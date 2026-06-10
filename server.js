@@ -1,7 +1,9 @@
 const path = require('path');
 const express = require('express');
 const cookieParser = require('cookie-parser');
+const multer = require('multer');
 const config = require('./src/config');
+const { initMaster } = require('./src/db');
 
 const app = express();
 app.disable('x-powered-by');
@@ -55,8 +57,28 @@ app.get('/register', page('register.html'));
 app.get('/app', page('app.html'));
 app.get('/c/:slug', page('chat.html'));
 
-app.listen(config.PORT, () => {
-  console.log(`\n🤖 ChatBotPro corriendo en http://localhost:${config.PORT}`);
-  console.log(`   Panel:    http://localhost:${config.PORT}/login`);
-  console.log(`   Registro: http://localhost:${config.PORT}/register\n`);
+// Manejador central de errores (mensajes amigables, sin stack al cliente)
+app.use((err, req, res, next) => {
+  if (err instanceof multer.MulterError) {
+    const msg =
+      err.code === 'LIMIT_FILE_SIZE'
+        ? 'La imagen es demasiado grande (máximo 8 MB). Usa una imagen más ligera.'
+        : `Error al subir el archivo: ${err.message}`;
+    return res.status(400).json({ error: msg });
+  }
+  console.error('[error]', err);
+  res.status(500).json({ error: 'Error interno del servidor' });
 });
+
+initMaster()
+  .then(() => {
+    app.listen(config.PORT, () => {
+      console.log(`\n🤖 ChatBotPro corriendo en http://localhost:${config.PORT}`);
+      console.log(`   Panel:    http://localhost:${config.PORT}/login`);
+      console.log(`   Registro: http://localhost:${config.PORT}/register\n`);
+    });
+  })
+  .catch((e) => {
+    console.error('[db] No se pudo conectar a Neon:', e.message);
+    process.exit(1);
+  });

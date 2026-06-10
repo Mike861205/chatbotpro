@@ -7,12 +7,13 @@ router.use(requireAuth);
 
 const STATUSES = ['pendiente', 'confirmado', 'preparando', 'enviado', 'entregado', 'cancelado'];
 
-function decorate(req, o) {
+async function decorate(t, o) {
   const customer = o.customer_id
-    ? req.tdb.prepare('SELECT * FROM customers WHERE id = ?').get(o.customer_id)
+    ? await t.get('SELECT * FROM {s}.customers WHERE id = $1', [o.customer_id])
     : null;
   return {
     ...o,
+    total: Number(o.total),
     items: JSON.parse(o.items || '[]'),
     customer: customer
       ? {
@@ -24,25 +25,32 @@ function decorate(req, o) {
   };
 }
 
-router.get('/', (req, res) => {
-  const { status, limit } = req.query;
-  let sql = 'SELECT * FROM orders';
-  const params = [];
-  if (status && STATUSES.includes(status)) {
-    sql += ' WHERE status = ?';
-    params.push(status);
-  }
-  sql += ' ORDER BY created_at DESC LIMIT ?';
-  params.push(Math.min(Number(limit) || 100, 500));
-  res.json(req.tdb.prepare(sql).all(...params).map((o) => decorate(req, o)));
+router.get('/', async (req, res, next) => {
+  try {
+    const { status, limit } = req.query;
+    let sql = `SELECT id, customer_id, items, total::float AS total, status, channel, delivery, notes,
+                      to_char(created_at AT TIME ZONE 'America/Mexico_City', 'DD Mon YYYY, HH24:MI') AS created_at
+               FROM {s}.orders`;
+    const params = [];
+    if (status && STATUSES.includes(status)) {
+      params.push(status);
+      sql += ` WHERE status = $${params.length}`;
+    }
+    params.push(Math.min(Number(limit) || 100, 500));
+    sql += ` ORDER BY id DESC LIMIT $${params.length}`;
+    const rows = await req.tdb.all(sql, params);
+    res.json(await Promise.all(rows.map((o) => decorate(req.tdb, o))));
+  } catch (e) { next(e); }
 });
 
-router.patch('/:id', (req, res) => {
-  const { status } = req.body || {};
-  if (!STATUSES.includes(status)) return res.status(400).json({ error: 'Estatus inválido' });
-  const r = req.tdb.prepare('UPDATE orders SET status = ? WHERE id = ?').run(status, req.params.id);
-  if (!r.changes) return res.status(404).json({ error: 'Pedido no encontrado' });
-  res.json({ ok: true });
+router.patch('/:id', async (req, res, next) => {
+  try {
+    const { status } = req.body || {};
+    if (!STATUSES.includes(status)) return res.status(400).json({ error: 'Estatus inválido' });
+    const r = await req.tdb.run('UPDATE {s}.orders SET status = $1 WHERE id = $2', [status, req.params.id]);
+    if (!r.rowCount) return res.status(404).json({ error: 'Pedido no encontrado' });
+    res.json({ ok: true });
+  } catch (e) { next(e); }
 });
 
 module.exports = router;

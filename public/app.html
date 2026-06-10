@@ -4,207 +4,286 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Panel — ChatBotPro</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/regular/style.css" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/bold/style.css" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/fill/style.css" />
   <link rel="stylesheet" href="/static/css/styles.css" />
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
 </head>
 <body>
+  <div class="boot-loader" id="bootLoader"><div class="spinner"></div></div>
+  <div class="scrim" id="scrim"></div>
+
   <div class="app">
-    <!-- ===== Sidebar ===== -->
+    <!-- ════════ Sidebar ════════ -->
     <aside class="sidebar" id="sidebar">
-      <div class="brand"><span class="dot">🤖</span> <span id="brandName">ChatBotPro</span></div>
+      <div class="brand">
+        <span class="dot"><i class="ph-fill ph-robot"></i></span>
+        <div><span id="brandName">ChatBotPro</span><small>Panel de control</small></div>
+      </div>
       <nav>
         <div class="nav-label">Principal</div>
-        <a href="#dashboard" data-view="dashboard" class="active"><span class="ico">📊</span> Dashboard</a>
-        <a href="#pedidos" data-view="pedidos"><span class="ico">🧾</span> Pedidos <span id="pendingBadge" class="badge b-pendiente" style="display:none;margin-left:auto"></span></a>
-        <a href="#productos" data-view="productos"><span class="ico">🍔</span> Productos</a>
+        <a href="#dashboard" data-view="dashboard" class="active"><i class="ph-bold ph-chart-pie-slice"></i> Dashboard</a>
+        <a href="#pedidos" data-view="pedidos"><i class="ph-bold ph-receipt"></i> Pedidos <span id="pendingBadge" class="count" style="display:none"></span></a>
+        <a href="#productos" data-view="productos"><i class="ph-bold ph-hamburger"></i> Productos</a>
         <div class="nav-label">Chatbot</div>
-        <a href="#chatbot" data-view="chatbot"><span class="ico">💬</span> Mi chatbot</a>
+        <a href="#chatbot" data-view="chatbot"><i class="ph-bold ph-chat-circle-dots"></i> Mi chatbot</a>
         <div class="nav-label">Negocio</div>
-        <a href="#config" data-view="config"><span class="ico">⚙️</span> Configuración</a>
+        <a href="#config" data-view="config"><i class="ph-bold ph-storefront"></i> Mi negocio</a>
       </nav>
       <div class="foot">
         <div class="user-chip">
           <div class="avatar" id="avatar">?</div>
           <div class="meta"><b id="userBizName">—</b><span id="userName">—</span></div>
+          <button class="logout" id="logoutBtn" title="Cerrar sesión"><i class="ph-bold ph-sign-out"></i></button>
         </div>
-        <button class="logout-btn" id="logoutBtn">Cerrar sesión</button>
       </div>
     </aside>
 
-    <!-- ===== Main ===== -->
+    <!-- ════════ Main ════════ -->
     <main class="main">
       <div class="topbar">
-        <div style="display:flex;align-items:center;gap:12px">
-          <button class="menu-toggle" id="menuToggle">☰</button>
+        <div style="display:flex;align-items:center;gap:14px">
+          <button class="menu-toggle" id="menuToggle"><i class="ph-bold ph-list"></i></button>
           <div>
-            <h1 id="viewTitle">Dashboard</h1>
+            <h1 id="viewTitle"><i class="ph-bold ph-chart-pie-slice"></i> Dashboard</h1>
             <div class="sub" id="viewSub">Resumen de tu negocio</div>
           </div>
         </div>
-        <a class="btn btn-primary" id="openChatLink" href="#" target="_blank">💬 Ver mi chatbot</a>
+        <a class="btn btn-primary" id="openChatLink" href="#" target="_blank"><i class="ph-bold ph-chat-circle-dots"></i> Ver mi chatbot</a>
       </div>
 
-      <!-- Dashboard -->
+      <!-- ──────── Dashboard ──────── -->
       <section class="section active" id="view-dashboard">
         <div class="grid-stats">
-          <div class="card stat"><div class="ic" style="background:#e6f9ed">💰</div><div><div class="val" id="stSalesToday">$0</div><div class="lbl">Ventas de hoy</div></div></div>
-          <div class="card stat"><div class="ic" style="background:#e7f0ff">🧾</div><div><div class="val" id="stOrdersToday">0</div><div class="lbl">Pedidos de hoy</div></div></div>
-          <div class="card stat"><div class="ic" style="background:#fff4e0">⏳</div><div><div class="val" id="stPending">0</div><div class="lbl">Pedidos pendientes</div></div></div>
-          <div class="card stat"><div class="ic" style="background:#f3e8ff">🍔</div><div><div class="val" id="stProducts">0</div><div class="lbl">Productos activos</div></div></div>
+          <div class="card stat"><div class="ic g1"><i class="ph-bold ph-currency-dollar"></i></div><div><div class="val" id="stSalesToday">—</div><div class="lbl">Ventas de hoy</div></div></div>
+          <div class="card stat"><div class="ic g2"><i class="ph-bold ph-receipt"></i></div><div><div class="val" id="stOrdersToday">—</div><div class="lbl">Pedidos de hoy</div></div></div>
+          <div class="card stat"><div class="ic g3"><i class="ph-bold ph-hourglass-medium"></i></div><div><div class="val" id="stPending">—</div><div class="lbl">Pedidos pendientes</div></div></div>
+          <div class="card stat"><div class="ic g4"><i class="ph-bold ph-chart-line-up"></i></div><div><div class="val" id="stAvgTicket">—</div><div class="lbl">Ticket promedio</div></div></div>
         </div>
         <div class="grid-2">
-          <div class="card"><h3>📈 Ventas — últimos 7 días</h3><canvas id="salesChart" height="220"></canvas></div>
-          <div class="card"><h3>🏆 Productos más vendidos</h3><canvas id="topChart" height="220"></canvas></div>
+          <div class="card"><h3><i class="ph-bold ph-trend-up"></i> Ventas — últimos 7 días</h3><canvas id="salesChart" height="225"></canvas></div>
+          <div class="card"><h3><i class="ph-bold ph-trophy"></i> Más vendidos</h3><canvas id="topChart" height="225"></canvas></div>
         </div>
         <div class="card" style="margin-top:16px">
-          <h3>🕑 Pedidos recientes</h3>
-          <div id="recentOrders"><div class="empty">Aún no hay pedidos</div></div>
+          <h3><i class="ph-bold ph-clock-counter-clockwise"></i> Pedidos recientes
+            <a href="#pedidos" class="right" style="font-size:13px;font-weight:700" onclick="navigate('pedidos');return false;">Ver todos →</a>
+          </h3>
+          <div class="table-wrap" id="recentOrders"></div>
         </div>
       </section>
 
-      <!-- Pedidos -->
+      <!-- ──────── Pedidos ──────── -->
       <section class="section" id="view-pedidos">
         <div class="card">
-          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;flex-wrap:wrap;gap:10px">
-            <h3 style="margin:0">Todos los pedidos</h3>
-            <select id="orderFilter" style="width:auto">
-              <option value="">Todos los estatus</option>
-              <option value="pendiente">Pendiente</option>
-              <option value="confirmado">Confirmado</option>
-              <option value="preparando">Preparando</option>
-              <option value="enviado">Enviado</option>
-              <option value="entregado">Entregado</option>
-              <option value="cancelado">Cancelado</option>
-            </select>
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:18px;flex-wrap:wrap;gap:12px">
+            <div class="segmented" id="orderFilter">
+              <button data-st="" class="on">Todos</button>
+              <button data-st="pendiente">Pendientes</button>
+              <button data-st="confirmado">Confirmados</button>
+              <button data-st="preparando">Preparando</button>
+              <button data-st="enviado">Enviados</button>
+              <button data-st="entregado">Entregados</button>
+              <button data-st="cancelado">Cancelados</button>
+            </div>
+            <button class="btn btn-ghost" onclick="loadOrders()"><i class="ph-bold ph-arrows-clockwise"></i> Actualizar</button>
           </div>
-          <div style="overflow-x:auto"><div id="ordersTable"></div></div>
+          <div class="table-wrap" id="ordersTable"></div>
         </div>
       </section>
 
-      <!-- Productos -->
+      <!-- ──────── Productos ──────── -->
       <section class="section" id="view-productos">
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;flex-wrap:wrap;gap:10px">
-          <div style="display:flex;gap:8px;flex-wrap:wrap" id="catChips"></div>
-          <div style="display:flex;gap:8px">
-            <button class="btn btn-ghost" id="addCatBtn">➕ Categoría</button>
-            <button class="btn btn-primary" id="addProdBtn">➕ Producto</button>
+        <div class="prod-toolbar">
+          <div class="chips" id="catChips"></div>
+          <div style="display:flex;gap:10px">
+            <button class="btn btn-ghost" id="addCatBtn"><i class="ph-bold ph-folder-plus"></i> Categoría</button>
+            <button class="btn btn-primary" id="addProdBtn"><i class="ph-bold ph-plus-circle"></i> Nuevo producto</button>
           </div>
         </div>
         <div class="prod-grid" id="prodGrid"></div>
       </section>
 
-      <!-- Chatbot -->
+      <!-- ──────── Chatbot ──────── -->
       <section class="section" id="view-chatbot">
-        <div class="card" style="margin-bottom:16px">
-          <h3>🔗 Tu liga para clientes</h3>
-          <p style="color:var(--ink-2);font-size:14px;margin-bottom:14px">Compártela en redes, en tu WhatsApp Business o imprímela en QR. Tus clientes ordenan solos y te llega el resumen por WhatsApp.</p>
-          <div class="share-box">
-            <input type="text" id="chatLink" readonly />
-            <button class="btn btn-primary" id="copyLinkBtn">📋 Copiar</button>
-            <a class="btn btn-ghost" id="waShareBtn" target="_blank" href="#">📲 Compartir por WhatsApp</a>
+        <div class="card share-hero" style="margin-bottom:16px">
+          <h3><i class="ph-bold ph-link"></i> Tu liga para clientes</h3>
+          <p>Compártela en redes sociales, en tu WhatsApp Business o imprime el código QR para tus mesas. Tus clientes ordenan solos y el resumen del pedido te llega directo a WhatsApp.</p>
+          <div class="share-flex">
+            <div class="share-main">
+              <div class="share-box">
+                <input type="text" id="chatLink" readonly />
+                <button class="btn btn-primary" id="copyLinkBtn"><i class="ph-bold ph-copy"></i> Copiar</button>
+                <a class="btn btn-ghost" id="waShareBtn" target="_blank" href="#" style="background:rgba(255,255,255,0.07);border-color:rgba(255,255,255,0.18);color:#fff"><i class="ph-bold ph-whatsapp-logo"></i> Compartir</a>
+              </div>
+            </div>
+            <div class="qr-box">
+              <img id="qrImg" alt="Código QR de tu chatbot" />
+              <span>Escanéame</span>
+            </div>
           </div>
         </div>
-        <div class="card">
-          <h3>💬 Flujo del chatbot</h3>
-          <form id="botForm">
-            <div class="field">
-              <label>Mensaje de bienvenida</label>
-              <textarea id="botWelcome" rows="3"></textarea>
-              <div class="hint">Es lo primero que ve tu cliente al abrir el chat.</div>
-            </div>
-            <div class="field">
-              <label>WhatsApp del negocio (con lada, ej. 52 1 33 1234 5678)</label>
-              <input type="tel" id="botWhatsapp" placeholder="5213312345678" />
-              <div class="hint">Aquí llegará el resumen de cada pedido confirmado.</div>
-            </div>
-            <div class="row-2">
+
+        <div class="grid-2">
+          <div class="card">
+            <h3><i class="ph-bold ph-chats-circle"></i> Flujo del chatbot</h3>
+            <form id="botForm">
               <div class="field">
-                <label>¿Entrega a domicilio?</label>
-                <select id="botDelivery"><option value="1">Sí</option><option value="0">No</option></select>
+                <label><i class="ph-bold ph-hand-waving"></i> Mensaje de bienvenida</label>
+                <textarea id="botWelcome" rows="3"></textarea>
+                <div class="hint">Es lo primero que ve tu cliente al abrir el chat.</div>
               </div>
               <div class="field">
-                <label>¿Recoger en sucursal?</label>
-                <select id="botPickup"><option value="1">Sí</option><option value="0">No</option></select>
+                <label><i class="ph-bold ph-whatsapp-logo"></i> WhatsApp del negocio</label>
+                <input type="tel" id="botWhatsapp" placeholder="5213312345678 (con lada del país)" />
+                <div class="hint">Aquí llegará el resumen de cada pedido confirmado.</div>
               </div>
+              <button class="btn btn-primary" type="submit"><i class="ph-bold ph-floppy-disk"></i> Guardar flujo</button>
+            </form>
+          </div>
+          <div class="card">
+            <h3><i class="ph-bold ph-truck"></i> Opciones de entrega</h3>
+            <div class="toggle-row">
+              <div class="t-info"><i class="ph-bold ph-moped"></i><div><b>Entrega a domicilio</b><span>El bot pedirá la dirección del cliente</span></div></div>
+              <label class="switch"><input type="checkbox" id="botDelivery" /><span class="track"></span></label>
             </div>
-            <button class="btn btn-primary" type="submit">Guardar flujo</button>
-          </form>
+            <div class="toggle-row">
+              <div class="t-info"><i class="ph-bold ph-storefront"></i><div><b>Recoger en sucursal</b><span>El cliente pasa por su pedido</span></div></div>
+              <label class="switch"><input type="checkbox" id="botPickup" /><span class="track"></span></label>
+            </div>
+            <div class="hint" style="margin-top:6px"><i class="ph ph-info"></i> Los cambios en estas opciones se guardan con el botón "Guardar flujo".</div>
+          </div>
         </div>
       </section>
 
-      <!-- Configuración -->
+      <!-- ──────── Mi negocio ──────── -->
       <section class="section" id="view-config">
-        <div class="card">
-          <h3>🏪 Datos del negocio</h3>
-          <form id="configForm">
-            <div class="row-2">
+        <div class="grid-2">
+          <div class="card">
+            <h3><i class="ph-bold ph-identification-card"></i> Identidad del negocio</h3>
+            <form id="configForm">
               <div class="field">
-                <label>Nombre del negocio</label>
+                <label><i class="ph-bold ph-storefront"></i> Nombre del negocio</label>
                 <input type="text" id="cfgName" />
               </div>
               <div class="field">
-                <label>Color principal</label>
-                <input type="color" id="cfgColor" value="#ff6b35" style="height:44px;padding:4px" />
-              </div>
-            </div>
-            <div class="field">
-              <label>Logo (PNG/JPG, máx. 2 MB)</label>
-              <input type="file" id="cfgLogo" accept="image/*" />
-              <div id="logoPreview" style="margin-top:8px"></div>
-            </div>
-            <div class="row-2">
-              <div class="field">
-                <label>Dirección</label>
-                <input type="text" id="cfgAddress" placeholder="Av. Principal 123" />
+                <label><i class="ph-bold ph-image"></i> Logo</label>
+                <div class="logo-upload">
+                  <div class="preview" id="logoPreview"><i class="ph ph-image"></i></div>
+                  <div style="flex:1">
+                    <input type="file" id="cfgLogo" accept="image/*" />
+                    <div class="hint">PNG, JPG o WebP. Máximo 8 MB. Se muestra en tu chatbot y panel.</div>
+                  </div>
+                </div>
               </div>
               <div class="field">
-                <label>Horario</label>
-                <input type="text" id="cfgHours" placeholder="Lun-Dom 12:00 - 22:00" />
+                <label><i class="ph-bold ph-palette"></i> Color de tu marca</label>
+                <div class="swatches" id="swatches"></div>
+                <input type="hidden" id="cfgColor" value="#ff6b35" />
               </div>
-            </div>
-            <div class="field" style="max-width:240px">
-              <label>Moneda</label>
-              <select id="cfgCurrency">
-                <option value="MXN">MXN — Peso mexicano</option>
-                <option value="USD">USD — Dólar</option>
-                <option value="COP">COP — Peso colombiano</option>
-                <option value="ARS">ARS — Peso argentino</option>
-                <option value="PEN">PEN — Sol peruano</option>
-                <option value="EUR">EUR — Euro</option>
-              </select>
-            </div>
-            <button class="btn btn-primary" type="submit">Guardar configuración</button>
-          </form>
+              <button class="btn btn-primary" type="submit"><i class="ph-bold ph-floppy-disk"></i> Guardar identidad</button>
+            </form>
+          </div>
+          <div class="card">
+            <h3><i class="ph-bold ph-map-pin"></i> Datos de contacto</h3>
+            <form id="contactForm">
+              <div class="field">
+                <label><i class="ph-bold ph-map-pin"></i> Dirección</label>
+                <input type="text" id="cfgAddress" placeholder="Av. Principal 123, Col. Centro" />
+              </div>
+              <div class="field">
+                <label><i class="ph-bold ph-clock"></i> Horario</label>
+                <input type="text" id="cfgHours" placeholder="Lun-Dom · 12:00 — 22:00" />
+              </div>
+              <div class="field">
+                <label><i class="ph-bold ph-coins"></i> Moneda</label>
+                <select id="cfgCurrency">
+                  <option value="MXN">🇲🇽 MXN — Peso mexicano</option>
+                  <option value="USD">🇺🇸 USD — Dólar americano</option>
+                  <option value="COP">🇨🇴 COP — Peso colombiano</option>
+                  <option value="ARS">🇦🇷 ARS — Peso argentino</option>
+                  <option value="PEN">🇵🇪 PEN — Sol peruano</option>
+                  <option value="EUR">🇪🇺 EUR — Euro</option>
+                </select>
+              </div>
+              <button class="btn btn-primary" type="submit"><i class="ph-bold ph-floppy-disk"></i> Guardar contacto</button>
+            </form>
+          </div>
         </div>
       </section>
     </main>
   </div>
 
-  <!-- Modal producto -->
+  <!-- ════════ Modal producto ════════ -->
   <div class="modal-bg" id="prodModal">
     <div class="modal">
-      <h3 id="prodModalTitle">Nuevo producto</h3>
+      <h3 id="prodModalTitle"><i class="ph-bold ph-plus-circle"></i> Nuevo producto</h3>
       <form id="prodForm">
         <input type="hidden" id="pId" />
-        <div class="field"><label>Nombre *</label><input type="text" id="pName" required /></div>
-        <div class="field"><label>Descripción</label><textarea id="pDesc" rows="2"></textarea></div>
-        <div class="row-2">
-          <div class="field"><label>Precio *</label><input type="number" id="pPrice" step="0.01" min="0" required /></div>
-          <div class="field"><label>Categoría</label><select id="pCat"><option value="">Sin categoría</option></select></div>
+        <div class="field">
+          <label><i class="ph-bold ph-image"></i> Foto del producto</label>
+          <div class="dropzone" id="dropzone">
+            <div class="dz-empty">
+              <i class="ph ph-cloud-arrow-up"></i>
+              <p>Arrastra una imagen o <b>haz clic para elegir</b></p>
+            </div>
+            <div class="dz-preview"><img id="dzImg" alt="" /><span>Cambiar imagen</span></div>
+            <input type="file" id="pImage" accept="image/*" />
+          </div>
         </div>
+        <div class="field"><label><i class="ph-bold ph-tag"></i> Nombre *</label><input type="text" id="pName" required placeholder="Hamburguesa clásica" /></div>
+        <div class="field"><label><i class="ph-bold ph-text-align-left"></i> Descripción</label><textarea id="pDesc" rows="2" placeholder="Carne 150g, queso, lechuga y tomate"></textarea></div>
         <div class="row-2">
-          <div class="field"><label>Imagen</label><input type="file" id="pImage" accept="image/*" /></div>
-          <div class="field"><label>Estado</label><select id="pActive"><option value="1">Activo (visible en chatbot)</option><option value="0">Inactivo</option></select></div>
+          <div class="field"><label><i class="ph-bold ph-currency-dollar"></i> Precio *</label><input type="number" id="pPrice" step="0.01" min="0" required placeholder="99.00" /></div>
+          <div class="field"><label><i class="ph-bold ph-folder"></i> Categoría</label><select id="pCat"><option value="">Sin categoría</option></select></div>
+        </div>
+        <div class="toggle-row" style="margin-bottom:0">
+          <div class="t-info"><i class="ph-bold ph-eye"></i><div><b>Visible en el chatbot</b><span>Los clientes podrán pedirlo</span></div></div>
+          <label class="switch"><input type="checkbox" id="pActive" checked /><span class="track"></span></label>
         </div>
         <div class="modal-actions">
           <button type="button" class="btn btn-ghost" id="prodCancel">Cancelar</button>
-          <button type="submit" class="btn btn-primary">Guardar</button>
+          <button type="submit" class="btn btn-primary" id="prodSave"><i class="ph-bold ph-check"></i> Guardar producto</button>
         </div>
       </form>
     </div>
   </div>
 
-  <div id="toast"></div>
+  <!-- ════════ Modal categoría ════════ -->
+  <div class="modal-bg" id="catModal">
+    <div class="modal" style="max-width:420px">
+      <h3><i class="ph-bold ph-folder-plus"></i> Nueva categoría</h3>
+      <form id="catForm">
+        <div class="field">
+          <label><i class="ph-bold ph-tag"></i> Nombre</label>
+          <input type="text" id="catName" required placeholder="Hamburguesas, Bebidas, Postres…" />
+        </div>
+        <div class="modal-actions">
+          <button type="button" class="btn btn-ghost" id="catCancel">Cancelar</button>
+          <button type="submit" class="btn btn-primary"><i class="ph-bold ph-check"></i> Crear</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- ════════ Modal confirmación ════════ -->
+  <div class="modal-bg" id="confirmModal">
+    <div class="modal" style="max-width:400px;text-align:center">
+      <div style="width:64px;height:64px;border-radius:20px;background:var(--red-soft);display:flex;align-items:center;justify-content:center;margin:0 auto 16px">
+        <i class="ph-bold ph-warning" style="font-size:30px;color:var(--red)"></i>
+      </div>
+      <h3 style="justify-content:center" id="confirmTitle">¿Eliminar?</h3>
+      <p style="color:var(--ink-2);font-size:14px;margin:-8px 0 22px" id="confirmMsg">Esta acción no se puede deshacer.</p>
+      <div style="display:flex;gap:10px;justify-content:center">
+        <button class="btn btn-ghost" id="confirmNo">Cancelar</button>
+        <button class="btn btn-danger" id="confirmYes"><i class="ph-bold ph-trash"></i> Sí, eliminar</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast"><i class="ph-fill ph-check-circle"></i><span id="toastMsg"></span></div>
   <script src="/static/js/app.js"></script>
 </body>
 </html>

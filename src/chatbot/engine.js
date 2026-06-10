@@ -2,7 +2,7 @@
 // tomar pedidos. Si hay OPENAI_API_KEY, responde preguntas libres con IA.
 const crypto = require('crypto');
 const config = require('../config');
-const { getSetting } = require('../db/tenant');
+const { getSetting } = require('../db');
 const { encrypt, lookupHash } = require('../utils/crypto');
 
 let openaiClient = null;
@@ -15,26 +15,25 @@ function money(n, currency = 'MXN') {
   return new Intl.NumberFormat('es-MX', { style: 'currency', currency }).format(n || 0);
 }
 
-function getState(db, sessionId) {
-  const row = db.prepare('SELECT state FROM chat_sessions WHERE id = ?').get(sessionId);
+async function getState(t, sessionId) {
+  const row = await t.get('SELECT state FROM {s}.chat_sessions WHERE id = $1', [sessionId]);
   return row ? JSON.parse(row.state) : null;
 }
 
-function saveState(db, sessionId, state) {
-  db.prepare(
-    `INSERT INTO chat_sessions (id, state, updated_at) VALUES (?, ?, datetime('now','localtime'))
-     ON CONFLICT(id) DO UPDATE SET state = excluded.state, updated_at = excluded.updated_at`
-  ).run(sessionId, JSON.stringify(state));
+async function saveState(t, sessionId, state) {
+  await t.run(
+    `INSERT INTO {s}.chat_sessions (id, state, updated_at) VALUES ($1, $2, now())
+     ON CONFLICT (id) DO UPDATE SET state = EXCLUDED.state, updated_at = now()`,
+    [sessionId, JSON.stringify(state)]
+  );
 }
 
-function activeProducts(db) {
-  return db
-    .prepare(
-      `SELECT p.id, p.name, p.description, p.price, p.image, c.name AS category
-       FROM products p LEFT JOIN categories c ON c.id = p.category_id
-       WHERE p.active = 1 ORDER BY c.sort, c.name, p.name`
-    )
-    .all();
+async function activeProducts(t) {
+  return t.all(
+    `SELECT p.id, p.name, p.description, p.price::float AS price, p.image, c.name AS category
+     FROM {s}.products p LEFT JOIN {s}.categories c ON c.id = p.category_id
+     WHERE p.active = 1 ORDER BY c.sort, c.name, p.name`
+  );
 }
 
 function cartTotal(cart) {
@@ -56,14 +55,11 @@ function mainOptions(cart) {
   return opts;
 }
 
-function showMenu(db, state) {
-  const cats = db.prepare('SELECT * FROM categories ORDER BY sort, name').all();
-  const products = activeProducts(db);
+async function showMenu(t, state) {
+  const cats = await t.all('SELECT * FROM {s}.categories ORDER BY sort, name');
+  const products = await activeProducts(t);
   if (!products.length) {
-    return {
-      messages: ['Por ahora no tenemos productos en el menú. ¡Vuelve pronto! 🙏'],
-      options: [],
-    };
+    return { messages: ['Por ahora no tenemos productos en el menú. ¡Vuelve pronto! 🙏'], options: [] };
   }
   const catsWithProducts = cats.filter((c) => products.some((p) => p.category === c.name));
   if (catsWithProducts.length > 1) {
@@ -73,13 +69,13 @@ function showMenu(db, state) {
       options: catsWithProducts.map((c) => ({ label: c.name, value: `cat_${c.id}` })),
     };
   }
-  return showProducts(db, state, null);
+  return showProducts(t, state, null);
 }
 
-function showProducts(db, state, categoryId) {
-  let products = activeProducts(db);
+async function showProducts(t, state, categoryId) {
+  let products = await activeProducts(t);
   if (categoryId) {
-    const cat = db.prepare('SELECT name FROM categories WHERE id = ?').get(categoryId);
+    const cat = await t.get('SELECT name FROM {s}.categories WHERE id = $1', [categoryId]);
     if (cat) products = products.filter((p) => p.category === cat.name);
   }
   state.step = 'choosing_product';
@@ -113,10 +109,10 @@ function buildOrderText(businessName, cart, customer, delivery, currency) {
   return lines.join('\n');
 }
 
-async function aiFallback(db, businessName, userText) {
+async function aiFallback(t, businessName, userText) {
   if (!openaiClient) return null;
   try {
-    const products = activeProducts(db);
+    const products = await activeProducts(t);
     const menuText = products.map((p) => `- ${p.name} (${p.category || 'General'}): $${p.price}. ${p.description}`).join('\n');
     const completion = await openaiClient.chat.completions.create({
       model: 'gpt-4o-mini',
@@ -136,22 +132,22 @@ async function aiFallback(db, businessName, userText) {
   }
 }
 
-async function handleMessage(db, slug, sessionId, rawInput) {
+async function handleMessage(t, slug, sessionId, rawInput) {
   const input = String(rawInput || '').trim();
-  const businessName = getSetting(db, 'business_name', slug);
-  const currency = getSetting(db, 'currency', 'MXN');
-  const whatsapp = getSetting(db, 'whatsapp', '').replace(/\D/g, '');
-  const deliveryEnabled = getSetting(db, 'delivery_enabled', '1') === '1';
-  const pickupEnabled = getSetting(db, 'pickup_enabled', '1') === '1';
+  const businessName = await getSetting(t, 'business_name', slug);
+  const currency = await getSetting(t, 'currency', 'MXN');
+  const whatsapp = (await getSetting(t, 'whatsapp', '')).replace(/\D/g, '');
+  const deliveryEnabled = (await getSetting(t, 'delivery_enabled', '1')) === '1';
+  const pickupEnabled = (await getSetting(t, 'pickup_enabled', '1')) === '1';
 
-  let state = getState(db, sessionId) || { step: 'start', cart: [], customer: {}, currency };
+  let state = (await getState(t, sessionId)) || { step: 'start', cart: [], customer: {}, currency };
   state.currency = currency;
 
   const reply = { messages: [], options: [], products: null, cart: null, order: null };
   const lower = input.toLowerCase();
 
-  const finish = () => {
-    saveState(db, sessionId, state);
+  const finish = async () => {
+    await saveState(t, sessionId, state);
     reply.cart = { items: state.cart, total: cartTotal(state.cart), totalLabel: money(cartTotal(state.cart), currency) };
     return reply;
   };
@@ -159,12 +155,12 @@ async function handleMessage(db, slug, sessionId, rawInput) {
   // Comandos globales
   if (!input || lower === 'start' || lower === 'hola' || lower === 'inicio') {
     state.step = 'start';
-    reply.messages = [getSetting(db, 'welcome_message', `¡Hola! Bienvenido a ${businessName} 👋`)];
+    reply.messages = [await getSetting(t, 'welcome_message', `¡Hola! Bienvenido a ${businessName} 👋`)];
     reply.options = mainOptions(state.cart);
     return finish();
   }
   if (lower === 'menu' || lower === 'menú') {
-    Object.assign(reply, showMenu(db, state));
+    Object.assign(reply, await showMenu(t, state));
     return finish();
   }
   if (lower === 'cart' || lower === 'carrito') {
@@ -188,13 +184,15 @@ async function handleMessage(db, slug, sessionId, rawInput) {
 
   // Selección de categoría
   if (lower.startsWith('cat_')) {
-    Object.assign(reply, showProducts(db, state, Number(lower.slice(4))));
+    Object.assign(reply, await showProducts(t, state, Number(lower.slice(4))));
     return finish();
   }
 
   // Selección de producto
   if (lower.startsWith('prod_')) {
-    const prod = db.prepare('SELECT * FROM products WHERE id = ? AND active = 1').get(Number(lower.slice(5)));
+    const prod = await t.get('SELECT id, name, price::float AS price FROM {s}.products WHERE id = $1 AND active = 1', [
+      Number(lower.slice(5)),
+    ]);
     if (prod) {
       state.step = 'awaiting_qty';
       state.pendingProduct = { id: prod.id, name: prod.name, price: prod.price };
@@ -312,27 +310,28 @@ async function handleMessage(db, slug, sessionId, rawInput) {
 
   if (state.step === 'confirm') {
     if (lower === 'confirm_yes') {
-      // Guarda cliente CIFRADO y crea el pedido en la BD aislada del tenant
+      // Guarda cliente CIFRADO y crea el pedido en el schema aislado del tenant
       const phoneHash = lookupHash(state.customer.phone);
-      let customer = db.prepare('SELECT id FROM customers WHERE phone_hash = ?').get(phoneHash);
+      let customer = await t.get('SELECT id FROM {s}.customers WHERE phone_hash = $1', [phoneHash]);
       if (!customer) {
-        const r = db
-          .prepare('INSERT INTO customers (name_enc, phone_enc, phone_hash, address_enc) VALUES (?, ?, ?, ?)')
-          .run(encrypt(state.customer.name), encrypt(state.customer.phone), phoneHash, encrypt(state.customer.address || ''));
-        customer = { id: r.lastInsertRowid };
+        customer = await t.get(
+          'INSERT INTO {s}.customers (name_enc, phone_enc, phone_hash, address_enc) VALUES ($1,$2,$3,$4) RETURNING id',
+          [encrypt(state.customer.name), encrypt(state.customer.phone), phoneHash, encrypt(state.customer.address || '')]
+        );
       }
       const total = cartTotal(state.cart);
-      const r = db
-        .prepare('INSERT INTO orders (customer_id, items, subtotal, total, status, channel, delivery) VALUES (?, ?, ?, ?, ?, ?, ?)')
-        .run(customer.id, JSON.stringify(state.cart), total, total, 'pendiente', 'chatbot', state.delivery || 'recoger');
+      const orderRow = await t.get(
+        'INSERT INTO {s}.orders (customer_id, items, subtotal, total, status, channel, delivery) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id',
+        [customer.id, JSON.stringify(state.cart), total, total, 'pendiente', 'chatbot', state.delivery || 'recoger']
+      );
 
       const orderText = buildOrderText(businessName, state.cart, state.customer, state.delivery, currency);
       const waLink = whatsapp ? `https://wa.me/${whatsapp}?text=${encodeURIComponent(orderText)}` : null;
 
       reply.messages = [
-        `🎉 *¡Pedido #${r.lastInsertRowid} recibido!*\n\nEn breve lo confirmamos. ¡Gracias por tu preferencia! 🙏`,
+        `🎉 *¡Pedido #${orderRow.id} recibido!*\n\nEn breve lo confirmamos. ¡Gracias por tu preferencia! 🙏`,
       ];
-      reply.order = { id: r.lastInsertRowid, total, totalLabel: money(total, currency), whatsappLink: waLink, summary: orderText };
+      reply.order = { id: orderRow.id, total, totalLabel: money(total, currency), whatsappLink: waLink, summary: orderText };
       if (waLink) reply.messages.push('👇 Toca el botón para enviar el resumen de tu pedido por WhatsApp y agilizar la atención.');
       state = { step: 'start', cart: [], customer: {}, currency };
       reply.options = [{ label: '🆕 Hacer otro pedido', value: 'start' }];
@@ -347,7 +346,7 @@ async function handleMessage(db, slug, sessionId, rawInput) {
   }
 
   // Texto libre: busca producto por nombre
-  const products = activeProducts(db);
+  const products = await activeProducts(t);
   const match = products.find((p) => p.name.toLowerCase().includes(lower) && lower.length >= 3);
   if (match) {
     state.step = 'awaiting_qty';
@@ -358,7 +357,7 @@ async function handleMessage(db, slug, sessionId, rawInput) {
   }
 
   // IA opcional para preguntas libres
-  const ai = await aiFallback(db, businessName, input);
+  const ai = await aiFallback(t, businessName, input);
   reply.messages = [ai || 'No estoy seguro de haber entendido 🤔 ¿Te ayudo con alguna de estas opciones?'];
   reply.options = mainOptions(state.cart);
   return finish();

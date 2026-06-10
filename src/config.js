@@ -27,6 +27,15 @@ module.exports = {
   JWT_SECRET: ensureSecret('JWT_SECRET'),
   ENCRYPTION_KEY: ensureSecret('DATA_ENCRYPTION_KEY'),
   OPENAI_API_KEY: (process.env.OPENAI_API_KEY || '').trim(),
+  DATABASE_URL: (() => {
+    const url = (process.env.DATABASE_URL || '').trim();
+    if (!url) {
+      console.error('\n[config] Falta DATABASE_URL en .env (cadena de conexión de Neon).');
+      process.exit(1);
+    }
+    // pg no entiende channel_binding; lo quitamos si viene en la URL
+    return url.replace(/[?&]channel_binding=[^&]*/i, '');
+  })(),
   ROOT,
   DATA_DIR,
   TENANTS_DIR,

@@ -4,57 +4,62 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Crear cuenta — ChatBotPro</title>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/regular/style.css" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/bold/style.css" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/fill/style.css" />
   <link rel="stylesheet" href="/static/css/styles.css" />
 </head>
 <body>
   <div class="auth-wrap">
     <div class="auth-hero">
-      <div style="font-size:42px">🚀</div>
-      <h1>Crea tu chatbot de pedidos en 2 minutos</h1>
+      <div class="glow"></div>
+      <div class="mark"><i class="ph-fill ph-rocket-launch"></i></div>
+      <h1>Crea tu chatbot de pedidos en <em>2 minutos</em></h1>
       <p>Registra tu restaurante, sube tu menú y comparte tu liga. Tus clientes ordenan solos y tú recibes todo por WhatsApp.</p>
       <div class="feats">
-        <div class="feat"><span>1️⃣</span><span>Regístrate con los datos de tu negocio</span></div>
-        <div class="feat"><span>2️⃣</span><span>Da de alta tus productos</span></div>
-        <div class="feat"><span>3️⃣</span><span>Comparte tu liga y recibe pedidos</span></div>
+        <div class="feat"><span class="fi"><i class="ph-bold ph-number-circle-one"></i></span><span>Regístrate con los datos de tu negocio</span></div>
+        <div class="feat"><span class="fi"><i class="ph-bold ph-number-circle-two"></i></span><span>Da de alta tus productos con foto</span></div>
+        <div class="feat"><span class="fi"><i class="ph-bold ph-number-circle-three"></i></span><span>Comparte tu liga o QR y recibe pedidos</span></div>
       </div>
     </div>
     <div class="auth-panel">
       <div class="auth-card">
-        <div class="logo"><span class="dot">🤖</span> ChatBotPro</div>
+        <div class="logo"><span class="dot"><i class="ph-fill ph-robot"></i></span> ChatBotPro</div>
         <h2>Registra tu negocio</h2>
         <p class="sub">Crea la cuenta de tu restaurante.</p>
-        <div class="error-box" id="error"></div>
+        <div class="error-box" id="error"><i class="ph-fill ph-warning-circle"></i><span id="errorMsg"></span></div>
         <form id="regForm">
           <div class="row-2">
             <div class="field">
-              <label>Tu nombre *</label>
+              <label><i class="ph-bold ph-user"></i> Tu nombre *</label>
               <input type="text" id="ownerName" required />
             </div>
             <div class="field">
-              <label>Teléfono</label>
+              <label><i class="ph-bold ph-phone"></i> Teléfono</label>
               <input type="tel" id="phone" placeholder="10 dígitos" />
             </div>
           </div>
           <div class="field">
-            <label>Nombre del negocio *</label>
+            <label><i class="ph-bold ph-storefront"></i> Nombre del negocio *</label>
             <input type="text" id="businessName" placeholder="Tacos El Güero" required />
           </div>
           <div class="field">
-            <label>Slug (liga de tu negocio) *</label>
+            <label><i class="ph-bold ph-link"></i> Slug (liga de tu negocio) *</label>
             <input type="text" id="slug" placeholder="tacos-el-guero" required pattern="[a-z0-9\-]{3,40}" />
-            <div class="hint">Tu chatbot vivirá en: <b id="slugPreview">tudominio.com/c/...</b></div>
+            <div class="hint">Tu chatbot vivirá en: <b id="slugPreview" style="color:var(--primary)">…</b></div>
           </div>
           <div class="row-2">
             <div class="field">
-              <label>Usuario *</label>
+              <label><i class="ph-bold ph-at"></i> Usuario *</label>
               <input type="text" id="username" autocomplete="username" required />
             </div>
             <div class="field">
-              <label>Contraseña *</label>
+              <label><i class="ph-bold ph-lock-key"></i> Contraseña *</label>
               <input type="password" id="password" autocomplete="new-password" minlength="8" required />
             </div>
           </div>
-          <button class="btn btn-primary btn-block" type="submit" id="btn">Crear mi cuenta</button>
+          <button class="btn btn-primary btn-block" type="submit" id="btn"><i class="ph-bold ph-rocket-launch"></i> Crear mi cuenta</button>
         </form>
         <p class="alt">¿Ya tienes cuenta? <a href="/login">Inicia sesión</a></p>
       </div>
@@ -71,7 +76,7 @@
     });
     slugInput.addEventListener('input', () => { slugInput.dataset.touched = '1'; slugInput.value = slugify(slugInput.value); updatePreview(); });
     function updatePreview() {
-      document.getElementById('slugPreview').textContent = location.origin + '/c/' + (slugInput.value || '...');
+      document.getElementById('slugPreview').textContent = location.origin + '/c/' + (slugInput.value || '…');
     }
     updatePreview();
 
@@ -98,7 +103,7 @@
         if (!res.ok) throw new Error(data.error || 'Error');
         location.href = '/app';
       } catch (err) {
-        errBox.textContent = err.message;
+        document.getElementById('errorMsg').textContent = err.message;
         errBox.classList.add('show');
         btn.disabled = false;
       }

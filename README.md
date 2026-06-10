@@ -5,7 +5,7 @@ Sistema SaaS multi-tenant donde cada restaurante (tenant) tiene su **base de dat
 ## ✨ Funcionalidades
 
 - **Registro multi-tenant**: nombre, teléfono, slug del negocio, usuario y contraseña.
-- **Aislamiento de datos**: la BD maestra solo guarda tenants/usuarios; cada negocio tiene su propio archivo SQLite en `data/tenants/<slug>.db`.
+- **Aislamiento de datos**: PostgreSQL en **Neon** con un **schema aislado por tenant** (`t_<slug>`); el schema público solo guarda tenants/usuarios.
 - **Seguridad**:
   - Contraseñas con `bcrypt` (12 rondas).
   - Datos sensibles de clientes (nombre, teléfono, dirección) cifrados con **AES-256-GCM**.
@@ -28,36 +28,33 @@ npm start
 - Registro: http://localhost:3000/register
 - Chatbot público: http://localhost:3000/c/<tu-slug>
 
-Los secretos (`JWT_SECRET`, `DATA_ENCRYPTION_KEY`) se generan automáticamente en `.env` en el primer arranque. Para usar IA, agrega tu `OPENAI_API_KEY` en `.env`.
+Requiere `DATABASE_URL` (cadena de conexión de Neon) en `.env`. Los secretos (`JWT_SECRET`, `DATA_ENCRYPTION_KEY`) se generan automáticamente en el primer arranque. Para usar IA, agrega tu `OPENAI_API_KEY` en `.env`.
 
 ## 🗂️ Estructura
 
 ```
 server.js              # Servidor Express + seguridad + rutas
 src/
-  config.js            # Configuración y generación de secretos
-  db/master.js         # BD maestra (tenants + usuarios)
-  db/tenant.js         # Fábrica de BD aislada por tenant
+  config.js            # Configuración, secretos y DATABASE_URL
+  db/index.js          # Pool de Neon + schema por tenant (t_<slug>)
   middleware/auth.js   # JWT + cookie httpOnly
   utils/crypto.js      # AES-256-GCM para datos de clientes
   chatbot/engine.js    # Máquina de estados del chatbot + OpenAI
   routes/              # auth, products, orders, dashboard, settings, chatbot
 public/                # Frontend (login, registro, panel, chat público)
-data/                  # SQLite (master.db + tenants/<slug>.db) — fuera de git
 uploads/               # Logos y fotos de productos — fuera de git
 ```
 
 ## ☁️ Roadmap a producción
 
-| Pieza | Local (hoy) | Producción |
+| Pieza | Hoy | Producción |
 |---|---|---|
-| Base de datos | SQLite por tenant | **Neon** (PostgreSQL): un schema por tenant (`DATABASE_URL` en `.env`) |
+| Base de datos | ✅ **Neon** (PostgreSQL, schema por tenant) | Igual — ya lista |
 | Hosting | localhost | **Liquid Web** (VPS con Node + Nginx + HTTPS/Let's Encrypt) |
 | IA | Opcional | **OpenAI** `gpt-4o-mini` para lenguaje natural |
 | Código | Git local | GitHub + despliegue por CI |
 
-Pasos sugeridos al migrar:
-1. Crear proyecto en Neon y definir `DATABASE_URL`.
-2. Sustituir `better-sqlite3` por `pg` y mapear `getTenantDb(slug)` a `SET search_path TO tenant_<slug>`.
-3. En Liquid Web: Nginx como proxy inverso al puerto Node, certificado SSL, `NODE_ENV=production` (activa cookies `secure`).
-4. Mover `uploads/` a almacenamiento persistente (o S3 compatible).
+Pasos sugeridos para desplegar:
+1. En Liquid Web: Nginx como proxy inverso al puerto Node, certificado SSL, `NODE_ENV=production` (activa cookies `secure`).
+2. Mover `uploads/` a almacenamiento persistente (o S3 compatible).
+3. Rotar la contraseña de Neon antes de salir a producción y usar una rama/proyecto dedicado.

@@ -1,7 +1,6 @@
 const jwt = require('jsonwebtoken');
 const config = require('../config');
-const master = require('../db/master');
-const { getTenantDb } = require('../db/tenant');
+const { q, tdb } = require('../db');
 
 const COOKIE_NAME = 'cbp_token';
 
@@ -26,19 +25,22 @@ function clearAuthCookie(res) {
   res.clearCookie(COOKIE_NAME);
 }
 
-function requireAuth(req, res, next) {
+async function requireAuth(req, res, next) {
   const token = req.cookies[COOKIE_NAME];
   if (!token) return res.status(401).json({ error: 'No autenticado' });
   try {
     const payload = jwt.verify(token, config.JWT_SECRET);
-    const tenant = master.prepare('SELECT * FROM tenants WHERE id = ?').get(payload.tid);
-    if (!tenant) return res.status(401).json({ error: 'Tenant no encontrado' });
+    const { rows } = await q('SELECT * FROM tenants WHERE id = $1', [payload.tid]);
+    if (!rows[0]) return res.status(401).json({ error: 'Tenant no encontrado' });
     req.user = payload;
-    req.tenant = tenant;
-    req.tdb = getTenantDb(tenant.slug); // BD aislada del tenant autenticado
+    req.tenant = rows[0];
+    req.tdb = tdb(rows[0].slug); // schema aislado del tenant autenticado
     next();
-  } catch {
-    return res.status(401).json({ error: 'Sesión inválida o expirada' });
+  } catch (e) {
+    if (e.name === 'JsonWebTokenError' || e.name === 'TokenExpiredError') {
+      return res.status(401).json({ error: 'Sesión inválida o expirada' });
+    }
+    next(e);
   }
 }
 

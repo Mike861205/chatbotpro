@@ -2,112 +2,176 @@
 <html lang="es">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
   <title>Haz tu pedido</title>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/regular/style.css" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/bold/style.css" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/fill/style.css" />
   <style>
-    :root { --primary: #ff6b35; --primary-dark: #e8501c; }
+    :root { --primary: #ff6b35; --ink: #171c2e; --ease: cubic-bezier(0.22, 1, 0.36, 1); }
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
-      font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
-      background: #ece5dd; height: 100dvh; display: flex; justify-content: center;
+      font-family: 'Plus Jakarta Sans', system-ui, sans-serif;
+      background: linear-gradient(160deg, #e9ecf5, #dfe4f0);
+      height: 100dvh; display: flex; justify-content: center; align-items: center;
     }
     .chat-app {
-      width: 100%; max-width: 480px; height: 100dvh; display: flex; flex-direction: column;
-      background: #efe7de; box-shadow: 0 0 40px rgba(0,0,0,0.15);
+      width: 100%; max-width: 460px; height: 100dvh; display: flex; flex-direction: column;
+      background: #f0f2f8; overflow: hidden; position: relative;
     }
-    /* Header */
+    @media (min-width: 520px) {
+      .chat-app { height: min(94dvh, 880px); border-radius: 30px; box-shadow: 0 30px 80px rgba(15,18,32,0.35); }
+    }
+    /* ── Header ── */
     .chat-header {
-      background: var(--primary); color: #fff; padding: 14px 18px;
-      display: flex; align-items: center; gap: 12px; flex-shrink: 0;
+      background:
+        radial-gradient(420px 200px at 90% -60%, color-mix(in srgb, var(--primary) 45%, transparent), transparent 70%),
+        linear-gradient(150deg, #171c2e, #232a45);
+      color: #fff; padding: 16px 18px; display: flex; align-items: center; gap: 13px; flex-shrink: 0; z-index: 5;
     }
     .chat-header .logo {
-      width: 44px; height: 44px; border-radius: 50%; background: rgba(255,255,255,0.25);
-      display: flex; align-items: center; justify-content: center; font-size: 22px; overflow: hidden; flex-shrink: 0;
+      width: 48px; height: 48px; border-radius: 16px;
+      background: linear-gradient(135deg, var(--primary), color-mix(in srgb, var(--primary) 55%, #ffc9a8));
+      display: flex; align-items: center; justify-content: center; font-size: 24px; overflow: hidden; flex-shrink: 0;
+      box-shadow: 0 6px 18px color-mix(in srgb, var(--primary) 45%, transparent);
     }
     .chat-header .logo img { width: 100%; height: 100%; object-fit: cover; }
-    .chat-header h1 { font-size: 17px; }
-    .chat-header .status { font-size: 12.5px; opacity: 0.9; display: flex; align-items: center; gap: 5px; }
-    .chat-header .status::before { content: ''; width: 8px; height: 8px; border-radius: 50%; background: #5dffa1; }
-    /* Cart bar */
+    .chat-header h1 { font-size: 16.5px; font-weight: 800; letter-spacing: -0.2px; }
+    .chat-header .status { font-size: 12px; color: #9aa3c0; display: flex; align-items: center; gap: 6px; margin-top: 2px; font-weight: 600; }
+    .chat-header .status .dot { width: 8px; height: 8px; border-radius: 50%; background: #34d399; box-shadow: 0 0 8px #34d399; animation: pulse 2s infinite; }
+    @keyframes pulse { 50% { opacity: 0.55; } }
+    .chat-header .meta { flex: 1; min-width: 0; }
+    /* ── Cart pill ── */
     .cart-bar {
-      display: none; background: #fff8f3; border-bottom: 1px solid #f3d9c8; padding: 9px 18px;
-      font-size: 13.5px; font-weight: 700; color: #8a4a22; flex-shrink: 0;
-      justify-content: space-between; align-items: center;
+      display: none; position: absolute; left: 14px; right: 14px; top: 86px; z-index: 6;
+      background: rgba(255,255,255,0.88); backdrop-filter: blur(12px);
+      border: 1px solid rgba(255,255,255,0.7);
+      border-radius: 999px; padding: 9px 9px 9px 18px;
+      box-shadow: 0 10px 30px rgba(15,18,32,0.16);
+      justify-content: space-between; align-items: center; gap: 10px;
+      animation: slideDown 0.35s var(--ease);
     }
+    @keyframes slideDown { from { opacity: 0; transform: translateY(-12px); } }
     .cart-bar.show { display: flex; }
-    .cart-bar button { background: var(--primary); color: #fff; border: none; border-radius: 999px; padding: 6px 14px; font-weight: 700; font-size: 12.5px; cursor: pointer; }
-    /* Messages */
-    .messages { flex: 1; overflow-y: auto; padding: 18px 14px; display: flex; flex-direction: column; gap: 10px; }
-    .msg { max-width: 82%; padding: 10px 14px; border-radius: 16px; font-size: 14.5px; line-height: 1.5; white-space: pre-wrap; word-wrap: break-word; animation: pop 0.18s ease; }
-    @keyframes pop { from { opacity: 0; transform: translateY(8px); } }
-    .msg.bot { background: #fff; border-bottom-left-radius: 4px; align-self: flex-start; box-shadow: 0 1px 2px rgba(0,0,0,0.08); }
-    .msg.user { background: #dcf8c6; border-bottom-right-radius: 4px; align-self: flex-end; }
-    .msg b, .msg strong { font-weight: 700; }
-    /* Product cards */
-    .prods { display: flex; flex-direction: column; gap: 8px; align-self: stretch; }
-    .prod {
-      background: #fff; border-radius: 14px; padding: 10px 12px; display: flex; gap: 12px;
-      align-items: center; cursor: pointer; box-shadow: 0 1px 2px rgba(0,0,0,0.08);
-      transition: transform 0.12s; border: 2px solid transparent;
+    .cart-bar .ci { font-size: 13px; font-weight: 800; color: var(--ink); display: flex; align-items: center; gap: 8px; }
+    .cart-bar .ci i { color: var(--primary); font-size: 17px; }
+    .cart-bar button {
+      background: linear-gradient(135deg, var(--primary), color-mix(in srgb, var(--primary) 70%, #ffb088));
+      color: #fff; border: none; border-radius: 999px; padding: 9px 18px; font-weight: 800; font-size: 12.5px;
+      cursor: pointer; font-family: inherit; display: flex; align-items: center; gap: 6px;
+      box-shadow: 0 5px 14px color-mix(in srgb, var(--primary) 40%, transparent);
+      transition: transform 0.15s var(--ease);
     }
-    .prod:hover { transform: translateY(-1px); border-color: var(--primary); }
-    .prod .pimg { width: 54px; height: 54px; border-radius: 11px; background: #ffeede; display: flex; align-items: center; justify-content: center; font-size: 26px; overflow: hidden; flex-shrink: 0; }
+    .cart-bar button:active { transform: scale(0.95); }
+    /* ── Messages ── */
+    .messages { flex: 1; overflow-y: auto; padding: 20px 16px 14px; display: flex; flex-direction: column; gap: 10px; scroll-behavior: smooth; }
+    .msg {
+      max-width: 84%; padding: 12px 16px; border-radius: 20px; font-size: 14.5px; line-height: 1.55;
+      white-space: pre-wrap; word-wrap: break-word; animation: popIn 0.3s var(--ease);
+    }
+    @keyframes popIn { from { opacity: 0; transform: translateY(10px) scale(0.97); } }
+    .msg.bot { background: #fff; border-bottom-left-radius: 6px; align-self: flex-start; box-shadow: 0 2px 8px rgba(15,18,32,0.06); }
+    .msg.user {
+      background: linear-gradient(135deg, var(--primary), color-mix(in srgb, var(--primary) 72%, #ff9d6b));
+      color: #fff; border-bottom-right-radius: 6px; align-self: flex-end;
+      box-shadow: 0 4px 14px color-mix(in srgb, var(--primary) 35%, transparent);
+    }
+    .msg b { font-weight: 800; }
+    /* ── Product cards ── */
+    .prods { display: flex; flex-direction: column; gap: 9px; align-self: stretch; animation: popIn 0.3s var(--ease); }
+    .prod {
+      background: #fff; border-radius: 18px; padding: 11px 13px; display: flex; gap: 13px;
+      align-items: center; cursor: pointer; box-shadow: 0 2px 8px rgba(15,18,32,0.06);
+      transition: transform 0.18s var(--ease), box-shadow 0.18s; border: 1.5px solid transparent;
+    }
+    .prod:hover { transform: translateY(-2px); border-color: var(--primary); box-shadow: 0 8px 22px rgba(15,18,32,0.1); }
+    .prod:active { transform: scale(0.98); }
+    .prod .pimg {
+      width: 60px; height: 60px; border-radius: 15px;
+      background: linear-gradient(135deg, color-mix(in srgb, var(--primary) 12%, #fff), color-mix(in srgb, var(--primary) 5%, #fff));
+      display: flex; align-items: center; justify-content: center; font-size: 26px; overflow: hidden; flex-shrink: 0;
+      color: color-mix(in srgb, var(--primary) 65%, #fff);
+    }
     .prod .pimg img { width: 100%; height: 100%; object-fit: cover; }
     .prod .pinfo { flex: 1; min-width: 0; }
-    .prod .pname { font-weight: 700; font-size: 14px; }
-    .prod .pdesc { font-size: 12px; color: #777; overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
-    .prod .pprice { font-weight: 800; color: var(--primary); font-size: 14px; white-space: nowrap; }
-    /* Quick replies */
-    .options { display: flex; flex-wrap: wrap; gap: 8px; align-self: flex-start; }
+    .prod .pname { font-weight: 800; font-size: 14px; letter-spacing: -0.1px; }
+    .prod .pdesc { font-size: 12px; color: #8b91a6; overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; margin-top: 2px; }
+    .prod .pright { display: flex; flex-direction: column; align-items: flex-end; gap: 5px; flex-shrink: 0; }
+    .prod .pprice { font-weight: 800; color: var(--primary); font-size: 14.5px; }
+    .prod .padd {
+      width: 28px; height: 28px; border-radius: 10px; background: color-mix(in srgb, var(--primary) 12%, #fff);
+      color: var(--primary); display: flex; align-items: center; justify-content: center; font-size: 15px;
+    }
+    /* ── Quick replies ── */
+    .options { display: flex; flex-wrap: wrap; gap: 8px; align-self: flex-start; animation: popIn 0.35s var(--ease); }
     .opt {
-      background: #fff; border: 1.5px solid var(--primary); color: var(--primary);
-      border-radius: 999px; padding: 8px 16px; font-size: 13.5px; font-weight: 700;
-      cursor: pointer; transition: all 0.12s;
+      background: #fff; border: 1.5px solid color-mix(in srgb, var(--primary) 45%, #fff); color: var(--primary);
+      border-radius: 999px; padding: 9px 17px; font-size: 13.5px; font-weight: 700; font-family: inherit;
+      cursor: pointer; transition: all 0.15s var(--ease); box-shadow: 0 2px 6px rgba(15,18,32,0.05);
     }
-    .opt:hover { background: var(--primary); color: #fff; }
-    /* WhatsApp CTA */
+    .opt:hover { background: var(--primary); color: #fff; border-color: var(--primary); transform: translateY(-1px); }
+    .opt:active { transform: scale(0.96); }
+    /* ── WhatsApp CTA ── */
     .wa-btn {
-      display: flex; align-items: center; justify-content: center; gap: 8px;
-      background: #25d366; color: #fff; border-radius: 999px; padding: 12px 18px;
+      display: flex; align-items: center; justify-content: center; gap: 9px;
+      background: linear-gradient(135deg, #1faa53, #25d366); color: #fff; border-radius: 18px; padding: 14px 18px;
       font-weight: 800; font-size: 14.5px; text-decoration: none; align-self: stretch;
-      box-shadow: 0 4px 14px rgba(37,211,102,0.4);
+      box-shadow: 0 8px 24px rgba(37,211,102,0.4); animation: popIn 0.35s var(--ease);
+      transition: transform 0.15s var(--ease);
     }
-    /* Typing */
-    .typing { display: flex; gap: 4px; padding: 12px 16px; background: #fff; border-radius: 16px; border-bottom-left-radius: 4px; align-self: flex-start; }
-    .typing span { width: 7px; height: 7px; border-radius: 50%; background: #bbb; animation: blink 1.2s infinite; }
-    .typing span:nth-child(2) { animation-delay: 0.2s; }
-    .typing span:nth-child(3) { animation-delay: 0.4s; }
-    @keyframes blink { 0%, 70%, 100% { opacity: 0.3; } 35% { opacity: 1; } }
-    /* Input */
-    .input-bar { display: flex; gap: 10px; padding: 12px 14px; background: #f5f1ec; flex-shrink: 0; }
+    .wa-btn:active { transform: scale(0.97); }
+    .wa-btn i { font-size: 20px; }
+    /* ── Typing ── */
+    .typing { display: flex; gap: 5px; padding: 14px 18px; background: #fff; border-radius: 20px; border-bottom-left-radius: 6px; align-self: flex-start; box-shadow: 0 2px 8px rgba(15,18,32,0.06); }
+    .typing span { width: 7px; height: 7px; border-radius: 50%; background: #c2c8d8; animation: blink 1.2s infinite; }
+    .typing span:nth-child(2) { animation-delay: 0.18s; }
+    .typing span:nth-child(3) { animation-delay: 0.36s; }
+    @keyframes blink { 0%, 70%, 100% { opacity: 0.3; transform: translateY(0); } 35% { opacity: 1; transform: translateY(-3px); } }
+    /* ── Input ── */
+    .input-bar {
+      display: flex; gap: 10px; padding: 12px 14px calc(12px + env(safe-area-inset-bottom));
+      background: rgba(255,255,255,0.75); backdrop-filter: blur(14px); flex-shrink: 0;
+      border-top: 1px solid rgba(255,255,255,0.9);
+    }
     .input-bar input {
-      flex: 1; border: none; border-radius: 999px; padding: 12px 18px; font-size: 14.5px;
-      outline: none; background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,0.08); font-family: inherit;
+      flex: 1; border: 1.5px solid transparent; border-radius: 999px; padding: 13px 19px; font-size: 14.5px;
+      outline: none; background: #fff; box-shadow: 0 2px 10px rgba(15,18,32,0.07); font-family: inherit;
+      transition: border-color 0.18s, box-shadow 0.18s;
     }
+    .input-bar input:focus { border-color: var(--primary); box-shadow: 0 0 0 4px color-mix(in srgb, var(--primary) 14%, transparent); }
     .input-bar button {
-      width: 46px; height: 46px; border-radius: 50%; border: none; background: var(--primary);
-      color: #fff; font-size: 18px; cursor: pointer; flex-shrink: 0; transition: background 0.15s;
+      width: 48px; height: 48px; border-radius: 50%; border: none;
+      background: linear-gradient(135deg, var(--primary), color-mix(in srgb, var(--primary) 70%, #ffb088));
+      color: #fff; font-size: 19px; cursor: pointer; flex-shrink: 0;
+      display: flex; align-items: center; justify-content: center;
+      box-shadow: 0 6px 16px color-mix(in srgb, var(--primary) 40%, transparent);
+      transition: transform 0.15s var(--ease);
     }
-    .input-bar button:hover { background: var(--primary-dark); }
+    .input-bar button:hover { transform: scale(1.06); }
+    .input-bar button:active { transform: scale(0.94); }
+    /* Scrollbar */
+    .messages::-webkit-scrollbar { width: 5px; }
+    .messages::-webkit-scrollbar-thumb { background: #c9cede; border-radius: 99px; }
   </style>
 </head>
 <body>
   <div class="chat-app">
     <div class="chat-header">
-      <div class="logo" id="bizLogo">🍽️</div>
-      <div>
+      <div class="logo" id="bizLogo"><i class="ph-fill ph-storefront"></i></div>
+      <div class="meta">
         <h1 id="bizName">Cargando…</h1>
-        <div class="status">Asistente en línea</div>
+        <div class="status"><span class="dot"></span> Asistente en línea · responde al instante</div>
       </div>
     </div>
     <div class="cart-bar" id="cartBar">
-      <span id="cartInfo"></span>
-      <button id="cartCheckout">Finalizar ✅</button>
+      <span class="ci"><i class="ph-fill ph-shopping-cart"></i><span id="cartInfo"></span></span>
+      <button id="cartCheckout">Finalizar <i class="ph-bold ph-arrow-right"></i></button>
     </div>
     <div class="messages" id="messages"></div>
     <div class="input-bar">
       <input type="text" id="input" placeholder="Escribe un mensaje…" maxlength="500" autocomplete="off" />
-      <button id="sendBtn">➤</button>
+      <button id="sendBtn" title="Enviar"><i class="ph-fill ph-paper-plane-tilt"></i></button>
     </div>
   </div>
 
@@ -158,9 +222,9 @@
           const card = document.createElement('div');
           card.className = 'prod';
           card.innerHTML = `
-            <div class="pimg">${p.image ? `<img src="${esc(p.image)}" alt="">` : '🍽️'}</div>
+            <div class="pimg">${p.image ? `<img src="${esc(p.image)}" alt="" loading="lazy">` : '<i class="ph ph-fork-knife"></i>'}</div>
             <div class="pinfo"><div class="pname">${esc(p.name)}</div><div class="pdesc">${esc(p.description || '')}</div></div>
-            <div class="pprice">${esc(p.priceLabel)}</div>`;
+            <div class="pright"><span class="pprice">${esc(p.priceLabel)}</span><span class="padd"><i class="ph-bold ph-plus"></i></span></div>`;
           card.addEventListener('click', () => send(`prod_${p.id}`, p.name));
           wrap.appendChild(card);
         });
@@ -173,7 +237,7 @@
         a.href = data.order.whatsappLink;
         a.target = '_blank';
         a.rel = 'noopener';
-        a.textContent = '📲 Enviar mi pedido por WhatsApp';
+        a.innerHTML = '<i class="ph-fill ph-whatsapp-logo"></i> Enviar mi pedido por WhatsApp';
         messagesEl.appendChild(a);
       }
 
@@ -193,7 +257,7 @@
       const bar = document.getElementById('cartBar');
       if (data.cart && data.cart.items.length) {
         const n = data.cart.items.reduce((s, it) => s + it.qty, 0);
-        document.getElementById('cartInfo').textContent = `🛒 ${n} producto${n > 1 ? 's' : ''} — ${data.cart.totalLabel}`;
+        document.getElementById('cartInfo').textContent = `${n} producto${n > 1 ? 's' : ''} · ${data.cart.totalLabel}`;
         bar.classList.add('show');
       } else {
         bar.classList.remove('show');
@@ -241,12 +305,8 @@
         const info = await res.json();
         document.title = `${info.businessName} — Haz tu pedido`;
         document.getElementById('bizName').textContent = info.businessName;
-        if (info.primaryColor) {
-          document.documentElement.style.setProperty('--primary', info.primaryColor);
-        }
-        if (info.logo) {
-          document.getElementById('bizLogo').innerHTML = `<img src="${esc(info.logo)}" alt="">`;
-        }
+        if (info.primaryColor) document.documentElement.style.setProperty('--primary', info.primaryColor);
+        if (info.logo) document.getElementById('bizLogo').innerHTML = `<img src="${esc(info.logo)}" alt="">`;
         send('start', null);
       } catch {
         document.getElementById('bizName').textContent = 'Negocio no encontrado';
