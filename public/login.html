@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Iniciar sesión — ChatBotPro</title>
+  <link rel="stylesheet" href="/static/css/styles.css" />
+</head>
+<body>
+  <div class="auth-wrap">
+    <div class="auth-hero">
+      <div style="font-size:42px">🤖</div>
+      <h1>Hola de nuevo 👋</h1>
+      <p>Entra a tu panel para ver tus pedidos del día, ventas y administrar tu menú.</p>
+      <div class="feats">
+        <div class="feat"><span>📊</span><span>Reportes claros de ventas y pedidos</span></div>
+        <div class="feat"><span>🍔</span><span>Administra tu menú en segundos</span></div>
+        <div class="feat"><span>🔒</span><span>Información protegida con cifrado</span></div>
+      </div>
+    </div>
+    <div class="auth-panel">
+      <div class="auth-card">
+        <div class="logo"><span class="dot">🤖</span> ChatBotPro</div>
+        <h2>Iniciar sesión</h2>
+        <p class="sub">Accede al panel de tu restaurante.</p>
+        <div class="error-box" id="error"></div>
+        <form id="loginForm">
+          <div class="field">
+            <label>Usuario</label>
+            <input type="text" id="username" autocomplete="username" required />
+          </div>
+          <div class="field">
+            <label>Contraseña</label>
+            <input type="password" id="password" autocomplete="current-password" required />
+          </div>
+          <button class="btn btn-primary btn-block" type="submit" id="btn">Entrar</button>
+        </form>
+        <p class="alt">¿No tienes cuenta? <a href="/register">Regístrate gratis</a></p>
+      </div>
+    </div>
+  </div>
+  <script>
+    const form = document.getElementById('loginForm');
+    const errBox = document.getElementById('error');
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      errBox.classList.remove('show');
+      const btn = document.getElementById('btn');
+      btn.disabled = true;
+      try {
+        const res = await fetch('/api/auth/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            username: document.getElementById('username').value,
+            password: document.getElementById('password').value,
+          }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Error');
+        location.href = '/app';
+      } catch (err) {
+        errBox.textContent = err.message;
+        errBox.classList.add('show');
+        btn.disabled = false;
+      }
+    });
+  </script>
+</body>
+</html>

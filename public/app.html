@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Panel — ChatBotPro</title>
+  <link rel="stylesheet" href="/static/css/styles.css" />
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+</head>
+<body>
+  <div class="app">
+    <!-- ===== Sidebar ===== -->
+    <aside class="sidebar" id="sidebar">
+      <div class="brand"><span class="dot">🤖</span> <span id="brandName">ChatBotPro</span></div>
+      <nav>
+        <div class="nav-label">Principal</div>
+        <a href="#dashboard" data-view="dashboard" class="active"><span class="ico">📊</span> Dashboard</a>
+        <a href="#pedidos" data-view="pedidos"><span class="ico">🧾</span> Pedidos <span id="pendingBadge" class="badge b-pendiente" style="display:none;margin-left:auto"></span></a>
+        <a href="#productos" data-view="productos"><span class="ico">🍔</span> Productos</a>
+        <div class="nav-label">Chatbot</div>
+        <a href="#chatbot" data-view="chatbot"><span class="ico">💬</span> Mi chatbot</a>
+        <div class="nav-label">Negocio</div>
+        <a href="#config" data-view="config"><span class="ico">⚙️</span> Configuración</a>
+      </nav>
+      <div class="foot">
+        <div class="user-chip">
+          <div class="avatar" id="avatar">?</div>
+          <div class="meta"><b id="userBizName">—</b><span id="userName">—</span></div>
+        </div>
+        <button class="logout-btn" id="logoutBtn">Cerrar sesión</button>
+      </div>
+    </aside>
+
+    <!-- ===== Main ===== -->
+    <main class="main">
+      <div class="topbar">
+        <div style="display:flex;align-items:center;gap:12px">
+          <button class="menu-toggle" id="menuToggle">☰</button>
+          <div>
+            <h1 id="viewTitle">Dashboard</h1>
+            <div class="sub" id="viewSub">Resumen de tu negocio</div>
+          </div>
+        </div>
+        <a class="btn btn-primary" id="openChatLink" href="#" target="_blank">💬 Ver mi chatbot</a>
+      </div>
+
+      <!-- Dashboard -->
+      <section class="section active" id="view-dashboard">
+        <div class="grid-stats">
+          <div class="card stat"><div class="ic" style="background:#e6f9ed">💰</div><div><div class="val" id="stSalesToday">$0</div><div class="lbl">Ventas de hoy</div></div></div>
+          <div class="card stat"><div class="ic" style="background:#e7f0ff">🧾</div><div><div class="val" id="stOrdersToday">0</div><div class="lbl">Pedidos de hoy</div></div></div>
+          <div class="card stat"><div class="ic" style="background:#fff4e0">⏳</div><div><div class="val" id="stPending">0</div><div class="lbl">Pedidos pendientes</div></div></div>
+          <div class="card stat"><div class="ic" style="background:#f3e8ff">🍔</div><div><div class="val" id="stProducts">0</div><div class="lbl">Productos activos</div></div></div>
+        </div>
+        <div class="grid-2">
+          <div class="card"><h3>📈 Ventas — últimos 7 días</h3><canvas id="salesChart" height="220"></canvas></div>
+          <div class="card"><h3>🏆 Productos más vendidos</h3><canvas id="topChart" height="220"></canvas></div>
+        </div>
+        <div class="card" style="margin-top:16px">
+          <h3>🕑 Pedidos recientes</h3>
+          <div id="recentOrders"><div class="empty">Aún no hay pedidos</div></div>
+        </div>
+      </section>
+
+      <!-- Pedidos -->
+      <section class="section" id="view-pedidos">
+        <div class="card">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;flex-wrap:wrap;gap:10px">
+            <h3 style="margin:0">Todos los pedidos</h3>
+            <select id="orderFilter" style="width:auto">
+              <option value="">Todos los estatus</option>
+              <option value="pendiente">Pendiente</option>
+              <option value="confirmado">Confirmado</option>
+              <option value="preparando">Preparando</option>
+              <option value="enviado">Enviado</option>
+              <option value="entregado">Entregado</option>
+              <option value="cancelado">Cancelado</option>
+            </select>
+          </div>
+          <div style="overflow-x:auto"><div id="ordersTable"></div></div>
+        </div>
+      </section>
+
+      <!-- Productos -->
+      <section class="section" id="view-productos">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;flex-wrap:wrap;gap:10px">
+          <div style="display:flex;gap:8px;flex-wrap:wrap" id="catChips"></div>
+          <div style="display:flex;gap:8px">
+            <button class="btn btn-ghost" id="addCatBtn">➕ Categoría</button>
+            <button class="btn btn-primary" id="addProdBtn">➕ Producto</button>
+          </div>
+        </div>
+        <div class="prod-grid" id="prodGrid"></div>
+      </section>
+
+      <!-- Chatbot -->
+      <section class="section" id="view-chatbot">
+        <div class="card" style="margin-bottom:16px">
+          <h3>🔗 Tu liga para clientes</h3>
+          <p style="color:var(--ink-2);font-size:14px;margin-bottom:14px">Compártela en redes, en tu WhatsApp Business o imprímela en QR. Tus clientes ordenan solos y te llega el resumen por WhatsApp.</p>
+          <div class="share-box">
+            <input type="text" id="chatLink" readonly />
+            <button class="btn btn-primary" id="copyLinkBtn">📋 Copiar</button>
+            <a class="btn btn-ghost" id="waShareBtn" target="_blank" href="#">📲 Compartir por WhatsApp</a>
+          </div>
+        </div>
+        <div class="card">
+          <h3>💬 Flujo del chatbot</h3>
+          <form id="botForm">
+            <div class="field">
+              <label>Mensaje de bienvenida</label>
+              <textarea id="botWelcome" rows="3"></textarea>
+              <div class="hint">Es lo primero que ve tu cliente al abrir el chat.</div>
+            </div>
+            <div class="field">
+              <label>WhatsApp del negocio (con lada, ej. 52 1 33 1234 5678)</label>
+              <input type="tel" id="botWhatsapp" placeholder="5213312345678" />
+              <div class="hint">Aquí llegará el resumen de cada pedido confirmado.</div>
+            </div>
+            <div class="row-2">
+              <div class="field">
+                <label>¿Entrega a domicilio?</label>
+                <select id="botDelivery"><option value="1">Sí</option><option value="0">No</option></select>
+              </div>
+              <div class="field">
+                <label>¿Recoger en sucursal?</label>
+                <select id="botPickup"><option value="1">Sí</option><option value="0">No</option></select>
+              </div>
+            </div>
+            <button class="btn btn-primary" type="submit">Guardar flujo</button>
+          </form>
+        </div>
+      </section>
+
+      <!-- Configuración -->
+      <section class="section" id="view-config">
+        <div class="card">
+          <h3>🏪 Datos del negocio</h3>
+          <form id="configForm">
+            <div class="row-2">
+              <div class="field">
+                <label>Nombre del negocio</label>
+                <input type="text" id="cfgName" />
+              </div>
+              <div class="field">
+                <label>Color principal</label>
+                <input type="color" id="cfgColor" value="#ff6b35" style="height:44px;padding:4px" />
+              </div>
+            </div>
+            <div class="field">
+              <label>Logo (PNG/JPG, máx. 2 MB)</label>
+              <input type="file" id="cfgLogo" accept="image/*" />
+              <div id="logoPreview" style="margin-top:8px"></div>
+            </div>
+            <div class="row-2">
+              <div class="field">
+                <label>Dirección</label>
+                <input type="text" id="cfgAddress" placeholder="Av. Principal 123" />
+              </div>
+              <div class="field">
+                <label>Horario</label>
+                <input type="text" id="cfgHours" placeholder="Lun-Dom 12:00 - 22:00" />
+              </div>
+            </div>
+            <div class="field" style="max-width:240px">
+              <label>Moneda</label>
+              <select id="cfgCurrency">
+                <option value="MXN">MXN — Peso mexicano</option>
+                <option value="USD">USD — Dólar</option>
+                <option value="COP">COP — Peso colombiano</option>
+                <option value="ARS">ARS — Peso argentino</option>
+                <option value="PEN">PEN — Sol peruano</option>
+                <option value="EUR">EUR — Euro</option>
+              </select>
+            </div>
+            <button class="btn btn-primary" type="submit">Guardar configuración</button>
+          </form>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <!-- Modal producto -->
+  <div class="modal-bg" id="prodModal">
+    <div class="modal">
+      <h3 id="prodModalTitle">Nuevo producto</h3>
+      <form id="prodForm">
+        <input type="hidden" id="pId" />
+        <div class="field"><label>Nombre *</label><input type="text" id="pName" required /></div>
+        <div class="field"><label>Descripción</label><textarea id="pDesc" rows="2"></textarea></div>
+        <div class="row-2">
+          <div class="field"><label>Precio *</label><input type="number" id="pPrice" step="0.01" min="0" required /></div>
+          <div class="field"><label>Categoría</label><select id="pCat"><option value="">Sin categoría</option></select></div>
+        </div>
+        <div class="row-2">
+          <div class="field"><label>Imagen</label><input type="file" id="pImage" accept="image/*" /></div>
+          <div class="field"><label>Estado</label><select id="pActive"><option value="1">Activo (visible en chatbot)</option><option value="0">Inactivo</option></select></div>
+        </div>
+        <div class="modal-actions">
+          <button type="button" class="btn btn-ghost" id="prodCancel">Cancelar</button>
+          <button type="submit" class="btn btn-primary">Guardar</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <div id="toast"></div>
+  <script src="/static/js/app.js"></script>
+</body>
+</html>
