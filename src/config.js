@@ -3,16 +3,27 @@ const path = require('path');
 const crypto = require('crypto');
 
 const ROOT = path.join(__dirname, '..');
-const envPath = path.join(ROOT, '.env');
-require('dotenv').config({ path: envPath });
+const defaultEnvByNodeEnv = {
+  production: '.env.production',
+  test: '.env.test',
+};
+const selectedEnvFile = (process.env.ENV_FILE || '').trim() || defaultEnvByNodeEnv[process.env.NODE_ENV] || '.env';
+const envPath = path.join(ROOT, selectedEnvFile);
+
+// Carga base + override por entorno para permitir defaults locales.
+const baseEnvPath = path.join(ROOT, '.env');
+if (fs.existsSync(baseEnvPath)) require('dotenv').config({ path: baseEnvPath });
+if (envPath !== baseEnvPath && fs.existsSync(envPath)) require('dotenv').config({ path: envPath, override: true });
+if (envPath === baseEnvPath && fs.existsSync(envPath)) require('dotenv').config({ path: envPath });
 
 // Genera y persiste secretos si no existen (primer arranque local)
 function ensureSecret(name, bytes = 32) {
   if (!process.env[name] || !process.env[name].trim()) {
     const val = crypto.randomBytes(bytes).toString('hex');
+    if (!fs.existsSync(envPath)) fs.writeFileSync(envPath, '', 'utf8');
     fs.appendFileSync(envPath, `\n${name}=${val}`);
     process.env[name] = val;
-    console.log(`[config] Secreto ${name} generado y guardado en .env`);
+    console.log(`[config] Secreto ${name} generado y guardado en ${selectedEnvFile}`);
   }
   return process.env[name];
 }

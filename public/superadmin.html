@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SuperAdmin — ChatBotPro</title>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/regular/style.css" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/bold/style.css" />
+  <link rel="stylesheet" href="/static/css/styles.css" />
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar" id="saSidebar">
+      <div class="brand">
+        <div class="logo-wrap"><div class="logo-dot" id="saBrandLogoDot"><i class="ph-fill ph-crown"></i><img id="saBrandLogo" alt="Logo SuperAdmin" hidden /></div></div>
+        <div>
+          <h2>SuperAdmin</h2>
+          <small>Control central</small>
+        </div>
+      </div>
+      <nav>
+        <a href="#tenants" data-sa-view="tenants" class="active"><span class="nav-ic"><i class="ph-fill ph-buildings"></i></span><span>Tenants</span></a>
+        <a href="#integrations" data-sa-view="integrations"><span class="nav-ic"><i class="ph-fill ph-plugs-connected"></i></span><span>Integraciones</span></a>
+      </nav>
+      <div class="user-pill" style="margin-top:auto">
+        <div class="avatar" style="background:linear-gradient(135deg,#2563eb,#0ea5e9)"><i class="ph-bold ph-user-gear"></i></div>
+        <div>
+          <b id="saUserName">superadmin</b>
+          <small>Plataforma</small>
+        </div>
+        <button class="btn btn-ghost" id="saLogout" type="button" title="Salir"><i class="ph-bold ph-sign-out"></i></button>
+      </div>
+    </aside>
+
+    <main class="main">
+      <header class="topbar">
+        <div>
+          <h1 id="saTitle"><i class="ph-bold ph-buildings"></i> Tenants</h1>
+          <p id="saSub" class="muted">Administra tenants activos, por pagar y suspendidos.</p>
+        </div>
+        <div class="sa-clock-pill">
+          <div><i class="ph-bold ph-calendar-blank"></i> <span id="saNowDate">--</span></div>
+          <div><i class="ph-bold ph-clock"></i> <span id="saNowTime">--:--:--</span></div>
+        </div>
+      </header>
+
+      <section id="saViewTenants" class="section active">
+        <div class="card" style="padding:16px;margin-bottom:14px">
+          <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px">
+            <h3><i class="ph-bold ph-bell-ringing"></i> Cobranza mensual y alertas</h3>
+            <button type="button" class="btn btn-ghost" id="saBillingRefresh"><i class="ph-bold ph-arrows-clockwise"></i> Actualizar cobranza</button>
+          </div>
+          <div id="saBillingSummary" class="pos-close-grid"></div>
+        </div>
+
+        <div class="card" style="padding:16px">
+          <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:12px">
+            <div class="segmented" id="saTenantFilters">
+              <button type="button" class="active" data-status="all">Todos</button>
+              <button type="button" data-status="active">Activos</button>
+              <button type="button" data-status="due">Por pagar</button>
+              <button type="button" data-status="mora">En mora</button>
+              <button type="button" data-status="inactive">Inactivos</button>
+            </div>
+            <input id="saTenantSearch" type="search" placeholder="Buscar por negocio, slug o dueño" style="max-width:320px" />
+            <button type="button" class="btn btn-primary" id="saReloadTenants"><i class="ph-bold ph-arrows-clockwise"></i> Actualizar</button>
+          </div>
+          <div id="saTenantsTable"></div>
+        </div>
+      </section>
+
+      <section id="saViewIntegrations" class="section" hidden>
+        <div class="card" style="padding:16px">
+          <h3 style="margin-bottom:10px"><i class="ph-bold ph-open-ai-logo"></i> OpenAI y APIs del chatbot</h3>
+          <form id="saIntegrationForm">
+            <div class="row-2">
+              <div class="field"><label><i class="ph-bold ph-toggle-left"></i> OpenAI habilitado</label>
+                <select id="saOpenAiEnabled"><option value="1">Sí</option><option value="0">No</option></select>
+              </div>
+              <div class="field"><label><i class="ph-bold ph-cpu"></i> Modelo</label><input id="saOpenAiModel" placeholder="gpt-4o-mini" /></div>
+            </div>
+            <div class="field"><label><i class="ph-bold ph-key"></i> API Key OpenAI</label><input id="saOpenAiKey" type="password" placeholder="sk-... (deja vacío para no cambiar)" /></div>
+            <div class="field"><label><i class="ph-bold ph-link-simple"></i> Base URL API (opcional)</label><input id="saOpenAiBaseUrl" placeholder="https://api.openai.com/v1" /></div>
+            <div class="field"><label><i class="ph-bold ph-webhooks-logo"></i> Webhook chatbot (opcional)</label><input id="saWebhookUrl" placeholder="https://mi-api.com/chatbot/webhook" /></div>
+            <hr style="margin:18px 0;border:none;border-top:1px solid var(--line)" />
+            <h3 style="margin-bottom:10px"><i class="ph-bold ph-palette"></i> Personalización SuperAdmin</h3>
+            <div class="field">
+              <label><i class="ph-bold ph-image"></i> Logo SuperAdmin</label>
+              <input id="saBrandLogoFile" type="file" accept="image/png,image/jpeg,image/webp,image/svg+xml" />
+              <div class="hint">Selecciona una imagen desde tu dispositivo (móvil o PC). Máximo 8 MB.</div>
+            </div>
+            <div class="sa-logo-preview">
+              <div class="sa-logo-preview-dot"><i class="ph-fill ph-crown" id="saBrandLogoPreviewIcon"></i><img id="saBrandLogoPreview" alt="Preview logo SuperAdmin" hidden /></div>
+              <div>
+                <b>Vista previa del menú</b>
+                <small>Si no subes logo, se mostrará el icono por defecto.</small>
+              </div>
+            </div>
+            <button class="btn btn-ghost" type="button" id="saUploadBrandLogo"><i class="ph-bold ph-upload-simple"></i> Subir logo</button>
+            <div class="hint" id="saIntegrationHint"></div>
+            <button class="btn btn-primary" type="submit"><i class="ph-bold ph-floppy-disk"></i> Guardar integraciones</button>
+          </form>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <div id="toast"><i class="ph-fill ph-check-circle"></i><span id="toastMsg"></span></div>
+
+  <div class="modal-bg" id="saPaymentModal">
+    <div class="modal" style="max-width:560px">
+      <h3><i class="ph-bold ph-currency-circle-dollar"></i> Registrar pago de tenant</h3>
+      <form id="saPaymentForm">
+        <input type="hidden" id="saPayTenantId" />
+        <div class="field">
+          <label><i class="ph-bold ph-buildings"></i> Tenant</label>
+          <input type="text" id="saPayTenantName" readonly />
+        </div>
+        <div class="row-2">
+          <div class="field">
+            <label><i class="ph-bold ph-money"></i> Monto</label>
+            <input type="number" id="saPayAmount" min="0" step="0.01" required />
+          </div>
+          <div class="field">
+            <label><i class="ph-bold ph-credit-card"></i> Medio de pago</label>
+            <select id="saPayMethod" required>
+              <option value="stripe">Stripe</option>
+              <option value="transferencia">Transferencia</option>
+              <option value="deposito">Depósito</option>
+            </select>
+          </div>
+        </div>
+        <div class="row-2">
+          <div class="field">
+            <label><i class="ph-bold ph-calendar"></i> Fecha de pago</label>
+            <input type="date" id="saPayDate" required />
+          </div>
+          <div class="field">
+            <label><i class="ph-bold ph-calendar-check"></i> Próximo vencimiento</label>
+            <input type="text" id="saPayNextDue" readonly />
+          </div>
+        </div>
+        <div class="field">
+          <label><i class="ph-bold ph-note-pencil"></i> Notas</label>
+          <textarea id="saPayNote" rows="3" placeholder="Referencia, folio, observaciones"></textarea>
+        </div>
+        <div class="hint" id="saPayHint">El sistema calculará el próximo vencimiento exactamente a +1 mes.</div>
+        <div class="modal-actions">
+          <button type="button" class="btn btn-ghost" id="saPayCancel">Cancelar</button>
+          <button class="btn btn-primary" type="submit"><i class="ph-bold ph-check-circle"></i> Registrar pago</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <div class="modal-bg" id="saSuspendModal">
+    <div class="modal" style="max-width:520px">
+      <h3><i class="ph-bold ph-warning-octagon"></i> Suspender tenant</h3>
+      <form id="saSuspendForm">
+        <input type="hidden" id="saSuspendTenantId" />
+        <div class="field">
+          <label><i class="ph-bold ph-buildings"></i> Tenant</label>
+          <input type="text" id="saSuspendTenantName" readonly />
+        </div>
+        <div class="field">
+          <label><i class="ph-bold ph-shield-warning"></i> Tipo de suspensión</label>
+          <select id="saSuspendMode">
+            <option value="account">Suspender sistema (cuenta inactiva)</option>
+            <option value="billing">Suspender por falta de pago (automático de cobranza)</option>
+          </select>
+        </div>
+        <div class="field">
+          <label><i class="ph-bold ph-note-pencil"></i> Nota (opcional)</label>
+          <textarea id="saSuspendNote" rows="3" placeholder="Ej. No se recibió pago del ciclo actual"></textarea>
+        </div>
+        <div class="hint" id="saSuspendHint">Si eliges falta de pago, el tenant verá el aviso para contactar por WhatsApp y reactivar su servicio.</div>
+        <div class="modal-actions">
+          <button type="button" class="btn btn-ghost" id="saSuspendCancel">Cancelar</button>
+          <button class="btn btn-danger" type="submit"><i class="ph-bold ph-pause-circle"></i> Confirmar suspensión</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <div class="modal-bg" id="saActivateModal">
+    <div class="modal" style="max-width:500px;text-align:center">
+      <div style="width:64px;height:64px;border-radius:20px;background:var(--green-soft);display:flex;align-items:center;justify-content:center;margin:0 auto 16px">
+        <i class="ph-bold ph-check-circle" style="font-size:30px;color:var(--green)"></i>
+      </div>
+      <h3 style="justify-content:center"><i class="ph-bold ph-lightning"></i> Reactivar tenant</h3>
+      <p id="saActivateMsg" style="color:var(--ink-2);font-size:14px;margin:-8px 0 16px">¿Deseas reactivar este tenant?</p>
+      <div class="hint" id="saActivateHint" style="margin-bottom:18px">Se habilitará nuevamente el acceso del tenant.</div>
+      <div class="modal-actions" style="justify-content:center">
+        <button type="button" class="btn btn-ghost" id="saActivateCancel">Cancelar</button>
+        <button class="btn btn-primary" type="button" id="saActivateConfirm"><i class="ph-bold ph-play-circle"></i> Sí, reactivar</button>
+      </div>
+    </div>
+  </div>
+  <script src="/static/js/superadmin.js"></script>
+</body>
+</html>

@@ -2,13 +2,46 @@
 // tomar pedidos. Si hay OPENAI_API_KEY, responde preguntas libres con IA.
 const crypto = require('crypto');
 const config = require('../config');
-const { getSetting } = require('../db');
-const { encrypt, lookupHash } = require('../utils/crypto');
+const OpenAI = require('openai');
+const { q, getSetting, getSuperAdminSetting } = require('../db');
+const { encrypt, decrypt, lookupHash } = require('../utils/crypto');
 
-let openaiClient = null;
-if (config.OPENAI_API_KEY) {
-  const OpenAI = require('openai');
-  openaiClient = new OpenAI({ apiKey: config.OPENAI_API_KEY });
+let aiConfigCache = { expiresAt: 0, value: null };
+const aiClientCache = new Map();
+
+async function getAiRuntimeConfig() {
+  const now = Date.now();
+  if (aiConfigCache.expiresAt > now && aiConfigCache.value) return aiConfigCache.value;
+
+  const [enabledRaw, modelRaw, baseUrlRaw, keyEncRaw] = await Promise.all([
+    getSuperAdminSetting('openai_enabled', ''),
+    getSuperAdminSetting('openai_model', ''),
+    getSuperAdminSetting('openai_base_url', ''),
+    getSuperAdminSetting('openai_api_key_enc', ''),
+  ]);
+
+  const keyFromSuperAdmin = decrypt(keyEncRaw || '') || '';
+  const key = keyFromSuperAdmin || config.OPENAI_API_KEY || '';
+  const model = String(modelRaw || 'gpt-4o-mini').trim() || 'gpt-4o-mini';
+  const baseUrl = String(baseUrlRaw || '').trim();
+  const enabled =
+    enabledRaw === ''
+      ? Boolean(key)
+      : String(enabledRaw) === '1' && Boolean(key);
+
+  aiConfigCache = {
+    expiresAt: now + 60 * 1000,
+    value: { enabled, key, model, baseUrl },
+  };
+  return aiConfigCache.value;
+}
+
+function getOpenAiClient(key, baseUrl) {
+  const cacheKey = `${key}::${baseUrl || ''}`;
+  if (aiClientCache.has(cacheKey)) return aiClientCache.get(cacheKey);
+  const client = new OpenAI(baseUrl ? { apiKey: key, baseURL: baseUrl } : { apiKey: key });
+  aiClientCache.set(cacheKey, client);
+  return client;
 }
 
 function money(n, currency = 'MXN') {
@@ -44,6 +77,44 @@ function cartSummary(cart, currency) {
   if (!cart.length) return 'Tu carrito está vacío 🛒';
   const lines = cart.map((it) => `• ${it.qty}x ${it.name} — ${money(it.price * it.qty, currency)}`);
   return `🛒 *Tu pedido:*\n${lines.join('\n')}\n\n*Total: ${money(cartTotal(cart), currency)}*`;
+}
+
+function parseGeoInput(input) {
+  const raw = String(input || '').trim();
+  if (!raw.toLowerCase().startsWith('geo:')) return null;
+  const payload = raw.slice(4);
+  const [coordsPart, labelPart] = payload.split('|');
+  const [latS, lngS] = String(coordsPart || '').split(',');
+  const lat = Number(latS);
+  const lng = Number(lngS);
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+  const label = String(labelPart || '').trim().slice(0, 160);
+  return { lat, lng, label };
+}
+
+function mapsUrl(lat, lng) {
+  return `https://www.google.com/maps?q=${lat},${lng}`;
+}
+
+function normalizeWhatsappNumber(raw) {
+  let digits = String(raw || '').replace(/\D/g, '');
+  if (!digits) return '';
+
+  // Si viene en formato internacional con 00...
+  digits = digits.replace(/^00+/, '');
+
+  // México con prefijo antiguo 521XXXXXXXXXX -> 52XXXXXXXXXX
+  if (digits.length === 13 && digits.startsWith('521')) {
+    digits = `52${digits.slice(3)}`;
+  }
+
+  // Si solo capturaron 10 dígitos locales, asumimos MX por defecto
+  if (digits.length === 10) {
+    digits = `52${digits}`;
+  }
+
+  if (digits.length < 11 || digits.length > 15) return '';
+  return digits;
 }
 
 function mainOptions(cart) {
@@ -104,18 +175,23 @@ function buildOrderText(businessName, cart, customer, delivery, currency) {
     '',
     `👤 ${customer.name}`,
     `📞 ${customer.phone}`,
-    delivery === 'domicilio' ? `📍 Entrega a domicilio: ${customer.address}` : '🏪 Recoger en sucursal',
+    delivery === 'domicilio'
+      ? `📍 Entrega a domicilio: ${customer.address}`
+      : `🏪 Recoger en sucursal${customer.branchName ? `: ${customer.branchName}` : ''}`,
   ];
+  if (customer.locationText) lines.push(`🧭 Ubicación cliente: ${customer.locationText}`);
   return lines.join('\n');
 }
 
 async function aiFallback(t, businessName, userText) {
-  if (!openaiClient) return null;
+  const aiCfg = await getAiRuntimeConfig();
+  if (!aiCfg.enabled || !aiCfg.key) return null;
   try {
+    const openaiClient = getOpenAiClient(aiCfg.key, aiCfg.baseUrl);
     const products = await activeProducts(t);
     const menuText = products.map((p) => `- ${p.name} (${p.category || 'General'}): $${p.price}. ${p.description}`).join('\n');
     const completion = await openaiClient.chat.completions.create({
-      model: 'gpt-4o-mini',
+      model: aiCfg.model || 'gpt-4o-mini',
       max_tokens: 200,
       messages: [
         {
@@ -136,9 +212,15 @@ async function handleMessage(t, slug, sessionId, rawInput) {
   const input = String(rawInput || '').trim();
   const businessName = await getSetting(t, 'business_name', slug);
   const currency = await getSetting(t, 'currency', 'MXN');
-  const whatsapp = (await getSetting(t, 'whatsapp', '')).replace(/\D/g, '');
+  let whatsapp = normalizeWhatsappNumber(await getSetting(t, 'whatsapp', ''));
+  if (!whatsapp) {
+    const tenantRow = await q('SELECT phone_enc FROM tenants WHERE slug = $1 LIMIT 1', [slug]);
+    const tenantPhone = decrypt(tenantRow.rows[0]?.phone_enc || '');
+    whatsapp = normalizeWhatsappNumber(tenantPhone);
+  }
   const deliveryEnabled = (await getSetting(t, 'delivery_enabled', '1')) === '1';
   const pickupEnabled = (await getSetting(t, 'pickup_enabled', '1')) === '1';
+  const locationEnabled = (await getSetting(t, 'location_enabled', '1')) === '1';
 
   let state = (await getState(t, sessionId)) || { step: 'start', cart: [], customer: {}, currency };
   state.currency = currency;
@@ -265,11 +347,28 @@ async function handleMessage(t, slug, sessionId, rawInput) {
       state.delivery = 'domicilio';
       state.step = 'ask_address';
       reply.messages = ['¿Cuál es tu *dirección* de entrega? 📍'];
+      if (locationEnabled) reply.options = [{ label: '📍 Compartir ubicación', value: 'share_location' }];
     } else {
       state.delivery = 'recoger';
-      state.step = 'confirm';
-      reply.messages = [confirmText(state, businessName, currency)];
-      reply.options = confirmOptions();
+      const branches = await t.all('SELECT id, name, address, reference FROM {s}.branches WHERE active = 1 ORDER BY name');
+      if (branches.length) {
+        state.step = 'ask_branch';
+        state.branchOptions = branches;
+        reply.messages = ['¿En qué sucursal pasarás a recoger tu pedido?'];
+        reply.options = branches.map((b) => ({ label: `🏪 ${b.name}`, value: `branch_${b.id}` }));
+      } else {
+        state.step = locationEnabled ? 'ask_location_optional' : 'confirm';
+        if (locationEnabled) {
+          reply.messages = ['¿Quieres compartir tu ubicación para ubicarte más fácil? (Opcional)'];
+          reply.options = [
+            { label: '📍 Compartir ubicación', value: 'share_location' },
+            { label: 'Omitir', value: 'skip_location' },
+          ];
+        } else {
+          reply.messages = [confirmText(state, businessName, currency)];
+          reply.options = confirmOptions();
+        }
+      }
     }
     return finish();
   }
@@ -279,13 +378,30 @@ async function handleMessage(t, slug, sessionId, rawInput) {
       state.delivery = 'domicilio';
       state.step = 'ask_address';
       reply.messages = ['¿Cuál es tu *dirección* de entrega? 📍'];
+      if (locationEnabled) reply.options = [{ label: '📍 Compartir ubicación', value: 'share_location' }];
       return finish();
     }
     if (lower === 'delivery_recoger') {
       state.delivery = 'recoger';
-      state.step = 'confirm';
-      reply.messages = [confirmText(state, businessName, currency)];
-      reply.options = confirmOptions();
+      const branches = await t.all('SELECT id, name, address, reference FROM {s}.branches WHERE active = 1 ORDER BY name');
+      if (branches.length) {
+        state.step = 'ask_branch';
+        state.branchOptions = branches;
+        reply.messages = ['¿En qué sucursal pasarás a recoger tu pedido?'];
+        reply.options = branches.map((b) => ({ label: `🏪 ${b.name}`, value: `branch_${b.id}` }));
+      } else {
+        state.step = locationEnabled ? 'ask_location_optional' : 'confirm';
+        if (locationEnabled) {
+          reply.messages = ['¿Quieres compartir tu ubicación para ubicarte más fácil? (Opcional)'];
+          reply.options = [
+            { label: '📍 Compartir ubicación', value: 'share_location' },
+            { label: 'Omitir', value: 'skip_location' },
+          ];
+        } else {
+          reply.messages = [confirmText(state, businessName, currency)];
+          reply.options = confirmOptions();
+        }
+      }
       return finish();
     }
     reply.messages = ['Elige una opción, por favor:'];
@@ -296,15 +412,142 @@ async function handleMessage(t, slug, sessionId, rawInput) {
     return finish();
   }
 
+  if (state.step === 'ask_branch') {
+    if (lower.startsWith('branch_')) {
+      const branchId = Number(lower.slice(7));
+      const chosen = (state.branchOptions || []).find((b) => Number(b.id) === branchId);
+      if (!chosen) {
+        reply.messages = ['Selecciona una sucursal válida, por favor.'];
+        reply.options = (state.branchOptions || []).map((b) => ({ label: `🏪 ${b.name}`, value: `branch_${b.id}` }));
+        return finish();
+      }
+      state.customer.branchId = chosen.id;
+      state.customer.branchName = chosen.name;
+      state.customer.branchAddress = chosen.address;
+      state.customer.branchReference = chosen.reference;
+      if (locationEnabled) {
+        state.step = 'ask_location_optional';
+        reply.messages = [
+          `Perfecto, recogerás en *${chosen.name}* ✅\n${chosen.address}${chosen.reference ? `\nReferencia: ${chosen.reference}` : ''}`,
+          '¿Quieres compartir tu ubicación para ubicarte más fácil? (Opcional)',
+        ];
+        reply.options = [
+          { label: '📍 Compartir ubicación', value: 'share_location' },
+          { label: 'Omitir', value: 'skip_location' },
+        ];
+      } else {
+        state.step = 'confirm';
+        reply.messages = [
+          `Perfecto, recogerás en *${chosen.name}* ✅\n${chosen.address}${chosen.reference ? `\nReferencia: ${chosen.reference}` : ''}`,
+          confirmText(state, businessName, currency),
+        ];
+        reply.options = confirmOptions();
+      }
+      return finish();
+    }
+    reply.messages = ['Elige una sucursal para continuar:'];
+    reply.options = (state.branchOptions || []).map((b) => ({ label: `🏪 ${b.name}`, value: `branch_${b.id}` }));
+    return finish();
+  }
+
   if (state.step === 'ask_address') {
+    if (lower === 'share_location') {
+      reply.messages = ['Activa la ubicación en tu celular para compartirla 📍'];
+      reply.options = [{ label: '📍 Compartir ubicación', value: 'share_location' }];
+      return finish();
+    }
+    if (lower === 'location_error') {
+      reply.messages = [
+        'No pude obtener tu ubicación automáticamente. Activa el permiso del navegador o escribe tu dirección/coordenadas para continuar.',
+      ];
+      reply.options = locationEnabled
+        ? [
+            { label: '📍 Compartir ubicación', value: 'share_location' },
+            { label: 'Omitir', value: 'skip_location' },
+          ]
+        : [];
+      return finish();
+    }
+
+    const geo = parseGeoInput(input);
+    if (geo) {
+      state.customer.locationLat = geo.lat;
+      state.customer.locationLng = geo.lng;
+      state.customer.locationText = geo.label || `${geo.lat.toFixed(5)}, ${geo.lng.toFixed(5)}`;
+      if (!state.customer.address) state.customer.address = state.customer.locationText;
+      state.step = 'confirm';
+      reply.messages = [
+        `🗺️ Ubicación recibida. Abrir en Maps: ${mapsUrl(geo.lat, geo.lng)}`,
+        confirmText(state, businessName, currency),
+      ];
+      reply.options = confirmOptions();
+      return finish();
+    }
+
     if (input.length < 5) {
       reply.messages = ['Necesito una dirección un poco más completa 🙏'];
+      if (locationEnabled) reply.options = [{ label: '📍 Compartir ubicación', value: 'share_location' }];
       return finish();
     }
     state.customer.address = input.slice(0, 200);
-    state.step = 'confirm';
-    reply.messages = [confirmText(state, businessName, currency)];
-    reply.options = confirmOptions();
+    if (locationEnabled) {
+      state.step = 'ask_location_optional';
+      reply.messages = ['¿Quieres compartir también tu ubicación exacta? (Opcional)'];
+      reply.options = [
+        { label: '📍 Compartir ubicación', value: 'share_location' },
+        { label: 'Omitir', value: 'skip_location' },
+      ];
+    } else {
+      state.step = 'confirm';
+      reply.messages = [confirmText(state, businessName, currency)];
+      reply.options = confirmOptions();
+    }
+    return finish();
+  }
+
+  if (state.step === 'ask_location_optional') {
+    if (lower === 'skip_location') {
+      state.step = 'confirm';
+      reply.messages = [confirmText(state, businessName, currency)];
+      reply.options = confirmOptions();
+      return finish();
+    }
+    if (lower === 'location_error') {
+      reply.messages = [
+        'No pude obtener tu ubicación automáticamente. Activa el permiso del navegador o escribe tu dirección/coordenadas para continuar.',
+      ];
+      reply.options = [
+        { label: '📍 Compartir ubicación', value: 'share_location' },
+        { label: 'Omitir', value: 'skip_location' },
+      ];
+      return finish();
+    }
+    if (lower === 'share_location') {
+      reply.messages = ['Activa la ubicación en tu celular para compartirla 📍'];
+      reply.options = [
+        { label: '📍 Compartir ubicación', value: 'share_location' },
+        { label: 'Omitir', value: 'skip_location' },
+      ];
+      return finish();
+    }
+    const geo = parseGeoInput(input);
+    if (geo) {
+      state.customer.locationLat = geo.lat;
+      state.customer.locationLng = geo.lng;
+      state.customer.locationText = geo.label || `${geo.lat.toFixed(5)}, ${geo.lng.toFixed(5)}`;
+      state.step = 'confirm';
+      reply.messages = [
+        `🗺️ Ubicación recibida. Abrir en Maps: ${mapsUrl(geo.lat, geo.lng)}`,
+        confirmText(state, businessName, currency),
+      ];
+      reply.options = confirmOptions();
+      return finish();
+    }
+    reply.messages = ['Elige una opción para continuar:'];
+    reply.options = [
+      { label: '📍 Compartir ubicación', value: 'share_location' },
+      { label: 'Omitir', value: 'skip_location' },
+    ];
     return finish();
   }
 
@@ -321,8 +564,23 @@ async function handleMessage(t, slug, sessionId, rawInput) {
       }
       const total = cartTotal(state.cart);
       const orderRow = await t.get(
-        'INSERT INTO {s}.orders (customer_id, items, subtotal, total, status, channel, delivery) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id',
-        [customer.id, JSON.stringify(state.cart), total, total, 'pendiente', 'chatbot', state.delivery || 'recoger']
+        `INSERT INTO {s}.orders
+         (customer_id, items, subtotal, total, status, channel, delivery, pickup_branch_id, pickup_branch_name, customer_location_lat, customer_location_lng, customer_location_text)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING id`,
+        [
+          customer.id,
+          JSON.stringify(state.cart),
+          total,
+          total,
+          'pendiente',
+          'chatbot',
+          state.delivery || 'recoger',
+          state.customer.branchId || null,
+          state.customer.branchName || null,
+          Number.isFinite(state.customer.locationLat) ? state.customer.locationLat : null,
+          Number.isFinite(state.customer.locationLng) ? state.customer.locationLng : null,
+          state.customer.locationText || null,
+        ]
       );
 
       const orderText = buildOrderText(businessName, state.cart, state.customer, state.delivery, currency);
@@ -333,6 +591,7 @@ async function handleMessage(t, slug, sessionId, rawInput) {
       ];
       reply.order = { id: orderRow.id, total, totalLabel: money(total, currency), whatsappLink: waLink, summary: orderText };
       if (waLink) reply.messages.push('👇 Toca el botón para enviar el resumen de tu pedido por WhatsApp y agilizar la atención.');
+      if (!waLink) reply.messages.push('⚠️ El negocio aún no tiene un WhatsApp válido para envío automático. Tu pedido ya quedó registrado.');
       state = { step: 'start', cart: [], customer: {}, currency };
       reply.options = [{ label: '🆕 Hacer otro pedido', value: 'start' }];
       return finish();
@@ -368,7 +627,10 @@ function confirmText(state, businessName, currency) {
   return (
     `${cartSummary(state.cart, currency)}\n\n` +
     `👤 ${c.name}\n📞 ${c.phone}\n` +
-    (state.delivery === 'domicilio' ? `📍 ${c.address}` : '🏪 Recoger en sucursal') +
+    (state.delivery === 'domicilio'
+      ? `📍 ${c.address}`
+      : `🏪 Recoger en sucursal${c.branchName ? `: ${c.branchName}` : ''}`) +
+    (c.locationText ? `\n🧭 Ubicación: ${c.locationText}` : '') +
     '\n\n¿Confirmamos tu pedido?'
   );
 }

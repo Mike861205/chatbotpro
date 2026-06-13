@@ -32,6 +32,11 @@ const SETTING_KEYS = [
   'hours',
   'delivery_enabled',
   'pickup_enabled',
+  'location_enabled',
+  'ticket_width_mm',
+  'ticket_font_size_px',
+  'ticket_line_height',
+  'ticket_show_logo',
 ];
 
 router.get('/', async (req, res, next) => {

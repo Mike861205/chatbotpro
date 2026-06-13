@@ -29,6 +29,9 @@
         <h2>Iniciar sesión</h2>
         <p class="sub">Accede al panel de tu restaurante.</p>
         <div class="error-box" id="error"><i class="ph-fill ph-warning-circle"></i><span id="errorMsg"></span></div>
+        <a class="btn btn-primary btn-block" id="suspendedWaBtn" href="https://wa.me/526241370820?text=tengo%20suspendiedo%20mi%20servicio%20y%20quiero%20realizar%20mi%20pago%20para%20activarlo" target="_blank" rel="noopener noreferrer" style="display:none;margin-bottom:12px">
+          <i class="ph-bold ph-whatsapp-logo"></i> Contactar por WhatsApp
+        </a>
         <form id="loginForm">
           <div class="field">
             <label><i class="ph-bold ph-user"></i> Usuario</label>
@@ -41,6 +44,7 @@
           <button class="btn btn-primary btn-block" type="submit" id="btn"><i class="ph-bold ph-sign-in"></i> Entrar</button>
         </form>
         <p class="alt">¿No tienes cuenta? <a href="/register">Regístrate gratis</a></p>
+        <p class="alt">Acceso de plataforma: <a href="/superadmin/login">SuperAdmin</a></p>
       </div>
     </div>
   </div>
@@ -49,7 +53,9 @@
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
       const errBox = document.getElementById('error');
+      const waBtn = document.getElementById('suspendedWaBtn');
       errBox.classList.remove('show');
+      waBtn.style.display = 'none';
       const btn = document.getElementById('btn');
       btn.disabled = true;
       try {
@@ -62,7 +68,13 @@
           }),
         });
         const data = await res.json();
-        if (!res.ok) throw new Error(data.error || 'Error');
+        if (!res.ok) {
+          if (res.status === 403 && data && data.errorCode === 'BILLING_SUSPENDED' && data.whatsappUrl) {
+            waBtn.href = data.whatsappUrl;
+            waBtn.style.display = 'inline-flex';
+          }
+          throw new Error(data.error || 'Error');
+        }
         location.href = '/app';
       } catch (err) {
         document.getElementById('errorMsg').textContent = err.message;

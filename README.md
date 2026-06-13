@@ -15,6 +15,8 @@ Sistema SaaS multi-tenant donde cada restaurante (tenant) tiene su **base de dat
 - **Productos**: categorías, fotos, precios, activar/desactivar para el chatbot.
 - **Chatbot con flujos guiados** (botones): menú → producto → cantidad → carrito → datos del cliente → confirmación → pedido + liga de WhatsApp con el resumen.
 - **OpenAI (opcional)**: si configuras `OPENAI_API_KEY`, el bot responde preguntas libres sobre el menú con IA.
+- **SuperAdmin**: panel separado para gestionar tenants activos/por pagar/inactivos y editar datos comerciales.
+- **Integraciones centralizadas**: OpenAI y APIs del chatbot configuradas en SuperAdmin, separadas del panel de tenants.
 - **Branding por tenant**: logo, color principal, mensaje de bienvenida, moneda, horarios.
 
 ## 🚀 Arranque local
@@ -26,9 +28,30 @@ npm start
 
 - Panel: http://localhost:3000/login
 - Registro: http://localhost:3000/register
+- SuperAdmin: http://localhost:3000/superadmin/login
 - Chatbot público: http://localhost:3000/c/<tu-slug>
 
-Requiere `DATABASE_URL` (cadena de conexión de Neon) en `.env`. Los secretos (`JWT_SECRET`, `DATA_ENCRYPTION_KEY`) se generan automáticamente en el primer arranque. Para usar IA, agrega tu `OPENAI_API_KEY` en `.env`.
+Requiere `DATABASE_URL` (cadena de conexión de Neon) en `.env`. Los secretos (`JWT_SECRET`, `DATA_ENCRYPTION_KEY`) se generan automáticamente en el primer arranque. Para usar IA puedes dejar `OPENAI_API_KEY` como fallback en `.env` o configurarla desde SuperAdmin. También puedes definir `SUPERADMIN_USERNAME` y `SUPERADMIN_PASSWORD` para crear el usuario inicial de plataforma.
+
+## 🧪 Separar test y producción
+
+El proyecto ya soporta archivos de entorno separados:
+
+- `NODE_ENV=test` usa `.env.test`
+- `NODE_ENV=production` usa `.env.production`
+- `ENV_FILE=.env.algo` permite forzar un archivo específico
+
+Ejemplo Windows PowerShell:
+
+```powershell
+$env:NODE_ENV='test'; node server.js
+$env:NODE_ENV='production'; node server.js
+```
+
+Recomendación:
+
+- Usa un `DATABASE_URL` distinto para test y producción.
+- No subas `.env*` al repo (excepto `.env.example`).
 
 ## 🗂️ Estructura
 

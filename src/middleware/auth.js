@@ -3,6 +3,12 @@ const config = require('../config');
 const { q, tdb } = require('../db');
 
 const COOKIE_NAME = 'cbp_token';
+const SUPPORT_WHATSAPP = '526241370820';
+const SUPPORT_MESSAGE = 'tengo suspendiedo mi servicio y quiero realizar mi pago para activarlo';
+
+function supportWhatsappUrl() {
+  return `https://wa.me/${SUPPORT_WHATSAPP}?text=${encodeURIComponent(SUPPORT_MESSAGE)}`;
+}
 
 function signToken(user, tenant) {
   return jwt.sign(
@@ -32,6 +38,17 @@ async function requireAuth(req, res, next) {
     const payload = jwt.verify(token, config.JWT_SECRET);
     const { rows } = await q('SELECT * FROM tenants WHERE id = $1', [payload.tid]);
     if (!rows[0]) return res.status(401).json({ error: 'Tenant no encontrado' });
+    if (rows[0].account_status !== 'active') {
+      return res.status(403).json({ error: 'La cuenta del negocio está inactiva. Contacta al administrador.' });
+    }
+    if (rows[0].billing_status === 'suspended') {
+      return res.status(403).json({
+        error: 'Suspendido por falta de pago. Ponte en contacto con tu asesor.',
+        errorCode: 'BILLING_SUSPENDED',
+        supportPhone: SUPPORT_WHATSAPP,
+        whatsappUrl: supportWhatsappUrl(),
+      });
+    }
     req.user = payload;
     req.tenant = rows[0];
     req.tdb = tdb(rows[0].slug); // schema aislado del tenant autenticado

@@ -11,6 +11,9 @@
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/fill/style.css" />
   <link rel="stylesheet" href="/static/css/styles.css" />
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/jspdf-autotable@3.8.2/dist/jspdf.plugin.autotable.min.js"></script>
 </head>
 <body>
   <div class="boot-loader" id="bootLoader"><div class="spinner"></div></div>
@@ -20,18 +23,19 @@
     <!-- ════════ Sidebar ════════ -->
     <aside class="sidebar" id="sidebar">
       <div class="brand">
-        <span class="dot"><i class="ph-fill ph-robot"></i></span>
+        <span class="dot" id="brandMark"><i class="ph-fill ph-robot"></i></span>
         <div><span id="brandName">ChatBotPro</span><small>Panel de control</small></div>
       </div>
       <nav>
         <div class="nav-label">Principal</div>
-        <a href="#dashboard" data-view="dashboard" class="active"><i class="ph-bold ph-chart-pie-slice"></i> Dashboard</a>
-        <a href="#pedidos" data-view="pedidos"><i class="ph-bold ph-receipt"></i> Pedidos <span id="pendingBadge" class="count" style="display:none"></span></a>
-        <a href="#productos" data-view="productos"><i class="ph-bold ph-hamburger"></i> Productos</a>
+        <a href="#dashboard" data-view="dashboard" class="active"><span class="nav-ic"><i class="ph-fill ph-house"></i></span><span>Dashboard</span></a>
+        <a href="#pedidos" data-view="pedidos"><span class="nav-ic"><i class="ph-fill ph-receipt"></i></span><span>Pedidos</span> <span id="pendingBadge" class="count" style="display:none"></span></a>
+        <a href="#pos" data-view="pos"><span class="nav-ic"><i class="ph-fill ph-cash-register"></i></span><span>Punto de venta</span></a>
+        <a href="#productos" data-view="productos"><span class="nav-ic"><i class="ph-fill ph-bowl-food"></i></span><span>Productos</span></a>
         <div class="nav-label">Chatbot</div>
-        <a href="#chatbot" data-view="chatbot"><i class="ph-bold ph-chat-circle-dots"></i> Mi chatbot</a>
+        <a href="#chatbot" data-view="chatbot"><span class="nav-ic"><i class="ph-fill ph-chat-circle-dots"></i></span><span>Mi chatbot</span></a>
         <div class="nav-label">Negocio</div>
-        <a href="#config" data-view="config"><i class="ph-bold ph-storefront"></i> Mi negocio</a>
+        <a href="#config" data-view="config"><span class="nav-ic"><i class="ph-fill ph-storefront"></i></span><span>Mi negocio</span></a>
       </nav>
       <div class="foot">
         <div class="user-chip">
@@ -88,9 +92,37 @@
               <button data-st="entregado">Entregados</button>
               <button data-st="cancelado">Cancelados</button>
             </div>
-            <button class="btn btn-ghost" onclick="loadOrders()"><i class="ph-bold ph-arrows-clockwise"></i> Actualizar</button>
+            <div style="display:flex;gap:8px;flex-wrap:wrap">
+              <button class="btn btn-ghost" id="expExcelBtn"><i class="ph-bold ph-file-xls"></i> Excel</button>
+              <button class="btn btn-ghost" id="expPdfBtn"><i class="ph-bold ph-file-pdf"></i> PDF</button>
+              <button class="btn btn-ghost" onclick="loadOrders()"><i class="ph-bold ph-arrows-clockwise"></i> Actualizar</button>
+            </div>
           </div>
           <div class="table-wrap" id="ordersTable"></div>
+        </div>
+      </section>
+
+      <!-- ──────── Punto de venta ──────── -->
+      <section class="section" id="view-pos">
+        <div class="pos-finance-strip" id="posFinanceStrip"></div>
+        <div class="pos-action-icons" id="posActionIcons"></div>
+        <div class="pos-shell">
+          <div class="pos-main">
+            <div class="card" id="posSessionCard"></div>
+            <div class="card pos-catalog-card">
+              <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap;margin-bottom:16px">
+                <div>
+                  <h3 style="margin-bottom:8px"><i class="ph-bold ph-storefront"></i> Catálogo para cobrar</h3>
+                  <div class="hint">Aquí aparecen automáticamente los productos activos dados de alta por categoría.</div>
+                </div>
+                <div class="segmented pos-cat-filters" id="posCatChips"></div>
+              </div>
+              <div class="pos-grid" id="posProductGrid"></div>
+            </div>
+          </div>
+          <div class="pos-side">
+            <div class="card pos-checkout-card" id="posCartCard"></div>
+          </div>
         </div>
       </section>
 
@@ -153,8 +185,21 @@
               <div class="t-info"><i class="ph-bold ph-storefront"></i><div><b>Recoger en sucursal</b><span>El cliente pasa por su pedido</span></div></div>
               <label class="switch"><input type="checkbox" id="botPickup" /><span class="track"></span></label>
             </div>
+            <div class="toggle-row">
+              <div class="t-info"><i class="ph-bold ph-map-pin-line"></i><div><b>Solicitar ubicación del cliente</b><span>Permite compartir ubicación al confirmar pedido</span></div></div>
+              <label class="switch"><input type="checkbox" id="botLocation" /><span class="track"></span></label>
+            </div>
             <div class="hint" style="margin-top:6px"><i class="ph ph-info"></i> Los cambios en estas opciones se guardan con el botón "Guardar flujo".</div>
           </div>
+        </div>
+
+        <div class="card" style="margin-top:16px">
+          <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
+            <h3><i class="ph-bold ph-buildings"></i> Sucursales de recogida</h3>
+            <button class="btn btn-primary" id="addBranchBtn"><i class="ph-bold ph-plus-circle"></i> Nueva sucursal</button>
+          </div>
+          <div class="hint" style="margin-top:8px">El chatbot mostrará estas sucursales cuando el cliente elija "Recoger en sucursal".</div>
+          <div class="table-wrap" id="branchTable" style="margin-top:14px"></div>
         </div>
       </section>
 
@@ -209,6 +254,37 @@
                 </select>
               </div>
               <button class="btn btn-primary" type="submit"><i class="ph-bold ph-floppy-disk"></i> Guardar contacto</button>
+            </form>
+            <hr style="margin:18px 0;border:none;border-top:1px solid var(--line)" />
+            <h3 style="margin-bottom:14px"><i class="ph-bold ph-printer"></i> Ticket térmico</h3>
+            <form id="ticketForm">
+              <div class="row-2">
+                <div class="field">
+                  <label><i class="ph-bold ph-ruler"></i> Ancho del ticket</label>
+                  <select id="cfgTicketWidth">
+                    <option value="58">58 mm</option>
+                    <option value="80">80 mm</option>
+                  </select>
+                </div>
+                <div class="field">
+                  <label><i class="ph-bold ph-text-aa"></i> Tamaño de letra</label>
+                  <input type="number" id="cfgTicketFont" min="10" max="24" step="1" value="14" />
+                </div>
+              </div>
+              <div class="row-2">
+                <div class="field">
+                  <label><i class="ph-bold ph-line-segment"></i> Interlineado</label>
+                  <input type="number" id="cfgTicketLineHeight" min="1.1" max="2" step="0.05" value="1.45" />
+                </div>
+                <div class="field">
+                  <label><i class="ph-bold ph-image"></i> Mostrar logo en ticket</label>
+                  <select id="cfgTicketShowLogo">
+                    <option value="1">Sí</option>
+                    <option value="0">No</option>
+                  </select>
+                </div>
+              </div>
+              <button class="btn btn-primary" type="submit"><i class="ph-bold ph-floppy-disk"></i> Guardar ticket</button>
             </form>
           </div>
         </div>
@@ -268,6 +344,194 @@
     </div>
   </div>
 
+  <!-- ════════ Modal sucursal ════════ -->
+  <div class="modal-bg" id="branchModal">
+    <div class="modal" style="max-width:520px">
+      <h3 id="branchModalTitle"><i class="ph-bold ph-buildings"></i> Nueva sucursal</h3>
+      <form id="branchForm">
+        <input type="hidden" id="branchId" />
+        <div class="field">
+          <label><i class="ph-bold ph-storefront"></i> Nombre de la sucursal *</label>
+          <input type="text" id="branchName" required placeholder="Sucursal Centro" />
+        </div>
+        <div class="field">
+          <label><i class="ph-bold ph-map-pin"></i> Dirección *</label>
+          <input type="text" id="branchAddress" required placeholder="Av. Principal 123, Col. Centro" />
+        </div>
+        <div class="field">
+          <label><i class="ph-bold ph-signpost"></i> Referencia</label>
+          <input type="text" id="branchReference" placeholder="Junto a la farmacia, frente al parque" />
+        </div>
+        <div class="toggle-row" style="margin-bottom:0">
+          <div class="t-info"><i class="ph-bold ph-eye"></i><div><b>Sucursal activa</b><span>Visible para pedidos por recogida</span></div></div>
+          <label class="switch"><input type="checkbox" id="branchActive" checked /><span class="track"></span></label>
+        </div>
+        <div class="modal-actions">
+          <button type="button" class="btn btn-ghost" id="branchCancel">Cancelar</button>
+          <button type="submit" class="btn btn-primary"><i class="ph-bold ph-check"></i> Guardar sucursal</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- ════════ Modal movimientos de caja ════════ -->
+  <div class="modal-bg" id="posMovementModal">
+    <div class="modal pos-movement-modal" style="max-width:760px">
+      <h3><i class="ph-bold ph-arrows-left-right"></i> Movimientos de caja</h3>
+      <form id="posMovementFormModal">
+        <div class="segmented pos-movement-kinds" id="posMovementKinds" style="margin-bottom:12px">
+          <button type="button" data-kind="income" class="on"><i class="ph-bold ph-trend-up"></i> Ingreso</button>
+          <button type="button" data-kind="withdrawal"><i class="ph-bold ph-arrow-bend-up-left"></i> Retiro</button>
+          <button type="button" data-kind="expense"><i class="ph-bold ph-receipt"></i> Gasto</button>
+        </div>
+        <div class="pos-movement-kind-hint" id="posMovementKindHint"></div>
+        <input type="hidden" id="posMovementKindModal" value="income" />
+        <div class="row-2">
+          <div class="field">
+            <label><i class="ph-bold ph-currency-circle-dollar"></i> Monto</label>
+            <input type="number" id="posMovementAmountModal" min="0" step="0.01" required />
+          </div>
+          <div class="field">
+            <label><i class="ph-bold ph-note-pencil"></i> Motivo</label>
+            <input type="text" id="posMovementNoteModal" placeholder="Ej. pago proveedor, retiro gerente" />
+          </div>
+        </div>
+        <div class="modal-actions">
+          <button type="button" class="btn btn-ghost" id="posMovementCancel">Cerrar</button>
+          <button class="btn btn-primary" type="submit"><i class="ph-bold ph-check"></i> Guardar movimiento</button>
+        </div>
+      </form>
+      <div class="table-wrap" id="posMovementHistory" style="margin-top:16px"></div>
+    </div>
+  </div>
+
+  <!-- ════════ Modal cierre de caja ════════ -->
+  <div class="modal-bg" id="posCloseModal">
+    <div class="modal pos-close-modal" style="max-width:760px">
+      <h3><i class="ph-bold ph-lock"></i> Cierre de caja del turno</h3>
+      <div id="posCloseSummary" class="pos-stats" style="margin-bottom:14px"></div>
+      <form id="posCloseFormModal">
+        <div class="row-2">
+          <div class="field">
+            <label><i class="ph-bold ph-calculator"></i> Efectivo final contado</label>
+            <input type="number" id="posClosingAmountModal" min="0" step="0.01" required />
+          </div>
+          <div class="field">
+            <label><i class="ph-bold ph-note-pencil"></i> Nota de cierre</label>
+            <input type="text" id="posClosingNoteModal" placeholder="Cierre sin novedades" />
+          </div>
+        </div>
+        <div class="modal-actions">
+          <button type="button" class="btn btn-ghost" id="posCloseCancel">Cancelar</button>
+          <button class="btn btn-danger" type="submit"><i class="ph-bold ph-lock"></i> Confirmar cierre</button>
+        </div>
+      </form>
+      <div class="hint" id="posLastCloseHint" style="margin-top:12px"></div>
+    </div>
+  </div>
+
+  <!-- ════════ Modal historial de ventas POS ════════ -->
+  <div class="modal-bg" id="posSalesHistoryModal">
+    <div class="modal" style="max-width:980px">
+      <h3><i class="ph-bold ph-receipt"></i> Historial de ventas POS</h3>
+      <div class="field" style="margin-bottom:10px">
+        <div class="segmented" id="posSalesFilters" style="margin-bottom:10px">
+          <button type="button" class="on" data-sales-filter="today">Hoy</button>
+          <button type="button" data-sales-filter="week">Semana</button>
+          <button type="button" data-sales-filter="month">Mes</button>
+          <button type="button" data-sales-filter="custom">Rango personalizado</button>
+        </div>
+        <div id="posSalesCustomRange" class="row-2" style="display:none;align-items:end">
+          <div class="field" style="margin-bottom:0">
+            <label for="posSalesStartDate"><i class="ph-bold ph-calendar"></i> Fecha inicial</label>
+            <input type="date" id="posSalesStartDate" />
+          </div>
+          <div class="field" style="margin-bottom:0">
+            <label for="posSalesEndDate"><i class="ph-bold ph-calendar"></i> Fecha final</label>
+            <div style="display:flex;gap:8px;align-items:center">
+              <input type="date" id="posSalesEndDate" />
+              <button type="button" class="btn btn-ghost" id="posSalesApplyCustomRange">Buscar</button>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="table-wrap" id="posSalesHistoryTable"></div>
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-top:14px">
+        <div class="hint" id="posSalesHistoryPageInfo">Página 1 de 1</div>
+        <div style="display:flex;gap:8px;align-items:center">
+          <button type="button" class="btn btn-ghost" id="posSalesPrevPage"><i class="ph-bold ph-caret-left"></i> Anterior</button>
+          <button type="button" class="btn btn-ghost" id="posSalesNextPage">Siguiente <i class="ph-bold ph-caret-right"></i></button>
+          <button type="button" class="btn btn-ghost" id="posSalesHistoryClose">Cerrar</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ════════ Modal cambio de pago POS ════════ -->
+  <div class="modal-bg" id="posPaymentEditModal">
+    <div class="modal" style="max-width:560px">
+      <h3><i class="ph-bold ph-credit-card"></i> Cambiar medio de pago</h3>
+      <form id="posPaymentEditForm">
+        <input type="hidden" id="posPaymentEditSaleId" />
+        <div class="field">
+          <label><i class="ph-bold ph-receipt"></i> Ticket</label>
+          <input type="text" id="posPaymentEditTicket" readonly />
+        </div>
+        <div class="field">
+          <label><i class="ph-bold ph-wallet"></i> Medio de pago</label>
+          <div class="segmented" id="posPaymentEditMethods">
+            <button type="button" data-method="cash">Efectivo</button>
+            <button type="button" data-method="card">Tarjeta</button>
+            <button type="button" data-method="transfer">Transferencia</button>
+            <button type="button" data-method="mixed">Múltiple</button>
+          </div>
+        </div>
+        <div class="field" id="posPaymentEditCashWrap" style="display:none">
+          <label><i class="ph-bold ph-money"></i> Efectivo recibido</label>
+          <input type="number" id="posPaymentEditCashReceived" min="0" step="0.01" />
+        </div>
+        <div id="posPaymentEditMixedWrap" style="display:none">
+          <div class="row-2">
+            <div class="field"><label><i class="ph-bold ph-money"></i> Efectivo</label><input type="number" id="posPaymentEditMixCash" min="0" step="0.01" /></div>
+            <div class="field"><label><i class="ph-bold ph-credit-card"></i> Tarjeta</label><input type="number" id="posPaymentEditMixCard" min="0" step="0.01" /></div>
+          </div>
+          <div class="row-2">
+            <div class="field"><label><i class="ph-bold ph-arrow-u-up-left"></i> Transferencia</label><input type="number" id="posPaymentEditMixTransfer" min="0" step="0.01" /></div>
+            <div class="field"><label><i class="ph-bold ph-hand-coins"></i> Efectivo recibido</label><input type="number" id="posPaymentEditMixCashReceived" min="0" step="0.01" /></div>
+          </div>
+          <div class="hint" id="posPaymentEditMixedHint"></div>
+        </div>
+        <div class="modal-actions">
+          <button type="button" class="btn btn-ghost" id="posPaymentEditCancel">Cancelar</button>
+          <button class="btn btn-primary" type="submit"><i class="ph-bold ph-floppy-disk"></i> Guardar cambio</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- ════════ Modal cancelación de venta POS ════════ -->
+  <div class="modal-bg" id="posCancelSaleModal">
+    <div class="modal" style="max-width:480px">
+      <h3><i class="ph-bold ph-x-circle"></i> Cancelar venta POS</h3>
+      <form id="posCancelSaleForm">
+        <input type="hidden" id="posCancelSaleSaleId" />
+        <div class="field">
+          <label><i class="ph-bold ph-receipt"></i> Ticket a cancelar</label>
+          <input type="text" id="posCancelSaleTicket" readonly />
+        </div>
+        <div class="field">
+          <label><i class="ph-bold ph-note-pencil"></i> Motivo de cancelación</label>
+          <textarea id="posCancelSaleReason" rows="3" placeholder="Ej. Cliente cambió de opinión, error en la orden, producto no disponible" required></textarea>
+        </div>
+        <div class="hint">Los motivos se registran con fecha y hora para auditoría.</div>
+        <div class="modal-actions">
+          <button type="button" class="btn btn-ghost" id="posCancelSaleCancel">No cancelar</button>
+          <button class="btn btn-danger" type="submit"><i class="ph-bold ph-x-circle"></i> Confirmar cancelación</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
   <!-- ════════ Modal confirmación ════════ -->
   <div class="modal-bg" id="confirmModal">
     <div class="modal" style="max-width:400px;text-align:center">
@@ -279,6 +543,23 @@
       <div style="display:flex;gap:10px;justify-content:center">
         <button class="btn btn-ghost" id="confirmNo">Cancelar</button>
         <button class="btn btn-danger" id="confirmYes"><i class="ph-bold ph-trash"></i> Sí, eliminar</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal-bg" id="suspensionModal">
+    <div class="modal" style="max-width:460px;text-align:center">
+      <div style="width:64px;height:64px;border-radius:20px;background:var(--amber-soft);display:flex;align-items:center;justify-content:center;margin:0 auto 16px">
+        <i class="ph-bold ph-warning-circle" style="font-size:30px;color:var(--amber)"></i>
+      </div>
+      <h3 style="justify-content:center">Servicio suspendido por falta de pago</h3>
+      <p id="suspensionMsg" style="color:var(--ink-2);font-size:14px;margin:-8px 0 16px">Ponte en contacto con tu asesor para reactivar tu cuenta.</p>
+      <div class="hint" style="margin-bottom:18px">WhatsApp de soporte: <b>6241370820</b></div>
+      <div style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap">
+        <a class="btn btn-primary" id="suspensionWhatsapp" href="https://wa.me/526241370820?text=tengo%20suspendiedo%20mi%20servicio%20y%20quiero%20realizar%20mi%20pago%20para%20activarlo" target="_blank" rel="noopener noreferrer">
+          <i class="ph-bold ph-whatsapp-logo"></i> Contactar por WhatsApp
+        </a>
+        <a class="btn btn-ghost" href="/login"><i class="ph-bold ph-sign-out"></i> Ir a login</a>
       </div>
     </div>
   </div>

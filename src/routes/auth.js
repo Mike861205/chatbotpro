@@ -8,6 +8,12 @@ const router = express.Router();
 
 const SLUG_RE = /^[a-z0-9](?:[a-z0-9-]{1,38}[a-z0-9])?$/;
 const RESERVED = new Set(['api', 'app', 'login', 'register', 'admin', 'uploads', 'c', 'static']);
+const SUPPORT_WHATSAPP = '526241370820';
+const SUPPORT_MESSAGE = 'tengo suspendiedo mi servicio y quiero realizar mi pago para activarlo';
+
+function supportWhatsappUrl() {
+  return `https://wa.me/${SUPPORT_WHATSAPP}?text=${encodeURIComponent(SUPPORT_MESSAGE)}`;
+}
 
 // Registro de un nuevo negocio (tenant) + usuario dueño
 router.post('/register', async (req, res, next) => {
@@ -60,8 +66,21 @@ router.post('/login', async (req, res, next) => {
       return res.status(401).json({ error: 'Usuario o contraseña incorrectos' });
     }
     const t = await q('SELECT * FROM tenants WHERE id = $1', [user.tenant_id]);
-    setAuthCookie(res, signToken(user, t.rows[0]));
-    res.json({ ok: true, slug: t.rows[0].slug });
+    const tenant = t.rows[0];
+    if (!tenant) return res.status(401).json({ error: 'Tenant no encontrado' });
+    if (tenant.account_status !== 'active') {
+      return res.status(403).json({ error: 'La cuenta del negocio está inactiva. Contacta al administrador.' });
+    }
+    if (tenant.billing_status === 'suspended') {
+      return res.status(403).json({
+        error: 'Suspendido por falta de pago. Ponte en contacto con tu asesor.',
+        errorCode: 'BILLING_SUSPENDED',
+        supportPhone: SUPPORT_WHATSAPP,
+        whatsappUrl: supportWhatsappUrl(),
+      });
+    }
+    setAuthCookie(res, signToken(user, tenant));
+    res.json({ ok: true, slug: tenant.slug });
   } catch (e) {
     next(e);
   }

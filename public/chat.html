@@ -185,7 +185,10 @@
       return String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
     }
     function md(s) {
-      return esc(s).replace(/\*([^*]+)\*/g, '<b>$1</b>').replace(/\n/g, '<br>');
+      return esc(s)
+        .replace(/\*([^*]+)\*/g, '<b>$1</b>')
+        .replace(/(https?:\/\/[^\s<]+)/g, '<a href="$1" target="_blank" rel="noopener noreferrer">$1</a>')
+        .replace(/\n/g, '<br>');
     }
     function scrollDown() { messagesEl.scrollTop = messagesEl.scrollHeight; }
 
@@ -199,6 +202,30 @@
 
     function clearInteractive() {
       messagesEl.querySelectorAll('.options, .prods, .wa-btn').forEach((el) => el.remove());
+    }
+
+    function shareLocation() {
+      if (!navigator.geolocation) {
+        send('location_error', 'No pude compartir mi ubicación');
+        return;
+      }
+      navigator.geolocation.getCurrentPosition(
+        (pos) => {
+          const lat = pos.coords.latitude;
+          const lng = pos.coords.longitude;
+          const label = `${lat.toFixed(5)}, ${lng.toFixed(5)}`;
+          send(`geo:${lat},${lng}|${label}`, '📍 Ubicación compartida');
+        },
+        () => {
+          send('location_error', 'No pude compartir mi ubicación');
+        },
+        { enableHighAccuracy: true, timeout: 8000, maximumAge: 0 }
+      );
+    }
+
+    function onOption(o) {
+      if (o.value === 'share_location') return shareLocation();
+      send(o.value, o.label);
     }
 
     function showTyping() {
@@ -248,7 +275,7 @@
           const b = document.createElement('button');
           b.className = 'opt';
           b.textContent = o.label;
-          b.addEventListener('click', () => send(o.value, o.label));
+          b.addEventListener('click', () => onOption(o));
           wrap.appendChild(b);
         });
         messagesEl.appendChild(wrap);

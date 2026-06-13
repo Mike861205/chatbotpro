@@ -3,7 +3,7 @@ const express = require('express');
 const cookieParser = require('cookie-parser');
 const multer = require('multer');
 const config = require('./src/config');
-const { initMaster } = require('./src/db');
+const { initMaster, refreshTenantBillingStatuses } = require('./src/db');
 
 const app = express();
 app.disable('x-powered-by');
@@ -47,7 +47,10 @@ app.use('/api/products', require('./src/routes/products'));
 app.use('/api/orders', require('./src/routes/orders'));
 app.use('/api/dashboard', require('./src/routes/dashboard'));
 app.use('/api/settings', require('./src/routes/settings'));
+app.use('/api/branches', require('./src/routes/branches'));
+app.use('/api/pos', require('./src/routes/pos'));
 app.use('/api/chat', rateLimit(120, 60 * 1000), require('./src/routes/chatbot'));
+app.use('/api/superadmin', rateLimit(80, 10 * 60 * 1000), require('./src/routes/superadmin'));
 
 // Páginas
 const page = (name) => (req, res) => res.sendFile(path.join(__dirname, 'public', name));
@@ -55,6 +58,8 @@ app.get('/', page('index.html'));
 app.get('/login', page('login.html'));
 app.get('/register', page('register.html'));
 app.get('/app', page('app.html'));
+app.get('/superadmin/login', page('superadmin-login.html'));
+app.get('/superadmin', page('superadmin.html'));
 app.get('/c/:slug', page('chat.html'));
 
 // Manejador central de errores (mensajes amigables, sin stack al cliente)
@@ -71,7 +76,25 @@ app.use((err, req, res, next) => {
 });
 
 initMaster()
-  .then(() => {
+  .then(async () => {
+    try {
+      const firstRefresh = await refreshTenantBillingStatuses();
+      console.log(`[billing] refresco inicial -> due:${firstRefresh.movedToDue} suspended:${firstRefresh.movedToSuspended}`);
+    } catch (e) {
+      console.error('[billing] error en refresco inicial:', e.message);
+    }
+
+    setInterval(async () => {
+      try {
+        const refreshed = await refreshTenantBillingStatuses();
+        if (refreshed.movedToDue || refreshed.movedToSuspended) {
+          console.log(`[billing] cron -> due:${refreshed.movedToDue} suspended:${refreshed.movedToSuspended}`);
+        }
+      } catch (e) {
+        console.error('[billing] error en cron:', e.message);
+      }
+    }, 60 * 60 * 1000);
+
     app.listen(config.PORT, () => {
       console.log(`\n🤖 ChatBotPro corriendo en http://localhost:${config.PORT}`);
       console.log(`   Panel:    http://localhost:${config.PORT}/login`);

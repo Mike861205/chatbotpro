@@ -29,6 +29,7 @@ router.get('/', async (req, res, next) => {
   try {
     const { status, limit } = req.query;
     let sql = `SELECT id, customer_id, items, total::float AS total, status, channel, delivery, notes,
+          pickup_branch_name, customer_location_lat, customer_location_lng, customer_location_text,
                       to_char(created_at AT TIME ZONE 'America/Mexico_City', 'DD Mon YYYY, HH24:MI') AS created_at
                FROM {s}.orders`;
     const params = [];
