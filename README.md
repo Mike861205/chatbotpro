@@ -1,6 +1,6 @@
 # 🤖 ChatBotPro — Sistema multi-tenant de chatbot de pedidos para restaurantes
 
-Sistema SaaS multi-tenant donde cada restaurante (tenant) tiene su **base de datos aislada**, su panel de administración y su **chatbot público de pedidos** accesible por liga (`/c/tu-slug`) con envío del resumen del pedido por **WhatsApp**.
+Sistema SaaS multi-tenant donde cada restaurante (tenant) tiene su **base de datos aislada**, su panel de administración y su **chatbot público de pedidos** accesible por liga (`/tu-slug`) con envío del resumen del pedido por **WhatsApp**.
 
 ## ✨ Funcionalidades
 
@@ -29,7 +29,7 @@ npm start
 - Panel: http://localhost:3000/login
 - Registro: http://localhost:3000/register
 - SuperAdmin: http://localhost:3000/superadmin/login
-- Chatbot público: http://localhost:3000/c/<tu-slug>
+- Chatbot público: http://localhost:3000/<tu-slug>
 
 Requiere `DATABASE_URL` (cadena de conexión de Neon) en `.env`. Los secretos (`JWT_SECRET`, `DATA_ENCRYPTION_KEY`) se generan automáticamente en el primer arranque. Para usar IA puedes dejar `OPENAI_API_KEY` como fallback en `.env` o configurarla desde SuperAdmin. También puedes definir `SUPERADMIN_USERNAME` y `SUPERADMIN_PASSWORD` para crear el usuario inicial de plataforma.
 

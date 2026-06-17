@@ -1613,7 +1613,7 @@ $('#prodForm').addEventListener('submit', async (e) => {
 /* ===== Chatbot ===== */
 function fillBotForm() {
   if (!SETTINGS) return;
-  const link = `${location.origin}/c/${SETTINGS.slug}`;
+  const link = `${location.origin}/${SETTINGS.slug}`;
   $('#chatLink').value = link;
   $('#qrImg').src = `https://api.qrserver.com/v1/create-qr-code/?size=296x296&margin=8&data=${encodeURIComponent(link)}`;
   $('#waShareBtn').href = `https://wa.me/?text=${encodeURIComponent(`¡Haz tu pedido en ${SETTINGS.business_name}! 🍔 Ordena aquí: ${link}`)}`;
@@ -1809,7 +1809,7 @@ async function boot(navigateToHash = true) {
   $('#avatar').innerHTML = ME.tenant.logo
     ? `<img src="${esc(ME.tenant.logo)}" alt="" />`
     : esc(ME.tenant.businessName.charAt(0).toUpperCase());
-  $('#openChatLink').href = `/c/${ME.tenant.slug}`;
+  $('#openChatLink').href = `/${ME.tenant.slug}`;
   if (navigateToHash) {
     const view = (location.hash || '#dashboard').slice(1);
     navigate(VIEW_META[view] ? view : 'dashboard');

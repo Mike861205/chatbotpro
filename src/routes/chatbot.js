@@ -1,4 +1,4 @@
-// API pública del chatbot (sin autenticación): la usa la liga /c/:slug
+// API pública del chatbot (sin autenticación): la usa la liga pública /:slug
 const express = require('express');
 const { q, tdb, getSetting } = require('../db');
 const { decrypt } = require('../utils/crypto');

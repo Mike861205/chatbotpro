@@ -60,7 +60,8 @@ app.get('/register', page('register.html'));
 app.get('/app', page('app.html'));
 app.get('/superadmin/login', page('superadmin-login.html'));
 app.get('/superadmin', page('superadmin.html'));
-app.get('/c/:slug', page('chat.html'));
+app.get('/c/:slug([a-z0-9-]{3,40})', page('chat.html'));
+app.get('/:slug([a-z0-9-]{3,40})', page('chat.html'));
 
 // Manejador central de errores (mensajes amigables, sin stack al cliente)
 app.use((err, req, res, next) => {

@@ -76,7 +76,7 @@
     });
     slugInput.addEventListener('input', () => { slugInput.dataset.touched = '1'; slugInput.value = slugify(slugInput.value); updatePreview(); });
     function updatePreview() {
-      document.getElementById('slugPreview').textContent = location.origin + '/c/' + (slugInput.value || '…');
+      document.getElementById('slugPreview').textContent = location.origin + '/' + (slugInput.value || '…');
     }
     updatePreview();
 
