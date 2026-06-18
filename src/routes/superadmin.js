@@ -80,7 +80,7 @@ function getRemoteDeployArgs(force) {
   const port = Number.isFinite(portRaw) && portRaw > 0 ? Math.floor(portRaw) : 0;
 
   const args = ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', scriptPath];
-  if (host) args.push('-Host', host);
+  if (host) args.push('-RemoteHost', host);
   if (user) args.push('-User', user);
   if (port) args.push('-Port', String(port));
   if (appDir) args.push('-AppDir', appDir);
@@ -668,15 +668,23 @@ router.post('/deploy/run', requireSuperAdmin, async (req, res, next) => {
       windowsHide: true,
     });
 
+    const DEPLOY_TIMEOUT_MS = 5 * 60 * 1000;
+    const killTimer = setTimeout(() => {
+      appendDeployLog('[deploy] Timeout de 5 minutos alcanzado. Cancelando proceso.');
+      child.kill('SIGTERM');
+    }, DEPLOY_TIMEOUT_MS);
+
     child.stdout.on('data', (chunk) => appendDeployLog(chunk));
     child.stderr.on('data', (chunk) => appendDeployLog(chunk));
 
     child.on('error', (err) => {
+      clearTimeout(killTimer);
       appendDeployLog(`[deploy] Error al ejecutar script: ${err.message}`);
       endDeploySession(-1);
     });
 
     child.on('close', (code) => {
+      clearTimeout(killTimer);
       endDeploySession(code);
       appendDeployLog(`[deploy] Finalizado con código ${deployState.exitCode}`);
     });
