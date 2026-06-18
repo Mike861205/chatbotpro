@@ -11,8 +11,8 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-$pullCmd = if ($Force.IsPresent) { "git reset --hard origin/$Branch" } else { "git pull --ff-only origin $Branch" }
-$remoteCmd = "cd $AppDir && git fetch origin $Branch --prune && $pullCmd && npm ci --omit=dev && pm2 restart $Pm2App && pm2 save && echo '==> Deploy OK'"
+# Siempre reset --hard + clean: más robusto que pull en servidores con archivos extra
+$remoteCmd = "cd $AppDir && git fetch origin $Branch --prune && git reset --hard origin/$Branch && git clean -fd && npm ci --omit=dev && pm2 restart $Pm2App && pm2 save && echo '==> Deploy OK'"
 
 $sshArgs = @(
   "-p", "$Port",
@@ -27,3 +27,7 @@ $sshArgs += @("$User@$RemoteHost", $remoteCmd)
 
 Write-Host "Running remote deploy on ${User}@${RemoteHost}:$Port ..." -ForegroundColor Cyan
 & ssh @sshArgs
+if ($LASTEXITCODE -ne 0) {
+  Write-Error "SSH deploy failed with exit code $LASTEXITCODE"
+  exit $LASTEXITCODE
+}
