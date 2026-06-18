@@ -1,26 +1,15 @@
 const express = require('express');
-const path = require('path');
-const fs = require('fs');
-const multer = require('multer');
-const config = require('../config');
 const { q, getSetting, setSetting } = require('../db');
 const { requireAuth } = require('../middleware/auth');
+const { createImageUpload, deleteManagedUpload, optimizeUploadedImage, safeUnlink } = require('../utils/uploads');
 
 const router = express.Router();
 router.use(requireAuth);
 
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    const dir = path.join(config.UPLOADS_DIR, req.tenant.slug);
-    fs.mkdirSync(dir, { recursive: true });
-    cb(null, dir);
-  },
-  filename: (req, file, cb) => cb(null, `logo_${Date.now()}${path.extname(file.originalname).toLowerCase()}`),
-});
-const upload = multer({
-  storage,
-  limits: { fileSize: 8 * 1024 * 1024 },
-  fileFilter: (req, file, cb) => cb(null, /^image\/(png|jpe?g|webp|svg\+xml)$/.test(file.mimetype)),
+const upload = createImageUpload({
+  scopeResolver: (req) => req.tenant.slug,
+  allowedMimePattern: /^image\/(png|jpe?g|webp|svg\+xml)$/,
+  tempPrefix: 'logo',
 });
 
 const SETTING_KEYS = [
@@ -33,6 +22,8 @@ const SETTING_KEYS = [
   'delivery_enabled',
   'pickup_enabled',
   'location_enabled',
+  'delivery_zones_geojson',
+  'delivery_fee_rules',
   'ticket_width_mm',
   'ticket_font_size_px',
   'ticket_line_height',
@@ -51,6 +42,7 @@ router.get('/', async (req, res, next) => {
 });
 
 router.put('/', upload.single('logo'), async (req, res, next) => {
+  let nextLogoPath = null;
   try {
     const body = req.body || {};
     for (const k of SETTING_KEYS) {
@@ -63,11 +55,21 @@ router.put('/', upload.single('logo'), async (req, res, next) => {
       await q('UPDATE tenants SET primary_color = $1 WHERE id = $2', [body.primary_color, req.tenant.id]);
     }
     if (req.file) {
-      const logoPath = `/uploads/${req.tenant.slug}/${req.file.filename}`;
-      await q('UPDATE tenants SET logo = $1 WHERE id = $2', [logoPath, req.tenant.id]);
+      nextLogoPath = await optimizeUploadedImage(req.file, { scope: req.tenant.slug, outputPrefix: 'logo', maxWidth: 1200, quality: 82 });
+      await q('UPDATE tenants SET logo = $1 WHERE id = $2', [nextLogoPath, req.tenant.id]);
+      if (req.tenant.logo && req.tenant.logo !== nextLogoPath) {
+        const refs = await q('SELECT COUNT(*)::int AS total FROM tenants WHERE logo = $1 AND id <> $2', [req.tenant.logo, req.tenant.id]);
+        if (!Number(refs.rows[0]?.total || 0)) await deleteManagedUpload(req.tenant.logo);
+      }
     }
     res.json({ ok: true });
-  } catch (e) { next(e); }
+  } catch (e) {
+    try {
+      if (nextLogoPath) await deleteManagedUpload(nextLogoPath);
+      else if (req.file) await safeUnlink(req.file.path);
+    } catch {}
+    next(e);
+  }
 });
 
 module.exports = router;

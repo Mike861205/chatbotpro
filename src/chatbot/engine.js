@@ -8,6 +8,169 @@ const { encrypt, decrypt, lookupHash } = require('../utils/crypto');
 
 let aiConfigCache = { expiresAt: 0, value: null };
 const aiClientCache = new Map();
+const reverseGeoCache = new Map();
+
+function normalizeDeliveryToken(raw) {
+  return String(raw || '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function parseDeliveryFeeRules(raw) {
+  return String(raw || '')
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => {
+      const [zoneNameRaw, feeRaw, aliasesRaw = ''] = line.split('|').map((part) => part.trim());
+      const fee = Number(feeRaw);
+      if (!zoneNameRaw || !Number.isFinite(fee) || fee < 0) return null;
+      const aliases = [zoneNameRaw, ...aliasesRaw.split(',').map((part) => part.trim())]
+        .map(normalizeDeliveryToken)
+        .filter(Boolean);
+      return { zoneName: zoneNameRaw, fee, aliases };
+    })
+    .filter(Boolean);
+}
+
+function parseDeliveryZones(raw) {
+  try {
+    const parsed = JSON.parse(String(raw || '[]'));
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .map((zone, i) => {
+        const points = Array.isArray(zone?.points)
+          ? zone.points
+              .map((p) => [Number(p?.[0]), Number(p?.[1])])
+              .filter((p) => Number.isFinite(p[0]) && Number.isFinite(p[1]))
+          : [];
+        const fee = Number(zone?.fee);
+        const name = String(zone?.name || '').trim();
+        if (!name || !Number.isFinite(fee) || fee < 0 || points.length < 3) return null;
+        return {
+          id: String(zone?.id || `zone-${i + 1}`),
+          name,
+          fee,
+          points,
+          active: zone?.active !== false,
+        };
+      })
+      .filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+function pointInPolygon(point, polygon) {
+  let inside = false;
+  for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
+    const xi = polygon[i][1];
+    const yi = polygon[i][0];
+    const xj = polygon[j][1];
+    const yj = polygon[j][0];
+    const intersects =
+      yi > point[0] !== yj > point[0] &&
+      point[1] < ((xj - xi) * (point[0] - yi)) / ((yj - yi) || Number.EPSILON) + xi;
+    if (intersects) inside = !inside;
+  }
+  return inside;
+}
+
+async function reverseGeocodeLocation(lat, lng) {
+  const cacheKey = `${lat.toFixed(5)},${lng.toFixed(5)}`;
+  const cached = reverseGeoCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) return cached.value;
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 1800);
+  try {
+    const resp = await fetch(
+      `https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${lat}&lon=${lng}&zoom=18&addressdetails=1`,
+      {
+        headers: {
+          'User-Agent': 'ChatBotPro/1.0 (delivery-zones)',
+          Accept: 'application/json',
+        },
+        signal: controller.signal,
+      }
+    );
+    if (!resp.ok) return null;
+    const data = await resp.json();
+    reverseGeoCache.set(cacheKey, { expiresAt: Date.now() + 6 * 60 * 60 * 1000, value: data });
+    return data;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function buildLocationCandidates(geo, address, reverseGeo) {
+  const source = reverseGeo?.address || {};
+  return {
+    resolvedLabel: reverseGeo?.display_name || '',
+    candidates: [...new Set([
+      geo?.label,
+      address,
+      reverseGeo?.display_name,
+      source.neighbourhood,
+      source.suburb,
+      source.city_district,
+      source.residential,
+      source.quarter,
+      source.hamlet,
+      source.village,
+      source.town,
+      source.city,
+      source.municipality,
+      source.county,
+      source.state,
+    ].map(normalizeDeliveryToken).filter(Boolean))],
+  };
+}
+
+function matchDeliveryFeeRule(rules, candidates) {
+  for (const rule of rules) {
+    for (const alias of rule.aliases) {
+      if (candidates.some((candidate) => candidate.includes(alias))) {
+        return { zoneName: rule.zoneName, fee: rule.fee };
+      }
+    }
+  }
+  return null;
+}
+
+async function resolveDeliveryFee(geo, address, rules, zones = []) {
+  if (!Number.isFinite(geo?.lat) || !Number.isFinite(geo?.lng)) {
+    return { fee: 0, zoneName: '', resolvedLabel: '' };
+  }
+
+  const activeZones = Array.isArray(zones) ? zones.filter((zone) => zone.active && Array.isArray(zone.points) && zone.points.length >= 3) : [];
+
+  // Si hay zonas dibujadas, la resolución es 100% por polígono para evitar latencia innecesaria.
+  if (activeZones.length) {
+    const zoneMatch = activeZones.find((zone) => pointInPolygon([geo.lat, geo.lng], zone.points));
+    if (zoneMatch) {
+      return { fee: zoneMatch.fee, zoneName: zoneMatch.name, resolvedLabel: zoneMatch.name };
+    }
+    return { fee: 0, zoneName: '', resolvedLabel: '' };
+  }
+
+  if (!rules.length) {
+    return { fee: 0, zoneName: '', resolvedLabel: '' };
+  }
+
+  const reverseGeo = await reverseGeocodeLocation(geo.lat, geo.lng);
+  const { resolvedLabel, candidates } = buildLocationCandidates(geo, address, reverseGeo);
+  const match = matchDeliveryFeeRule(rules, candidates);
+  if (!match) return { fee: 0, zoneName: '', resolvedLabel };
+
+  return { fee: match.fee, zoneName: match.zoneName, resolvedLabel };
+}
 
 async function getAiRuntimeConfig() {
   const now = Date.now();
@@ -96,6 +259,35 @@ function mapsUrl(lat, lng) {
   return `https://www.google.com/maps?q=${lat},${lng}`;
 }
 
+function locationSummary(customer) {
+  const hasCoords = Number.isFinite(customer?.locationLat) && Number.isFinite(customer?.locationLng);
+  const locationLabel = String(customer?.locationText || '').trim();
+  if (!hasCoords && !locationLabel) return '';
+
+  const lines = [];
+  if (locationLabel) lines.push(`🧭 Ubicación compartida: ${locationLabel}`);
+  if (hasCoords) {
+    lines.push(`📍 Coordenadas: ${customer.locationLat.toFixed(5)}, ${customer.locationLng.toFixed(5)}`);
+    lines.push(`🗺️ Abrir en Maps: ${mapsUrl(customer.locationLat, customer.locationLng)}`);
+  }
+  if (customer?.locationResolved) lines.push(`🏘️ Referencia Maps: ${customer.locationResolved}`);
+  return lines.join('\n');
+}
+
+function pricingSummary(state, currency) {
+  const subtotal = cartTotal(state.cart);
+  const deliveryFee = Number(state.customer?.deliveryFee || 0);
+  const lines = state.cart.map((it) => `• ${it.qty}x ${it.name} — ${money(it.price * it.qty, currency)}`);
+  return [
+    '🛒 *Tu pedido:*',
+    ...lines,
+    '',
+    `*Subtotal: ${money(subtotal, currency)}*`,
+    ...(deliveryFee > 0 ? [`*Envío${state.customer?.deliveryZoneName ? ` (${state.customer.deliveryZoneName})` : ''}: ${money(deliveryFee, currency)}*`] : []),
+    `*Total: ${money(subtotal + deliveryFee, currency)}*`,
+  ].join('\n');
+}
+
 function normalizeWhatsappNumber(raw) {
   let digits = String(raw || '').replace(/\D/g, '');
   if (!digits) return '';
@@ -166,12 +358,16 @@ async function showProducts(t, state, categoryId) {
 }
 
 function buildOrderText(businessName, cart, customer, delivery, currency) {
+  const subtotal = cartTotal(cart);
+  const deliveryFee = Number(customer?.deliveryFee || 0);
   const lines = [
     `🧾 *Nuevo pedido — ${businessName}*`,
     '',
     ...cart.map((it) => `• ${it.qty}x ${it.name} — ${money(it.price * it.qty, currency)}`),
     '',
-    `*Total: ${money(cartTotal(cart), currency)}*`,
+    `*Subtotal: ${money(subtotal, currency)}*`,
+    ...(deliveryFee > 0 ? [`*Envío${customer?.deliveryZoneName ? ` (${customer.deliveryZoneName})` : ''}: ${money(deliveryFee, currency)}*`] : []),
+    `*Total: ${money(subtotal + deliveryFee, currency)}*`,
     '',
     `👤 ${customer.name}`,
     `📞 ${customer.phone}`,
@@ -179,7 +375,8 @@ function buildOrderText(businessName, cart, customer, delivery, currency) {
       ? `📍 Entrega a domicilio: ${customer.address}`
       : `🏪 Recoger en sucursal${customer.branchName ? `: ${customer.branchName}` : ''}`,
   ];
-  if (customer.locationText) lines.push(`🧭 Ubicación cliente: ${customer.locationText}`);
+  const locationDetails = locationSummary(customer);
+  if (locationDetails) lines.push(locationDetails);
   return lines.join('\n');
 }
 
@@ -212,6 +409,8 @@ async function handleMessage(t, slug, sessionId, rawInput) {
   const input = String(rawInput || '').trim();
   const businessName = await getSetting(t, 'business_name', slug);
   const currency = await getSetting(t, 'currency', 'MXN');
+  const deliveryFeeRules = parseDeliveryFeeRules(await getSetting(t, 'delivery_fee_rules', ''));
+  const deliveryZones = parseDeliveryZones(await getSetting(t, 'delivery_zones_geojson', '[]'));
   let whatsapp = normalizeWhatsappNumber(await getSetting(t, 'whatsapp', ''));
   if (!whatsapp) {
     const tenantRow = await q('SELECT phone_enc FROM tenants WHERE slug = $1 LIMIT 1', [slug]);
@@ -475,9 +674,15 @@ async function handleMessage(t, slug, sessionId, rawInput) {
       state.customer.locationLng = geo.lng;
       state.customer.locationText = geo.label || `${geo.lat.toFixed(5)}, ${geo.lng.toFixed(5)}`;
       if (!state.customer.address) state.customer.address = state.customer.locationText;
+      if (state.delivery === 'domicilio') {
+        const feeInfo = await resolveDeliveryFee(geo, state.customer.address, deliveryFeeRules, deliveryZones);
+        state.customer.deliveryFee = feeInfo.fee;
+        state.customer.deliveryZoneName = feeInfo.zoneName;
+        state.customer.locationResolved = feeInfo.resolvedLabel;
+      }
       state.step = 'confirm';
       reply.messages = [
-        `🗺️ Ubicación recibida. Abrir en Maps: ${mapsUrl(geo.lat, geo.lng)}`,
+        `🗺️ Ubicación recibida. Abrir en Maps: ${mapsUrl(geo.lat, geo.lng)}${Number(state.customer.deliveryFee || 0) > 0 ? `\n🛵 Envío detectado: ${money(state.customer.deliveryFee, currency)}${state.customer.deliveryZoneName ? ` (${state.customer.deliveryZoneName})` : ''}` : ''}`,
         confirmText(state, businessName, currency),
       ];
       reply.options = confirmOptions();
@@ -535,9 +740,15 @@ async function handleMessage(t, slug, sessionId, rawInput) {
       state.customer.locationLat = geo.lat;
       state.customer.locationLng = geo.lng;
       state.customer.locationText = geo.label || `${geo.lat.toFixed(5)}, ${geo.lng.toFixed(5)}`;
+      if (state.delivery === 'domicilio') {
+        const feeInfo = await resolveDeliveryFee(geo, state.customer.address, deliveryFeeRules, deliveryZones);
+        state.customer.deliveryFee = feeInfo.fee;
+        state.customer.deliveryZoneName = feeInfo.zoneName;
+        state.customer.locationResolved = feeInfo.resolvedLabel;
+      }
       state.step = 'confirm';
       reply.messages = [
-        `🗺️ Ubicación recibida. Abrir en Maps: ${mapsUrl(geo.lat, geo.lng)}`,
+        `🗺️ Ubicación recibida. Abrir en Maps: ${mapsUrl(geo.lat, geo.lng)}${Number(state.customer.deliveryFee || 0) > 0 ? `\n🛵 Envío detectado: ${money(state.customer.deliveryFee, currency)}${state.customer.deliveryZoneName ? ` (${state.customer.deliveryZoneName})` : ''}` : ''}`,
         confirmText(state, businessName, currency),
       ];
       reply.options = confirmOptions();
@@ -562,15 +773,17 @@ async function handleMessage(t, slug, sessionId, rawInput) {
           [encrypt(state.customer.name), encrypt(state.customer.phone), phoneHash, encrypt(state.customer.address || '')]
         );
       }
-      const total = cartTotal(state.cart);
+      const subtotal = cartTotal(state.cart);
+      const deliveryFee = Number(state.customer.deliveryFee || 0);
+      const total = subtotal + deliveryFee;
       const orderRow = await t.get(
         `INSERT INTO {s}.orders
-         (customer_id, items, subtotal, total, status, channel, delivery, pickup_branch_id, pickup_branch_name, customer_location_lat, customer_location_lng, customer_location_text)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING id`,
+         (customer_id, items, subtotal, total, status, channel, delivery, pickup_branch_id, pickup_branch_name, customer_location_lat, customer_location_lng, customer_location_text, customer_location_resolved, delivery_fee, delivery_zone_name)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) RETURNING id`,
         [
           customer.id,
           JSON.stringify(state.cart),
-          total,
+          subtotal,
           total,
           'pendiente',
           'chatbot',
@@ -580,6 +793,9 @@ async function handleMessage(t, slug, sessionId, rawInput) {
           Number.isFinite(state.customer.locationLat) ? state.customer.locationLat : null,
           Number.isFinite(state.customer.locationLng) ? state.customer.locationLng : null,
           state.customer.locationText || null,
+          state.customer.locationResolved || null,
+          deliveryFee,
+          state.customer.deliveryZoneName || null,
         ]
       );
 
@@ -624,13 +840,14 @@ async function handleMessage(t, slug, sessionId, rawInput) {
 
 function confirmText(state, businessName, currency) {
   const c = state.customer;
+  const locationDetails = locationSummary(c);
   return (
-    `${cartSummary(state.cart, currency)}\n\n` +
+    `${pricingSummary(state, currency)}\n\n` +
     `👤 ${c.name}\n📞 ${c.phone}\n` +
     (state.delivery === 'domicilio'
       ? `📍 ${c.address}`
       : `🏪 Recoger en sucursal${c.branchName ? `: ${c.branchName}` : ''}`) +
-    (c.locationText ? `\n🧭 Ubicación: ${c.locationText}` : '') +
+    (locationDetails ? `\n${locationDetails}` : '') +
     '\n\n¿Confirmamos tu pedido?'
   );
 }

@@ -9,11 +9,13 @@
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/regular/style.css" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/bold/style.css" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/fill/style.css" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
   <link rel="stylesheet" href="/static/css/styles.css" />
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/jspdf-autotable@3.8.2/dist/jspdf.plugin.autotable.min.js"></script>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 </head>
 <body>
   <div class="boot-loader" id="bootLoader"><div class="spinner"></div></div>
@@ -158,8 +160,14 @@
           </div>
         </div>
 
-        <div class="grid-2">
-          <div class="card">
+        <div class="chatbot-subtabs">
+          <button type="button" class="active" id="chatbotTabFlow"><i class="ph-bold ph-chats-circle"></i> Flujo del chatbot</button>
+          <button type="button" id="chatbotTabDelivery"><i class="ph-bold ph-truck"></i> Servicio a domicilio</button>
+        </div>
+
+        <div id="chatbotFlowPanel">
+          <div class="grid-2">
+            <div class="card">
             <h3><i class="ph-bold ph-chats-circle"></i> Flujo del chatbot</h3>
             <form id="botForm">
               <div class="field">
@@ -174,32 +182,85 @@
               </div>
               <button class="btn btn-primary" type="submit"><i class="ph-bold ph-floppy-disk"></i> Guardar flujo</button>
             </form>
+            </div>
+            <div class="card">
+              <h3><i class="ph-bold ph-truck"></i> Opciones de entrega</h3>
+              <div class="toggle-row">
+                <div class="t-info"><i class="ph-bold ph-moped"></i><div><b>Entrega a domicilio</b><span>El bot pedirá la dirección del cliente</span></div></div>
+                <label class="switch"><input type="checkbox" id="botDelivery" /><span class="track"></span></label>
+              </div>
+              <div class="toggle-row">
+                <div class="t-info"><i class="ph-bold ph-storefront"></i><div><b>Recoger en sucursal</b><span>El cliente pasa por su pedido</span></div></div>
+                <label class="switch"><input type="checkbox" id="botPickup" /><span class="track"></span></label>
+              </div>
+              <div class="toggle-row">
+                <div class="t-info"><i class="ph-bold ph-map-pin-line"></i><div><b>Solicitar ubicación del cliente</b><span>Permite compartir ubicación al confirmar pedido</span></div></div>
+                <label class="switch"><input type="checkbox" id="botLocation" /><span class="track"></span></label>
+              </div>
+              <div class="hint" style="margin-top:6px"><i class="ph ph-info"></i> Los cambios en estas opciones se guardan con el botón "Guardar flujo".</div>
+            </div>
           </div>
-          <div class="card">
-            <h3><i class="ph-bold ph-truck"></i> Opciones de entrega</h3>
-            <div class="toggle-row">
-              <div class="t-info"><i class="ph-bold ph-moped"></i><div><b>Entrega a domicilio</b><span>El bot pedirá la dirección del cliente</span></div></div>
-              <label class="switch"><input type="checkbox" id="botDelivery" /><span class="track"></span></label>
+
+          <div class="card" style="margin-top:16px">
+            <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
+              <h3><i class="ph-bold ph-buildings"></i> Sucursales de recogida</h3>
+              <button class="btn btn-primary" id="addBranchBtn"><i class="ph-bold ph-plus-circle"></i> Nueva sucursal</button>
             </div>
-            <div class="toggle-row">
-              <div class="t-info"><i class="ph-bold ph-storefront"></i><div><b>Recoger en sucursal</b><span>El cliente pasa por su pedido</span></div></div>
-              <label class="switch"><input type="checkbox" id="botPickup" /><span class="track"></span></label>
-            </div>
-            <div class="toggle-row">
-              <div class="t-info"><i class="ph-bold ph-map-pin-line"></i><div><b>Solicitar ubicación del cliente</b><span>Permite compartir ubicación al confirmar pedido</span></div></div>
-              <label class="switch"><input type="checkbox" id="botLocation" /><span class="track"></span></label>
-            </div>
-            <div class="hint" style="margin-top:6px"><i class="ph ph-info"></i> Los cambios en estas opciones se guardan con el botón "Guardar flujo".</div>
+            <div class="hint" style="margin-top:8px">El chatbot mostrará estas sucursales cuando el cliente elija "Recoger en sucursal".</div>
+            <div class="table-wrap" id="branchTable" style="margin-top:14px"></div>
           </div>
         </div>
 
-        <div class="card" style="margin-top:16px">
-          <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
-            <h3><i class="ph-bold ph-buildings"></i> Sucursales de recogida</h3>
-            <button class="btn btn-primary" id="addBranchBtn"><i class="ph-bold ph-plus-circle"></i> Nueva sucursal</button>
+        <div id="chatbotDeliveryPanel" hidden>
+          <div class="grid-2">
+            <div class="card">
+              <h3><i class="ph-bold ph-map-trifold"></i> Servicio a domicilio</h3>
+              <div class="hint" style="margin-bottom:12px">Dibuja tus zonas de entrega directamente en el mapa y asigna un costo por zona.</div>
+              <div class="field">
+                <label><i class="ph-bold ph-flag-banner"></i> Nombre de zona</label>
+                <input type="text" id="deliveryZoneName" placeholder="Ej. Zona Centro" />
+              </div>
+              <div class="row-2">
+                <div class="field">
+                  <label><i class="ph-bold ph-currency-circle-dollar"></i> Costo de envío</label>
+                  <input type="number" id="deliveryZoneFee" min="0" step="0.01" placeholder="45" />
+                </div>
+                <div class="field">
+                  <label><i class="ph-bold ph-palette"></i> Color</label>
+                  <div class="delivery-color-picker">
+                    <div class="delivery-color-presets" id="deliveryColorPresets">
+                      <button type="button" class="delivery-color-chip active" data-color="#0ea5e9" style="background:#0ea5e9" title="Azul"></button>
+                      <button type="button" class="delivery-color-chip" data-color="#22c55e" style="background:#22c55e" title="Verde"></button>
+                      <button type="button" class="delivery-color-chip" data-color="#f97316" style="background:#f97316" title="Naranja"></button>
+                      <button type="button" class="delivery-color-chip" data-color="#e11d48" style="background:#e11d48" title="Rojo"></button>
+                      <button type="button" class="delivery-color-chip" data-color="#8b5cf6" style="background:#8b5cf6" title="Morado"></button>
+                      <button type="button" class="delivery-color-chip" data-color="#0f766e" style="background:#0f766e" title="Turquesa"></button>
+                    </div>
+                    <div class="delivery-color-custom-row">
+                      <button class="btn btn-ghost" type="button" id="deliveryColorCustomBtn"><i class="ph-bold ph-eyedropper"></i> Personalizar</button>
+                      <span class="delivery-color-code" id="deliveryColorCode">#0EA5E9</span>
+                    </div>
+                    <input type="color" id="deliveryZoneColor" value="#0ea5e9" aria-label="Color de zona" />
+                  </div>
+                </div>
+              </div>
+              <div class="delivery-zone-actions">
+                <button class="btn btn-ghost" type="button" id="deliveryStartDraw"><i class="ph-bold ph-pencil-simple-line"></i> Iniciar dibujo</button>
+                <button class="btn btn-ghost" type="button" id="deliveryUndoPoint"><i class="ph-bold ph-arrow-counter-clockwise"></i> Deshacer punto</button>
+                <button class="btn btn-primary" type="button" id="deliverySaveZone"><i class="ph-bold ph-plus-circle"></i> Guardar zona</button>
+              </div>
+              <div class="hint" id="deliveryDrawHint" style="margin-top:8px">Activa "Iniciar dibujo" y toca el mapa para crear el polígono de tu zona.</div>
+            </div>
+            <div class="card">
+              <h3><i class="ph-bold ph-list-bullets"></i> Zonas configuradas</h3>
+              <div id="deliveryZonesList" class="delivery-zones-list"></div>
+              <button class="btn btn-primary" type="button" id="deliverySaveAll" style="margin-top:12px"><i class="ph-bold ph-floppy-disk"></i> Guardar servicio a domicilio</button>
+            </div>
           </div>
-          <div class="hint" style="margin-top:8px">El chatbot mostrará estas sucursales cuando el cliente elija "Recoger en sucursal".</div>
-          <div class="table-wrap" id="branchTable" style="margin-top:14px"></div>
+          <div class="card" style="margin-top:16px">
+            <h3><i class="ph-bold ph-map-pin"></i> Mapa de zonas</h3>
+            <div id="deliveryZoneMap" class="delivery-zone-map"></div>
+          </div>
         </div>
       </section>
 
@@ -374,6 +435,28 @@
     </div>
   </div>
 
+  <!-- ════════ Modal guía zonas a domicilio ════════ -->
+  <div class="modal-bg" id="deliveryDrawHelpModal">
+    <div class="modal" style="max-width:540px">
+      <h3><i class="ph-bold ph-map-trifold"></i> Cómo dibujar una zona</h3>
+      <div class="delivery-help-body">
+        <p><b>Ejemplo rápido:</b> dibuja el contorno de una colonia tocando puntos sobre el mapa.</p>
+        <ol>
+          <li>Toca 3 o más puntos alrededor de la zona.</li>
+          <li>Cierra visualmente el polígono cubriendo solo el área de entrega.</li>
+          <li>Presiona "Guardar zona" para asignar costo de envío.</li>
+        </ol>
+        <div class="delivery-help-example">
+          <span></span><span></span><span></span><span></span>
+        </div>
+      </div>
+      <div class="modal-actions">
+        <button type="button" class="btn btn-ghost" id="deliveryHelpClose">Cerrar</button>
+        <button type="button" class="btn btn-primary" id="deliveryHelpStart"><i class="ph-bold ph-play"></i> Entendido, iniciar dibujo</button>
+      </div>
+    </div>
+  </div>
+
   <!-- ════════ Modal movimientos de caja ════════ -->
   <div class="modal-bg" id="posMovementModal">
     <div class="modal pos-movement-modal" style="max-width:760px">
@@ -529,6 +612,23 @@
           <button class="btn btn-danger" type="submit"><i class="ph-bold ph-x-circle"></i> Confirmar cancelación</button>
         </div>
       </form>
+    </div>
+  </div>
+
+  <!-- ════════ Modal motivo de cancelación de pedido ════════ -->
+  <div class="modal-bg" id="orderCancelReasonModal">
+    <div class="modal" style="max-width:520px">
+      <h3><i class="ph-bold ph-x-circle"></i> Cancelar pedido <span id="orderCancelReasonOrder" style="color:var(--ink-3);font-size:14px;font-weight:700"></span></h3>
+      <div class="field">
+        <label for="orderCancelReasonInput"><i class="ph-bold ph-note-pencil"></i> Motivo de cancelación</label>
+        <textarea id="orderCancelReasonInput" rows="4" maxlength="280" placeholder="Ej. Cliente canceló, dirección fuera de cobertura, producto sin existencia"></textarea>
+      </div>
+      <div class="hint">Este motivo se guardará en el pedido para auditoría y seguimiento.</div>
+      <div id="orderCancelReasonError" class="order-cancel-error"></div>
+      <div class="modal-actions">
+        <button type="button" class="btn btn-ghost" id="orderCancelReasonCancel">Volver</button>
+        <button type="button" class="btn btn-danger" id="orderCancelReasonSave"><i class="ph-bold ph-floppy-disk"></i> Confirmar cancelación</button>
+      </div>
     </div>
   </div>
 

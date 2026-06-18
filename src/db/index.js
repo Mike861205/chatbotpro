@@ -229,6 +229,10 @@ async function createTenantSchema(slug) {
     ALTER TABLE "${s}".orders ADD COLUMN IF NOT EXISTS customer_location_lat NUMERIC(10,7);
     ALTER TABLE "${s}".orders ADD COLUMN IF NOT EXISTS customer_location_lng NUMERIC(10,7);
     ALTER TABLE "${s}".orders ADD COLUMN IF NOT EXISTS customer_location_text TEXT;
+    ALTER TABLE "${s}".orders ADD COLUMN IF NOT EXISTS customer_location_resolved TEXT;
+    ALTER TABLE "${s}".orders ADD COLUMN IF NOT EXISTS delivery_fee NUMERIC(12,2) DEFAULT 0;
+    ALTER TABLE "${s}".orders ADD COLUMN IF NOT EXISTS delivery_zone_name TEXT;
+    ALTER TABLE "${s}".orders ADD COLUMN IF NOT EXISTS cancel_note TEXT;
     ALTER TABLE "${s}".orders ADD COLUMN IF NOT EXISTS payment_method TEXT DEFAULT '';
     ALTER TABLE "${s}".orders ADD COLUMN IF NOT EXISTS payment_breakdown TEXT;
     ALTER TABLE "${s}".orders ADD COLUMN IF NOT EXISTS cash_received NUMERIC(12,2);
@@ -249,6 +253,8 @@ async function ensureTenantDefaults(slug, businessName = slug) {
     delivery_enabled: '1',
     pickup_enabled: '1',
     location_enabled: '1',
+    delivery_zones_geojson: '[]',
+    delivery_fee_rules: '',
     pos_enabled: '1',
     ticket_width_mm: '80',
     ticket_font_size_px: '14',

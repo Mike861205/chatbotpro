@@ -1,30 +1,14 @@
 const express = require('express');
-const path = require('path');
-const fs = require('fs');
-const multer = require('multer');
-const config = require('../config');
 const { requireAuth } = require('../middleware/auth');
+const { createImageUpload, deleteManagedUpload, optimizeUploadedImage, safeUnlink } = require('../utils/uploads');
 
 const router = express.Router();
 router.use(requireAuth);
 
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    const dir = path.join(config.UPLOADS_DIR, req.tenant.slug);
-    fs.mkdirSync(dir, { recursive: true });
-    cb(null, dir);
-  },
-  filename: (req, file, cb) => {
-    const ext = path.extname(file.originalname).toLowerCase();
-    cb(null, `prod_${Date.now()}${ext}`);
-  },
-});
-const upload = multer({
-  storage,
-  limits: { fileSize: 8 * 1024 * 1024 }, // 8 MB
-  fileFilter: (req, file, cb) => {
-    cb(null, /^image\/(png|jpe?g|webp|gif)$/.test(file.mimetype));
-  },
+const upload = createImageUpload({
+  scopeResolver: (req) => req.tenant.slug,
+  allowedMimePattern: /^image\/(png|jpe?g|webp|gif)$/,
+  tempPrefix: 'prod',
 });
 
 // ---- Categorías ----
@@ -66,26 +50,34 @@ router.get('/', async (req, res, next) => {
 });
 
 router.post('/', upload.single('image'), async (req, res, next) => {
+  let img = null;
   try {
     const { name, description, price, categoryId, active } = req.body || {};
     if (!name || !name.trim() || price === undefined || price === '') {
       return res.status(400).json({ error: 'Nombre y precio son obligatorios' });
     }
-    const img = req.file ? `/uploads/${req.tenant.slug}/${req.file.filename}` : null;
+    img = req.file ? await optimizeUploadedImage(req.file, { scope: req.tenant.slug, outputPrefix: 'prod' }) : null;
     const row = await req.tdb.get(
       'INSERT INTO {s}.products (name, description, price, category_id, image, active) VALUES ($1,$2,$3,$4,$5,$6) RETURNING id',
       [name.trim(), description || '', Number(price) || 0, categoryId || null, img, active === '0' ? 0 : 1]
     );
     res.json(row);
-  } catch (e) { next(e); }
+  } catch (e) {
+    try {
+      if (img) await deleteManagedUpload(img);
+      else if (req.file) await safeUnlink(req.file.path);
+    } catch {}
+    next(e);
+  }
 });
 
 router.put('/:id', upload.single('image'), async (req, res, next) => {
+  let img = null;
   try {
     const existing = await req.tdb.get('SELECT * FROM {s}.products WHERE id = $1', [req.params.id]);
     if (!existing) return res.status(404).json({ error: 'Producto no encontrado' });
     const { name, description, price, categoryId, active } = req.body || {};
-    const img = req.file ? `/uploads/${req.tenant.slug}/${req.file.filename}` : existing.image;
+    img = req.file ? await optimizeUploadedImage(req.file, { scope: req.tenant.slug, outputPrefix: 'prod' }) : existing.image;
     await req.tdb.run(
       'UPDATE {s}.products SET name=$1, description=$2, price=$3, category_id=$4, image=$5, active=$6 WHERE id=$7',
       [
@@ -98,13 +90,28 @@ router.put('/:id', upload.single('image'), async (req, res, next) => {
         req.params.id,
       ]
     );
+    if (req.file && existing.image && existing.image !== img) {
+      const refs = await req.tdb.get('SELECT COUNT(*)::int AS total FROM {s}.products WHERE image = $1', [existing.image]);
+      if (!Number(refs?.total || 0)) await deleteManagedUpload(existing.image);
+    }
     res.json({ ok: true });
-  } catch (e) { next(e); }
+  } catch (e) {
+    try {
+      if (img && req.file) await deleteManagedUpload(img);
+      else if (req.file) await safeUnlink(req.file.path);
+    } catch {}
+    next(e);
+  }
 });
 
 router.delete('/:id', async (req, res, next) => {
   try {
+    const existing = await req.tdb.get('SELECT image FROM {s}.products WHERE id = $1', [req.params.id]);
     await req.tdb.run('DELETE FROM {s}.products WHERE id = $1', [req.params.id]);
+    if (existing?.image) {
+      const refs = await req.tdb.get('SELECT COUNT(*)::int AS total FROM {s}.products WHERE image = $1', [existing.image]);
+      if (!Number(refs?.total || 0)) await deleteManagedUpload(existing.image);
+    }
     res.json({ ok: true });
   } catch (e) { next(e); }
 });

@@ -5,6 +5,7 @@ let SA_PAYMENT_TENANT_ID = null;
 let SA_SUSPEND_TENANT_ID = null;
 let SA_ACTIVATE_TENANT_ID = null;
 let SA_ACTIVATE_MODE = 'account';
+let SA_DEPLOY_POLL_TIMER = null;
 
 const $ = (s) => document.querySelector(s);
 let SA_CLOCK_TIMER = null;
@@ -473,7 +474,7 @@ async function confirmActivateTenant() {
 async function loadIntegrations() {
   const cfg = await api('/api/superadmin/integrations');
   $('#saOpenAiEnabled').value = cfg.openaiEnabled ? '1' : '0';
-  $('#saOpenAiModel').value = cfg.openaiModel || 'gpt-4o-mini';
+  applyOpenAiModelSelection(cfg.openaiModel || 'gpt-4o-mini');
   $('#saOpenAiBaseUrl').value = cfg.openaiBaseUrl || '';
   $('#saWebhookUrl').value = cfg.webhookUrl || '';
   $('#saOpenAiKey').value = '';
@@ -495,7 +496,7 @@ async function saveIntegrations(e) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       openaiEnabled: $('#saOpenAiEnabled').value === '1',
-      openaiModel: $('#saOpenAiModel').value,
+      openaiModel: getSelectedOpenAiModel(),
       openaiBaseUrl: $('#saOpenAiBaseUrl').value,
       webhookUrl: $('#saWebhookUrl').value,
       openaiApiKey: $('#saOpenAiKey').value || undefined,
@@ -509,6 +510,144 @@ async function saveIntegrations(e) {
   toast(logoFile ? 'Integraciones y logo guardados' : 'Integraciones guardadas');
   await loadIntegrations();
 }
+
+function formatDeployStatus(deploy) {
+  if (!deploy) return 'Estado: sin datos de deploy.';
+  if (deploy.running) {
+    const started = deploy.startedAt ? fmtDate(deploy.startedAt) : '—';
+    return `Estado: ejecutando (iniciado ${started})`;
+  }
+  if (deploy.completedAt) {
+    const code = Number(deploy.exitCode);
+    const ok = code === 0;
+    return `Estado: ${ok ? 'último deploy exitoso' : 'último deploy con error'} (código ${Number.isFinite(code) ? code : 'n/a'})`;
+  }
+  return 'Estado: sin ejecuciones todavía.';
+}
+
+function renderDeployStatus(payload) {
+  const deploy = payload?.deploy || null;
+  const statusEl = $('#saDeployStatus');
+  const logsEl = $('#saDeployLogs');
+  const runBtn = $('#saDeployRun');
+  const pushDeployBtn = $('#saPushDeployRun');
+
+  if (!statusEl || !logsEl || !runBtn) return;
+
+  statusEl.textContent = formatDeployStatus(deploy);
+  runBtn.disabled = Boolean(deploy?.running);
+  if (pushDeployBtn) pushDeployBtn.disabled = Boolean(deploy?.running);
+
+  const logs = Array.isArray(deploy?.logs) ? deploy.logs : [];
+  logsEl.textContent = logs.length ? logs.join('\n') : 'Sin logs todavía.';
+  logsEl.scrollTop = logsEl.scrollHeight;
+}
+
+async function loadDeployStatus() {
+  const payload = await api('/api/superadmin/deploy/status');
+  renderDeployStatus(payload);
+  if (payload?.deploy?.running) startDeployPolling();
+  return payload;
+}
+
+async function loadGitDeployStatus() {
+  const payload = await api('/api/superadmin/deploy/git-status');
+  const hint = $('#saGitStatusHint');
+  if (hint) {
+    const git = payload?.git || {};
+    const dirtyCount = Number(git.dirtyCount || 0);
+    hint.textContent = `Git: rama local ${git.currentBranch || '-'} | destino ${git.remote || 'origin'}/${git.branch || 'main'} | cambios pendientes ${dirtyCount}`;
+  }
+  return payload;
+}
+
+function stopDeployPolling() {
+  if (SA_DEPLOY_POLL_TIMER) {
+    clearInterval(SA_DEPLOY_POLL_TIMER);
+    SA_DEPLOY_POLL_TIMER = null;
+  }
+}
+
+function startDeployPolling() {
+  stopDeployPolling();
+  SA_DEPLOY_POLL_TIMER = setInterval(async () => {
+    try {
+      const payload = await loadDeployStatus();
+      if (!payload?.deploy?.running) {
+        stopDeployPolling();
+        await loadGitDeployStatus().catch(() => {});
+      }
+    } catch (err) {
+      stopDeployPolling();
+      toast(err.message, true);
+    }
+  }, 2500);
+}
+
+async function runProductionDeploy() {
+  const force = Boolean($('#saDeployForce')?.checked);
+  const payload = await api('/api/superadmin/deploy/run', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ force }),
+  });
+  renderDeployStatus(payload);
+  startDeployPolling();
+  toast('Deploy lanzado. Revisa el log en tiempo real.');
+}
+
+async function runPushAndDeploy() {
+  const commitMessage = String($('#saDeployCommitMessage')?.value || '').trim();
+  if (commitMessage.length < 5) {
+    return toast('Escribe un mensaje de commit de al menos 5 caracteres', true);
+  }
+  const forceDeploy = Boolean($('#saDeployForce')?.checked);
+  const payload = await api('/api/superadmin/deploy/push-run', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ commitMessage, forceDeploy }),
+  });
+  renderDeployStatus(payload);
+  startDeployPolling();
+  toast('Push + deploy lanzado. Revisa el log en tiempo real.');
+}
+
+function applyOpenAiModelSelection(model) {
+  const preset = $('#saOpenAiModelPreset');
+  const customInput = $('#saOpenAiModel');
+  const hint = $('#saOpenAiModelHint');
+  const cleanModel = String(model || 'gpt-4o-mini').trim() || 'gpt-4o-mini';
+  const knownModels = new Set(['gpt-4o-mini', 'gpt-4.1-mini', 'gpt-4.1', 'gpt-4o', 'gpt-4.1-nano']);
+  const useCustom = !knownModels.has(cleanModel);
+
+  preset.value = useCustom ? 'custom' : cleanModel;
+  customInput.hidden = !useCustom;
+  customInput.value = useCustom ? cleanModel : '';
+  hint.textContent = useCustom
+    ? 'Modelo personalizado para todos los tenants. Verifica que exista en tu cuenta OpenAI.'
+    : 'Este será el modelo por default para todos los tenants.';
+}
+
+function getSelectedOpenAiModel() {
+  const presetValue = $('#saOpenAiModelPreset').value;
+  if (presetValue === 'custom') {
+    return ($('#saOpenAiModel').value || '').trim() || 'gpt-4o-mini';
+  }
+  return presetValue || 'gpt-4o-mini';
+}
+
+$('#saOpenAiModelPreset')?.addEventListener('change', () => {
+  const presetValue = $('#saOpenAiModelPreset').value;
+  if (presetValue === 'custom') {
+    $('#saOpenAiModel').hidden = false;
+    $('#saOpenAiModel').focus();
+    $('#saOpenAiModelHint').textContent = 'Modelo personalizado para todos los tenants. Verifica que exista en tu cuenta OpenAI.';
+    return;
+  }
+  $('#saOpenAiModel').hidden = true;
+  $('#saOpenAiModel').value = '';
+  $('#saOpenAiModelHint').textContent = 'Este será el modelo por default para todos los tenants.';
+});
 
 async function uploadSuperAdminLogo(fileParam, options = {}) {
   const input = $('#saBrandLogoFile');
@@ -547,7 +686,7 @@ async function boot() {
     const me = await api('/api/superadmin/me');
     $('#saUserName').textContent = me.username || 'superadmin';
     startSuperAdminClock();
-    await Promise.all([loadTenants(), loadIntegrations()]);
+    await Promise.all([loadTenants(), loadIntegrations(), loadDeployStatus(), loadGitDeployStatus()]);
   } catch (err) {
     toast(err.message, true);
   }
@@ -564,7 +703,10 @@ $('#saTenantSearch')?.addEventListener('input', renderTenantTable);
 $('#saReloadTenants')?.addEventListener('click', () => loadTenants().catch((e) => toast(e.message, true)));
 $('#saBillingRefresh')?.addEventListener('click', () => refreshBilling().catch((e) => toast(e.message, true)));
 $('#saIntegrationForm')?.addEventListener('submit', (e) => saveIntegrations(e).catch((err) => toast(err.message, true)));
+$('#saDeployRun')?.addEventListener('click', () => runProductionDeploy().catch((err) => toast(err.message, true)));
+$('#saPushDeployRun')?.addEventListener('click', () => runPushAndDeploy().catch((err) => toast(err.message, true)));
 $('#saLogout')?.addEventListener('click', async () => {
+  stopDeployPolling();
   await fetch('/api/superadmin/logout', { method: 'POST' });
   location.href = '/superadmin/login';
 });

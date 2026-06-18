@@ -78,7 +78,19 @@
               <div class="field"><label><i class="ph-bold ph-toggle-left"></i> OpenAI habilitado</label>
                 <select id="saOpenAiEnabled"><option value="1">Sí</option><option value="0">No</option></select>
               </div>
-              <div class="field"><label><i class="ph-bold ph-cpu"></i> Modelo</label><input id="saOpenAiModel" placeholder="gpt-4o-mini" /></div>
+              <div class="field">
+                <label><i class="ph-bold ph-cpu"></i> Modelo por default</label>
+                <select id="saOpenAiModelPreset">
+                  <option value="gpt-4o-mini">gpt-4o-mini</option>
+                  <option value="gpt-4.1-mini">gpt-4.1-mini</option>
+                  <option value="gpt-4.1">gpt-4.1</option>
+                  <option value="gpt-4o">gpt-4o</option>
+                  <option value="gpt-4.1-nano">gpt-4.1-nano</option>
+                  <option value="custom">Otro modelo...</option>
+                </select>
+                <input id="saOpenAiModel" type="text" placeholder="Escribe un modelo personalizado" hidden />
+                <div class="hint" id="saOpenAiModelHint">Este será el modelo por default para todos los tenants.</div>
+              </div>
             </div>
             <div class="field"><label><i class="ph-bold ph-key"></i> API Key OpenAI</label><input id="saOpenAiKey" type="password" placeholder="sk-... (deja vacío para no cambiar)" /></div>
             <div class="field"><label><i class="ph-bold ph-link-simple"></i> Base URL API (opcional)</label><input id="saOpenAiBaseUrl" placeholder="https://api.openai.com/v1" /></div>
@@ -101,6 +113,26 @@
             <div class="hint" id="saIntegrationHint"></div>
             <button class="btn btn-primary" type="submit"><i class="ph-bold ph-floppy-disk"></i> Guardar integraciones</button>
           </form>
+        </div>
+
+        <div class="card" style="padding:16px;margin-top:14px">
+          <h3 style="margin-bottom:10px"><i class="ph-bold ph-rocket-launch"></i> Deploy a producción</h3>
+          <p class="hint" style="margin-bottom:12px">Ejecuta el script remoto de despliegue sin abrir PowerShell manualmente.</p>
+          <div class="field" style="margin-bottom:10px">
+            <label><i class="ph-bold ph-git-commit"></i> Mensaje de commit para Push + Deploy</label>
+            <input id="saDeployCommitMessage" type="text" placeholder="Ej. fix: ajustes POS y superadmin" maxlength="140" />
+          </div>
+          <div class="hint" id="saGitStatusHint" style="margin-bottom:10px">Git: cargando estado del repositorio...</div>
+          <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:10px">
+            <button class="btn btn-primary" type="button" id="saDeployRun"><i class="ph-bold ph-upload-simple"></i> Deploy ahora</button>
+            <button class="btn btn-ghost" type="button" id="saPushDeployRun"><i class="ph-bold ph-git-pull-request"></i> Push + Deploy</button>
+            <label style="display:flex;align-items:center;gap:6px;font-size:13px;color:var(--ink-2)">
+              <input type="checkbox" id="saDeployForce" />
+              Forzar (descarta cambios en servidor)
+            </label>
+          </div>
+          <div class="hint" id="saDeployStatus">Estado: sin ejecuciones todavía.</div>
+          <pre id="saDeployLogs" style="margin-top:10px;max-height:220px;overflow:auto;background:#0f172a;color:#e2e8f0;padding:12px;border-radius:10px;border:1px solid #1e293b;font-size:12px;line-height:1.45">Sin logs todavía.</pre>
         </div>
       </section>
     </main>

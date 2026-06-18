@@ -204,23 +204,48 @@
       messagesEl.querySelectorAll('.options, .prods, .wa-btn').forEach((el) => el.remove());
     }
 
-    function shareLocation() {
+    async function shareLocation() {
       if (!navigator.geolocation) {
-        send('location_error', 'No pude compartir mi ubicación');
+        send('location_error', null);
         return;
       }
-      navigator.geolocation.getCurrentPosition(
-        (pos) => {
-          const lat = pos.coords.latitude;
-          const lng = pos.coords.longitude;
-          const label = `${lat.toFixed(5)}, ${lng.toFixed(5)}`;
-          send(`geo:${lat},${lng}|${label}`, '📍 Ubicación compartida');
-        },
-        () => {
-          send('location_error', 'No pude compartir mi ubicación');
-        },
-        { enableHighAccuracy: true, timeout: 8000, maximumAge: 0 }
-      );
+
+      const getPosition = (opts) =>
+        new Promise((resolve, reject) => {
+          navigator.geolocation.getCurrentPosition(resolve, reject, opts);
+        });
+
+      const sendGeo = (pos) => {
+        const lat = pos.coords.latitude;
+        const lng = pos.coords.longitude;
+        const label = `${lat.toFixed(5)}, ${lng.toFixed(5)}`;
+        send(`geo:${lat},${lng}|${label}`, '📍 Ubicación compartida');
+      };
+
+      try {
+        let pos;
+        try {
+          // Primer intento: rápido, pero con timeout suficiente para aceptar permisos sin fallar.
+          pos = await getPosition({ enableHighAccuracy: false, timeout: 12000, maximumAge: 60000 });
+        } catch (err) {
+          // Si no hay permiso, salimos; si fue timeout/posición no disponible, hacemos reintento interno.
+          if (err && err.code === 1) throw err;
+          pos = await getPosition({ enableHighAccuracy: true, timeout: 12000, maximumAge: 0 });
+        }
+
+        const accuracy = Number(pos?.coords?.accuracy || 9999);
+        if (accuracy > 120) {
+          try {
+            pos = await getPosition({ enableHighAccuracy: true, timeout: 8000, maximumAge: 0 });
+          } catch {
+            // Si falla mejora de precisión, usamos la coordenada ya capturada para no bloquear al cliente.
+          }
+        }
+
+        sendGeo(pos);
+      } catch {
+        send('location_error', null);
+      }
     }
 
     function onOption(o) {

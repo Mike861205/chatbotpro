@@ -1,11 +1,11 @@
 const express = require('express');
 const bcrypt = require('bcryptjs');
 const path = require('node:path');
-const fs = require('node:fs');
-const multer = require('multer');
+const { spawn } = require('node:child_process');
 const config = require('../config');
 const { q, tdb, getSuperAdminSetting, setSuperAdminSetting, refreshTenantBillingStatuses } = require('../db');
 const { encrypt, decrypt } = require('../utils/crypto');
+const { createImageUpload, deleteManagedUpload, optimizeUploadedImage, safeUnlink } = require('../utils/uploads');
 const { signToken, setAuthCookie } = require('../middleware/auth');
 const {
   signSuperAdminToken,
@@ -16,22 +16,171 @@ const {
 
 const router = express.Router();
 
-const superadminLogoStorage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    const dir = path.join(config.UPLOADS_DIR, 'superadmin');
-    fs.mkdirSync(dir, { recursive: true });
-    cb(null, dir);
-  },
-  filename: (req, file, cb) => {
-    const ext = path.extname(file.originalname || '').toLowerCase() || '.png';
-    cb(null, `logo_superadmin_${Date.now()}${ext}`);
-  },
-});
+const deployState = {
+  running: false,
+  startedAt: null,
+  completedAt: null,
+  exitCode: null,
+  mode: 'deploy',
+  force: false,
+  command: '',
+  logs: [],
+};
 
-const uploadSuperadminLogo = multer({
-  storage: superadminLogoStorage,
-  limits: { fileSize: 8 * 1024 * 1024 },
-  fileFilter: (req, file, cb) => cb(null, /^image\/(png|jpe?g|webp|svg\+xml)$/i.test(file.mimetype)),
+function appendDeployLog(raw) {
+  const text = String(raw || '').replace(/\r/g, '');
+  if (!text) return;
+  const lines = text.split('\n').filter(Boolean);
+  const ts = new Date().toISOString();
+  for (const line of lines) {
+    deployState.logs.push(`[${ts}] ${line}`);
+  }
+  if (deployState.logs.length > 300) {
+    deployState.logs = deployState.logs.slice(-300);
+  }
+}
+
+function getDeployStatus() {
+  return {
+    running: deployState.running,
+    startedAt: deployState.startedAt,
+    completedAt: deployState.completedAt,
+    exitCode: deployState.exitCode,
+    mode: deployState.mode,
+    force: deployState.force,
+    command: deployState.command,
+    logs: deployState.logs,
+  };
+}
+
+function beginDeploySession({ force, mode, command }) {
+  deployState.running = true;
+  deployState.startedAt = new Date().toISOString();
+  deployState.completedAt = null;
+  deployState.exitCode = null;
+  deployState.mode = mode || 'deploy';
+  deployState.force = Boolean(force);
+  deployState.command = String(command || '').trim();
+  deployState.logs = [];
+}
+
+function endDeploySession(code) {
+  deployState.running = false;
+  deployState.exitCode = Number.isFinite(code) ? code : -1;
+  deployState.completedAt = new Date().toISOString();
+}
+
+function getRemoteDeployArgs(force) {
+  const scriptPath = path.join(config.ROOT, 'deploy', 'remote-deploy.ps1');
+  const host = String(process.env.DEPLOY_SSH_HOST || '').trim();
+  const user = String(process.env.DEPLOY_SSH_USER || '').trim();
+  const appDir = String(process.env.DEPLOY_REMOTE_APP_DIR || '').trim();
+  const identityFile = String(process.env.DEPLOY_SSH_IDENTITY_FILE || '').trim();
+  const portRaw = Number(process.env.DEPLOY_SSH_PORT || 0);
+  const port = Number.isFinite(portRaw) && portRaw > 0 ? Math.floor(portRaw) : 0;
+
+  const args = ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', scriptPath];
+  if (host) args.push('-Host', host);
+  if (user) args.push('-User', user);
+  if (port) args.push('-Port', String(port));
+  if (appDir) args.push('-AppDir', appDir);
+  if (identityFile) args.push('-IdentityFile', identityFile);
+  if (force) args.push('-Force');
+  return args;
+}
+
+function spawnAndCapture(command, args, options = {}) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, {
+      cwd: options.cwd || config.ROOT,
+      windowsHide: true,
+    });
+
+    let stdout = '';
+    let stderr = '';
+    child.stdout.on('data', (chunk) => {
+      const txt = String(chunk || '');
+      stdout += txt;
+      if (options.captureToDeployLog !== false) appendDeployLog(txt);
+    });
+    child.stderr.on('data', (chunk) => {
+      const txt = String(chunk || '');
+      stderr += txt;
+      if (options.captureToDeployLog !== false) appendDeployLog(txt);
+    });
+    child.on('error', (err) => reject(err));
+    child.on('close', (code) => {
+      resolve({ code: Number.isFinite(code) ? code : -1, stdout, stderr });
+    });
+  });
+}
+
+async function runGitAndDeploySequence({ commitMessage, forceDeploy, username }) {
+  try {
+    appendDeployLog(`[deploy] Flujo push+deploy iniciado por ${username}`);
+    const remote = String(process.env.DEPLOY_GIT_REMOTE || 'origin').trim() || 'origin';
+    const branch = String(process.env.DEPLOY_GIT_BRANCH || 'main').trim() || 'main';
+
+    appendDeployLog(`[git] add -A`);
+    let out = await spawnAndCapture('git', ['add', '-A'], { cwd: config.ROOT });
+    if (out.code !== 0) throw new Error('No se pudo ejecutar git add -A');
+
+    appendDeployLog('[git] diff --cached --name-only');
+    out = await spawnAndCapture('git', ['diff', '--cached', '--name-only'], { cwd: config.ROOT });
+    if (out.code !== 0) throw new Error('No se pudo leer el estado del staging');
+    const stagedFiles = String(out.stdout || '')
+      .split('\n')
+      .map((v) => v.trim())
+      .filter(Boolean);
+
+    if (!stagedFiles.length) {
+      appendDeployLog('[git] No hay cambios locales para commit. Continuando con push/deploy.');
+    } else {
+      appendDeployLog(`[git] Archivos en commit: ${stagedFiles.length}`);
+      appendDeployLog(`[git] commit -m "${commitMessage}"`);
+      out = await spawnAndCapture('git', ['commit', '-m', commitMessage], { cwd: config.ROOT });
+      if (out.code !== 0) throw new Error('Falló git commit. Revisa el log para más detalle.');
+    }
+
+    appendDeployLog(`[git] push ${remote} HEAD:${branch}`);
+    out = await spawnAndCapture('git', ['push', remote, `HEAD:${branch}`], { cwd: config.ROOT });
+    if (out.code !== 0) throw new Error('Falló git push. Revisa credenciales o permisos del repo.');
+
+    const deployArgs = getRemoteDeployArgs(forceDeploy);
+    appendDeployLog('[deploy] Ejecutando deploy remoto...');
+    out = await spawnAndCapture('powershell.exe', deployArgs, { cwd: config.ROOT });
+    if (out.code !== 0) throw new Error('Deploy remoto finalizó con error.');
+
+    appendDeployLog('[deploy] Push + deploy completado correctamente.');
+    endDeploySession(0);
+  } catch (err) {
+    appendDeployLog(`[deploy] Error: ${err.message}`);
+    endDeploySession(1);
+  }
+}
+
+async function getGitDeployStatus() {
+  const remote = String(process.env.DEPLOY_GIT_REMOTE || 'origin').trim() || 'origin';
+  const branch = String(process.env.DEPLOY_GIT_BRANCH || 'main').trim() || 'main';
+  const branchResult = await spawnAndCapture('git', ['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: config.ROOT, captureToDeployLog: false });
+  const statusResult = await spawnAndCapture('git', ['status', '--porcelain'], { cwd: config.ROOT, captureToDeployLog: false });
+  const lines = String(statusResult.stdout || '')
+    .split('\n')
+    .map((v) => v.trim())
+    .filter(Boolean);
+  return {
+    remote,
+    branch,
+    currentBranch: String(branchResult.stdout || '').trim() || '(desconocida)',
+    dirtyCount: lines.length,
+    dirtyFiles: lines.slice(0, 50),
+  };
+}
+
+const uploadSuperadminLogo = createImageUpload({
+  scopeResolver: () => 'superadmin',
+  allowedMimePattern: /^image\/(png|jpe?g|webp|svg\+xml)$/i,
+  tempPrefix: 'logo_superadmin',
 });
 
 function buildTenantSummary(rows) {
@@ -166,12 +315,19 @@ router.put('/integrations', requireSuperAdmin, async (req, res, next) => {
 });
 
 router.post('/branding/logo', requireSuperAdmin, uploadSuperadminLogo.single('logo'), async (req, res, next) => {
+  let nextLogoPath = null;
   try {
     if (!req.file) return res.status(400).json({ error: 'Selecciona un archivo de imagen' });
-    const logoPath = `/uploads/superadmin/${req.file.filename}`;
-    await setSuperAdminSetting('superadmin_logo_url', logoPath);
-    res.json({ ok: true, superadminLogoUrl: logoPath });
+    const currentLogoPath = await getSuperAdminSetting('superadmin_logo_url', '');
+    nextLogoPath = await optimizeUploadedImage(req.file, { scope: 'superadmin', outputPrefix: 'logo_superadmin', maxWidth: 1200, quality: 82 });
+    await setSuperAdminSetting('superadmin_logo_url', nextLogoPath);
+    if (currentLogoPath && currentLogoPath !== nextLogoPath) await deleteManagedUpload(currentLogoPath);
+    res.json({ ok: true, superadminLogoUrl: nextLogoPath });
   } catch (e) {
+    try {
+      if (nextLogoPath) await deleteManagedUpload(nextLogoPath);
+      else if (req.file) await safeUnlink(req.file.path);
+    } catch {}
     next(e);
   }
 });
@@ -478,6 +634,87 @@ router.post('/tenants/:id/payment', requireSuperAdmin, async (req, res, next) =>
     );
 
     res.json({ ok: true, nextDueDate });
+  } catch (e) {
+    next(e);
+  }
+});
+
+router.get('/deploy/status', requireSuperAdmin, (req, res) => {
+  res.json({ ok: true, deploy: getDeployStatus() });
+});
+
+router.get('/deploy/git-status', requireSuperAdmin, async (req, res, next) => {
+  try {
+    const git = await getGitDeployStatus();
+    res.json({ ok: true, git });
+  } catch (e) {
+    next(e);
+  }
+});
+
+router.post('/deploy/run', requireSuperAdmin, async (req, res, next) => {
+  try {
+    if (deployState.running) {
+      return res.status(409).json({ error: 'Ya hay un deploy en ejecución' });
+    }
+
+    const force = Boolean(req.body?.force);
+    const args = getRemoteDeployArgs(force);
+    beginDeploySession({ force, mode: 'deploy', command: `powershell.exe ${args.join(' ')}` });
+    appendDeployLog(`[deploy] Iniciado por ${req.superadmin.username}`);
+
+    const child = spawn('powershell.exe', args, {
+      cwd: config.ROOT,
+      windowsHide: true,
+    });
+
+    child.stdout.on('data', (chunk) => appendDeployLog(chunk));
+    child.stderr.on('data', (chunk) => appendDeployLog(chunk));
+
+    child.on('error', (err) => {
+      appendDeployLog(`[deploy] Error al ejecutar script: ${err.message}`);
+      endDeploySession(-1);
+    });
+
+    child.on('close', (code) => {
+      endDeploySession(code);
+      appendDeployLog(`[deploy] Finalizado con código ${deployState.exitCode}`);
+    });
+
+    res.json({ ok: true, message: 'Deploy lanzado', deploy: getDeployStatus() });
+  } catch (e) {
+    next(e);
+  }
+});
+
+router.post('/deploy/push-run', requireSuperAdmin, async (req, res, next) => {
+  try {
+    if (deployState.running) {
+      return res.status(409).json({ error: 'Ya hay un proceso de release en ejecución' });
+    }
+
+    const commitMessage = String(req.body?.commitMessage || '').trim();
+    if (commitMessage.length < 5) {
+      return res.status(400).json({ error: 'El mensaje de commit debe tener al menos 5 caracteres' });
+    }
+
+    const forceDeploy = Boolean(req.body?.forceDeploy);
+    beginDeploySession({
+      force: forceDeploy,
+      mode: 'push-deploy',
+      command: `git add -A && git commit -m "${commitMessage}" && git push && remote-deploy${forceDeploy ? ' --force' : ''}`,
+    });
+
+    runGitAndDeploySequence({
+      commitMessage,
+      forceDeploy,
+      username: req.superadmin.username,
+    }).catch((err) => {
+      appendDeployLog(`[deploy] Error inesperado: ${err.message}`);
+      endDeploySession(1);
+    });
+
+    res.json({ ok: true, message: 'Push + deploy lanzado', deploy: getDeployStatus() });
   } catch (e) {
     next(e);
   }

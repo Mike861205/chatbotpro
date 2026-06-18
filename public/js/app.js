@@ -20,6 +20,15 @@ let POS_SALES_FILTER = 'today';
 let POS_SALES_START_DATE = '';
 let POS_SALES_END_DATE = '';
 let POS_PAYMENT_EDIT_METHOD = 'cash';
+let CHATBOT_SUBTAB = 'flow';
+let DELIVERY_ZONES = [];
+let DELIVERY_ZONE_MAP = null;
+let DELIVERY_ZONE_LAYER = null;
+let DELIVERY_DRAW_ACTIVE = false;
+let DELIVERY_DRAW_POINTS = [];
+let DELIVERY_DRAW_MARKERS = [];
+let DELIVERY_DRAW_PREVIEW = null;
+let DELIVERY_DRAW_HELP_SHOWN = false;
 
 const $ = (s) => document.querySelector(s);
 const fmtMoney = (n, c) =>
@@ -73,6 +82,51 @@ function askConfirm(title, msg) {
     };
     $('#confirmYes').onclick = () => done(true);
     $('#confirmNo').onclick = () => done(false);
+  });
+}
+
+function askCancelReason(orderId, initialValue = '') {
+  return new Promise((resolve) => {
+    const modal = $('#orderCancelReasonModal');
+    const input = $('#orderCancelReasonInput');
+    const error = $('#orderCancelReasonError');
+    const btnCancel = $('#orderCancelReasonCancel');
+    const btnSave = $('#orderCancelReasonSave');
+    const orderEl = $('#orderCancelReasonOrder');
+
+    if (orderEl) orderEl.textContent = `#${orderId}`;
+    if (input) input.value = initialValue || '';
+    if (error) error.textContent = '';
+    modal.classList.add('show');
+    setTimeout(() => input?.focus(), 60);
+
+    const done = (value) => {
+      modal.classList.remove('show');
+      modal.onclick = null;
+      btnCancel.onclick = null;
+      btnSave.onclick = null;
+      input.oninput = null;
+      resolve(value);
+    };
+
+    modal.onclick = (e) => {
+      if (e.target === modal) done(null);
+    };
+
+    input.oninput = () => {
+      if (error && String(input.value || '').trim().length >= 3) error.textContent = '';
+    };
+
+    btnCancel.onclick = () => done(null);
+    btnSave.onclick = () => {
+      const note = String(input.value || '').trim();
+      if (note.length < 3) {
+        if (error) error.textContent = 'Escribe un motivo de al menos 3 caracteres.';
+        input.focus();
+        return;
+      }
+      done(note.slice(0, 280));
+    };
   });
 }
 
@@ -262,17 +316,28 @@ function ordersTableHTML(orders, editable = true) {
         o.delivery === 'domicilio'
           ? '<i class="ph-bold ph-moped" style="color:var(--blue)"></i> Domicilio'
           : `<i class="ph-bold ph-storefront" style="color:var(--violet)"></i> Recoger${o.pickup_branch_name ? ` · ${esc(o.pickup_branch_name)}` : ''}`;
+      const deliveryFeeText =
+        o.delivery === 'domicilio' && Number(o.delivery_fee || 0) > 0
+          ? `<div style="font-size:12px;color:var(--ink-3);margin-top:3px"><i class="ph-bold ph-coins"></i> Envío: ${fmtMoney(Number(o.delivery_fee || 0))}${o.delivery_zone_name ? ` · ${esc(o.delivery_zone_name)}` : ''}</div>`
+          : '';
+      const resolvedLocationText = o.customer_location_resolved
+        ? `<div style="font-size:12px;color:var(--ink-3);margin-top:3px"><i class="ph-bold ph-map-trifold"></i> ${esc(o.customer_location_resolved)}</div>`
+        : '';
       const mapLink = Number.isFinite(Number(o.customer_location_lat)) && Number.isFinite(Number(o.customer_location_lng))
         ? `<a href="https://www.google.com/maps?q=${Number(o.customer_location_lat)},${Number(o.customer_location_lng)}" target="_blank" rel="noopener noreferrer" style="font-size:12px;color:var(--primary);margin-top:3px;display:inline-flex;gap:6px;align-items:center;text-decoration:none"><i class="ph-bold ph-map-pin"></i> Abrir ubicación</a>`
         : '';
       const locationText = o.customer_location_text
-        ? `<div style="font-size:12px;color:var(--ink-3);margin-top:3px"><i class="ph-bold ph-map-pin"></i> ${esc(o.customer_location_text)}</div>${mapLink}`
-        : mapLink;
+        ? `<div style="font-size:12px;color:var(--ink-3);margin-top:3px"><i class="ph-bold ph-map-pin"></i> ${esc(o.customer_location_text)}</div>${resolvedLocationText}${mapLink}`
+        : `${resolvedLocationText}${mapLink}`;
+      const cancelNoteText =
+        o.status === 'cancelado' && o.cancel_note
+          ? `<div style="font-size:12px;color:#b42318;margin-top:4px"><i class="ph-bold ph-note-pencil"></i> Motivo: ${esc(o.cancel_note)}</div>`
+          : '';
       return `<tr>
         <td><b>#${o.id}</b></td>
         <td><div class="cust">${custAvatar(o.customer?.name)}<div class="cmeta"><b>${esc(o.customer?.name || '—')}</b><span>${esc(o.customer?.phone || '')}</span></div></div></td>
         <td style="max-width:280px">${esc(items)}</td>
-        <td style="white-space:nowrap">${deliveryText}${locationText}</td>
+        <td style="white-space:nowrap">${deliveryText}${deliveryFeeText}${locationText}${cancelNoteText}</td>
         <td><b>${fmtMoney(o.total)}</b></td>
         <td>${statusCell}</td>
         <td style="white-space:nowrap;color:var(--ink-3);font-size:12.5px">${esc(o.created_at)}</td>
@@ -290,16 +355,38 @@ async function loadOrders() {
     : emptyHTML('ph-funnel', 'Sin resultados', 'No hay pedidos con este filtro.');
   document.querySelectorAll('.status-sel').forEach((sel) =>
     sel.addEventListener('change', async () => {
+      const current = LAST_ORDERS.find((o) => String(o.id) === String(sel.dataset.order));
+      const previousStatus = current?.status || 'pendiente';
+      let cancelNote = null;
       try {
+        if (sel.value === 'cancelado') {
+          const note = await askCancelReason(sel.dataset.order, current?.cancel_note || '');
+          if (note === null) {
+            sel.value = previousStatus;
+            sel.className = `status-sel s-${previousStatus}`;
+            return;
+          }
+          const clean = String(note || '').trim();
+          if (clean.length < 3) {
+            toast('Debes escribir un motivo de cancelación', true);
+            sel.value = previousStatus;
+            sel.className = `status-sel s-${previousStatus}`;
+            return;
+          }
+          cancelNote = clean;
+        }
         await api(`/api/orders/${sel.dataset.order}`, {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ status: sel.value }),
+          body: JSON.stringify({ status: sel.value, cancel_note: cancelNote }),
         });
         sel.className = `status-sel s-${sel.value}`;
         toast(`Pedido #${sel.dataset.order} → ${sel.value}`);
+        await loadOrders();
         loadDashboardBadge();
       } catch (e) {
+        sel.value = previousStatus;
+        sel.className = `status-sel s-${previousStatus}`;
         toast(e.message, true);
       }
     })
@@ -315,6 +402,7 @@ function formatExportRows(orders) {
     productos: o.items.map((it) => `${it.qty}x ${it.name}`).join(', '),
     entrega: o.delivery === 'domicilio' ? 'Domicilio' : `Recoger${o.pickup_branch_name ? ` (${o.pickup_branch_name})` : ''}`,
     ubicacion: o.customer_location_text || '',
+    motivo_cancelacion: o.cancel_note || '',
     total: Number(o.total || 0),
     estatus: o.status,
     fecha: o.created_at || '',
@@ -331,6 +419,7 @@ function exportOrdersExcel() {
     Productos: r.productos,
     Entrega: r.entrega,
     Ubicacion: r.ubicacion,
+    MotivoCancelacion: r.motivo_cancelacion,
     Total: r.total,
     Estatus: r.estatus,
     Fecha: r.fecha,
@@ -353,11 +442,11 @@ function exportOrdersPdf() {
   doc.text(`Generado: ${new Date().toLocaleString('es-MX')}`, 14, 20);
   doc.autoTable({
     startY: 24,
-    head: [['Pedido', 'Cliente', 'Telefono', 'Productos', 'Entrega', 'Ubicacion', 'Total', 'Estatus', 'Fecha']],
-    body: rows.map((r) => [r.pedido, r.cliente, r.telefono, r.productos, r.entrega, r.ubicacion, fmtMoney(r.total), r.estatus, r.fecha]),
+    head: [['Pedido', 'Cliente', 'Telefono', 'Productos', 'Entrega', 'Ubicacion', 'Motivo cancelacion', 'Total', 'Estatus', 'Fecha']],
+    body: rows.map((r) => [r.pedido, r.cliente, r.telefono, r.productos, r.entrega, r.ubicacion, r.motivo_cancelacion, fmtMoney(r.total), r.estatus, r.fecha]),
     styles: { fontSize: 8, cellPadding: 2.2 },
     headStyles: { fillColor: [23, 28, 46] },
-    columnStyles: { 3: { cellWidth: 60 }, 5: { cellWidth: 38 } },
+    columnStyles: { 3: { cellWidth: 52 }, 5: { cellWidth: 32 }, 6: { cellWidth: 42 } },
   });
   doc.save(`pedidos_${Date.now()}.pdf`);
   toast('Pedidos exportados a PDF');
@@ -1580,7 +1669,7 @@ function openProdModal(p = null) {
 }
 $('#addProdBtn').addEventListener('click', () => openProdModal());
 $('#prodCancel').addEventListener('click', () => $('#prodModal').classList.remove('show'));
-[$('#prodModal'), $('#catModal'), $('#confirmModal'), $('#branchModal'), $('#posMovementModal'), $('#posCloseModal'), $('#posSalesHistoryModal'), $('#posPaymentEditModal')].forEach((m) =>
+[$('#prodModal'), $('#catModal'), $('#confirmModal'), $('#branchModal'), $('#posMovementModal'), $('#posCloseModal'), $('#posSalesHistoryModal'), $('#posPaymentEditModal'), $('#orderCancelReasonModal')].forEach((m) =>
   m.addEventListener('click', (e) => {
     if (e.target === m) m.classList.remove('show');
   })
@@ -1611,6 +1700,243 @@ $('#prodForm').addEventListener('submit', async (e) => {
 });
 
 /* ===== Chatbot ===== */
+function parseDeliveryZones(raw) {
+  try {
+    const parsed = JSON.parse(String(raw || '[]'));
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .map((zone, i) => {
+        const points = Array.isArray(zone?.points)
+          ? zone.points
+              .map((p) => [Number(p?.[0]), Number(p?.[1])])
+              .filter((p) => Number.isFinite(p[0]) && Number.isFinite(p[1]))
+          : [];
+        const fee = Number(zone?.fee);
+        const name = String(zone?.name || '').trim();
+        if (!name || !Number.isFinite(fee) || fee < 0 || points.length < 3) return null;
+        return {
+          id: String(zone?.id || `zone-${i + 1}`),
+          name,
+          fee,
+          color: String(zone?.color || '#0ea5e9'),
+          points,
+          active: zone?.active !== false,
+        };
+      })
+      .filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+function setChatbotSubtab(tab) {
+  CHATBOT_SUBTAB = tab === 'delivery' ? 'delivery' : 'flow';
+  const isDelivery = CHATBOT_SUBTAB === 'delivery';
+  $('#chatbotTabFlow')?.classList.toggle('active', !isDelivery);
+  $('#chatbotTabDelivery')?.classList.toggle('active', isDelivery);
+  $('#chatbotFlowPanel').hidden = isDelivery;
+  $('#chatbotDeliveryPanel').hidden = !isDelivery;
+  if (isDelivery) {
+    ensureDeliveryZoneMap();
+    setTimeout(() => DELIVERY_ZONE_MAP?.invalidateSize(), 80);
+  }
+}
+
+function renderDeliveryZonesList() {
+  const host = $('#deliveryZonesList');
+  if (!host) return;
+  if (!DELIVERY_ZONES.length) {
+    host.innerHTML = emptyHTML('ph-map-pin', 'Sin zonas aún', 'Dibuja tu primera zona y asígnale un costo de envío.');
+    return;
+  }
+  host.innerHTML = DELIVERY_ZONES.map((zone) => `
+    <div class="delivery-zone-item">
+      <div class="meta">
+        <span class="swatch" style="background:${esc(zone.color)}"></span>
+        <div>
+          <b>${esc(zone.name)}</b>
+          <small>${zone.points.length} puntos · ${fmtMoney(zone.fee)}</small>
+        </div>
+      </div>
+      <button class="btn btn-danger btn-icon" type="button" data-delivery-zone-del="${esc(zone.id)}" title="Eliminar zona"><i class="ph-bold ph-trash"></i></button>
+    </div>
+  `).join('');
+
+  host.querySelectorAll('[data-delivery-zone-del]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      DELIVERY_ZONES = DELIVERY_ZONES.filter((z) => z.id !== btn.dataset.deliveryZoneDel);
+      drawDeliveryZones();
+      renderDeliveryZonesList();
+    });
+  });
+}
+
+function clearDeliveryDrawing() {
+  DELIVERY_DRAW_POINTS = [];
+  DELIVERY_DRAW_MARKERS.forEach((m) => m.remove());
+  DELIVERY_DRAW_MARKERS = [];
+  if (DELIVERY_DRAW_PREVIEW) {
+    DELIVERY_DRAW_PREVIEW.remove();
+    DELIVERY_DRAW_PREVIEW = null;
+  }
+}
+
+function setDeliveryColor(color) {
+  const normalized = String(color || '#0ea5e9').toLowerCase();
+  const input = $('#deliveryZoneColor');
+  if (input) input.value = normalized;
+  const code = $('#deliveryColorCode');
+  if (code) code.textContent = normalized.toUpperCase();
+  document.querySelectorAll('.delivery-color-chip').forEach((chip) => {
+    chip.classList.toggle('active', String(chip.dataset.color || '').toLowerCase() === normalized);
+  });
+}
+
+function setDeliveryDrawingActive(active) {
+  DELIVERY_DRAW_ACTIVE = Boolean(active);
+  $('#deliveryStartDraw').innerHTML = DELIVERY_DRAW_ACTIVE
+    ? '<i class="ph-bold ph-stop-circle"></i> Detener dibujo'
+    : '<i class="ph-bold ph-pencil-simple-line"></i> Iniciar dibujo';
+  $('#deliveryDrawHint').textContent = DELIVERY_DRAW_ACTIVE
+    ? 'Dibujo activo: toca el mapa para crear puntos del polígono.'
+    : 'Dibujo pausado. Puedes reactivarlo cuando quieras.';
+}
+
+function openDeliveryDrawHelpModal() {
+  $('#deliveryDrawHelpModal')?.classList.add('show');
+}
+
+function closeDeliveryDrawHelpModal() {
+  $('#deliveryDrawHelpModal')?.classList.remove('show');
+}
+
+function redrawDeliveryPreview() {
+  if (!DELIVERY_ZONE_MAP) return;
+  if (DELIVERY_DRAW_PREVIEW) {
+    DELIVERY_DRAW_PREVIEW.remove();
+    DELIVERY_DRAW_PREVIEW = null;
+  }
+  if (DELIVERY_DRAW_POINTS.length < 2) return;
+  if (DELIVERY_DRAW_POINTS.length >= 3) {
+    DELIVERY_DRAW_PREVIEW = L.polygon(DELIVERY_DRAW_POINTS, {
+      color: $('#deliveryZoneColor')?.value || '#0ea5e9',
+      weight: 2,
+      fillOpacity: 0.2,
+      dashArray: '6,6',
+    }).addTo(DELIVERY_ZONE_MAP);
+  } else {
+    DELIVERY_DRAW_PREVIEW = L.polyline(DELIVERY_DRAW_POINTS, {
+      color: $('#deliveryZoneColor')?.value || '#0ea5e9',
+      weight: 2,
+      dashArray: '6,6',
+    }).addTo(DELIVERY_ZONE_MAP);
+  }
+}
+
+function drawDeliveryZones() {
+  if (!DELIVERY_ZONE_LAYER) return;
+  DELIVERY_ZONE_LAYER.clearLayers();
+  DELIVERY_ZONES.forEach((zone) => {
+    const polygon = L.polygon(zone.points, {
+      color: zone.color || '#0ea5e9',
+      weight: 2,
+      fillOpacity: 0.22,
+    }).addTo(DELIVERY_ZONE_LAYER);
+    polygon.bindPopup(`<b>${esc(zone.name)}</b><br/>Envío: ${fmtMoney(zone.fee)}`);
+  });
+}
+
+function ensureDeliveryZoneMap() {
+  if (DELIVERY_ZONE_MAP || !$('#deliveryZoneMap') || !globalThis.L) return;
+
+  DELIVERY_ZONE_MAP = L.map('deliveryZoneMap', { zoomControl: true }).setView([20.6597, -103.3496], 11);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    attribution: 'Leaflet | © OpenStreetMap',
+    maxZoom: 19,
+  }).addTo(DELIVERY_ZONE_MAP);
+  DELIVERY_ZONE_LAYER = L.layerGroup().addTo(DELIVERY_ZONE_MAP);
+  drawDeliveryZones();
+
+  DELIVERY_ZONE_MAP.on('click', (e) => {
+    if (!DELIVERY_DRAW_ACTIVE) return;
+    DELIVERY_DRAW_POINTS.push([e.latlng.lat, e.latlng.lng]);
+    DELIVERY_DRAW_MARKERS.push(L.circleMarker(e.latlng, { radius: 4, color: $('#deliveryZoneColor')?.value || '#0ea5e9', weight: 2, fillOpacity: 1 }).addTo(DELIVERY_ZONE_MAP));
+    redrawDeliveryPreview();
+    $('#deliveryDrawHint').textContent = `Puntos capturados: ${DELIVERY_DRAW_POINTS.length}. Necesitas mínimo 3 para guardar.`;
+  });
+}
+
+function initDeliveryZoneModuleEvents() {
+  $('#chatbotTabFlow')?.addEventListener('click', () => setChatbotSubtab('flow'));
+  $('#chatbotTabDelivery')?.addEventListener('click', () => setChatbotSubtab('delivery'));
+
+  $('#deliveryStartDraw')?.addEventListener('click', () => {
+    const next = !DELIVERY_DRAW_ACTIVE;
+    setDeliveryDrawingActive(next);
+    if (next && !DELIVERY_DRAW_HELP_SHOWN) {
+      DELIVERY_DRAW_HELP_SHOWN = true;
+      openDeliveryDrawHelpModal();
+    }
+  });
+
+  $('#deliveryHelpClose')?.addEventListener('click', closeDeliveryDrawHelpModal);
+  $('#deliveryHelpStart')?.addEventListener('click', () => {
+    closeDeliveryDrawHelpModal();
+    setDeliveryDrawingActive(true);
+  });
+
+  document.querySelectorAll('.delivery-color-chip').forEach((chip) => {
+    chip.addEventListener('click', () => setDeliveryColor(chip.dataset.color));
+  });
+  $('#deliveryColorCustomBtn')?.addEventListener('click', () => $('#deliveryZoneColor')?.click());
+  $('#deliveryZoneColor')?.addEventListener('input', (e) => setDeliveryColor(e.target.value));
+
+  $('#deliveryUndoPoint')?.addEventListener('click', () => {
+    if (!DELIVERY_DRAW_POINTS.length) return;
+    DELIVERY_DRAW_POINTS.pop();
+    const marker = DELIVERY_DRAW_MARKERS.pop();
+    marker?.remove();
+    redrawDeliveryPreview();
+    $('#deliveryDrawHint').textContent = DELIVERY_DRAW_POINTS.length
+      ? `Puntos capturados: ${DELIVERY_DRAW_POINTS.length}.`
+      : 'Sin puntos capturados. Inicia dibujo y toca el mapa.';
+  });
+
+  $('#deliverySaveZone')?.addEventListener('click', () => {
+    const name = ($('#deliveryZoneName')?.value || '').trim();
+    const fee = Number($('#deliveryZoneFee')?.value || '0');
+    const color = $('#deliveryZoneColor')?.value || '#0ea5e9';
+    if (!name) return toast('Escribe un nombre de zona', true);
+    if (!Number.isFinite(fee) || fee < 0) return toast('El costo de envío no es válido', true);
+    if (DELIVERY_DRAW_POINTS.length < 3) return toast('Dibuja al menos 3 puntos para formar la zona', true);
+
+    DELIVERY_ZONES.push({
+      id: `zone_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+      name,
+      fee,
+      color,
+      points: [...DELIVERY_DRAW_POINTS],
+      active: true,
+    });
+
+    clearDeliveryDrawing();
+    drawDeliveryZones();
+    renderDeliveryZonesList();
+    $('#deliveryZoneName').value = '';
+    $('#deliveryZoneFee').value = '';
+    $('#deliveryDrawHint').textContent = 'Zona agregada. Guarda para aplicar cambios al chatbot.';
+    toast('Zona agregada al mapa');
+  });
+
+  $('#deliverySaveAll')?.addEventListener('click', async () => {
+    const fd = new FormData();
+    fd.append('delivery_zones_geojson', JSON.stringify(DELIVERY_ZONES));
+    await api('/api/settings', { method: 'PUT', body: fd });
+    SETTINGS = await api('/api/settings');
+    toast('Servicio a domicilio guardado');
+  });
+}
+
 function fillBotForm() {
   if (!SETTINGS) return;
   const link = `${location.origin}/${SETTINGS.slug}`;
@@ -1622,6 +1948,14 @@ function fillBotForm() {
   $('#botDelivery').checked = SETTINGS.delivery_enabled === '1';
   $('#botPickup').checked = SETTINGS.pickup_enabled === '1';
   $('#botLocation').checked = SETTINGS.location_enabled !== '0';
+  DELIVERY_ZONES = parseDeliveryZones(SETTINGS.delivery_zones_geojson || '[]');
+  setDeliveryColor($('#deliveryZoneColor')?.value || '#0ea5e9');
+  renderDeliveryZonesList();
+  if (CHATBOT_SUBTAB === 'delivery') {
+    ensureDeliveryZoneMap();
+    drawDeliveryZones();
+    setTimeout(() => DELIVERY_ZONE_MAP?.invalidateSize(), 80);
+  }
   loadBranches();
 }
 $('#copyLinkBtn').addEventListener('click', () => {
@@ -1643,6 +1977,8 @@ $('#botForm').addEventListener('submit', async (e) => {
   toast('Flujo del chatbot guardado');
   SETTINGS = await api('/api/settings');
 });
+
+initDeliveryZoneModuleEvents();
 
 /* ===== Sucursales ===== */
 function branchesTableHTML(rows) {

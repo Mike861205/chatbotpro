@@ -48,6 +48,54 @@ $env:NODE_ENV='test'; node server.js
 $env:NODE_ENV='production'; node server.js
 ```
 
+## ⚡ Deploy rápido de cambios
+
+Flujo recomendado:
+
+1. En local: `git add . && git commit -m "..." && git push origin main`
+2. En servidor (una sola orden):
+
+```bash
+cd /var/www/chatbotpro
+chmod +x deploy/quick-deploy.sh
+./deploy/quick-deploy.sh
+```
+
+Si el servidor tiene cambios locales y quieres forzar el código remoto:
+
+```bash
+cd /var/www/chatbotpro
+./deploy/quick-deploy.sh --force
+```
+
+Deploy remoto en un solo comando (desde tu PC Windows con PowerShell):
+
+```powershell
+cd c:\chatbotpro
+powershell -ExecutionPolicy Bypass -File .\deploy\remote-deploy.ps1
+```
+
+Forzado (descarta cambios locales en servidor):
+
+```powershell
+cd c:\chatbotpro
+powershell -ExecutionPolicy Bypass -File .\deploy\remote-deploy.ps1 -Force
+```
+
+Deploy desde SuperAdmin (sin abrir PowerShell):
+
+1. Entra a `/superadmin` -> sección **Integraciones**.
+2. En tarjeta **Deploy a producción**, pulsa **Deploy ahora**.
+3. Opcional: activa **Forzar** para usar `--force` en servidor.
+4. Si quieres todo en uno, usa **Push + Deploy** escribiendo mensaje de commit.
+
+Notas importantes:
+
+- El deploy remoto publica lo que ya está en GitHub (`origin/main`).
+- Antes de pulsar deploy, asegúrate de haber hecho `git push` de tus cambios locales.
+- Con **Push + Deploy**, el panel ejecuta: `git add -A` -> `git commit` -> `git push` -> deploy remoto.
+- Puedes configurar SSH con variables `DEPLOY_*` en `.env` (ver `.env.example`).
+
 Recomendación:
 
 - Usa un `DATABASE_URL` distinto para test y producción.
