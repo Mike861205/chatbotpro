@@ -45,6 +45,7 @@ app.use('/uploads', express.static(config.UPLOADS_DIR));
 app.use('/api/auth', rateLimit(30, 10 * 60 * 1000), require('./src/routes/auth'));
 app.use('/api/products', require('./src/routes/products'));
 app.use('/api/orders', require('./src/routes/orders'));
+app.use('/api/customers', require('./src/routes/customers'));
 app.use('/api/dashboard', require('./src/routes/dashboard'));
 app.use('/api/settings', require('./src/routes/settings'));
 app.use('/api/branches', require('./src/routes/branches'));

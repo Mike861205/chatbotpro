@@ -32,6 +32,7 @@
         <div class="nav-label">Principal</div>
         <a href="#dashboard" data-view="dashboard" class="active"><span class="nav-ic"><i class="ph-fill ph-house"></i></span><span>Dashboard</span></a>
         <a href="#pedidos" data-view="pedidos"><span class="nav-ic"><i class="ph-fill ph-receipt"></i></span><span>Pedidos</span> <span id="pendingBadge" class="count" style="display:none"></span></a>
+        <a href="#clientes" data-view="clientes"><span class="nav-ic"><i class="ph-fill ph-users-three"></i></span><span>Clientes</span></a>
         <a href="#pos" data-view="pos"><span class="nav-ic"><i class="ph-fill ph-cash-register"></i></span><span>Punto de venta</span></a>
         <a href="#productos" data-view="productos"><span class="nav-ic"><i class="ph-fill ph-bowl-food"></i></span><span>Productos</span></a>
         <div class="nav-label">Chatbot</div>
@@ -84,7 +85,7 @@
       <!-- ──────── Pedidos ──────── -->
       <section class="section" id="view-pedidos">
         <div class="card">
-          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:18px;flex-wrap:wrap;gap:12px">
+          <div class="orders-topbar">
             <div class="segmented" id="orderFilter">
               <button data-st="" class="on">Todos</button>
               <button data-st="pendiente">Pendientes</button>
@@ -94,13 +95,69 @@
               <button data-st="entregado">Entregados</button>
               <button data-st="cancelado">Cancelados</button>
             </div>
-            <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <div class="orders-actions">
               <button class="btn btn-ghost" id="expExcelBtn"><i class="ph-bold ph-file-xls"></i> Excel</button>
               <button class="btn btn-ghost" id="expPdfBtn"><i class="ph-bold ph-file-pdf"></i> PDF</button>
               <button class="btn btn-ghost" onclick="loadOrders()"><i class="ph-bold ph-arrows-clockwise"></i> Actualizar</button>
             </div>
           </div>
+          <div class="orders-filters" id="ordersDateFilters">
+            <button class="btn btn-ghost orders-today-toggle" id="ordersTodayToggle" aria-pressed="false">
+              <i class="ph-bold ph-calendar-check"></i> Solo pedidos del día: Desactivado
+            </button>
+            <div class="orders-range">
+              <div class="field" style="margin:0">
+                <label>Desde</label>
+                <input type="date" id="ordersDateStart" />
+              </div>
+              <div class="field" style="margin:0">
+                <label>Hasta</label>
+                <input type="date" id="ordersDateEnd" />
+              </div>
+              <button class="btn btn-ghost" id="ordersApplyDate"><i class="ph-bold ph-funnel"></i> Aplicar fechas</button>
+              <button class="btn btn-ghost" id="ordersClearDate"><i class="ph-bold ph-x-circle"></i> Limpiar</button>
+            </div>
+          </div>
           <div class="table-wrap" id="ordersTable"></div>
+          <div class="orders-pagination" id="ordersPagination"></div>
+        </div>
+      </section>
+
+      <!-- ──────── Clientes ──────── -->
+      <section class="section" id="view-clientes">
+        <div class="card">
+          <div class="orders-topbar" style="margin-bottom:10px">
+            <h3 style="margin:0"><i class="ph-bold ph-users-three"></i> Clientes de chatbot con mayor fidelidad</h3>
+            <button class="btn btn-ghost" id="refreshCustomersBtn"><i class="ph-bold ph-arrows-clockwise"></i> Actualizar</button>
+          </div>
+          <div class="hint" style="margin-bottom:12px">Ranking por número de pedidos y monto acumulado en compras por chatbot.</div>
+          <div class="customers-filters" id="customersFilters">
+            <div class="customers-filters-row">
+              <div class="field" style="margin:0">
+                <label>Desde</label>
+                <input type="date" id="customersDateStart" />
+              </div>
+              <div class="field" style="margin:0">
+                <label>Hasta</label>
+                <input type="date" id="customersDateEnd" />
+              </div>
+              <div class="field" style="margin:0">
+                <label>Ordenar por</label>
+                <select id="customersSort">
+                  <option value="orders_desc">Mayor pedidos → menor</option>
+                  <option value="orders_asc">Menor pedidos → mayor</option>
+                  <option value="amount_desc">Mayor monto acumulado</option>
+                  <option value="recent_desc">Último pedido más reciente</option>
+                  <option value="name_asc">Nombre (A-Z)</option>
+                </select>
+              </div>
+            </div>
+            <div class="customers-filters-actions">
+              <button class="btn btn-ghost" id="customersApplyFilters"><i class="ph-bold ph-funnel"></i> Aplicar</button>
+              <button class="btn btn-ghost" id="customersClearFilters"><i class="ph-bold ph-x-circle"></i> Limpiar</button>
+            </div>
+          </div>
+          <div class="table-wrap" id="customersTable"></div>
         </div>
       </section>
 

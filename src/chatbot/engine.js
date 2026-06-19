@@ -318,6 +318,64 @@ function mainOptions(cart) {
   return opts;
 }
 
+function returningAddressText(profile) {
+  const lines = [];
+  if (profile.address) lines.push(`📍 Dirección: ${profile.address}`);
+  if (Number.isFinite(profile.locationLat) && Number.isFinite(profile.locationLng)) {
+    lines.push(`🗺️ Maps: ${mapsUrl(profile.locationLat, profile.locationLng)}`);
+  }
+  if (profile.locationResolved) lines.push(`🏷️ Referencia Maps: ${profile.locationResolved}`);
+  if (profile.reference) lines.push(`📝 Referencia cliente: ${profile.reference}`);
+  if (profile.lastDeliveryAt) lines.push(`🕒 Último pedido a domicilio: ${profile.lastDeliveryAt}`);
+  return lines.join('\n');
+}
+
+async function findReturningCustomerByPhone(t, phoneRaw) {
+  const digits = String(phoneRaw || '').replace(/\D/g, '');
+  if (digits.length < 10) return null;
+  const phoneHash = lookupHash(digits);
+  const row = await t.get(
+    `SELECT
+       c.id,
+       c.name_enc,
+       c.phone_enc,
+       c.address_enc,
+       o.customer_location_lat::float AS location_lat,
+       o.customer_location_lng::float AS location_lng,
+       o.customer_location_text,
+       o.customer_location_resolved,
+       o.notes AS customer_reference,
+       o.delivery_fee::float AS delivery_fee,
+       o.delivery_zone_name,
+       to_char(o.created_at AT TIME ZONE 'America/Mexico_City', 'DD Mon YYYY, HH24:MI') AS last_delivery_at
+     FROM {s}.customers c
+     JOIN {s}.orders o ON o.customer_id = c.id
+     WHERE c.phone_hash = $1
+       AND o.delivery = 'domicilio'
+     ORDER BY o.id DESC
+     LIMIT 1`,
+    [phoneHash]
+  );
+  if (!row) return null;
+  const name = decrypt(row.name_enc) || '';
+  const phone = decrypt(row.phone_enc) || digits;
+  const address = decrypt(row.address_enc) || row.customer_location_text || '';
+  return {
+    id: Number(row.id),
+    name,
+    phone,
+    address,
+    locationLat: Number.isFinite(Number(row.location_lat)) ? Number(row.location_lat) : null,
+    locationLng: Number.isFinite(Number(row.location_lng)) ? Number(row.location_lng) : null,
+    locationText: row.customer_location_text || '',
+    locationResolved: row.customer_location_resolved || '',
+    reference: String(row.customer_reference || '').trim(),
+    deliveryFee: Number(row.delivery_fee || 0),
+    deliveryZoneName: row.delivery_zone_name || '',
+    lastDeliveryAt: row.last_delivery_at || '',
+  };
+}
+
 async function showMenu(t, state) {
   const cats = await t.all('SELECT * FROM {s}.categories ORDER BY sort, name');
   const products = await activeProducts(t);
@@ -374,6 +432,7 @@ function buildOrderText(businessName, cart, customer, delivery, currency) {
     delivery === 'domicilio'
       ? `📍 Entrega a domicilio: ${customer.address}`
       : `🏪 Recoger en sucursal${customer.branchName ? `: ${customer.branchName}` : ''}`,
+    ...(delivery === 'domicilio' && customer?.reference ? [`📝 Referencia cliente: ${customer.reference}`] : []),
   ];
   const locationDetails = locationSummary(customer);
   if (locationDetails) lines.push(locationDetails);
@@ -436,8 +495,19 @@ async function handleMessage(t, slug, sessionId, rawInput) {
   // Comandos globales
   if (!input || lower === 'start' || lower === 'hola' || lower === 'inicio') {
     state.step = 'start';
+    state.returningProfile = null;
     reply.messages = [await getSetting(t, 'welcome_message', `¡Hola! Bienvenido a ${businessName} 👋`)];
     reply.options = mainOptions(state.cart);
+    return finish();
+  }
+  if (lower === 'returning_customer') {
+    if (!deliveryEnabled) {
+      reply.messages = ['En este momento el negocio no tiene entregas a domicilio activas, así que no puedo recuperar dirección automática. Puedes pedir normalmente desde el menú.'];
+      reply.options = mainOptions(state.cart);
+      return finish();
+    }
+    state.step = 'ask_returning_phone';
+    reply.messages = ['¡Claro! Si ya has pedido, escribe tu *número de teléfono* para buscar tu última dirección a domicilio 📱'];
     return finish();
   }
   if (lower === 'menu' || lower === 'menú') {
@@ -505,6 +575,125 @@ async function handleMessage(t, slug, sessionId, rawInput) {
     return finish();
   }
 
+  if (state.step === 'ask_returning_phone') {
+    const profile = await findReturningCustomerByPhone(t, input);
+    if (!profile) {
+      reply.messages = ['No encontré un pedido a domicilio previo con ese teléfono. Verifica el número o continúa como pedido nuevo.'];
+      reply.options = [
+        { label: '🔁 Intentar de nuevo', value: 'returning_customer' },
+        { label: '📋 Ver menú', value: 'menu' },
+      ];
+      state.step = 'start';
+      return finish();
+    }
+
+    state.returningProfile = profile;
+    state.step = 'confirm_returning_address';
+    reply.messages = [
+      `Encontré tu último pedido, *${profile.name || 'cliente'}* 🙌`,
+      `${returningAddressText(profile)}\n\n¿Esta es tu dirección para este nuevo pedido?`,
+    ];
+    reply.options = [
+      { label: '✅ Sí, usar esta dirección', value: 'returning_address_yes' },
+      { label: '✏️ No, capturar nueva', value: 'returning_address_no' },
+      { label: '🏪 Usar para recoger en sucursal', value: 'returning_address_pickup' },
+    ];
+    return finish();
+  }
+
+  if (state.step === 'confirm_returning_address') {
+    if (lower === 'returning_address_yes') {
+      const p = state.returningProfile || {};
+      state.customer.name = p.name || state.customer.name || '';
+      state.customer.phone = String(p.phone || '').replace(/\D/g, '') || state.customer.phone || '';
+      state.customer.address = p.address || p.locationText || '';
+      state.customer.locationLat = p.locationLat;
+      state.customer.locationLng = p.locationLng;
+      state.customer.locationText = p.locationText || '';
+      state.customer.locationResolved = p.locationResolved || '';
+      state.customer.deliveryFee = Number(p.deliveryFee || 0);
+      state.customer.deliveryZoneName = p.deliveryZoneName || '';
+      state.customer.reference = p.reference || '';
+      state.delivery = 'domicilio';
+      if (state.cart.length) {
+        state.step = 'confirm';
+        reply.messages = [
+          '¡Perfecto! Ya usaré tus mismos datos de ubicación para este pedido 🚀',
+          confirmText(state, businessName, currency),
+        ];
+        reply.options = confirmOptions();
+      } else {
+        state.step = 'start';
+        const quickMessages = ['¡Perfecto! Ya usaré tus mismos datos de ubicación para este pedido 🚀', 'Ahora solo elige del menú y será más rápido.'];
+        const menuReply = await showMenu(t, state);
+        Object.assign(reply, menuReply);
+        reply.messages = [...quickMessages, ...(menuReply.messages || [])];
+      }
+      return finish();
+    }
+
+    if (lower === 'returning_address_no') {
+      state.returningProfile = null;
+      state.step = 'ask_name';
+      reply.messages = ['Sin problema. Vamos a registrar tus datos para este pedido. ¿Cuál es tu *nombre*?'];
+      return finish();
+    }
+
+    if (lower === 'returning_address_pickup') {
+      if (!pickupEnabled) {
+        reply.messages = ['En este momento solo está activa la entrega a domicilio. ¿Deseas usar la dirección guardada?'];
+        reply.options = [
+          { label: '✅ Sí, usar esta dirección', value: 'returning_address_yes' },
+          { label: '✏️ No, capturar nueva', value: 'returning_address_no' },
+        ];
+        return finish();
+      }
+
+      const p = state.returningProfile || {};
+      state.customer.name = p.name || state.customer.name || '';
+      state.customer.phone = String(p.phone || '').replace(/\D/g, '') || state.customer.phone || '';
+      state.delivery = 'recoger';
+      state.customer.address = '';
+      state.customer.locationLat = null;
+      state.customer.locationLng = null;
+      state.customer.locationText = '';
+      state.customer.locationResolved = '';
+      state.customer.deliveryFee = 0;
+      state.customer.deliveryZoneName = '';
+      state.customer.reference = '';
+
+      const branches = await t.all('SELECT id, name, address, reference FROM {s}.branches WHERE active = 1 ORDER BY name');
+      if (branches.length) {
+        state.step = 'ask_branch';
+        state.branchOptions = branches;
+        reply.messages = ['Perfecto, usaremos tus datos y ahora elige la sucursal para recoger 🏪'];
+        reply.options = branches.map((b) => ({ label: `🏪 ${b.name}`, value: `branch_${b.id}` }));
+        return finish();
+      }
+
+      state.step = locationEnabled ? 'ask_location_optional' : 'confirm';
+      if (locationEnabled) {
+        reply.messages = ['Perfecto, no hay sucursales configuradas. ¿Quieres compartir tu ubicación para ubicarte más fácil? (Opcional)'];
+        reply.options = [
+          { label: '📍 Compartir ubicación', value: 'share_location' },
+          { label: 'Omitir', value: 'skip_location' },
+        ];
+      } else {
+        reply.messages = [confirmText(state, businessName, currency)];
+        reply.options = confirmOptions();
+      }
+      return finish();
+    }
+
+    reply.messages = ['Confírmame si usarás la misma dirección del último pedido:'];
+    reply.options = [
+      { label: '✅ Sí, usar esta dirección', value: 'returning_address_yes' },
+      { label: '✏️ No, capturar nueva', value: 'returning_address_no' },
+      { label: '🏪 Usar para recoger en sucursal', value: 'returning_address_pickup' },
+    ];
+    return finish();
+  }
+
   // Checkout
   if (lower === 'checkout') {
     if (!state.cart.length) {
@@ -512,8 +701,53 @@ async function handleMessage(t, slug, sessionId, rawInput) {
       reply.options = [{ label: '📋 Ver menú', value: 'menu' }];
       return finish();
     }
-    state.step = 'ask_name';
-    reply.messages = ['¡Perfecto! Para completar tu pedido, ¿cuál es tu *nombre*?'];
+
+    const hasReturningData =
+      Boolean(state.customer?.name) &&
+      Boolean(state.customer?.phone) &&
+      state.delivery === 'domicilio' &&
+      Boolean(state.customer?.address);
+
+    if (hasReturningData) {
+      state.step = 'confirm';
+      reply.messages = [
+        'Usaré tus datos guardados del último pedido para agilizar ✅',
+        confirmText(state, businessName, currency),
+      ];
+      reply.options = confirmOptions();
+      return finish();
+    }
+
+    state.step = 'checkout_identity_choice';
+    reply.messages = ['Antes de finalizar, ¿ya habías pedido con nosotros?'];
+    reply.options = [
+      { label: '🔁 Ya he pedido', value: 'returning_customer' },
+      { label: '👤 Soy cliente nuevo', value: 'checkout_new_customer' },
+    ];
+    return finish();
+  }
+
+  if (state.step === 'checkout_identity_choice') {
+    if (lower === 'returning_customer') {
+      if (!deliveryEnabled) {
+        state.step = 'ask_name';
+        reply.messages = ['En este momento solo está activo el flujo normal. ¿Cuál es tu *nombre*?'];
+        return finish();
+      }
+      state.step = 'ask_returning_phone';
+      reply.messages = ['¡Claro! Si ya has pedido, escribe tu *número de teléfono* para recuperar tus datos 📱'];
+      return finish();
+    }
+    if (lower === 'checkout_new_customer') {
+      state.step = 'ask_name';
+      reply.messages = ['¡Perfecto! Para completar tu pedido, ¿cuál es tu *nombre*?'];
+      return finish();
+    }
+    reply.messages = ['Elige una opción para continuar:'];
+    reply.options = [
+      { label: '🔁 Ya he pedido', value: 'returning_customer' },
+      { label: '👤 Soy cliente nuevo', value: 'checkout_new_customer' },
+    ];
     return finish();
   }
 
@@ -680,12 +914,12 @@ async function handleMessage(t, slug, sessionId, rawInput) {
         state.customer.deliveryZoneName = feeInfo.zoneName;
         state.customer.locationResolved = feeInfo.resolvedLabel;
       }
-      state.step = 'confirm';
+      state.step = 'ask_reference';
       reply.messages = [
         `🗺️ Ubicación recibida. Abrir en Maps: ${mapsUrl(geo.lat, geo.lng)}${Number(state.customer.deliveryFee || 0) > 0 ? `\n🛵 Envío detectado: ${money(state.customer.deliveryFee, currency)}${state.customer.deliveryZoneName ? ` (${state.customer.deliveryZoneName})` : ''}` : ''}`,
-        confirmText(state, businessName, currency),
+        '¿Alguna referencia de tu domicilio? (ejemplo: portón negro, casa esquina).',
       ];
-      reply.options = confirmOptions();
+      reply.options = [{ label: 'Omitir referencia', value: 'skip_reference' }];
       return finish();
     }
 
@@ -703,18 +937,24 @@ async function handleMessage(t, slug, sessionId, rawInput) {
         { label: 'Omitir', value: 'skip_location' },
       ];
     } else {
-      state.step = 'confirm';
-      reply.messages = [confirmText(state, businessName, currency)];
-      reply.options = confirmOptions();
+      state.step = 'ask_reference';
+      reply.messages = ['¿Alguna referencia de tu domicilio? (ejemplo: portón negro, casa esquina).'];
+      reply.options = [{ label: 'Omitir referencia', value: 'skip_reference' }];
     }
     return finish();
   }
 
   if (state.step === 'ask_location_optional') {
     if (lower === 'skip_location') {
-      state.step = 'confirm';
-      reply.messages = [confirmText(state, businessName, currency)];
-      reply.options = confirmOptions();
+      if (state.delivery === 'domicilio') {
+        state.step = 'ask_reference';
+        reply.messages = ['¿Alguna referencia de tu domicilio? (ejemplo: portón negro, casa esquina).'];
+        reply.options = [{ label: 'Omitir referencia', value: 'skip_reference' }];
+      } else {
+        state.step = 'confirm';
+        reply.messages = [confirmText(state, businessName, currency)];
+        reply.options = confirmOptions();
+      }
       return finish();
     }
     if (lower === 'location_error') {
@@ -746,12 +986,21 @@ async function handleMessage(t, slug, sessionId, rawInput) {
         state.customer.deliveryZoneName = feeInfo.zoneName;
         state.customer.locationResolved = feeInfo.resolvedLabel;
       }
-      state.step = 'confirm';
-      reply.messages = [
-        `🗺️ Ubicación recibida. Abrir en Maps: ${mapsUrl(geo.lat, geo.lng)}${Number(state.customer.deliveryFee || 0) > 0 ? `\n🛵 Envío detectado: ${money(state.customer.deliveryFee, currency)}${state.customer.deliveryZoneName ? ` (${state.customer.deliveryZoneName})` : ''}` : ''}`,
-        confirmText(state, businessName, currency),
-      ];
-      reply.options = confirmOptions();
+      if (state.delivery === 'domicilio') {
+        state.step = 'ask_reference';
+        reply.messages = [
+          `🗺️ Ubicación recibida. Abrir en Maps: ${mapsUrl(geo.lat, geo.lng)}${Number(state.customer.deliveryFee || 0) > 0 ? `\n🛵 Envío detectado: ${money(state.customer.deliveryFee, currency)}${state.customer.deliveryZoneName ? ` (${state.customer.deliveryZoneName})` : ''}` : ''}`,
+          '¿Alguna referencia de tu domicilio? (ejemplo: portón negro, casa esquina).',
+        ];
+        reply.options = [{ label: 'Omitir referencia', value: 'skip_reference' }];
+      } else {
+        state.step = 'confirm';
+        reply.messages = [
+          `🗺️ Ubicación recibida. Abrir en Maps: ${mapsUrl(geo.lat, geo.lng)}${Number(state.customer.deliveryFee || 0) > 0 ? `\n🛵 Envío detectado: ${money(state.customer.deliveryFee, currency)}${state.customer.deliveryZoneName ? ` (${state.customer.deliveryZoneName})` : ''}` : ''}`,
+          confirmText(state, businessName, currency),
+        ];
+        reply.options = confirmOptions();
+      }
       return finish();
     }
     reply.messages = ['Elige una opción para continuar:'];
@@ -759,6 +1008,29 @@ async function handleMessage(t, slug, sessionId, rawInput) {
       { label: '📍 Compartir ubicación', value: 'share_location' },
       { label: 'Omitir', value: 'skip_location' },
     ];
+    return finish();
+  }
+
+  if (state.step === 'ask_reference') {
+    if (lower === 'skip_reference') {
+      state.customer.reference = '';
+      state.step = 'confirm';
+      reply.messages = [confirmText(state, businessName, currency)];
+      reply.options = confirmOptions();
+      return finish();
+    }
+
+    const ref = String(input || '').trim();
+    if (ref.length < 3) {
+      reply.messages = ['Puedes escribirme una referencia más clara o tocar "Omitir referencia".'];
+      reply.options = [{ label: 'Omitir referencia', value: 'skip_reference' }];
+      return finish();
+    }
+
+    state.customer.reference = ref.slice(0, 180);
+    state.step = 'confirm';
+    reply.messages = [confirmText(state, businessName, currency)];
+    reply.options = confirmOptions();
     return finish();
   }
 
@@ -772,14 +1044,20 @@ async function handleMessage(t, slug, sessionId, rawInput) {
           'INSERT INTO {s}.customers (name_enc, phone_enc, phone_hash, address_enc) VALUES ($1,$2,$3,$4) RETURNING id',
           [encrypt(state.customer.name), encrypt(state.customer.phone), phoneHash, encrypt(state.customer.address || '')]
         );
+      } else {
+        // Mantiene la ficha del cliente actualizada para métricas y fidelidad.
+        await t.run(
+          'UPDATE {s}.customers SET name_enc = $1, phone_enc = $2, address_enc = $3 WHERE id = $4',
+          [encrypt(state.customer.name), encrypt(state.customer.phone), encrypt(state.customer.address || ''), customer.id]
+        );
       }
       const subtotal = cartTotal(state.cart);
       const deliveryFee = Number(state.customer.deliveryFee || 0);
       const total = subtotal + deliveryFee;
       const orderRow = await t.get(
         `INSERT INTO {s}.orders
-         (customer_id, items, subtotal, total, status, channel, delivery, pickup_branch_id, pickup_branch_name, customer_location_lat, customer_location_lng, customer_location_text, customer_location_resolved, delivery_fee, delivery_zone_name)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) RETURNING id`,
+         (customer_id, items, subtotal, total, status, channel, delivery, notes, pickup_branch_id, pickup_branch_name, customer_location_lat, customer_location_lng, customer_location_text, customer_location_resolved, delivery_fee, delivery_zone_name)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16) RETURNING id`,
         [
           customer.id,
           JSON.stringify(state.cart),
@@ -788,6 +1066,7 @@ async function handleMessage(t, slug, sessionId, rawInput) {
           'pendiente',
           'chatbot',
           state.delivery || 'recoger',
+          state.delivery === 'domicilio' ? (state.customer.reference || null) : null,
           state.customer.branchId || null,
           state.customer.branchName || null,
           Number.isFinite(state.customer.locationLat) ? state.customer.locationLat : null,
@@ -847,6 +1126,7 @@ function confirmText(state, businessName, currency) {
     (state.delivery === 'domicilio'
       ? `📍 ${c.address}`
       : `🏪 Recoger en sucursal${c.branchName ? `: ${c.branchName}` : ''}`) +
+    (state.delivery === 'domicilio' && c.reference ? `\n📝 Referencia: ${c.reference}` : '') +
     (locationDetails ? `\n${locationDetails}` : '') +
     '\n\n¿Confirmamos tu pedido?'
   );

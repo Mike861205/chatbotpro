@@ -29,19 +29,41 @@ async function decorate(t, o) {
 
 router.get('/', async (req, res, next) => {
   try {
-    const { status, limit } = req.query;
-      let sql = `SELECT id, customer_id, items, subtotal::float AS subtotal, total::float AS total,
+    const { status, limit, todayOnly, startDate, endDate } = req.query;
+    let sql = `SELECT id, customer_id, items, subtotal::float AS subtotal, total::float AS total,
         delivery_fee::float AS delivery_fee, delivery_zone_name, cancel_note, status, channel, delivery, notes,
         pickup_branch_name, customer_location_lat, customer_location_lng, customer_location_text,
         customer_location_resolved,
                       to_char(created_at AT TIME ZONE 'America/Mexico_City', 'DD Mon YYYY, HH24:MI') AS created_at
                FROM {s}.orders`;
     const params = [];
+    const where = [];
+
     if (status && STATUSES.includes(status)) {
       params.push(status);
-      sql += ` WHERE status = $${params.length}`;
+      where.push(`status = $${params.length}`);
     }
-    params.push(Math.min(Number(limit) || 100, 500));
+
+    const isTodayOnly = String(todayOnly || '').toLowerCase() === '1' || String(todayOnly || '').toLowerCase() === 'true';
+    if (isTodayOnly) {
+      where.push(`(created_at AT TIME ZONE 'America/Mexico_City')::date = (now() AT TIME ZONE 'America/Mexico_City')::date`);
+    } else {
+      const validDate = /^\d{4}-\d{2}-\d{2}$/;
+      if (startDate && validDate.test(String(startDate))) {
+        params.push(String(startDate));
+        where.push(`(created_at AT TIME ZONE 'America/Mexico_City')::date >= $${params.length}::date`);
+      }
+      if (endDate && validDate.test(String(endDate))) {
+        params.push(String(endDate));
+        where.push(`(created_at AT TIME ZONE 'America/Mexico_City')::date <= $${params.length}::date`);
+      }
+    }
+
+    if (where.length) {
+      sql += ` WHERE ${where.join(' AND ')}`;
+    }
+
+    params.push(Math.min(Number(limit) || 500, 500));
     sql += ` ORDER BY id DESC LIMIT $${params.length}`;
     const rows = await req.tdb.all(sql, params);
     res.json(await Promise.all(rows.map((o) => decorate(req.tdb, o))));

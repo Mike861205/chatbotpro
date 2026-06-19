@@ -4,6 +4,14 @@ let SETTINGS = null;
 let salesChart = null;
 let topChart = null;
 let orderStatusFilter = '';
+let orderPage = 1;
+const ORDER_PAGE_SIZE = 10;
+let orderTodayOnly = false;
+let orderDateStart = '';
+let orderDateEnd = '';
+let customersDateStart = '';
+let customersDateEnd = '';
+let customersSort = 'orders_desc';
 let BRANCHES = [];
 let LAST_ORDERS = [];
 let POS_OVERVIEW = null;
@@ -134,6 +142,7 @@ function askCancelReason(orderId, initialValue = '') {
 const VIEW_META = {
   dashboard: ['Dashboard', 'Resumen de tu negocio', 'ph-chart-pie-slice'],
   pedidos: ['Pedidos', 'Administra y actualiza tus pedidos', 'ph-receipt'],
+  clientes: ['Clientes', 'Fidelidad y valor de clientes del chatbot', 'ph-users-three'],
   pos: ['Punto de venta', 'Caja, cobro y cierre del día', 'ph-cash-register'],
   productos: ['Productos', 'Tu menú visible en el chatbot', 'ph-hamburger'],
   chatbot: ['Mi chatbot', 'Configura el flujo y comparte tu liga', 'ph-chat-circle-dots'],
@@ -143,6 +152,7 @@ const VIEW_META = {
 const VIEW_LOADERS = {
   dashboard: loadDashboard,
   pedidos: loadOrders,
+  clientes: loadCustomers,
   pos: loadPos,
   productos: loadProducts,
   chatbot: fillBotForm,
@@ -347,12 +357,75 @@ function ordersTableHTML(orders, editable = true) {
   return `<table><thead><tr><th>Pedido</th><th>Cliente</th><th>Productos</th><th>Entrega</th><th>Total</th><th>Estatus</th><th>Fecha</th></tr></thead><tbody>${rows}</tbody></table>`;
 }
 
+function renderOrdersPagination(totalItems) {
+  const holder = $('#ordersPagination');
+  if (!holder) return;
+  const totalPages = Math.max(1, Math.ceil(totalItems / ORDER_PAGE_SIZE));
+  if (orderPage > totalPages) orderPage = totalPages;
+
+  holder.innerHTML = `
+    <div class="orders-pagination-inner">
+      <span class="orders-page-info">Página ${orderPage} de ${totalPages} · ${totalItems} pedidos</span>
+      <div class="orders-page-actions">
+        <button class="btn btn-ghost" id="ordersPrevPage" ${orderPage <= 1 ? 'disabled' : ''}><i class="ph-bold ph-caret-left"></i> Anterior</button>
+        <button class="btn btn-ghost" id="ordersNextPage" ${orderPage >= totalPages ? 'disabled' : ''}>Siguiente <i class="ph-bold ph-caret-right"></i></button>
+      </div>
+    </div>
+  `;
+
+  $('#ordersPrevPage')?.addEventListener('click', () => {
+    if (orderPage <= 1) return;
+    orderPage -= 1;
+    loadOrders();
+  });
+  $('#ordersNextPage')?.addEventListener('click', () => {
+    if (orderPage >= totalPages) return;
+    orderPage += 1;
+    loadOrders();
+  });
+}
+
+function syncOrdersFiltersUI() {
+  const toggle = $('#ordersTodayToggle');
+  if (toggle) {
+    toggle.classList.toggle('on', orderTodayOnly);
+    toggle.setAttribute('aria-pressed', String(orderTodayOnly));
+    toggle.innerHTML = `<i class="ph-bold ph-calendar-check"></i> Solo pedidos del día: ${orderTodayOnly ? 'Activado' : 'Desactivado'}`;
+  }
+  const start = $('#ordersDateStart');
+  const end = $('#ordersDateEnd');
+  if (start) {
+    start.value = orderDateStart;
+    start.disabled = orderTodayOnly;
+  }
+  if (end) {
+    end.value = orderDateEnd;
+    end.disabled = orderTodayOnly;
+  }
+  $('#ordersApplyDate')?.toggleAttribute('disabled', orderTodayOnly);
+}
+
 async function loadOrders() {
-  const orders = await api(`/api/orders${orderStatusFilter ? `?status=${orderStatusFilter}` : ''}`);
+  syncOrdersFiltersUI();
+  const params = new URLSearchParams();
+  if (orderStatusFilter) params.set('status', orderStatusFilter);
+  if (orderTodayOnly) params.set('todayOnly', '1');
+  if (!orderTodayOnly && orderDateStart) params.set('startDate', orderDateStart);
+  if (!orderTodayOnly && orderDateEnd) params.set('endDate', orderDateEnd);
+
+  const orders = await api(`/api/orders${params.toString() ? `?${params.toString()}` : ''}`);
   LAST_ORDERS = orders;
+
+  const totalPages = Math.max(1, Math.ceil(orders.length / ORDER_PAGE_SIZE));
+  if (orderPage > totalPages) orderPage = totalPages;
+  const startIdx = (orderPage - 1) * ORDER_PAGE_SIZE;
+  const pageOrders = orders.slice(startIdx, startIdx + ORDER_PAGE_SIZE);
+
   $('#ordersTable').innerHTML = orders.length
-    ? ordersTableHTML(orders, true)
+    ? ordersTableHTML(pageOrders, true)
     : emptyHTML('ph-funnel', 'Sin resultados', 'No hay pedidos con este filtro.');
+  renderOrdersPagination(orders.length);
+
   document.querySelectorAll('.status-sel').forEach((sel) =>
     sel.addEventListener('change', async () => {
       const current = LAST_ORDERS.find((o) => String(o.id) === String(sel.dataset.order));
@@ -393,6 +466,84 @@ async function loadOrders() {
   );
 }
 window.loadOrders = loadOrders;
+
+function customerLoyaltyBadge(ordersCount, totalSpent) {
+  if (ordersCount >= 15 || totalSpent >= 8000) return '<span class="loyalty-pill top">Top</span>';
+  if (ordersCount >= 8 || totalSpent >= 4000) return '<span class="loyalty-pill high">Alta</span>';
+  if (ordersCount >= 4 || totalSpent >= 1500) return '<span class="loyalty-pill mid">Media</span>';
+  return '<span class="loyalty-pill base">Nueva</span>';
+}
+
+function customersTableHTML(customers) {
+  const rows = customers
+    .map((c, idx) => `
+      <tr>
+        <td><b>#${idx + 1}</b></td>
+        <td>
+          <div class="cust">
+            ${custAvatar(c.name)}
+            <div class="cmeta"><b>${esc(c.name || 'Cliente')}</b><span>${esc(c.phone || '—')}</span></div>
+          </div>
+        </td>
+        <td style="white-space:nowrap">${esc(c.customer_since || '—')}</td>
+        <td><b>${Number(c.orders_count || 0)}</b></td>
+        <td><b>${fmtMoney(Number(c.total_spent || 0))}</b></td>
+        <td style="white-space:nowrap;color:var(--ink-3)">${esc(c.last_order_at || '—')}</td>
+        <td>${customerLoyaltyBadge(Number(c.orders_count || 0), Number(c.total_spent || 0))}</td>
+      </tr>
+    `)
+    .join('');
+
+  return `<table><thead><tr><th>Rank</th><th>Cliente</th><th>Registro</th><th># Pedidos</th><th>Monto acumulado</th><th>Último pedido</th><th>Fidelidad</th></tr></thead><tbody>${rows}</tbody></table>`;
+}
+
+async function loadCustomers() {
+  const startInput = $('#customersDateStart');
+  const endInput = $('#customersDateEnd');
+  const sortInput = $('#customersSort');
+  if (startInput) startInput.value = customersDateStart;
+  if (endInput) endInput.value = customersDateEnd;
+  if (sortInput) sortInput.value = customersSort;
+
+  const params = new URLSearchParams();
+  if (customersDateStart) params.set('startDate', customersDateStart);
+  if (customersDateEnd) params.set('endDate', customersDateEnd);
+  if (customersSort) params.set('sort', customersSort);
+
+  const customers = await api(`/api/customers${params.toString() ? `?${params.toString()}` : ''}`);
+  const table = $('#customersTable');
+  if (!table) return;
+  table.innerHTML = customers.length
+    ? customersTableHTML(customers)
+    : emptyHTML('ph-users-three', 'Sin clientes aún', 'Cuando lleguen pedidos por chatbot aquí verás los clientes con mayor fidelidad.');
+}
+
+$('#refreshCustomersBtn')?.addEventListener('click', loadCustomers);
+$('#customersApplyFilters')?.addEventListener('click', () => {
+  const start = String($('#customersDateStart')?.value || '');
+  const end = String($('#customersDateEnd')?.value || '');
+  const sort = String($('#customersSort')?.value || 'orders_desc');
+  if (start && end && start > end) {
+    toast('La fecha inicial no puede ser mayor a la final', true);
+    return;
+  }
+  customersDateStart = start;
+  customersDateEnd = end;
+  customersSort = sort;
+  loadCustomers();
+});
+$('#customersClearFilters')?.addEventListener('click', () => {
+  customersDateStart = '';
+  customersDateEnd = '';
+  customersSort = 'orders_desc';
+  const startInput = $('#customersDateStart');
+  const endInput = $('#customersDateEnd');
+  const sortInput = $('#customersSort');
+  if (startInput) startInput.value = '';
+  if (endInput) endInput.value = '';
+  if (sortInput) sortInput.value = 'orders_desc';
+  loadCustomers();
+});
 
 function formatExportRows(orders) {
   return orders.map((o) => ({
@@ -470,6 +621,40 @@ $('#orderFilter').addEventListener('click', (e) => {
   document.querySelectorAll('#orderFilter button').forEach((b) => b.classList.remove('on'));
   btn.classList.add('on');
   orderStatusFilter = btn.dataset.st;
+  orderPage = 1;
+  loadOrders();
+});
+
+$('#ordersTodayToggle')?.addEventListener('click', () => {
+  orderTodayOnly = !orderTodayOnly;
+  if (orderTodayOnly) {
+    orderDateStart = '';
+    orderDateEnd = '';
+  }
+  orderPage = 1;
+  loadOrders();
+});
+
+$('#ordersApplyDate')?.addEventListener('click', () => {
+  if (orderTodayOnly) return;
+  orderDateStart = String($('#ordersDateStart')?.value || '');
+  orderDateEnd = String($('#ordersDateEnd')?.value || '');
+  if (orderDateStart && orderDateEnd && orderDateStart > orderDateEnd) {
+    toast('La fecha inicial no puede ser mayor a la final', true);
+    return;
+  }
+  orderPage = 1;
+  loadOrders();
+});
+
+$('#ordersClearDate')?.addEventListener('click', () => {
+  orderDateStart = '';
+  orderDateEnd = '';
+  const start = $('#ordersDateStart');
+  const end = $('#ordersDateEnd');
+  if (start) start.value = '';
+  if (end) end.value = '';
+  orderPage = 1;
   loadOrders();
 });
 

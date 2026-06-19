@@ -1,0 +1,373 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8" />
+<title>Especificación: Botón de Deploy desde SuperAdmin</title>
+<style>
+  body { font-family: 'Segoe UI', Arial, sans-serif; max-width: 860px; margin: 40px auto; color: #1e293b; line-height: 1.6; font-size: 15px; }
+  h1 { font-size: 24px; border-bottom: 3px solid #ff6b35; padding-bottom: 10px; color: #0f172a; }
+  h2 { font-size: 18px; color: #0f172a; margin-top: 32px; border-left: 4px solid #ff6b35; padding-left: 12px; }
+  h3 { font-size: 15px; color: #334155; margin-top: 20px; }
+  code { background: #f1f5f9; padding: 2px 6px; border-radius: 4px; font-family: 'Consolas', monospace; font-size: 13px; color: #be185d; }
+  pre { background: #0f172a; color: #e2e8f0; padding: 16px; border-radius: 8px; font-size: 13px; overflow-x: auto; }
+  .tag { display: inline-block; padding: 2px 10px; border-radius: 12px; font-size: 12px; font-weight: 600; }
+  .tag-backend { background: #dbeafe; color: #1d4ed8; }
+  .tag-frontend { background: #dcfce7; color: #15803d; }
+  .tag-script { background: #fef9c3; color: #854d0e; }
+  .tag-env { background: #f3e8ff; color: #7e22ce; }
+  table { width: 100%; border-collapse: collapse; margin: 12px 0; }
+  th { background: #f1f5f9; text-align: left; padding: 8px 12px; font-size: 13px; }
+  td { padding: 8px 12px; border-bottom: 1px solid #e2e8f0; font-size: 13px; }
+  .box { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 16px; margin: 12px 0; }
+  .warn { background: #fffbeb; border-left: 4px solid #f59e0b; padding: 12px 16px; border-radius: 4px; margin: 12px 0; }
+  ul li { margin: 4px 0; }
+  @media print { body { margin: 20px; } }
+</style>
+</head>
+<body>
+
+<h1>🚀 Especificación: Botón Deploy desde SuperAdmin</h1>
+<p><strong>Propósito:</strong> Implementar en el panel SuperAdmin de un sistema Node.js + Express un módulo de despliegue a producción con tres acciones: <em>Push + Deploy</em>, <em>Deploy ahora</em> y <em>Forzar</em>, sin necesidad de abrir una terminal manualmente.</p>
+<p><strong>Stack de referencia:</strong> Node.js + Express, frontend vanilla JS, panel SuperAdmin en <code>/superadmin</code>, VPS con PM2 + Nginx, repo en GitHub.</p>
+
+<hr />
+
+<h2>1. Resumen del flujo</h2>
+<div class="box">
+  <strong>Push + Deploy</strong> (cambios locales nuevos):<br />
+  <code>git add -A</code> → <code>git commit -m "mensaje"</code> → <code>git push origin main</code> → SSH al servidor → <code>git reset --hard</code> → <code>npm ci</code> → <code>pm2 restart</code>
+  <br /><br />
+  <strong>Deploy ahora</strong> (código ya en GitHub, solo actualizar servidor):<br />
+  SSH al servidor → <code>git fetch</code> → <code>git reset --hard origin/main</code> → <code>npm ci</code> → <code>pm2 restart</code>
+  <br /><br />
+  <strong>Forzar</strong>: checkbox opcional, ya incluido en ambas acciones por defecto con <code>reset --hard</code>.
+</div>
+
+<h2>2. Archivos a crear / modificar</h2>
+<table>
+  <tr><th>Archivo</th><th>Tipo</th><th>Acción</th></tr>
+  <tr><td><code>deploy/remote-deploy.ps1</code></td><td><span class="tag tag-script">Script</span></td><td>Crear (Windows PowerShell, ejecuta SSH al servidor)</td></tr>
+  <tr><td><code>src/routes/superadmin.js</code></td><td><span class="tag tag-backend">Backend</span></td><td>Agregar endpoints de deploy</td></tr>
+  <tr><td><code>public/superadmin.html</code></td><td><span class="tag tag-frontend">Frontend</span></td><td>Agregar tarjeta Deploy a producción</td></tr>
+  <tr><td><code>public/js/superadmin.js</code></td><td><span class="tag tag-frontend">Frontend</span></td><td>Agregar lógica JS de deploy y polling de logs</td></tr>
+  <tr><td><code>.env.example</code></td><td><span class="tag tag-env">Config</span></td><td>Documentar variables DEPLOY_*</td></tr>
+</table>
+
+<h2>3. Script PowerShell remoto</h2>
+<p><span class="tag tag-script">Script</span> Archivo: <code>deploy/remote-deploy.ps1</code></p>
+<pre>param(
+  [string]$RemoteHost = "IP_DEL_SERVIDOR",
+  [string]$User = "root",
+  [int]$Port = 22,
+  [string]$AppDir = "/var/www/mi-proyecto",
+  [string]$Branch = "main",
+  [string]$Pm2App = "nombre-pm2-app",
+  [switch]$Force,
+  [string]$IdentityFile = ""
+)
+
+$ErrorActionPreference = "Stop"
+
+# reset --hard siempre: más robusto que pull en servidores con archivos extra
+$remoteCmd = "cd $AppDir && git fetch origin $Branch --prune && git reset --hard origin/$Branch && git clean -fd && npm ci --omit=dev && pm2 restart $Pm2App && pm2 save && echo '==&gt; Deploy OK'"
+
+$sshArgs = @(
+  "-p", "$Port",
+  "-o", "BatchMode=yes",
+  "-o", "ConnectTimeout=30",
+  "-o", "StrictHostKeyChecking=accept-new"
+)
+if ($IdentityFile -and $IdentityFile.Trim().Length -gt 0) {
+  $sshArgs += @("-i", $IdentityFile)
+}
+$sshArgs += @("$User@$RemoteHost", $remoteCmd)
+
+Write-Host "Running remote deploy on ${User}@${RemoteHost}:$Port ..." -ForegroundColor Cyan
+&amp; ssh @sshArgs
+if ($LASTEXITCODE -ne 0) {
+  Write-Error "SSH deploy failed with exit code $LASTEXITCODE"
+  exit $LASTEXITCODE
+}</pre>
+
+<div class="warn">⚠️ <strong>Importante:</strong> <code>$Host</code> es variable reservada de PowerShell. Siempre usar <code>$RemoteHost</code> para el parámetro de IP/hostname del servidor.</div>
+
+<h2>4. Backend — Endpoints en <code>src/routes/superadmin.js</code></h2>
+<p><span class="tag tag-backend">Backend</span> Agregar al inicio del archivo junto a los otros <code>require</code>:</p>
+<pre>const { spawn } = require('node:child_process');</pre>
+
+<h3>4a. Estado en memoria (agregar junto a las otras variables del módulo)</h3>
+<pre>const deployState = {
+  running: false, startedAt: null, completedAt: null,
+  exitCode: null, mode: 'deploy', force: false, command: '', logs: [],
+};
+
+function appendDeployLog(raw) {
+  const text = String(raw || '').replaceAll('\r', '');
+  if (!text) return;
+  const ts = new Date().toISOString();
+  for (const line of text.split('\n').filter(Boolean)) {
+    deployState.logs.push(`[${ts}] ${line}`);
+  }
+  if (deployState.logs.length &gt; 300) deployState.logs = deployState.logs.slice(-300);
+}
+function beginDeploySession({ force, mode, command }) {
+  Object.assign(deployState, {
+    running: true, startedAt: new Date().toISOString(), completedAt: null,
+    exitCode: null, mode: mode || 'deploy', force: Boolean(force),
+    command: String(command || ''), logs: [],
+  });
+}
+function endDeploySession(code) {
+  deployState.running = false;
+  deployState.exitCode = Number.isFinite(code) ? code : -1;
+  deployState.completedAt = new Date().toISOString();
+}
+function getDeployStatus() { return { ...deployState }; }
+function getRemoteDeployArgs(force) {
+  const scriptPath = path.join(config.ROOT, 'deploy', 'remote-deploy.ps1');
+  const host = String(process.env.DEPLOY_SSH_HOST || '').trim();
+  const user = String(process.env.DEPLOY_SSH_USER || '').trim();
+  const appDir = String(process.env.DEPLOY_REMOTE_APP_DIR || '').trim();
+  const identityFile = String(process.env.DEPLOY_SSH_IDENTITY_FILE || '').trim();
+  const portRaw = Number(process.env.DEPLOY_SSH_PORT || 0);
+  const port = Number.isFinite(portRaw) &amp;&amp; portRaw &gt; 0 ? Math.floor(portRaw) : 0;
+  const args = ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', scriptPath];
+  if (host) args.push('-RemoteHost', host);
+  if (user) args.push('-User', user);
+  if (port) args.push('-Port', String(port));
+  if (appDir) args.push('-AppDir', appDir);
+  if (identityFile) args.push('-IdentityFile', identityFile);
+  if (force) args.push('-Force');
+  return args;
+}
+function spawnAndCapture(command, args, options = {}) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, { cwd: options.cwd || config.ROOT, windowsHide: true });
+    let stdout = '', stderr = '';
+    child.stdout.on('data', (c) => { const t = String(c); stdout += t; if (options.captureToDeployLog !== false) appendDeployLog(t); });
+    child.stderr.on('data', (c) => { const t = String(c); stderr += t; if (options.captureToDeployLog !== false) appendDeployLog(t); });
+    child.on('error', reject);
+    child.on('close', (code) => resolve({ code: Number.isFinite(code) ? code : -1, stdout, stderr }));
+  });
+}</pre>
+
+<h3>4b. Rutas a agregar (antes de <code>module.exports = router</code>)</h3>
+<pre>router.get('/deploy/status', requireSuperAdmin, (req, res) =&gt; {
+  res.json({ ok: true, deploy: getDeployStatus() });
+});
+
+router.get('/deploy/git-status', requireSuperAdmin, async (req, res, next) =&gt; {
+  try {
+    const remote = String(process.env.DEPLOY_GIT_REMOTE || 'origin').trim() || 'origin';
+    const branch = String(process.env.DEPLOY_GIT_BRANCH || 'main').trim() || 'main';
+    const branchR = await spawnAndCapture('git', ['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: config.ROOT, captureToDeployLog: false });
+    const statusR = await spawnAndCapture('git', ['status', '--porcelain'], { cwd: config.ROOT, captureToDeployLog: false });
+    const lines = String(statusR.stdout || '').split('\n').map(v =&gt; v.trim()).filter(Boolean);
+    res.json({ ok: true, git: { remote, branch, currentBranch: String(branchR.stdout || '').trim(), dirtyCount: lines.length, dirtyFiles: lines.slice(0, 50) } });
+  } catch (e) { next(e); }
+});
+
+router.post('/deploy/run', requireSuperAdmin, async (req, res, next) =&gt; {
+  try {
+    if (deployState.running) return res.status(409).json({ error: 'Ya hay un deploy en ejecución' });
+    const force = Boolean(req.body?.force);
+    const args = getRemoteDeployArgs(force);
+    beginDeploySession({ force, mode: 'deploy', command: `powershell.exe ${args.join(' ')}` });
+    appendDeployLog(`[deploy] Iniciado por ${req.superadmin.username}`);
+    const child = spawn('powershell.exe', args, { cwd: config.ROOT, windowsHide: true });
+    const killTimer = setTimeout(() =&gt; { appendDeployLog('[deploy] Timeout 5min. Cancelando.'); child.kill(); }, 5 * 60 * 1000);
+    child.stdout.on('data', appendDeployLog);
+    child.stderr.on('data', appendDeployLog);
+    child.on('error', (err) =&gt; { clearTimeout(killTimer); appendDeployLog(`[deploy] Error: ${err.message}`); endDeploySession(-1); });
+    child.on('close', (code) =&gt; { clearTimeout(killTimer); endDeploySession(code); appendDeployLog(`[deploy] Finalizado con código ${deployState.exitCode}`); });
+    res.json({ ok: true, message: 'Deploy lanzado', deploy: getDeployStatus() });
+  } catch (e) { next(e); }
+});
+
+router.post('/deploy/push-run', requireSuperAdmin, async (req, res, next) =&gt; {
+  try {
+    if (deployState.running) return res.status(409).json({ error: 'Ya hay un proceso de release en ejecución' });
+    const commitMessage = String(req.body?.commitMessage || '').trim();
+    if (commitMessage.length &lt; 5) return res.status(400).json({ error: 'El mensaje de commit debe tener al menos 5 caracteres' });
+    const forceDeploy = Boolean(req.body?.forceDeploy);
+    beginDeploySession({ force: forceDeploy, mode: 'push-deploy', command: `git add -A &amp;&amp; git commit -m "${commitMessage}" &amp;&amp; git push &amp;&amp; remote-deploy` });
+    (async () =&gt; {
+      try {
+        const remote = String(process.env.DEPLOY_GIT_REMOTE || 'origin').trim() || 'origin';
+        const branch = String(process.env.DEPLOY_GIT_BRANCH || 'main').trim() || 'main';
+        appendDeployLog(`[deploy] Flujo push+deploy iniciado por ${req.superadmin.username}`);
+        await spawnAndCapture('git', ['add', '-A'], { cwd: config.ROOT });
+        const diff = await spawnAndCapture('git', ['diff', '--cached', '--name-only'], { cwd: config.ROOT });
+        const staged = String(diff.stdout || '').split('\n').map(v =&gt; v.trim()).filter(Boolean);
+        if (staged.length) {
+          await spawnAndCapture('git', ['commit', '-m', commitMessage], { cwd: config.ROOT });
+        } else {
+          appendDeployLog('[git] Sin cambios locales. Continuando con push/deploy.');
+        }
+        const push = await spawnAndCapture('git', ['push', remote, `HEAD:${branch}`], { cwd: config.ROOT });
+        if (push.code !== 0) throw new Error('Falló git push.');
+        appendDeployLog('[deploy] Ejecutando deploy remoto...');
+        const deployArgs = getRemoteDeployArgs(forceDeploy);
+        const dep = await spawnAndCapture('powershell.exe', deployArgs, { cwd: config.ROOT });
+        if (dep.code !== 0) throw new Error('Deploy remoto finalizó con error.');
+        appendDeployLog('[deploy] Push + deploy completado correctamente.');
+        endDeploySession(0);
+      } catch (err) { appendDeployLog(`[deploy] Error: ${err.message}`); endDeploySession(1); }
+    })().catch(() =&gt; {});
+    res.json({ ok: true, message: 'Push + deploy lanzado', deploy: getDeployStatus() });
+  } catch (e) { next(e); }
+});</pre>
+
+<h2>5. Frontend HTML — Tarjeta en <code>public/superadmin.html</code></h2>
+<p>Agregar dentro de la sección de Integraciones (<code>&lt;section id="saViewIntegrations"&gt;</code>), después de la tarjeta de ajustes:</p>
+<pre>&lt;div class="card" style="padding:16px;margin-top:14px"&gt;
+  &lt;h3&gt;&lt;i class="ph-bold ph-rocket-launch"&gt;&lt;/i&gt; Deploy a producción&lt;/h3&gt;
+  &lt;p class="hint"&gt;Sube cambios locales a GitHub y despliega en el servidor de producción.&lt;/p&gt;
+  &lt;div class="field" style="margin-bottom:10px"&gt;
+    &lt;label&gt;Mensaje de commit para Push + Deploy&lt;/label&gt;
+    &lt;input id="saDeployCommitMessage" type="text" placeholder="Ej. fix: ajustes módulo X" maxlength="140" /&gt;
+  &lt;/div&gt;
+  &lt;div class="hint" id="saGitStatusHint"&gt;Git: cargando...&lt;/div&gt;
+  &lt;div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin:10px 0"&gt;
+    &lt;button class="btn btn-primary" type="button" id="saDeployRun"&gt;
+      &lt;i class="ph-bold ph-upload-simple"&gt;&lt;/i&gt; Deploy ahora
+    &lt;/button&gt;
+    &lt;button class="btn btn-ghost" type="button" id="saPushDeployRun"&gt;
+      &lt;i class="ph-bold ph-git-pull-request"&gt;&lt;/i&gt; Push + Deploy
+    &lt;/button&gt;
+    &lt;label style="display:flex;align-items:center;gap:6px;font-size:13px"&gt;
+      &lt;input type="checkbox" id="saDeployForce" /&gt;
+      Forzar (descarta cambios en servidor)
+    &lt;/label&gt;
+  &lt;/div&gt;
+  &lt;div class="hint" id="saDeployStatus"&gt;Estado: sin ejecuciones todavía.&lt;/div&gt;
+  &lt;pre id="saDeployLogs" style="margin-top:10px;max-height:220px;overflow:auto;background:#0f172a;color:#e2e8f0;padding:12px;border-radius:10px;font-size:12px"&gt;Sin logs todavía.&lt;/pre&gt;
+&lt;/div&gt;</pre>
+
+<h2>6. Frontend JS — Lógica en <code>public/js/superadmin.js</code></h2>
+<p>Agregar las siguientes funciones y listeners:</p>
+<pre>let SA_DEPLOY_POLL_TIMER = null;
+
+function formatDeployStatus(deploy) {
+  if (!deploy) return 'Estado: sin datos.';
+  if (deploy.running) return `Estado: ejecutando...`;
+  if (deploy.completedAt) {
+    return deploy.exitCode === 0 ? 'Estado: último deploy exitoso ✓' : `Estado: último deploy con error (código ${deploy.exitCode})`;
+  }
+  return 'Estado: sin ejecuciones todavía.';
+}
+function renderDeployStatus(payload) {
+  const deploy = payload?.deploy || null;
+  const statusEl = $('#saDeployStatus'), logsEl = $('#saDeployLogs');
+  const runBtn = $('#saDeployRun'), pushBtn = $('#saPushDeployRun');
+  if (!statusEl || !logsEl) return;
+  statusEl.textContent = formatDeployStatus(deploy);
+  if (runBtn) runBtn.disabled = Boolean(deploy?.running);
+  if (pushBtn) pushBtn.disabled = Boolean(deploy?.running);
+  const logs = Array.isArray(deploy?.logs) ? deploy.logs : [];
+  logsEl.textContent = logs.length ? logs.join('\n') : 'Sin logs todavía.';
+  logsEl.scrollTop = logsEl.scrollHeight;
+}
+async function loadDeployStatus() {
+  const payload = await api('/api/superadmin/deploy/status');
+  renderDeployStatus(payload);
+  if (payload?.deploy?.running) startDeployPolling();
+  return payload;
+}
+async function loadGitDeployStatus() {
+  const payload = await api('/api/superadmin/deploy/git-status');
+  const hint = $('#saGitStatusHint');
+  if (hint) {
+    const git = payload?.git || {};
+    hint.textContent = `Git: rama local ${git.currentBranch || '-'} | destino ${git.remote || 'origin'}/${git.branch || 'main'} | cambios pendientes ${git.dirtyCount || 0}`;
+  }
+  return payload;
+}
+function stopDeployPolling() {
+  if (SA_DEPLOY_POLL_TIMER) { clearInterval(SA_DEPLOY_POLL_TIMER); SA_DEPLOY_POLL_TIMER = null; }
+}
+function startDeployPolling() {
+  stopDeployPolling();
+  SA_DEPLOY_POLL_TIMER = setInterval(async () =&gt; {
+    try {
+      const p = await loadDeployStatus();
+      if (!p?.deploy?.running) { stopDeployPolling(); await loadGitDeployStatus().catch(() =&gt; {}); }
+    } catch (err) { stopDeployPolling(); toast(err.message, true); }
+  }, 2500);
+}
+async function runProductionDeploy() {
+  const force = Boolean($('#saDeployForce')?.checked);
+  const payload = await api('/api/superadmin/deploy/run', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ force }) });
+  renderDeployStatus(payload); startDeployPolling();
+  toast('Deploy lanzado. Revisa el log.');
+}
+async function runPushAndDeploy() {
+  const commitMessage = String($('#saDeployCommitMessage')?.value || '').trim();
+  if (commitMessage.length &lt; 5) return toast('Escribe un mensaje de commit de al menos 5 caracteres', true);
+  const forceDeploy = Boolean($('#saDeployForce')?.checked);
+  const payload = await api('/api/superadmin/deploy/push-run', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ commitMessage, forceDeploy }) });
+  renderDeployStatus(payload); startDeployPolling();
+  toast('Push + deploy lanzado. Revisa el log.');
+}
+
+// Listeners (agregar junto a los demás event listeners del módulo)
+$('#saDeployRun')?.addEventListener('click', () =&gt; runProductionDeploy().catch(err =&gt; toast(err.message, true)));
+$('#saPushDeployRun')?.addEventListener('click', () =&gt; runPushAndDeploy().catch(err =&gt; toast(err.message, true)));
+
+// En la función boot() agregar:
+await Promise.all([..., loadDeployStatus(), loadGitDeployStatus()]);</pre>
+
+<h2>7. Variables de entorno (<code>.env</code>)</h2>
+<pre># Deploy remoto desde SuperAdmin
+DEPLOY_SSH_HOST=IP_DEL_SERVIDOR        # ej. 50.28.103.1
+DEPLOY_SSH_USER=root
+DEPLOY_SSH_PORT=22
+DEPLOY_REMOTE_APP_DIR=/var/www/mi-app
+DEPLOY_SSH_IDENTITY_FILE=              # ruta a llave SSH si no es la default
+DEPLOY_GIT_REMOTE=origin
+DEPLOY_GIT_BRANCH=main</pre>
+
+<h2>8. Configuración SSH (una sola vez por máquina)</h2>
+<div class="box">
+  <strong>Paso 1</strong> — Generar llave SSH en la PC de desarrollo (PowerShell):<br />
+  <code>ssh-keygen -t ed25519 -f "$env:USERPROFILE\.ssh\id_ed25519" -N '""' -C deploy-key</code>
+  <br /><br />
+  <strong>Paso 2</strong> — Copiar llave al servidor (desde terminal del VPS o SSH):<br />
+  <code>mkdir -p ~/.ssh &amp;&amp; echo "PEGAR_CONTENIDO_id_ed25519.pub" &gt;&gt; ~/.ssh/authorized_keys &amp;&amp; chmod 600 ~/.ssh/authorized_keys &amp;&amp; chmod 700 ~/.ssh</code>
+  <br /><br />
+  <strong>Paso 3</strong> — Verificar que conecta sin contraseña:<br />
+  <code>ssh root@IP_SERVIDOR echo OK</code>
+</div>
+
+<h2>9. Prerrequisitos en el servidor</h2>
+<ul>
+  <li>Node.js 20+, npm, PM2 instalados</li>
+  <li>Repo clonado en <code>DEPLOY_REMOTE_APP_DIR</code> con <code>git remote = origin</code></li>
+  <li>App corriendo con PM2 bajo el nombre definido en <code>Pm2App</code></li>
+  <li>Acceso SSH con llave pública autorizada (paso 8)</li>
+</ul>
+
+<h2>10. Resultado esperado en logs al funcionar correctamente</h2>
+<pre>[deploy] Flujo push+deploy iniciado por admin
+[git] add -A
+[git] commit -m "mi mensaje"
+[master abc1234] mi mensaje
+[git] push origin HEAD:main
+To https://github.com/org/repo.git
+   abc123..def456  HEAD -&gt; main
+[deploy] Ejecutando deploy remoto...
+Running remote deploy on root@IP:22 ...
+From https://github.com/org/repo
+ * branch main -&gt; FETCH_HEAD
+HEAD is now at def456 mi mensaje
+added X packages in Xs
+[PM2] Restarting 'app-name' with pm2
+=&gt; Deploy OK
+[deploy] Finalizado con código 0</pre>
+
+<hr />
+<p style="color:#64748b;font-size:12px;text-align:center">
+  Especificación generada el 18 Jun 2026 · ChatBotPro · GitHub Copilot
+</p>
+</body>
+</html>
