@@ -211,6 +211,22 @@ function money(n, currency = 'MXN') {
   return new Intl.NumberFormat('es-MX', { style: 'currency', currency }).format(n || 0);
 }
 
+function paymentMethodLabel(method) {
+  return {
+    cash: 'Efectivo',
+    transfer: 'Transferencia',
+    card: 'Tarjeta',
+  }[String(method || '')] || 'Sin definir';
+}
+
+function enabledPaymentOptions(settings) {
+  const options = [];
+  if (settings.cash) options.push({ label: '💵 Efectivo', value: 'pay_cash', method: 'cash' });
+  if (settings.transfer) options.push({ label: '🏦 Transferencia', value: 'pay_transfer', method: 'transfer' });
+  if (settings.card) options.push({ label: '💳 Tarjeta', value: 'pay_card', method: 'card' });
+  return options;
+}
+
 async function getState(t, sessionId) {
   const row = await t.get('SELECT state FROM {s}.chat_sessions WHERE id = $1', [sessionId]);
   return row ? JSON.parse(row.state) : null;
@@ -429,6 +445,7 @@ function buildOrderText(businessName, cart, customer, delivery, currency) {
     '',
     `👤 ${customer.name}`,
     `📞 ${customer.phone}`,
+    `💳 Pago: ${paymentMethodLabel(customer.paymentMethod)}`,
     delivery === 'domicilio'
       ? `📍 Entrega a domicilio: ${customer.address}`
       : `🏪 Recoger en sucursal${customer.branchName ? `: ${customer.branchName}` : ''}`,
@@ -479,6 +496,16 @@ async function handleMessage(t, slug, sessionId, rawInput) {
   const deliveryEnabled = (await getSetting(t, 'delivery_enabled', '1')) === '1';
   const pickupEnabled = (await getSetting(t, 'pickup_enabled', '1')) === '1';
   const locationEnabled = (await getSetting(t, 'location_enabled', '1')) === '1';
+  const chatPaymentDeliverySettings = {
+    cash: (await getSetting(t, 'chatbot_payment_delivery_cash', '1')) === '1',
+    transfer: (await getSetting(t, 'chatbot_payment_delivery_transfer', '0')) === '1',
+    card: (await getSetting(t, 'chatbot_payment_delivery_card', '0')) === '1',
+  };
+  const chatPaymentPickupSettings = {
+    cash: (await getSetting(t, 'chatbot_payment_pickup_cash', '1')) === '1',
+    transfer: (await getSetting(t, 'chatbot_payment_pickup_transfer', '0')) === '1',
+    card: (await getSetting(t, 'chatbot_payment_pickup_card', '0')) === '1',
+  };
 
   let state = (await getState(t, sessionId)) || { step: 'start', cart: [], customer: {}, currency };
   state.currency = currency;
@@ -490,6 +517,22 @@ async function handleMessage(t, slug, sessionId, rawInput) {
     await saveState(t, sessionId, state);
     reply.cart = { items: state.cart, total: cartTotal(state.cart), totalLabel: money(cartTotal(state.cart), currency) };
     return reply;
+  };
+
+  const goToPaymentOrConfirm = () => {
+    const chatPaymentOptions = state.delivery === 'recoger'
+      ? enabledPaymentOptions(chatPaymentPickupSettings)
+      : enabledPaymentOptions(chatPaymentDeliverySettings);
+    if (!chatPaymentOptions.length) {
+      state.customer.paymentMethod = 'cash';
+      state.step = 'confirm';
+      reply.messages.push(confirmText(state, businessName, currency));
+      reply.options = confirmOptions();
+      return;
+    }
+    state.step = 'ask_payment_method';
+    reply.messages.push('¿Cómo pagarás tu pedido?');
+    reply.options = chatPaymentOptions.map((opt) => ({ label: opt.label, value: opt.value }));
   };
 
   // Comandos globales
@@ -616,12 +659,8 @@ async function handleMessage(t, slug, sessionId, rawInput) {
       state.customer.reference = p.reference || '';
       state.delivery = 'domicilio';
       if (state.cart.length) {
-        state.step = 'confirm';
-        reply.messages = [
-          '¡Perfecto! Ya usaré tus mismos datos de ubicación para este pedido 🚀',
-          confirmText(state, businessName, currency),
-        ];
-        reply.options = confirmOptions();
+        reply.messages = ['¡Perfecto! Ya usaré tus mismos datos de ubicación para este pedido 🚀'];
+        goToPaymentOrConfirm();
       } else {
         state.step = 'start';
         const quickMessages = ['¡Perfecto! Ya usaré tus mismos datos de ubicación para este pedido 🚀', 'Ahora solo elige del menú y será más rápido.'];
@@ -679,8 +718,7 @@ async function handleMessage(t, slug, sessionId, rawInput) {
           { label: 'Omitir', value: 'skip_location' },
         ];
       } else {
-        reply.messages = [confirmText(state, businessName, currency)];
-        reply.options = confirmOptions();
+        goToPaymentOrConfirm();
       }
       return finish();
     }
@@ -709,12 +747,8 @@ async function handleMessage(t, slug, sessionId, rawInput) {
       Boolean(state.customer?.address);
 
     if (hasReturningData) {
-      state.step = 'confirm';
-      reply.messages = [
-        'Usaré tus datos guardados del último pedido para agilizar ✅',
-        confirmText(state, businessName, currency),
-      ];
-      reply.options = confirmOptions();
+      reply.messages = ['Usaré tus datos guardados del último pedido para agilizar ✅'];
+      goToPaymentOrConfirm();
       return finish();
     }
 
@@ -798,8 +832,7 @@ async function handleMessage(t, slug, sessionId, rawInput) {
             { label: 'Omitir', value: 'skip_location' },
           ];
         } else {
-          reply.messages = [confirmText(state, businessName, currency)];
-          reply.options = confirmOptions();
+          goToPaymentOrConfirm();
         }
       }
     }
@@ -831,8 +864,7 @@ async function handleMessage(t, slug, sessionId, rawInput) {
             { label: 'Omitir', value: 'skip_location' },
           ];
         } else {
-          reply.messages = [confirmText(state, businessName, currency)];
-          reply.options = confirmOptions();
+          goToPaymentOrConfirm();
         }
       }
       return finish();
@@ -951,9 +983,7 @@ async function handleMessage(t, slug, sessionId, rawInput) {
         reply.messages = ['¿Alguna referencia de tu domicilio? (ejemplo: portón negro, casa esquina).'];
         reply.options = [{ label: 'Omitir referencia', value: 'skip_reference' }];
       } else {
-        state.step = 'confirm';
-        reply.messages = [confirmText(state, businessName, currency)];
-        reply.options = confirmOptions();
+        goToPaymentOrConfirm();
       }
       return finish();
     }
@@ -994,12 +1024,10 @@ async function handleMessage(t, slug, sessionId, rawInput) {
         ];
         reply.options = [{ label: 'Omitir referencia', value: 'skip_reference' }];
       } else {
-        state.step = 'confirm';
         reply.messages = [
           `🗺️ Ubicación recibida. Abrir en Maps: ${mapsUrl(geo.lat, geo.lng)}${Number(state.customer.deliveryFee || 0) > 0 ? `\n🛵 Envío detectado: ${money(state.customer.deliveryFee, currency)}${state.customer.deliveryZoneName ? ` (${state.customer.deliveryZoneName})` : ''}` : ''}`,
-          confirmText(state, businessName, currency),
         ];
-        reply.options = confirmOptions();
+        goToPaymentOrConfirm();
       }
       return finish();
     }
@@ -1014,9 +1042,7 @@ async function handleMessage(t, slug, sessionId, rawInput) {
   if (state.step === 'ask_reference') {
     if (lower === 'skip_reference') {
       state.customer.reference = '';
-      state.step = 'confirm';
-      reply.messages = [confirmText(state, businessName, currency)];
-      reply.options = confirmOptions();
+      goToPaymentOrConfirm();
       return finish();
     }
 
@@ -1028,6 +1054,25 @@ async function handleMessage(t, slug, sessionId, rawInput) {
     }
 
     state.customer.reference = ref.slice(0, 180);
+    goToPaymentOrConfirm();
+    return finish();
+  }
+
+  if (state.step === 'ask_payment_method') {
+    const chatPaymentOptions = state.delivery === 'recoger'
+      ? enabledPaymentOptions(chatPaymentPickupSettings)
+      : enabledPaymentOptions(chatPaymentDeliverySettings);
+    const selected = {
+      pay_cash: 'cash',
+      pay_transfer: 'transfer',
+      pay_card: 'card',
+    }[lower];
+    if (!selected || !chatPaymentOptions.some((opt) => opt.method === selected)) {
+      reply.messages = ['Elige una opción de pago válida para continuar:'];
+      reply.options = chatPaymentOptions.map((opt) => ({ label: opt.label, value: opt.value }));
+      return finish();
+    }
+    state.customer.paymentMethod = selected;
     state.step = 'confirm';
     reply.messages = [confirmText(state, businessName, currency)];
     reply.options = confirmOptions();
@@ -1077,6 +1122,7 @@ async function handleMessage(t, slug, sessionId, rawInput) {
           state.customer.deliveryZoneName || null,
         ]
       );
+      await t.run('UPDATE {s}.orders SET payment_method = $1 WHERE id = $2', [state.customer.paymentMethod || '', orderRow.id]);
 
       const orderText = buildOrderText(businessName, state.cart, state.customer, state.delivery, currency);
       const waLink = whatsapp ? `https://wa.me/${whatsapp}?text=${encodeURIComponent(orderText)}` : null;
@@ -1123,6 +1169,7 @@ function confirmText(state, businessName, currency) {
   return (
     `${pricingSummary(state, currency)}\n\n` +
     `👤 ${c.name}\n📞 ${c.phone}\n` +
+    `💳 Pago: ${paymentMethodLabel(c.paymentMethod)}\n` +
     (state.delivery === 'domicilio'
       ? `📍 ${c.address}`
       : `🏪 Recoger en sucursal${c.branchName ? `: ${c.branchName}` : ''}`) +

@@ -10,7 +10,7 @@
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/bold/style.css" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/fill/style.css" />
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-  <link rel="stylesheet" href="/static/css/styles.css" />
+  <link rel="stylesheet" href="/static/css/styles.css?v=20260619c" />
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
@@ -164,6 +164,7 @@
       <!-- ──────── Punto de venta ──────── -->
       <section class="section" id="view-pos">
         <div class="pos-finance-strip" id="posFinanceStrip"></div>
+        <div class="pos-delivery-strip" id="posDeliveryStrip"></div>
         <div class="pos-action-icons" id="posActionIcons"></div>
         <div class="pos-shell">
           <div class="pos-main">
@@ -190,6 +191,11 @@
         <div class="prod-toolbar">
           <div class="chips" id="catChips"></div>
           <div style="display:flex;gap:10px">
+            <div class="prod-view-switch" id="prodViewSwitch" title="Cambiar vista de productos">
+              <button type="button" class="btn btn-ghost" data-prod-view="card"><i class="ph-bold ph-squares-four"></i> Tarjetas</button>
+              <button type="button" class="btn btn-ghost" data-prod-view="detail"><i class="ph-bold ph-list-bullets"></i> Detalle</button>
+              <button type="button" class="btn btn-ghost" data-prod-view="compact"><i class="ph-bold ph-grid-four"></i> Íconos</button>
+            </div>
             <button class="btn btn-ghost" id="addCatBtn"><i class="ph-bold ph-folder-plus"></i> Categoría</button>
             <button class="btn btn-primary" id="addProdBtn"><i class="ph-bold ph-plus-circle"></i> Nuevo producto</button>
           </div>
@@ -350,7 +356,7 @@
             </form>
           </div>
           <div class="card">
-            <h3><i class="ph-bold ph-map-pin"></i> Datos de contacto</h3>
+            <h3><i class="ph-bold ph-map-pin"></i> Horarios y Medios de pagos</h3>
             <form id="contactForm">
               <div class="field">
                 <label><i class="ph-bold ph-map-pin"></i> Dirección</label>
@@ -371,7 +377,32 @@
                   <option value="EUR">🇪🇺 EUR — Euro</option>
                 </select>
               </div>
-              <button class="btn btn-primary" type="submit"><i class="ph-bold ph-floppy-disk"></i> Guardar contacto</button>
+              <div class="field">
+                <label><i class="ph-bold ph-credit-card"></i> Medios de pago en chatbot</label>
+                <div class="hint" style="margin-bottom:8px">Configura por separado los pagos para domicilio y para recoger en sucursal.</div>
+                <div class="pay-method-group">
+                  <b><i class="ph-bold ph-moped"></i> Servicio a domicilio</b>
+                  <div class="pay-method-grid">
+                    <label class="pay-method-chip"><input type="checkbox" id="cfgChatPayDeliveryCash" /> <span><i class="ph-bold ph-money"></i> Efectivo</span></label>
+                    <label class="pay-method-chip"><input type="checkbox" id="cfgChatPayDeliveryTransfer" /> <span><i class="ph-bold ph-bank"></i> Transferencia</span></label>
+                    <label class="pay-method-chip"><input type="checkbox" id="cfgChatPayDeliveryCard" /> <span><i class="ph-bold ph-credit-card"></i> Tarjeta</span></label>
+                  </div>
+                </div>
+                <div class="pay-method-group">
+                  <b><i class="ph-bold ph-storefront"></i> Recoger en sucursal</b>
+                  <div class="pay-method-grid">
+                    <label class="pay-method-chip"><input type="checkbox" id="cfgChatPayPickupCash" /> <span><i class="ph-bold ph-money"></i> Efectivo</span></label>
+                    <label class="pay-method-chip"><input type="checkbox" id="cfgChatPayPickupTransfer" /> <span><i class="ph-bold ph-bank"></i> Transferencia</span></label>
+                    <label class="pay-method-chip"><input type="checkbox" id="cfgChatPayPickupCard" /> <span><i class="ph-bold ph-credit-card"></i> Tarjeta</span></label>
+                  </div>
+                </div>
+                <div class="hint">El chatbot mostrará solo estas opciones al cliente según el tipo de entrega que elija.</div>
+              </div>
+              <div class="toggle-row" style="margin-top:12px">
+                <div class="t-info"><i class="ph-bold ph-cash-register"></i><div><b>Integrar pedidos de chatbot al punto de venta</b><span>Permite al cajero importar pedidos chatbot al ticket para cobrarlos y sumarlos al corte de caja.</span></div></div>
+                <label class="switch"><input type="checkbox" id="cfgPosChatIntegration" /><span class="track"></span></label>
+              </div>
+              <button class="btn btn-primary" type="submit"><i class="ph-bold ph-floppy-disk"></i> Guardar</button>
             </form>
             <hr style="margin:18px 0;border:none;border-top:1px solid var(--line)" />
             <h3 style="margin-bottom:14px"><i class="ph-bold ph-printer"></i> Ticket térmico</h3>
@@ -607,6 +638,26 @@
     </div>
   </div>
 
+  <!-- ════════ Modal pedidos chatbot para POS ════════ -->
+  <div class="modal-bg" id="posChatbotQueueModal">
+    <div class="modal pos-chatbot-modal">
+      <div class="pos-chatbot-modal-head">
+        <h3><i class="ph-bold ph-chat-circle-dots"></i> Pedidos chatbot para cobrar en caja</h3>
+        <div class="hint">Importa pedidos activos del chatbot del día de operación para cobrarlos en punto de venta. Al importarlos se registran como venta POS y entran al cierre de caja.</div>
+      </div>
+      <div class="table-wrap" id="posChatbotQueueTable"></div>
+      <div class="pos-chatbot-modal-foot">
+        <div class="hint" id="posChatbotQueueInfo">Página 1 de 1 · 0 pedidos</div>
+        <div style="display:flex;gap:8px;align-items:center">
+          <button type="button" class="btn btn-ghost" id="posChatbotQueuePrev"><i class="ph-bold ph-caret-left"></i> Anterior</button>
+          <button type="button" class="btn btn-ghost" id="posChatbotQueueNext">Siguiente <i class="ph-bold ph-caret-right"></i></button>
+          <button type="button" class="btn btn-ghost" id="posChatbotQueueRefresh"><i class="ph-bold ph-arrows-clockwise"></i> Actualizar</button>
+          <button type="button" class="btn btn-ghost" id="posChatbotQueueClose">Cerrar</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <!-- ════════ Modal cambio de pago POS ════════ -->
   <div class="modal-bg" id="posPaymentEditModal">
     <div class="modal" style="max-width:560px">
@@ -722,6 +773,6 @@
   </div>
 
   <div id="toast"><i class="ph-fill ph-check-circle"></i><span id="toastMsg"></span></div>
-  <script src="/static/js/app.js"></script>
+  <script src="/static/js/app.js?v=20260619c"></script>
 </body>
 </html>

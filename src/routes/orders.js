@@ -31,7 +31,7 @@ router.get('/', async (req, res, next) => {
   try {
     const { status, limit, todayOnly, startDate, endDate } = req.query;
     let sql = `SELECT id, customer_id, items, subtotal::float AS subtotal, total::float AS total,
-        delivery_fee::float AS delivery_fee, delivery_zone_name, cancel_note, status, channel, delivery, notes,
+      delivery_fee::float AS delivery_fee, delivery_zone_name, cancel_note, status, channel, delivery, notes, payment_method,
         pickup_branch_name, customer_location_lat, customer_location_lng, customer_location_text,
         customer_location_resolved,
                       to_char(created_at AT TIME ZONE 'America/Mexico_City', 'DD Mon YYYY, HH24:MI') AS created_at

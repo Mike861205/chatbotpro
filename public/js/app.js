@@ -28,6 +28,12 @@ let POS_SALES_FILTER = 'today';
 let POS_SALES_START_DATE = '';
 let POS_SALES_END_DATE = '';
 let POS_PAYMENT_EDIT_METHOD = 'cash';
+let POS_IS_DELIVERY = false;
+let POS_DELIVERY_FEE = '';
+let POS_CHATBOT_QUEUE = [];
+let POS_CHATBOT_PAGE = 1;
+let POS_CHATBOT_TOTAL_PAGES = 1;
+const POS_CHATBOT_IMPORTING = new Set();
 let CHATBOT_SUBTAB = 'flow';
 let DELIVERY_ZONES = [];
 let DELIVERY_ZONE_MAP = null;
@@ -77,10 +83,14 @@ async function api(path, opts = {}) {
 }
 
 /* ===== Confirmación elegante (reemplaza confirm()) ===== */
-function askConfirm(title, msg) {
+function askConfirm(title, msg, options = {}) {
   return new Promise((resolve) => {
     $('#confirmTitle').textContent = title;
     $('#confirmMsg').textContent = msg;
+    const yesLabel = String(options?.yesLabel || '<i class="ph-bold ph-trash"></i> Sí, eliminar');
+    const noLabel = String(options?.noLabel || 'Cancelar');
+    $('#confirmYes').innerHTML = yesLabel;
+    $('#confirmNo').textContent = noLabel;
     const modal = $('#confirmModal');
     modal.classList.add('show');
     const done = (val) => {
@@ -313,6 +323,14 @@ function custAvatar(name) {
   return `<div class="cav" style="background:linear-gradient(135deg,hsl(${hue} 70% 48%),hsl(${hue} 75% 62%))">${esc(initials)}</div>`;
 }
 
+function orderPaymentLabel(method) {
+  return {
+    cash: 'Efectivo',
+    transfer: 'Transferencia',
+    card: 'Tarjeta',
+  }[String(method || '')] || '—';
+}
+
 function ordersTableHTML(orders, editable = true) {
   const rows = orders
     .map((o) => {
@@ -343,18 +361,20 @@ function ordersTableHTML(orders, editable = true) {
         o.status === 'cancelado' && o.cancel_note
           ? `<div style="font-size:12px;color:#b42318;margin-top:4px"><i class="ph-bold ph-note-pencil"></i> Motivo: ${esc(o.cancel_note)}</div>`
           : '';
+      const paymentText = `<span class="badge b-confirmado"><span style="display:none"></span>${esc(orderPaymentLabel(o.payment_method))}</span>`;
       return `<tr>
         <td><b>#${o.id}</b></td>
         <td><div class="cust">${custAvatar(o.customer?.name)}<div class="cmeta"><b>${esc(o.customer?.name || '—')}</b><span>${esc(o.customer?.phone || '')}</span></div></div></td>
         <td style="max-width:280px">${esc(items)}</td>
         <td style="white-space:nowrap">${deliveryText}${deliveryFeeText}${locationText}${cancelNoteText}</td>
         <td><b>${fmtMoney(o.total)}</b></td>
+        <td>${paymentText}</td>
         <td>${statusCell}</td>
         <td style="white-space:nowrap;color:var(--ink-3);font-size:12.5px">${esc(o.created_at)}</td>
       </tr>`;
     })
     .join('');
-  return `<table><thead><tr><th>Pedido</th><th>Cliente</th><th>Productos</th><th>Entrega</th><th>Total</th><th>Estatus</th><th>Fecha</th></tr></thead><tbody>${rows}</tbody></table>`;
+  return `<table><thead><tr><th>Pedido</th><th>Cliente</th><th>Productos</th><th>Entrega</th><th>Total</th><th>Pago</th><th>Estatus</th><th>Fecha</th></tr></thead><tbody>${rows}</tbody></table>`;
 }
 
 function renderOrdersPagination(totalItems) {
@@ -554,6 +574,7 @@ function formatExportRows(orders) {
     entrega: o.delivery === 'domicilio' ? 'Domicilio' : `Recoger${o.pickup_branch_name ? ` (${o.pickup_branch_name})` : ''}`,
     ubicacion: o.customer_location_text || '',
     motivo_cancelacion: o.cancel_note || '',
+    metodo_pago: orderPaymentLabel(o.payment_method),
     total: Number(o.total || 0),
     estatus: o.status,
     fecha: o.created_at || '',
@@ -571,6 +592,7 @@ function exportOrdersExcel() {
     Entrega: r.entrega,
     Ubicacion: r.ubicacion,
     MotivoCancelacion: r.motivo_cancelacion,
+    MetodoPago: r.metodo_pago,
     Total: r.total,
     Estatus: r.estatus,
     Fecha: r.fecha,
@@ -593,11 +615,11 @@ function exportOrdersPdf() {
   doc.text(`Generado: ${new Date().toLocaleString('es-MX')}`, 14, 20);
   doc.autoTable({
     startY: 24,
-    head: [['Pedido', 'Cliente', 'Telefono', 'Productos', 'Entrega', 'Ubicacion', 'Motivo cancelacion', 'Total', 'Estatus', 'Fecha']],
-    body: rows.map((r) => [r.pedido, r.cliente, r.telefono, r.productos, r.entrega, r.ubicacion, r.motivo_cancelacion, fmtMoney(r.total), r.estatus, r.fecha]),
+    head: [['Pedido', 'Cliente', 'Telefono', 'Productos', 'Entrega', 'Ubicacion', 'Motivo cancelacion', 'Metodo pago', 'Total', 'Estatus', 'Fecha']],
+    body: rows.map((r) => [r.pedido, r.cliente, r.telefono, r.productos, r.entrega, r.ubicacion, r.motivo_cancelacion, r.metodo_pago, fmtMoney(r.total), r.estatus, r.fecha]),
     styles: { fontSize: 8, cellPadding: 2.2 },
     headStyles: { fillColor: [23, 28, 46] },
-    columnStyles: { 3: { cellWidth: 52 }, 5: { cellWidth: 32 }, 6: { cellWidth: 42 } },
+    columnStyles: { 3: { cellWidth: 52 }, 5: { cellWidth: 32 }, 6: { cellWidth: 36 }, 7: { cellWidth: 24 } },
   });
   doc.save(`pedidos_${Date.now()}.pdf`);
   toast('Pedidos exportados a PDF');
@@ -666,6 +688,11 @@ function moneyNum(value) {
 
 function posCartTotal() {
   return moneyNum(POS_CART.reduce((sum, item) => sum + item.price * item.qty, 0));
+}
+
+function posGrandTotal() {
+  const fee = POS_IS_DELIVERY ? moneyNum(Number(POS_DELIVERY_FEE) || 0) : 0;
+  return moneyNum(posCartTotal() + fee);
 }
 
 function posMethodLabel(method) {
@@ -839,7 +866,7 @@ function syncPosCartFromCatalog() {
 }
 
 function setPosPaymentDefaults() {
-  const total = posCartTotal();
+  const total = posGrandTotal();
   if (POS_PAYMENT_METHOD === 'cash' && (POS_PAYMENT_FORM.cashReceived === '' || POS_PAYMENT_FORM.cashReceived === null)) {
     POS_PAYMENT_FORM.cashReceived = String(total || '');
   }
@@ -853,12 +880,14 @@ function setPosPaymentDefaults() {
 function resetPosPaymentForm() {
   POS_PAYMENT_METHOD = 'cash';
   POS_PAYMENT_FORM = { cashReceived: '', cash: '', card: '', transfer: '', notes: '' };
+  POS_IS_DELIVERY = false;
+  POS_DELIVERY_FEE = '';
 }
 
 function updatePosChangeHint() {
   const hint = $('#posChangeHint');
   if (!hint) return;
-  const total = posCartTotal();
+  const total = posGrandTotal();
   const received = moneyNum($('#posCashReceived')?.value || 0);
   const effectiveCashPart = POS_PAYMENT_METHOD === 'mixed'
     ? moneyNum($('#posMixCash')?.value || POS_PAYMENT_FORM.cash || 0)
@@ -872,7 +901,7 @@ function updatePosMixedHint() {
   if (!hint) return;
   const submitBtn = $('#posCheckoutForm button[type="submit"]');
   const hasSession = Boolean(POS_OVERVIEW?.activeSession);
-  const total = posCartTotal();
+  const total = posGrandTotal();
   const cash = moneyNum($('#posMixCash')?.value || POS_PAYMENT_FORM.cash || 0);
   const card = moneyNum($('#posMixCard')?.value || POS_PAYMENT_FORM.card || 0);
   const transfer = moneyNum($('#posMixTransfer')?.value || POS_PAYMENT_FORM.transfer || 0);
@@ -904,7 +933,9 @@ function buildPosTicketData() {
       price: Number(item.price),
       total: moneyNum(item.qty * item.price),
     }));
-    const total = posCartTotal();
+    const subtotal = posCartTotal();
+    const deliveryFee = POS_IS_DELIVERY ? moneyNum(Number(POS_DELIVERY_FEE) || 0) : 0;
+    const total = moneyNum(subtotal + deliveryFee);
     const paymentBreakdown = {
       cash: POS_PAYMENT_METHOD === 'cash' ? total : moneyNum(POS_PAYMENT_FORM.cash || 0),
       card: POS_PAYMENT_METHOD === 'card' ? total : moneyNum(POS_PAYMENT_FORM.card || 0),
@@ -915,7 +946,8 @@ function buildPosTicketData() {
       createdAt: new Date().toLocaleString('es-MX'),
       paymentMethod: POS_PAYMENT_METHOD,
       items,
-      subtotal: total,
+      subtotal,
+      deliveryFee,
       total,
       paymentBreakdown,
       cashReceived: moneyNum(POS_PAYMENT_FORM.cashReceived || 0),
@@ -936,7 +968,8 @@ function buildPosTicketData() {
         price: Number(item.price),
         total: moneyNum(item.qty * item.price),
       })),
-      subtotal: Number(LAST_POS_SALE.total || 0),
+      subtotal: Number(LAST_POS_SALE.subtotal || LAST_POS_SALE.total || 0),
+      deliveryFee: Number(LAST_POS_SALE.deliveryFee || 0),
       total: Number(LAST_POS_SALE.total || 0),
       paymentBreakdown: LAST_POS_SALE.paymentBreakdown || null,
       cashReceived: moneyNum(LAST_POS_SALE.cashReceived || 0),
@@ -1018,7 +1051,9 @@ function openThermalPrintWindow(ticket) {
   <table>
     <tr><td>Método</td><td class="r">${esc(posMethodLabel(ticket.paymentMethod || 'cash'))}</td></tr>
     ${breakdownLines}
-    <tr><td>Subtotal</td><td class="r">${esc(fmtMoney(subtotal, currency))}</td></tr>
+    ${Number(ticket.deliveryFee || 0) > 0
+      ? `<tr><td>Subtotal</td><td class="r">${esc(fmtMoney(subtotal, currency))}</td></tr><tr><td>&#x1F6F5; Envío domicilio</td><td class="r">+ ${esc(fmtMoney(Number(ticket.deliveryFee), currency))}</td></tr>`
+      : `<tr><td>Subtotal</td><td class="r">${esc(fmtMoney(subtotal, currency))}</td></tr>`}
     <tr><td class="tot">TOTAL</td><td class="tot r">${esc(fmtMoney(total, currency))}</td></tr>
     ${!isMixed && Number(ticket.cashReceived || 0) > 0 ? `<tr><td>Efectivo recibido</td><td class="r">${esc(fmtMoney(ticket.cashReceived, currency))}</td></tr>` : ''}
     ${!isMixed && Number(ticket.cashChange || 0) > 0 ? `<tr><td>Cambio</td><td class="r">${esc(fmtMoney(ticket.cashChange, currency))}</td></tr>` : ''}
@@ -1072,6 +1107,167 @@ function printPosSaleById(id) {
   openThermalPrintWindow(ticket);
 }
 
+function exportPosClosePdf(closeResult) {
+  if (!closeResult) return;
+  if (!globalThis.jspdf || !globalThis.jspdf.jsPDF) {
+    toast('No se pudo exportar PDF del cierre (librería no disponible)', true);
+    return;
+  }
+  const totals = closeResult.totals || {};
+  const collected = totals.collected || {};
+  const salesByMethod = totals.salesByMethod || {};
+  const movements = totals.movements || {};
+  const cancellations = totals.cancellations || {};
+  const delivery = totals.delivery || {};
+
+  const doc = new globalThis.jspdf.jsPDF({ orientation: 'portrait' });
+  const bizName = SETTINGS?.business_name || ME?.tenant?.businessName || 'Negocio';
+  const now = new Date().toLocaleString('es-MX');
+  const closedBy = closeResult?.closedSession?.closed_by || ME?.username || 'cajero';
+
+  doc.setFontSize(15);
+  doc.text(`Cierre de caja - ${bizName}`, 14, 14);
+  doc.setFontSize(10);
+  doc.text(`Generado: ${now}`, 14, 20);
+  doc.text(`Cerrado por: ${closedBy}`, 14, 25);
+
+  doc.autoTable({
+    startY: 30,
+    head: [['Concepto', 'Valor']],
+    body: [
+      ['Fondo inicial', fmtMoney(closeResult?.closedSession?.opening_amount || 0)],
+      ['Ventas del turno', fmtMoney(totals.totalSales || 0)],
+      ['Efectivo esperado', fmtMoney(closeResult.expectedAmount || 0)],
+      ['Efectivo contado', fmtMoney(closeResult.closingAmount || 0)],
+      ['Diferencia', fmtMoney(closeResult.differenceAmount || 0)],
+      ['Tickets', String(totals.tickets || 0)],
+    ],
+    styles: { fontSize: 9 },
+    headStyles: { fillColor: [23, 28, 46] },
+  });
+
+  doc.autoTable({
+    startY: doc.lastAutoTable.finalY + 6,
+    head: [['Ventas por medio', 'Monto']],
+    body: [
+      ['Efectivo', fmtMoney(salesByMethod.cash || 0)],
+      ['Tarjeta', fmtMoney(salesByMethod.card || 0)],
+      ['Transferencia', fmtMoney(salesByMethod.transfer || 0)],
+      ['Mixto', fmtMoney(salesByMethod.mixed || 0)],
+    ],
+    styles: { fontSize: 9 },
+    headStyles: { fillColor: [37, 99, 235] },
+  });
+
+  doc.autoTable({
+    startY: doc.lastAutoTable.finalY + 6,
+    head: [['Caja / Operación', 'Monto']],
+    body: [
+      ['Cobrado efectivo', fmtMoney(collected.cash || 0)],
+      ['Cobrado tarjeta', fmtMoney(collected.card || 0)],
+      ['Cobrado transferencia', fmtMoney(collected.transfer || 0)],
+      ['Ingresos manuales', fmtMoney(movements.income || 0)],
+      ['Retiros', fmtMoney(movements.withdrawal || 0)],
+      ['Gastos', fmtMoney(movements.expense || 0)],
+      ['Cancelaciones tickets', String(cancellations.tickets || 0)],
+      ['Cancelaciones total', fmtMoney(cancellations.total || 0)],
+      ['Domicilios tickets', String(delivery.tickets || 0)],
+      ['Domicilios total', fmtMoney(delivery.total || 0)],
+      ['Costo envíos', fmtMoney(delivery.fees || 0)],
+    ],
+    styles: { fontSize: 9 },
+    headStyles: { fillColor: [14, 165, 233] },
+  });
+
+  const notes = String(closeResult?.closedSession?.notes || '').trim();
+  if (notes) {
+    doc.setFontSize(9);
+    doc.text(`Nota de cierre: ${notes}`, 14, doc.lastAutoTable.finalY + 10, { maxWidth: 180 });
+  }
+
+  doc.save(`cierre_caja_${Date.now()}.pdf`);
+}
+
+function printPosCloseReport(closeResult) {
+  if (!closeResult) return;
+  const totals = closeResult.totals || {};
+  const collected = totals.collected || {};
+  const salesByMethod = totals.salesByMethod || {};
+  const movements = totals.movements || {};
+  const cancellations = totals.cancellations || {};
+  const delivery = totals.delivery || {};
+  const biz = esc(SETTINGS?.business_name || ME?.tenant?.businessName || 'Negocio');
+  const now = new Date().toLocaleString('es-MX');
+  const closedBy = esc(closeResult?.closedSession?.closed_by || ME?.username || 'cajero');
+
+  const html = `<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Cierre de caja</title>
+  <style>
+    body { font-family: ui-sans-serif, system-ui; margin: 16px; color: #111827; }
+    h2 { margin: 0 0 8px; }
+    p { margin: 2px 0; font-size: 12px; }
+    table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+    th, td { border: 1px solid #e5e7eb; padding: 6px 8px; font-size: 12px; text-align: left; }
+    th { background: #f3f4f6; }
+    .tot { font-weight: 700; }
+  </style>
+</head>
+<body>
+  <h2>Cierre de caja - ${biz}</h2>
+  <p>Generado: ${esc(now)}</p>
+  <p>Cerrado por: ${closedBy}</p>
+  <table>
+    <tr><th>Concepto</th><th>Valor</th></tr>
+    <tr><td>Fondo inicial</td><td>${esc(fmtMoney(closeResult?.closedSession?.opening_amount || 0))}</td></tr>
+    <tr><td>Ventas del turno</td><td>${esc(fmtMoney(totals.totalSales || 0))}</td></tr>
+    <tr><td>Efectivo esperado</td><td>${esc(fmtMoney(closeResult.expectedAmount || 0))}</td></tr>
+    <tr><td>Efectivo contado</td><td>${esc(fmtMoney(closeResult.closingAmount || 0))}</td></tr>
+    <tr class="tot"><td>Diferencia</td><td>${esc(fmtMoney(closeResult.differenceAmount || 0))}</td></tr>
+  </table>
+  <table>
+    <tr><th>Medio</th><th>Monto</th></tr>
+    <tr><td>Efectivo</td><td>${esc(fmtMoney(salesByMethod.cash || 0))}</td></tr>
+    <tr><td>Tarjeta</td><td>${esc(fmtMoney(salesByMethod.card || 0))}</td></tr>
+    <tr><td>Transferencia</td><td>${esc(fmtMoney(salesByMethod.transfer || 0))}</td></tr>
+    <tr><td>Mixto</td><td>${esc(fmtMoney(salesByMethod.mixed || 0))}</td></tr>
+  </table>
+  <table>
+    <tr><th>Auditoría</th><th>Monto</th></tr>
+    <tr><td>Cobrado efectivo</td><td>${esc(fmtMoney(collected.cash || 0))}</td></tr>
+    <tr><td>Cobrado tarjeta</td><td>${esc(fmtMoney(collected.card || 0))}</td></tr>
+    <tr><td>Cobrado transferencia</td><td>${esc(fmtMoney(collected.transfer || 0))}</td></tr>
+    <tr><td>Ingresos</td><td>${esc(fmtMoney(movements.income || 0))}</td></tr>
+    <tr><td>Retiros</td><td>${esc(fmtMoney(movements.withdrawal || 0))}</td></tr>
+    <tr><td>Gastos</td><td>${esc(fmtMoney(movements.expense || 0))}</td></tr>
+    <tr><td>Cancelaciones tickets</td><td>${esc(String(cancellations.tickets || 0))}</td></tr>
+    <tr><td>Cancelaciones total</td><td>${esc(fmtMoney(cancellations.total || 0))}</td></tr>
+    <tr><td>Domicilios tickets</td><td>${esc(String(delivery.tickets || 0))}</td></tr>
+    <tr><td>Domicilios total</td><td>${esc(fmtMoney(delivery.total || 0))}</td></tr>
+    <tr><td>Costo envíos</td><td>${esc(fmtMoney(delivery.fees || 0))}</td></tr>
+  </table>
+  <script>
+    window.onload = () => {
+      window.print();
+      setTimeout(() => window.close(), 120);
+    };
+  </script>
+</body>
+</html>`;
+
+  const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
+  const blobUrl = URL.createObjectURL(blob);
+  const w = window.open(blobUrl, '_blank', 'width=780,height=860');
+  if (!w) {
+    toast('Permite ventanas emergentes para imprimir el cierre', true);
+    return;
+  }
+  setTimeout(() => URL.revokeObjectURL(blobUrl), 10000);
+}
+
 async function loadPos() {
   POS_OVERVIEW = await api('/api/pos/overview');
   syncPosCartFromCatalog();
@@ -1109,17 +1305,52 @@ function clearPosCart() {
 
 function renderPos() {
   renderPosFinanceStrip();
+  renderPosDeliveryStrip();
   renderPosActions();
   renderPosSession();
   renderPosCatalog();
   renderPosCart();
 }
 
+function renderPosDeliveryStrip() {
+  const el = $('#posDeliveryStrip');
+  if (!el) return;
+  const session = POS_OVERVIEW?.activeSession;
+  const delivery = session?.totals?.delivery || { tickets: 0, total: 0, fees: 0 };
+  if (!session || !delivery.tickets) { el.innerHTML = ''; return; }
+  el.innerHTML = `
+    <div class="pos-delivery-wrap">
+      <div class="pos-delivery-header">
+        <i class="ph-bold ph-moped"></i>
+        <span>Servicios a domicilio del turno</span>
+        <span class="pos-delivery-count">${delivery.tickets} pedido${delivery.tickets !== 1 ? 's' : ''}</span>
+      </div>
+      <div class="pos-delivery-stats">
+        <div class="pos-delivery-stat">
+          <div class="pos-delivery-stat-ic"><i class="ph-bold ph-package"></i></div>
+          <div><span>Pedidos domicilio</span><b>${delivery.tickets}</b></div>
+        </div>
+        <div class="pos-delivery-stat">
+          <div class="pos-delivery-stat-ic"><i class="ph-bold ph-currency-circle-dollar"></i></div>
+          <div><span>Total domicilio</span><b>${fmtMoney(delivery.total)}</b></div>
+        </div>
+        <div class="pos-delivery-stat">
+          <div class="pos-delivery-stat-ic"><i class="ph-bold ph-truck"></i></div>
+          <div><span>Costo envíos cobrados</span><b>${fmtMoney(delivery.fees)}</b></div>
+        </div>
+      </div>
+    </div>`;
+}
+
 function renderPosActions() {
   const el = $('#posActionIcons');
   if (!el) return;
   const hasSession = Boolean(POS_OVERVIEW?.activeSession);
+  const chatbotEnabled = Boolean(POS_OVERVIEW?.chatbotIntegrationEnabled);
   el.innerHTML = `
+    ${chatbotEnabled ? `<button type="button" class="pos-action-btn" id="posOpenChatbotQueue" ${hasSession ? '' : 'disabled'}>
+      <i class="ph-bold ph-chat-circle-dots"></i> Pedidos chatbot
+    </button>` : ''}
     <button type="button" class="pos-action-btn" id="posOpenSalesHistory">
       <i class="ph-bold ph-receipt"></i> Historial de ventas
     </button>
@@ -1130,6 +1361,7 @@ function renderPosActions() {
       <i class="ph-bold ph-lock"></i> Cierre de caja
     </button>
   `;
+  $('#posOpenChatbotQueue')?.addEventListener('click', openPosChatbotQueueModal);
   $('#posOpenSalesHistory')?.addEventListener('click', openPosSalesHistoryModal);
   $('#posOpenMovement')?.addEventListener('click', openPosMovementModal);
   $('#posOpenClose')?.addEventListener('click', openPosCloseModal);
@@ -1252,7 +1484,9 @@ function renderPosCatalog() {
 
 function renderPosCart() {
   const el = $('#posCartCard');
-  const total = posCartTotal();
+  const total = posGrandTotal();
+  const subtotalItems = posCartTotal();
+  const deliveryFeeAmt = POS_IS_DELIVERY ? moneyNum(Number(POS_DELIVERY_FEE) || 0) : 0;
   const session = POS_OVERVIEW?.activeSession;
   setPosPaymentDefaults();
   const methodButtons = ['cash', 'card', 'transfer', 'mixed']
@@ -1297,7 +1531,11 @@ function renderPosCart() {
             </div>
           </div>`).join('')}
       </div>
-      <div class="pos-total-line"><span>Total</span><b>${fmtMoney(total)}</b></div>
+      ${POS_IS_DELIVERY && deliveryFeeAmt > 0
+        ? `<div class="pos-total-line pos-subtotal-line"><span>Subtotal</span><b>${fmtMoney(subtotalItems)}</b></div>
+           <div class="pos-total-line pos-delivery-fee-line"><i class="ph-bold ph-moped"></i><span>Envío</span><b>+ ${fmtMoney(deliveryFeeAmt)}</b></div>
+           <div class="pos-total-line"><span>Total</span><b>${fmtMoney(total)}</b></div>`
+        : `<div class="pos-total-line"><span>Total</span><b>${fmtMoney(total)}</b></div>`}
       <form id="posCheckoutForm">
         <div class="field">
           <label><i class="ph-bold ph-credit-card"></i> Medio de pago</label>
@@ -1305,9 +1543,18 @@ function renderPosCart() {
         </div>
         ${cashField}
         ${mixedFields}
+        <div class="toggle-row pos-delivery-toggle">
+          <div class="t-info"><i class="ph-bold ph-moped"></i><div><b>Entrega a domicilio</b><span>Cobra envío y registra el pedido como domicilio</span></div></div>
+          <label class="switch"><input type="checkbox" id="posDeliveryToggle" ${POS_IS_DELIVERY ? 'checked' : ''} /><span class="track"></span></label>
+        </div>
+        ${POS_IS_DELIVERY ? `<div class="field">
+          <label><i class="ph-bold ph-currency-circle-dollar"></i> Costo de envío</label>
+          <input type="number" id="posDeliveryFee" step="0.01" min="0" value="${esc(String(POS_DELIVERY_FEE || ''))}" placeholder="0.00" />
+          <div class="hint">Se suma al total y suma al turno en el rubro domicilios.</div>
+        </div>` : ''}
         <div class="field">
           <label><i class="ph-bold ph-note"></i> Nota de venta</label>
-          <textarea id="posSaleNotes" rows="2" placeholder="Mesa 4, venta rápida, pedido interno...">${esc(POS_PAYMENT_FORM.notes || '')}</textarea>
+          <textarea id="posSaleNotes" rows="2" placeholder="${POS_IS_DELIVERY ? 'Dirección, referencia de entrega...' : 'Mesa 4, venta rápida, pedido interno...'}">${esc(POS_PAYMENT_FORM.notes || '')}</textarea>
         </div>
         <div style="display:flex;gap:10px;flex-wrap:wrap">
           <button class="btn btn-primary" type="submit" ${submitDisabled}><i class="ph-bold ph-check-circle"></i> Cobrar venta</button>
@@ -1352,6 +1599,25 @@ function renderPosCart() {
     updatePosMixedHint();
   });
   $('#posSaleNotes')?.addEventListener('input', (e) => (POS_PAYMENT_FORM.notes = e.target.value));
+  $('#posDeliveryToggle')?.addEventListener('change', (e) => {
+    POS_IS_DELIVERY = e.target.checked;
+    if (!POS_IS_DELIVERY) POS_DELIVERY_FEE = '';
+    setPosPaymentDefaults();
+    renderPosCart();
+  });
+  $('#posDeliveryFee')?.addEventListener('input', (e) => {
+    POS_DELIVERY_FEE = e.target.value;
+    if (POS_PAYMENT_METHOD === 'cash') {
+      const newTotal = posGrandTotal();
+      const cashInput = $('#posCashReceived');
+      if (cashInput && moneyNum(cashInput.value) < newTotal) {
+        cashInput.value = String(newTotal);
+        POS_PAYMENT_FORM.cashReceived = String(newTotal);
+      }
+    }
+    updatePosChangeHint();
+    updatePosMixedHint();
+  });
   updatePosChangeHint();
   updatePosMixedHint();
   $('#posCheckoutForm')?.addEventListener('submit', async (e) => {
@@ -1367,6 +1633,8 @@ function renderPosCart() {
         },
         cashReceived: Number($('#posCashReceived')?.value || 0),
         notes: $('#posSaleNotes')?.value || '',
+        isDelivery: POS_IS_DELIVERY,
+        deliveryFee: POS_IS_DELIVERY ? Number($('#posDeliveryFee')?.value || 0) : 0,
       };
       const result = await api('/api/pos/sales', {
         method: 'POST',
@@ -1492,6 +1760,176 @@ function openPosSalesHistoryModal() {
   loadPosSalesHistory(1).catch((err) => toast(err.message, true));
 }
 
+function chatbotOrderStatusBadge(status) {
+  const st = String(status || '').toLowerCase();
+  if (st === 'confirmado') return '<span class="badge b-confirmado">Confirmado</span>';
+  if (st === 'preparando') return '<span class="badge b-preparando">Preparando</span>';
+  if (st === 'enviado') return '<span class="badge b-enviado">Enviado</span>';
+  return '<span class="badge b-pendiente">Pendiente</span>';
+}
+
+function chatbotDeliveryLabel(order) {
+  if (order.delivery === 'domicilio') return 'Domicilio';
+  return `Recoger${order.pickup_branch_name ? ` (${order.pickup_branch_name})` : ''}`;
+}
+
+function chatbotChargeStatusBadge(orderId) {
+  if (POS_CHATBOT_IMPORTING.has(Number(orderId))) {
+    return '<span class="badge b-charge-processing"><i class="ph-bold ph-spinner"></i> En proceso</span>';
+  }
+  return '<span class="badge b-charge-available"><i class="ph-bold ph-check-circle"></i> Disponible</span>';
+}
+
+function isCompactChatbotQueueView() {
+  return window.matchMedia('(max-width: 760px)').matches;
+}
+
+async function loadPosChatbotQueue(page = 1) {
+  const safePage = Math.max(1, Number(page) || 1);
+  const data = await api(`/api/pos/chatbot-orders?page=${safePage}`);
+  POS_CHATBOT_QUEUE = Array.isArray(data.rows) ? data.rows : [];
+  POS_CHATBOT_PAGE = Math.max(1, Number(data.page || safePage));
+  POS_CHATBOT_TOTAL_PAGES = Math.max(1, Number(data.totalPages || 1));
+  const table = $('#posChatbotQueueTable');
+  const info = $('#posChatbotQueueInfo');
+  if (!table || !info) return;
+  table.style.display = 'block';
+  table.style.width = '100%';
+  table.style.maxWidth = '100%';
+  table.style.overflowX = 'auto';
+  table.style.overflowY = 'auto';
+  table.style.webkitOverflowScrolling = 'touch';
+
+  if (!POS_CHATBOT_QUEUE.length) {
+    table.innerHTML = emptyHTML('ph-chat-circle-dots', 'Sin pedidos chatbot por importar hoy', 'Aquí se muestran solo pedidos del día de operación para cobrarlos en caja.');
+    info.textContent = `Página ${POS_CHATBOT_PAGE} de ${POS_CHATBOT_TOTAL_PAGES} · ${Number(data.total || 0)} pedidos`;
+    const prev = $('#posChatbotQueuePrev');
+    const next = $('#posChatbotQueueNext');
+    if (prev) prev.disabled = POS_CHATBOT_PAGE <= 1;
+    if (next) next.disabled = POS_CHATBOT_PAGE >= POS_CHATBOT_TOTAL_PAGES;
+    return;
+  }
+
+  if (isCompactChatbotQueueView()) {
+    table.innerHTML = `<div class="pos-chatbot-cards">${POS_CHATBOT_QUEUE
+      .map((order) => {
+        const items = (order.items || []).map((it) => `${it.qty}x ${it.name}`).join(', ');
+        const isImporting = POS_CHATBOT_IMPORTING.has(Number(order.id));
+        const locationText = order.customer_location_text || order.customer_location_resolved || '—';
+        const noteText = order.notes || '—';
+        return `<article class="pos-chatbot-card">
+          <div class="pos-chatbot-card-head">
+            <b>#${order.id}</b>
+            <div>${chatbotChargeStatusBadge(order.id)}</div>
+          </div>
+          <div class="pos-chatbot-card-meta">
+            <div class="pos-chatbot-kv"><span>Cliente</span><div><b>${esc(order.customer_name || 'Cliente')}</b><br>${esc(order.customer_phone || '—')}</div></div>
+            <div class="pos-chatbot-kv"><span>Total</span><b>${fmtMoney(order.total)}</b></div>
+            <div class="pos-chatbot-kv"><span>Entrega</span><div>${esc(chatbotDeliveryLabel(order))}<br><small style="color:var(--ink-3)">${esc(locationText)}</small></div></div>
+            <div class="pos-chatbot-kv"><span>Pago</span><b>${esc(posMethodLabel(order.payment_method || 'cash'))}</b></div>
+            <div class="pos-chatbot-kv"><span>Productos</span><div>${esc(items || '—')}</div></div>
+            <div class="pos-chatbot-kv"><span>Estado</span><div>${chatbotOrderStatusBadge(order.status)}</div></div>
+            <div class="pos-chatbot-kv"><span>Fecha</span><div>${esc(order.created_at || '')}</div></div>
+            <div class="pos-chatbot-kv"><span>Nota</span><div>${esc(noteText)}</div></div>
+          </div>
+          <button type="button" class="btn-pos-charge" data-import-chatbot-order="${order.id}" ${isImporting ? 'disabled' : ''}><i class="ph-bold ph-cash-register"></i> ${isImporting ? 'Procesando...' : 'Cobrar en POS'}</button>
+        </article>`;
+      })
+      .join('')}</div>`;
+  } else {
+    table.innerHTML = `<table class="pos-chatbot-table" style="width:1580px;min-width:1580px;table-layout:fixed"><thead><tr><th class="th-pedido">Pedido</th><th class="th-action">Cobrar</th><th class="th-cliente">Cliente</th><th class="th-productos">Productos</th><th class="th-entrega">Entrega</th><th class="th-pago">Pago</th><th class="th-total">Total</th><th class="th-estado">Estado</th><th class="th-fecha">Fecha</th><th class="th-cobro">Cobro</th></tr></thead><tbody>${POS_CHATBOT_QUEUE
+      .map((order) => {
+        const items = (order.items || []).map((it) => `${it.qty}x ${it.name}`).join(', ');
+        const isImporting = POS_CHATBOT_IMPORTING.has(Number(order.id));
+        const locationLine = order.customer_location_text
+          ? `<div style="font-size:12px;color:var(--ink-3)">${esc(order.customer_location_text)}</div>`
+          : (order.customer_location_resolved ? `<div style="font-size:12px;color:var(--ink-3)">${esc(order.customer_location_resolved)}</div>` : '');
+        const noteLine = order.notes
+          ? `<div style="font-size:12px;color:var(--ink-3);margin-top:4px">Nota: ${esc(order.notes)}</div>`
+          : '';
+        return `<tr>
+          <td class="td-pedido"><b>#${order.id}</b></td>
+          <td class="td-action"><button type="button" class="btn-pos-charge" data-import-chatbot-order="${order.id}" ${isImporting ? 'disabled' : ''}><i class="ph-bold ph-cash-register"></i> ${isImporting ? 'Procesando...' : 'Cobrar en POS'}</button></td>
+          <td class="td-cliente"><b>${esc(order.customer_name || 'Cliente')}</b><div style="font-size:12px;color:var(--ink-3)">${esc(order.customer_phone || '—')}</div></td>
+          <td class="td-productos">${esc(items || '—')}</td>
+          <td class="td-entrega">${esc(chatbotDeliveryLabel(order))}${locationLine}${noteLine}</td>
+          <td class="td-pago">${esc(posMethodLabel(order.payment_method || 'cash'))}</td>
+          <td class="td-total"><b>${fmtMoney(order.total)}</b></td>
+          <td class="td-estado">${chatbotOrderStatusBadge(order.status)}</td>
+          <td class="td-fecha">${esc(order.created_at || '')}</td>
+          <td class="td-cobro">${chatbotChargeStatusBadge(order.id)}</td>
+        </tr>`;
+      })
+      .join('')}</tbody></table>`;
+  }
+  info.textContent = `Página ${POS_CHATBOT_PAGE} de ${POS_CHATBOT_TOTAL_PAGES} · ${Number(data.total || 0)} pedidos`;
+  table.scrollLeft = 0;
+  const prev = $('#posChatbotQueuePrev');
+  const next = $('#posChatbotQueueNext');
+  if (prev) prev.disabled = POS_CHATBOT_PAGE <= 1;
+  if (next) next.disabled = POS_CHATBOT_PAGE >= POS_CHATBOT_TOTAL_PAGES;
+
+  document.querySelectorAll('[data-import-chatbot-order]').forEach((button) => {
+    button.addEventListener('click', () => importChatbotOrderToPos(button.dataset.importChatbotOrder));
+  });
+}
+
+async function importChatbotOrderToPos(orderId) {
+  const id = Number(orderId);
+  if (!Number.isInteger(id) || id <= 0) return;
+  if (POS_CHATBOT_IMPORTING.has(id)) return;
+  const ok = await askConfirm(
+    '¿Pasar pedido a caja?',
+    `El pedido #${id} se convertirá en venta POS para cobrar ticket y sumarse al cierre.`,
+    { yesLabel: 'Pasar a caja', noLabel: 'Cancelar' }
+  );
+  if (!ok) return;
+
+  try {
+    POS_CHATBOT_IMPORTING.add(id);
+    await loadPosChatbotQueue(POS_CHATBOT_PAGE);
+    const result = await api(`/api/pos/chatbot-orders/${id}/import`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    });
+    const sale = result?.sale || {};
+    LAST_POS_SALE = {
+      id: sale.id,
+      subtotal: Number(sale.subtotal || sale.total || 0),
+      deliveryFee: Number(sale.deliveryFee || sale.delivery_fee || 0),
+      total: Number(sale.total || 0),
+      items: Array.isArray(sale.items) ? sale.items : [],
+      paymentMethod: sale.payment_method || 'cash',
+      paymentBreakdown: sale.payment_breakdown || null,
+      cashReceived: Number(sale.cash_received || 0),
+      cashChange: Number(sale.cash_change || 0),
+      notes: String(sale.notes || ''),
+    };
+    toast(`Pedido #${id} integrado a caja`);
+    await loadPos();
+    await loadPosChatbotQueue(POS_CHATBOT_PAGE);
+    if (!POS_CHATBOT_QUEUE.length && POS_CHATBOT_PAGE > 1) {
+      await loadPosChatbotQueue(POS_CHATBOT_PAGE - 1);
+    }
+    setTimeout(() => {
+      if (LAST_POS_SALE?.id) printPosTicket();
+    }, 120);
+  } catch (err) {
+    toast(err.message, true);
+  } finally {
+    POS_CHATBOT_IMPORTING.delete(id);
+  }
+}
+
+function openPosChatbotQueueModal() {
+  const hasSession = Boolean(POS_OVERVIEW?.activeSession);
+  if (!hasSession) return toast('Abre una caja para importar pedidos chatbot', true);
+  POS_CHATBOT_PAGE = 1;
+  $('#posChatbotQueueModal').classList.add('show');
+  loadPosChatbotQueue(POS_CHATBOT_PAGE).catch((err) => toast(err.message, true));
+}
+
 function renderLastCloseHint() {
   const last = POS_OVERVIEW?.lastClosedSession;
   const hint = $('#posLastCloseHint');
@@ -1555,36 +1993,55 @@ function openPosCloseModal() {
     cancellations: { tickets: 0, total: 0 },
     tickets: 0,
   };
+  const delivery = totals.delivery || { tickets: 0, total: 0, fees: 0 };
   $('#posCloseSummary').innerHTML = `
     <div class="pos-close-groups">
       <div class="pos-close-group neutral">
         <h4><i class="ph-bold ph-info"></i> Datos del turno</h4>
         <div class="pos-close-grid">
-          <div class="pos-mini-stat"><span>Fondo inicial</span><b>${fmtMoney(session.opening_amount || 0)}</b></div>
-          <div class="pos-mini-stat"><span>Ventas del turno</span><b>${fmtMoney(totals.totalSales || 0)}</b></div>
-          <div class="pos-mini-stat"><span>Efectivo esperado</span><b>${fmtMoney(session.expectedCash || 0)}</b></div>
-          <div class="pos-mini-stat"><span>Tickets</span><b>${Number(totals.tickets || 0)}</b></div>
-          <div class="pos-mini-stat"><span>Abierta por</span><b>${esc(session.opened_by || '—')}</b></div>
+          <div class="pos-mini-stat tone-ink"><span>Fondo inicial</span><b>${fmtMoney(session.opening_amount || 0)}</b></div>
+          <div class="pos-mini-stat tone-blue"><span>Ventas del turno</span><b>${fmtMoney(totals.totalSales || 0)}</b></div>
+          <div class="pos-mini-stat tone-green"><span>Efectivo esperado</span><b>${fmtMoney(session.expectedCash || 0)}</b></div>
+          <div class="pos-mini-stat tone-violet"><span>Tickets</span><b>${Number(totals.tickets || 0)}</b></div>
+          <div class="pos-mini-stat tone-ink"><span>Abierta por</span><b>${esc(session.opened_by || '—')}</b></div>
+        </div>
+      </div>
+      <div class="pos-close-group payment">
+        <h4><i class="ph-bold ph-credit-card"></i> Ventas por medio de pago</h4>
+        <div class="pos-close-grid">
+          <div class="pos-mini-stat tone-green"><span>Efectivo</span><b>${fmtMoney(totals.salesByMethod?.cash || 0)}</b></div>
+          <div class="pos-mini-stat tone-violet"><span>Tarjeta</span><b>${fmtMoney(totals.salesByMethod?.card || 0)}</b></div>
+          <div class="pos-mini-stat tone-cyan"><span>Transferencia</span><b>${fmtMoney(totals.salesByMethod?.transfer || 0)}</b></div>
+          <div class="pos-mini-stat tone-amber"><span>Mixto</span><b>${fmtMoney(totals.salesByMethod?.mixed || 0)}</b></div>
+        </div>
+      </div>
+      <div class="pos-close-group delivery">
+        <h4><i class="ph-bold ph-moped"></i> Servicio a domicilio</h4>
+        <div class="pos-close-grid">
+          <div class="pos-mini-stat tone-cyan"><span>Pedidos domicilio</span><b>${Number(delivery.tickets || 0)}</b></div>
+          <div class="pos-mini-stat tone-blue"><span>Total domicilio</span><b>${fmtMoney(delivery.total || 0)}</b></div>
+          <div class="pos-mini-stat tone-green"><span>Costo envíos</span><b>${fmtMoney(delivery.fees || 0)}</b></div>
+          <div class="pos-mini-stat tone-ink"><span>Cobrado efectivo</span><b>${fmtMoney(totals.collected?.cash || 0)}</b></div>
         </div>
       </div>
       <div class="pos-close-group income">
         <h4><i class="ph-bold ph-trend-up"></i> Entradas</h4>
         <div class="pos-close-grid">
-          <div class="pos-mini-stat"><span>Ingreso manual</span><b>${fmtMoney(totals.movements.income || 0)}</b></div>
+          <div class="pos-mini-stat tone-green"><span>Ingreso manual</span><b>${fmtMoney(totals.movements.income || 0)}</b></div>
         </div>
       </div>
       <div class="pos-close-group outflow">
         <h4><i class="ph-bold ph-arrow-bend-up-left"></i> Salidas</h4>
         <div class="pos-close-grid">
-          <div class="pos-mini-stat"><span>Retiros</span><b>${fmtMoney(totals.movements.withdrawal || 0)}</b></div>
-          <div class="pos-mini-stat"><span>Gastos</span><b>${fmtMoney(totals.movements.expense || 0)}</b></div>
+          <div class="pos-mini-stat tone-amber"><span>Retiros</span><b>${fmtMoney(totals.movements.withdrawal || 0)}</b></div>
+          <div class="pos-mini-stat tone-red"><span>Gastos</span><b>${fmtMoney(totals.movements.expense || 0)}</b></div>
         </div>
       </div>
       <div class="pos-close-group cancel">
         <h4><i class="ph-bold ph-x-circle"></i> Cancelaciones</h4>
         <div class="pos-close-grid">
-          <div class="pos-mini-stat"><span>Tickets cancelados</span><b>${Number(totals.cancellations.tickets || 0)}</b></div>
-          <div class="pos-mini-stat"><span>Total cancelado</span><b>${fmtMoney(totals.cancellations.total || 0)}</b></div>
+          <div class="pos-mini-stat tone-red"><span>Tickets cancelados</span><b>${Number(totals.cancellations.tickets || 0)}</b></div>
+          <div class="pos-mini-stat tone-red"><span>Total cancelado</span><b>${fmtMoney(totals.cancellations.total || 0)}</b></div>
         </div>
       </div>
     </div>
@@ -1607,6 +2064,18 @@ $('#posMovementKinds')?.addEventListener('click', (e) => {
 $('#posMovementCancel')?.addEventListener('click', () => $('#posMovementModal').classList.remove('show'));
 $('#posCloseCancel')?.addEventListener('click', () => $('#posCloseModal').classList.remove('show'));
 $('#posSalesHistoryClose')?.addEventListener('click', () => $('#posSalesHistoryModal').classList.remove('show'));
+$('#posChatbotQueueClose')?.addEventListener('click', () => $('#posChatbotQueueModal').classList.remove('show'));
+$('#posChatbotQueueRefresh')?.addEventListener('click', () => {
+  loadPosChatbotQueue(POS_CHATBOT_PAGE).catch((err) => toast(err.message, true));
+});
+$('#posChatbotQueuePrev')?.addEventListener('click', () => {
+  if (POS_CHATBOT_PAGE <= 1) return;
+  loadPosChatbotQueue(POS_CHATBOT_PAGE - 1).catch((err) => toast(err.message, true));
+});
+$('#posChatbotQueueNext')?.addEventListener('click', () => {
+  if (POS_CHATBOT_PAGE >= POS_CHATBOT_TOTAL_PAGES) return;
+  loadPosChatbotQueue(POS_CHATBOT_PAGE + 1).catch((err) => toast(err.message, true));
+});
 $('#posSalesPrevPage')?.addEventListener('click', () => {
   if (POS_SALES_PAGE <= 1) return;
   loadPosSalesHistory(POS_SALES_PAGE - 1).catch((err) => toast(err.message, true));
@@ -1716,6 +2185,8 @@ $('#posCloseFormModal')?.addEventListener('submit', async (e) => {
     clearPosCart();
     $('#posCloseModal').classList.remove('show');
     toast(`Caja cerrada. Diferencia: ${fmtMoney(result.differenceAmount)}`);
+    exportPosClosePdf(result);
+    printPosCloseReport(result);
     await loadPos();
   } catch (err) {
     toast(err.message, true);
@@ -1724,63 +2195,212 @@ $('#posCloseFormModal')?.addEventListener('submit', async (e) => {
 
 /* ===== Productos ===== */
 let CATS = [];
+let PRODUCTS_CACHE = [];
+let PRODUCT_CAT_FILTER = 'all';
+let PRODUCT_VIEW_MODE = 'card';
+let PRODUCT_VIEW_SWITCH_BOUND = false;
 
-async function loadProducts() {
-  CATS = await api('/api/products/categories');
-  const prods = await api('/api/products');
+const PRODUCT_VIEW_MODES = new Set(['card', 'detail', 'compact']);
 
-  $('#catChips').innerHTML = CATS.length
-    ? CATS.map(
-        (c) =>
-          `<span class="chip"><i class="ph-bold ph-folder" style="color:var(--primary)"></i> ${esc(c.name)} <a href="#" class="x" data-delcat="${c.id}" title="Eliminar categoría"><i class="ph-bold ph-x"></i></a></span>`
-      ).join('')
-    : '<span class="chip" style="opacity:0.6">Sin categorías — crea la primera</span>';
+function productViewStorageKey() {
+  return `chatbotpro:products:view:${ME?.tenant?.slug || 'default'}`;
+}
+
+function readStoredProductViewMode() {
+  try {
+    const saved = String(localStorage.getItem(productViewStorageKey()) || '').trim();
+    return PRODUCT_VIEW_MODES.has(saved) ? saved : 'card';
+  } catch {
+    return 'card';
+  }
+}
+
+function saveProductViewMode(mode) {
+  try {
+    localStorage.setItem(productViewStorageKey(), mode);
+  } catch {
+    // Ignore storage errors silently.
+  }
+}
+
+function categoryTone(cat) {
+  const seed = `${cat?.id || ''}:${cat?.name || ''}`;
+  let hash = 0;
+  for (let i = 0; i < seed.length; i++) {
+    hash = (hash << 5) - hash + seed.charCodeAt(i);
+    hash |= 0;
+  }
+  const hue = Math.abs(hash) % 360;
+  return {
+    bg: `hsl(${hue} 90% 95%)`,
+    border: `hsl(${hue} 62% 74%)`,
+    ink: `hsl(${hue} 62% 36%)`,
+  };
+}
+
+function bindProductViewSwitch() {
+  if (PRODUCT_VIEW_SWITCH_BOUND) return;
+  PRODUCT_VIEW_SWITCH_BOUND = true;
+  document.querySelectorAll('[data-prod-view]').forEach((button) => {
+    button.addEventListener('click', () => {
+      const mode = String(button.dataset.prodView || 'card').trim();
+      if (!PRODUCT_VIEW_MODES.has(mode)) return;
+      PRODUCT_VIEW_MODE = mode;
+      saveProductViewMode(mode);
+      renderProductsGrid();
+      renderCategoryChips();
+    });
+  });
+}
+
+function renderCategoryChips() {
+  const host = $('#catChips');
+  if (!host) return;
+  const allOn = PRODUCT_CAT_FILTER === 'all';
+  const chips = [
+    `<button type="button" class="chip chip-cat chip-all ${allOn ? 'on' : ''}" data-cat-filter="all"><i class="ph-bold ph-squares-four"></i> Todos</button>`,
+  ];
+  if (CATS.length) {
+    chips.push(
+      ...CATS.map((cat) => {
+        const tone = categoryTone(cat);
+        const on = String(PRODUCT_CAT_FILTER) === String(cat.id);
+        return `<button type="button" class="chip chip-cat ${on ? 'on' : ''}" data-cat-filter="${cat.id}" style="--chip-bg:${tone.bg};--chip-border:${tone.border};--chip-ink:${tone.ink}"><i class="ph-bold ph-folder"></i> ${esc(cat.name)} <span class="x" data-delcat="${cat.id}" title="Eliminar categoria"><i class="ph-bold ph-x"></i></span></button>`;
+      })
+    );
+  }
+  host.innerHTML = chips.join('');
+
+  document.querySelectorAll('[data-cat-filter]').forEach((button) => {
+    button.addEventListener('click', () => {
+      PRODUCT_CAT_FILTER = String(button.dataset.catFilter || 'all');
+      renderCategoryChips();
+      renderProductsGrid();
+    });
+  });
+
   document.querySelectorAll('[data-delcat]').forEach((a) =>
     a.addEventListener('click', async (e) => {
-      e.preventDefault();
-      if (!(await askConfirm('¿Eliminar categoría?', 'Los productos de esta categoría quedarán sin categoría.'))) return;
+      e.stopPropagation();
+      if (!(await askConfirm('¿Eliminar categoria?', 'Los productos de esta categoria quedaran sin categoria.'))) return;
       await api(`/api/products/categories/${a.dataset.delcat}`, { method: 'DELETE' });
-      toast('Categoría eliminada');
+      toast('Categoria eliminada');
+      if (PRODUCT_CAT_FILTER === String(a.dataset.delcat)) PRODUCT_CAT_FILTER = 'all';
       loadProducts();
     })
   );
 
-  $('#pCat').innerHTML = '<option value="">Sin categoría</option>' + CATS.map((c) => `<option value="${c.id}">${esc(c.name)}</option>`).join('');
+  document.querySelectorAll('[data-prod-view]').forEach((btn) => {
+    const on = btn.dataset.prodView === PRODUCT_VIEW_MODE;
+    btn.classList.toggle('on', on);
+    btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+  });
+}
 
-  $('#prodGrid').innerHTML = prods.length
-    ? prods
-        .map(
-          (p) => `<div class="prod-card ${p.active ? '' : 'inactive'}">
-        <div class="img">
-          ${p.image ? `<img src="${esc(p.image)}" alt="" loading="lazy" />` : '<i class="ph ph-fork-knife"></i>'}
-          <span class="state-dot ${p.active ? 'on' : 'off'}">${p.active ? 'ACTIVO' : 'OCULTO'}</span>
+function renderProductsGrid() {
+  const grid = $('#prodGrid');
+  if (!grid) return;
+  const visible = PRODUCT_CAT_FILTER === 'all'
+    ? PRODUCTS_CACHE
+    : PRODUCTS_CACHE.filter((p) => String(p.category_id || '') === String(PRODUCT_CAT_FILTER));
+
+  grid.classList.remove('view-card', 'view-detail', 'view-compact');
+  grid.classList.add(`view-${PRODUCT_VIEW_MODE}`);
+
+  if (!visible.length) {
+    grid.innerHTML = `<div class="card" style="grid-column:1/-1">${emptyHTML('ph-hamburger', 'Sin productos para este filtro', 'Cambia de categoria o agrega productos nuevos al menu.')}</div>`;
+    return;
+  }
+
+  if (PRODUCT_VIEW_MODE === 'detail') {
+    grid.innerHTML = visible
+      .map(
+        (p) => `<article class="prod-row ${p.active ? '' : 'inactive'}">
+      <div class="thumb">
+        ${p.image ? `<img src="${esc(p.image)}" alt="" loading="lazy" />` : '<i class="ph ph-fork-knife"></i>'}
+      </div>
+      <div class="meta">
+        <div class="top">
+          <div>
+            <div class="name">${esc(p.name)}</div>
+            ${p.category_name ? `<div class="cat">${esc(p.category_name)}</div>` : ''}
+          </div>
           <span class="price-tag">${fmtMoney(p.price)}</span>
         </div>
-        <div class="body">
-          ${p.category_name ? `<span class="cat">${esc(p.category_name)}</span>` : ''}
-          <div class="name">${esc(p.name)}</div>
-          <div class="desc">${esc(p.description || '')}</div>
-        </div>
-        <div class="actions">
-          <button class="btn btn-ghost" data-edit="${p.id}"><i class="ph-bold ph-pencil-simple"></i> Editar</button>
-          <button class="btn btn-danger btn-icon" data-del="${p.id}" title="Eliminar"><i class="ph-bold ph-trash"></i></button>
-        </div>
-      </div>`
-        )
-        .join('')
-    : `<div class="card" style="grid-column:1/-1">${emptyHTML('ph-hamburger', 'Tu menú está vacío', 'Agrega tu primer producto para que el chatbot pueda vender.')}</div>`;
+        <div class="desc">${esc(p.description || '')}</div>
+      </div>
+      <div class="row-actions">
+        <span class="state-dot ${p.active ? 'on' : 'off'}">${p.active ? 'ACTIVO' : 'OCULTO'}</span>
+        <button class="btn btn-ghost" data-edit="${p.id}"><i class="ph-bold ph-pencil-simple"></i> Editar</button>
+        <button class="btn btn-danger btn-icon" data-del="${p.id}" title="Eliminar"><i class="ph-bold ph-trash"></i></button>
+      </div>
+    </article>`
+      )
+      .join('');
+  } else if (PRODUCT_VIEW_MODE === 'compact') {
+    grid.innerHTML = visible
+      .map(
+        (p) => `<article class="prod-mini ${p.active ? '' : 'inactive'}">
+      <div class="mini-thumb">${p.image ? `<img src="${esc(p.image)}" alt="" loading="lazy" />` : '<i class="ph ph-fork-knife"></i>'}</div>
+      <div class="mini-name">${esc(p.name)}</div>
+      <div class="mini-price">${fmtMoney(p.price)}</div>
+      <div class="mini-actions">
+        <button class="btn btn-ghost" data-edit="${p.id}"><i class="ph-bold ph-pencil-simple"></i></button>
+        <button class="btn btn-danger btn-icon" data-del="${p.id}" title="Eliminar"><i class="ph-bold ph-trash"></i></button>
+      </div>
+    </article>`
+      )
+      .join('');
+  } else {
+    grid.innerHTML = visible
+      .map(
+        (p) => `<div class="prod-card ${p.active ? '' : 'inactive'}">
+      <div class="img">
+        ${p.image ? `<img src="${esc(p.image)}" alt="" loading="lazy" />` : '<i class="ph ph-fork-knife"></i>'}
+        <span class="state-dot ${p.active ? 'on' : 'off'}">${p.active ? 'ACTIVO' : 'OCULTO'}</span>
+        <span class="price-tag">${fmtMoney(p.price)}</span>
+      </div>
+      <div class="body">
+        ${p.category_name ? `<span class="cat">${esc(p.category_name)}</span>` : ''}
+        <div class="name">${esc(p.name)}</div>
+        <div class="desc">${esc(p.description || '')}</div>
+      </div>
+      <div class="actions">
+        <button class="btn btn-ghost" data-edit="${p.id}"><i class="ph-bold ph-pencil-simple"></i> Editar</button>
+        <button class="btn btn-danger btn-icon" data-del="${p.id}" title="Eliminar"><i class="ph-bold ph-trash"></i></button>
+      </div>
+    </div>`
+      )
+      .join('');
+  }
 
   document.querySelectorAll('[data-edit]').forEach((b) =>
-    b.addEventListener('click', () => openProdModal(prods.find((p) => p.id == b.dataset.edit)))
+    b.addEventListener('click', () => openProdModal(PRODUCTS_CACHE.find((p) => p.id == b.dataset.edit)))
   );
   document.querySelectorAll('[data-del]').forEach((b) =>
     b.addEventListener('click', async () => {
-      if (!(await askConfirm('¿Eliminar producto?', 'Se quitará de tu menú y del chatbot de inmediato.'))) return;
+      if (!(await askConfirm('¿Eliminar producto?', 'Se quitara de tu menu y del chatbot de inmediato.'))) return;
       await api(`/api/products/${b.dataset.del}`, { method: 'DELETE' });
       toast('Producto eliminado');
       loadProducts();
     })
   );
+}
+
+async function loadProducts() {
+  bindProductViewSwitch();
+  PRODUCT_VIEW_MODE = readStoredProductViewMode();
+  CATS = await api('/api/products/categories');
+  PRODUCTS_CACHE = await api('/api/products');
+
+  $('#pCat').innerHTML = '<option value="">Sin categoría</option>' + CATS.map((c) => `<option value="${c.id}">${esc(c.name)}</option>`).join('');
+
+  if (PRODUCT_CAT_FILTER !== 'all' && !CATS.some((c) => String(c.id) === String(PRODUCT_CAT_FILTER))) {
+    PRODUCT_CAT_FILTER = 'all';
+  }
+
+  renderCategoryChips();
+  renderProductsGrid();
 }
 
 /* — Modal categoría — */
@@ -2262,6 +2882,13 @@ function fillConfigForm() {
   $('#cfgAddress').value = SETTINGS.address || '';
   $('#cfgHours').value = SETTINGS.hours || '';
   $('#cfgCurrency').value = SETTINGS.currency || 'MXN';
+  $('#cfgChatPayDeliveryCash').checked = (SETTINGS.chatbot_payment_delivery_cash || '1') === '1';
+  $('#cfgChatPayDeliveryTransfer').checked = (SETTINGS.chatbot_payment_delivery_transfer || '0') === '1';
+  $('#cfgChatPayDeliveryCard').checked = (SETTINGS.chatbot_payment_delivery_card || '0') === '1';
+  $('#cfgChatPayPickupCash').checked = (SETTINGS.chatbot_payment_pickup_cash || '1') === '1';
+  $('#cfgChatPayPickupTransfer').checked = (SETTINGS.chatbot_payment_pickup_transfer || '0') === '1';
+  $('#cfgChatPayPickupCard').checked = (SETTINGS.chatbot_payment_pickup_card || '0') === '1';
+  $('#cfgPosChatIntegration').checked = (SETTINGS.chatbot_pos_integration_enabled || '0') === '1';
   $('#cfgTicketWidth').value = String(Number(SETTINGS.ticket_width_mm || 80));
   $('#cfgTicketFont').value = String(Number(SETTINGS.ticket_font_size_px || 14));
   $('#cfgTicketLineHeight').value = String(Number(SETTINGS.ticket_line_height || 1.45));
@@ -2290,13 +2917,31 @@ $('#configForm').addEventListener('submit', async (e) => {
 });
 $('#contactForm').addEventListener('submit', async (e) => {
   e.preventDefault();
+  const deliveryEnabled = $('#botDelivery') ? $('#botDelivery').checked : true;
+  const pickupEnabled = $('#botPickup') ? $('#botPickup').checked : true;
+  const hasDeliveryPayment = $('#cfgChatPayDeliveryCash').checked || $('#cfgChatPayDeliveryTransfer').checked || $('#cfgChatPayDeliveryCard').checked;
+  const hasPickupPayment = $('#cfgChatPayPickupCash').checked || $('#cfgChatPayPickupTransfer').checked || $('#cfgChatPayPickupCard').checked;
+  if (deliveryEnabled && !hasDeliveryPayment) {
+    return toast('Activa al menos un medio de pago para domicilio', true);
+  }
+  if (pickupEnabled && !hasPickupPayment) {
+    return toast('Activa al menos un medio de pago para recoger en sucursal', true);
+  }
   const fd = new FormData();
   fd.append('address', $('#cfgAddress').value);
   fd.append('hours', $('#cfgHours').value);
   fd.append('currency', $('#cfgCurrency').value);
+  fd.append('chatbot_payment_delivery_cash', $('#cfgChatPayDeliveryCash').checked ? '1' : '0');
+  fd.append('chatbot_payment_delivery_transfer', $('#cfgChatPayDeliveryTransfer').checked ? '1' : '0');
+  fd.append('chatbot_payment_delivery_card', $('#cfgChatPayDeliveryCard').checked ? '1' : '0');
+  fd.append('chatbot_payment_pickup_cash', $('#cfgChatPayPickupCash').checked ? '1' : '0');
+  fd.append('chatbot_payment_pickup_transfer', $('#cfgChatPayPickupTransfer').checked ? '1' : '0');
+  fd.append('chatbot_payment_pickup_card', $('#cfgChatPayPickupCard').checked ? '1' : '0');
+  fd.append('chatbot_pos_integration_enabled', $('#cfgPosChatIntegration').checked ? '1' : '0');
   await api('/api/settings', { method: 'PUT', body: fd });
   toast('Datos de contacto guardados');
   SETTINGS = await api('/api/settings');
+  fillConfigForm();
 });
 
 $('#ticketForm').addEventListener('submit', async (e) => {

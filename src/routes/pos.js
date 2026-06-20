@@ -1,5 +1,7 @@
 const express = require('express');
 const { requireAuth } = require('../middleware/auth');
+const { getSetting } = require('../db');
+const { decrypt } = require('../utils/crypto');
 
 const router = express.Router();
 router.use(requireAuth);
@@ -8,6 +10,7 @@ const PAYMENT_METHODS = new Set(['cash', 'card', 'transfer', 'mixed']);
 const MOVEMENT_KINDS = new Set(['income', 'withdrawal', 'expense']);
 const TZ = 'America/Mexico_City';
 const SALES_HISTORY_FILTERS = new Set(['today', 'week', 'month', 'custom']);
+const CHATBOT_IMPORTABLE_STATUSES = new Set(['pendiente', 'confirmado', 'preparando', 'enviado']);
 
 function n(value) {
   const num = Number(value);
@@ -69,7 +72,10 @@ async function getSessionTotals(t, sessionId) {
             COALESCE(SUM(CASE WHEN payment_method = 'mixed' THEN total ELSE 0 END), 0)::float AS sales_mixed,
             COALESCE(SUM(CASE WHEN payment_method = 'cash' THEN total WHEN payment_method = 'mixed' THEN COALESCE((payment_breakdown::jsonb ->> 'cash')::numeric, 0) ELSE 0 END), 0)::float AS collected_cash,
             COALESCE(SUM(CASE WHEN payment_method = 'card' THEN total WHEN payment_method = 'mixed' THEN COALESCE((payment_breakdown::jsonb ->> 'card')::numeric, 0) ELSE 0 END), 0)::float AS collected_card,
-            COALESCE(SUM(CASE WHEN payment_method = 'transfer' THEN total WHEN payment_method = 'mixed' THEN COALESCE((payment_breakdown::jsonb ->> 'transfer')::numeric, 0) ELSE 0 END), 0)::float AS collected_transfer
+            COALESCE(SUM(CASE WHEN payment_method = 'transfer' THEN total WHEN payment_method = 'mixed' THEN COALESCE((payment_breakdown::jsonb ->> 'transfer')::numeric, 0) ELSE 0 END), 0)::float AS collected_transfer,
+            COUNT(CASE WHEN delivery = 'domicilio' THEN 1 END)::int AS delivery_tickets,
+            COALESCE(SUM(CASE WHEN delivery = 'domicilio' THEN total ELSE 0 END), 0)::float AS delivery_total,
+            COALESCE(SUM(CASE WHEN delivery = 'domicilio' THEN COALESCE(delivery_fee, 0) ELSE 0 END), 0)::float AS delivery_fees
      FROM {s}.orders
      WHERE channel = 'pos' AND pos_session_id = $1 AND status != 'cancelado'`,
     [sessionId]
@@ -112,11 +118,61 @@ async function getSessionTotals(t, sessionId) {
       tickets: Number(canceled?.canceled_tickets || 0),
       total: n(canceled?.canceled_total),
     },
+    delivery: {
+      tickets: Number(sales?.delivery_tickets || 0),
+      total: n(sales?.delivery_total),
+      fees: n(sales?.delivery_fees),
+    },
   };
 }
 
 function expectedCashForSession(session, totals) {
   return n(session.opening_amount) + totals.collected.cash + totals.movements.income - totals.movements.withdrawal - totals.movements.expense;
+}
+
+async function isChatbotPosIntegrationEnabled(t) {
+  const value = await getSetting(t, 'chatbot_pos_integration_enabled', '0');
+  return String(value || '0') === '1';
+}
+
+function paymentBreakdownForMethod(method, total) {
+  const amount = n(total);
+  if (method === 'card') return { cash: 0, card: amount, transfer: 0 };
+  if (method === 'transfer') return { cash: 0, card: 0, transfer: amount };
+  return { cash: amount, card: 0, transfer: 0 };
+}
+
+async function loadChatbotOrderForImport(t, orderId) {
+  return t.get(
+    `SELECT o.id, o.customer_id, o.items, o.total::float AS total, o.status, o.channel, o.delivery, o.notes,
+            o.payment_method, o.pickup_branch_name, o.customer_location_text, o.customer_location_resolved,
+            o.delivery_fee::float AS delivery_fee, o.delivery_zone_name,
+            to_char(o.created_at AT TIME ZONE '${TZ}', 'DD Mon YYYY, HH24:MI') AS created_at,
+            c.name_enc, c.phone_enc, c.address_enc
+     FROM {s}.orders o
+     LEFT JOIN {s}.customers c ON c.id = o.customer_id
+     WHERE o.id = $1
+     LIMIT 1`,
+    [orderId]
+  );
+}
+
+function chatbotSummaryNote(order) {
+  const name = decrypt(order?.name_enc) || 'Cliente';
+  const phone = decrypt(order?.phone_enc) || '';
+  const address = decrypt(order?.address_enc) || '';
+  const parts = [];
+  parts.push(`Pedido chatbot #${order.id}`);
+  parts.push(`Cliente: ${name}${phone ? ` (${phone})` : ''}`);
+  parts.push(`Entrega: ${order.delivery === 'domicilio' ? 'Domicilio' : `Recoger${order.pickup_branch_name ? ` · ${order.pickup_branch_name}` : ''}`}`);
+  if (address) parts.push(`Dirección: ${address}`);
+  if (order.customer_location_text) parts.push(`Ubicación: ${order.customer_location_text}`);
+  if (order.customer_location_resolved) parts.push(`Referencia mapa: ${order.customer_location_resolved}`);
+  if (order.delivery === 'domicilio' && Number(order.delivery_fee || 0) > 0) {
+    parts.push(`Envío: ${n(order.delivery_fee)}${order.delivery_zone_name ? ` (${order.delivery_zone_name})` : ''}`);
+  }
+  if (order.notes) parts.push(`Nota cliente: ${order.notes}`);
+  return parts.join('\n');
 }
 
 async function listRecentSales(t, sessionId = null) {
@@ -300,17 +356,175 @@ router.get('/overview', async (req, res, next) => {
         }
       : null;
     const lastClosedSession = await getLastClosedSession(req.tdb);
+    const chatbotIntegrationEnabled = await isChatbotPosIntegrationEnabled(req.tdb);
 
     res.json({
       categories,
       products,
       activeSession,
       lastClosedSession,
+      chatbotIntegrationEnabled,
       recentSales: await listRecentSales(req.tdb, activeSession?.id || null),
       recentMovements: await listRecentMovements(req.tdb, activeSession?.id || null),
     });
   } catch (e) {
     next(e);
+  }
+});
+
+router.get('/chatbot-orders', async (req, res, next) => {
+  try {
+    const enabled = await isChatbotPosIntegrationEnabled(req.tdb);
+    if (!enabled) return res.status(403).json({ error: 'Activa la integración de pedidos chatbot en Mi negocio para usar esta función' });
+
+    const pageSize = 10;
+    const safePage = Math.max(1, Number(req.query.page || 1) || 1);
+
+    const totalRow = await req.tdb.get(
+      `SELECT COUNT(*)::int AS c
+       FROM {s}.orders o
+       WHERE o.channel = 'chatbot'
+         AND o.status = ANY($1::text[])
+         AND (o.created_at AT TIME ZONE '${TZ}')::date = (now() AT TIME ZONE '${TZ}')::date`,
+      [Array.from(CHATBOT_IMPORTABLE_STATUSES)]
+    );
+    const total = Number(totalRow?.c || 0);
+    const totalPages = Math.max(1, Math.ceil(total / pageSize));
+    const boundedPage = Math.min(safePage, totalPages);
+    const offset = (boundedPage - 1) * pageSize;
+
+    const rows = await req.tdb.all(
+      `SELECT o.id, o.items, o.total::float AS total, o.status, o.delivery, o.notes, o.payment_method,
+              o.pickup_branch_name, o.customer_location_text, o.customer_location_resolved,
+              to_char(o.created_at AT TIME ZONE '${TZ}', 'DD Mon YYYY, HH24:MI') AS created_at,
+              c.name_enc, c.phone_enc
+       FROM {s}.orders o
+       LEFT JOIN {s}.customers c ON c.id = o.customer_id
+       WHERE o.channel = 'chatbot'
+         AND o.status = ANY($1::text[])
+         AND (o.created_at AT TIME ZONE '${TZ}')::date = (now() AT TIME ZONE '${TZ}')::date
+       ORDER BY o.id ASC
+       LIMIT $2 OFFSET $3`,
+      [Array.from(CHATBOT_IMPORTABLE_STATUSES), pageSize, offset]
+    );
+
+    const result = rows.map((row) => ({
+      id: row.id,
+      total: n(row.total),
+      status: row.status,
+      delivery: row.delivery,
+      payment_method: row.payment_method || 'cash',
+      notes: row.notes || '',
+      pickup_branch_name: row.pickup_branch_name,
+      customer_location_text: row.customer_location_text,
+      customer_location_resolved: row.customer_location_resolved,
+      created_at: row.created_at,
+      customer_name: decrypt(row.name_enc) || 'Cliente',
+      customer_phone: decrypt(row.phone_enc) || '',
+      items: JSON.parse(row.items || '[]'),
+    }));
+
+    res.json({ rows: result, page: boundedPage, pageSize, total, totalPages });
+  } catch (e) {
+    next(e);
+  }
+});
+
+router.post('/chatbot-orders/:id/import', async (req, res, next) => {
+  try {
+    const enabled = await isChatbotPosIntegrationEnabled(req.tdb);
+    if (!enabled) return res.status(403).json({ error: 'Activa la integración de pedidos chatbot en Mi negocio para usar esta función' });
+
+    const session = await getOpenSession(req.tdb);
+    if (!session) return res.status(400).json({ error: 'Abre una caja antes de importar pedidos chatbot al POS' });
+
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: 'Pedido de chatbot inválido' });
+
+    const sourceOrder = await loadChatbotOrderForImport(req.tdb, id);
+    if (!sourceOrder) return res.status(404).json({ error: 'No se encontró el pedido de chatbot' });
+    if (sourceOrder.channel !== 'chatbot') return res.status(409).json({ error: 'Este pedido ya fue integrado al POS' });
+    if (!CHATBOT_IMPORTABLE_STATUSES.has(sourceOrder.status)) {
+      return res.status(409).json({ error: 'Solo puedes integrar pedidos chatbot activos (no cancelados ni entregados)' });
+    }
+
+    const isToday = await req.tdb.get(
+      `SELECT 1 AS ok
+       FROM {s}.orders
+       WHERE id = $1
+         AND (created_at AT TIME ZONE '${TZ}')::date = (now() AT TIME ZONE '${TZ}')::date
+       LIMIT 1`,
+      [id]
+    );
+    if (!isToday) {
+      return res.status(409).json({ error: 'Solo puedes pasar a caja pedidos del día de operación' });
+    }
+
+    const sourceItems = JSON.parse(sourceOrder.items || '[]');
+    if (!Array.isArray(sourceItems) || !sourceItems.length) {
+      return res.status(400).json({ error: 'El pedido no tiene productos para cobrar en caja' });
+    }
+
+    const paymentMethod = PAYMENT_METHODS.has(sourceOrder.payment_method)
+      ? sourceOrder.payment_method
+      : 'cash';
+    const paymentBreakdown = paymentBreakdownForMethod(paymentMethod, sourceOrder.total);
+    const mergedNote = chatbotSummaryNote(sourceOrder);
+
+    const update = await req.tdb.run(
+      `UPDATE {s}.orders
+       SET channel = 'pos',
+           status = 'entregado',
+           pos_session_id = $1,
+           payment_method = $2,
+           payment_breakdown = $3,
+           cash_received = CASE WHEN $2 = 'cash' THEN total ELSE NULL END,
+           cash_change = 0,
+           notes = CASE
+             WHEN COALESCE(notes, '') = '' THEN $4
+             ELSE notes || E'\n\n' || $4
+           END
+       WHERE id = $5
+         AND channel = 'chatbot'
+         AND status = ANY($6::text[])
+         AND (created_at AT TIME ZONE '${TZ}')::date = (now() AT TIME ZONE '${TZ}')::date
+       RETURNING id, total::float AS total, payment_method, payment_breakdown, cash_received::float AS cash_received,
+                 cash_change::float AS cash_change, notes, items,
+                 to_char(created_at AT TIME ZONE '${TZ}', 'DD Mon YYYY, HH24:MI') AS created_at`,
+      [session.id, paymentMethod, JSON.stringify(paymentBreakdown), mergedNote, id, Array.from(CHATBOT_IMPORTABLE_STATUSES)]
+    );
+
+    if (!update.rowCount) {
+      return res.status(409).json({ error: 'El pedido ya no está disponible para integrarse al POS' });
+    }
+
+    const saleRow = await req.tdb.get(
+      `SELECT id, subtotal::float AS subtotal, total::float AS total, delivery_fee::float AS delivery_fee,
+              status, payment_method, payment_breakdown, cash_received::float AS cash_received,
+              cash_change::float AS cash_change, notes, items,
+              to_char(created_at AT TIME ZONE '${TZ}', 'DD Mon YYYY, HH24:MI') AS created_at
+       FROM {s}.orders
+       WHERE id = $1`,
+      [id]
+    );
+
+    const totals = await getSessionTotals(req.tdb, session.id);
+    res.json({
+      ok: true,
+      sale: {
+        ...saleRow,
+        subtotal: Number(saleRow.subtotal || saleRow.total || 0),
+        deliveryFee: Number(saleRow.delivery_fee || 0),
+        items: JSON.parse(saleRow.items || '[]'),
+        payment_breakdown: saleRow.payment_breakdown ? JSON.parse(saleRow.payment_breakdown) : null,
+      },
+      totals,
+      expectedCash: expectedCashForSession(session, totals),
+      recentSales: await listRecentSales(req.tdb, session.id),
+    });
+  } catch (e) {
+    console.error('[pos][chatbot-import] error:', e?.message || e);
+    return res.status(500).json({ error: e?.message || 'No se pudo pasar el pedido a caja' });
   }
 });
 
@@ -428,24 +642,30 @@ async function createPosSale(req, res, next) {
       };
     });
     const subtotal = n(saleItems.reduce((sum, item) => sum + item.price * item.qty, 0));
+    const isDelivery = Boolean(req.body?.isDelivery);
+    const deliveryFee = isDelivery ? Math.max(0, n(req.body?.deliveryFee)) : 0;
+    const deliveryType = isDelivery ? 'domicilio' : 'mostrador';
+    const total = n(subtotal + deliveryFee);
     const paymentMethod = String(req.body?.paymentMethod || '').trim();
-    const payment = normalizePayment(paymentMethod, req.body?.payments || {}, subtotal, req.body?.cashReceived);
+    const payment = normalizePayment(paymentMethod, req.body?.payments || {}, total, req.body?.cashReceived);
     const notes = String(req.body?.notes || '').trim().slice(0, 240);
     const row = await req.tdb.get(
       `INSERT INTO {s}.orders
-       (customer_id, items, subtotal, total, status, channel, delivery, notes, payment_method, payment_breakdown, cash_received, cash_change, pos_session_id)
-       VALUES (NULL, $1, $2, $3, 'entregado', 'pos', 'mostrador', $4, $5, $6, $7, $8, $9)
+       (customer_id, items, subtotal, total, status, channel, delivery, notes, payment_method, payment_breakdown, cash_received, cash_change, pos_session_id, delivery_fee)
+       VALUES (NULL, $1, $2, $3, 'entregado', 'pos', $4, $5, $6, $7, $8, $9, $10, $11)
        RETURNING id`,
       [
         JSON.stringify(saleItems),
         subtotal,
-        subtotal,
+        total,
+        deliveryType,
         notes,
         payment.method,
         JSON.stringify(payment.breakdown),
         payment.cashReceived || null,
         payment.cashChange || null,
         session.id,
+        deliveryFee,
       ]
     );
     const totals = await getSessionTotals(req.tdb, session.id);
@@ -453,7 +673,9 @@ async function createPosSale(req, res, next) {
       ok: true,
       sale: {
         id: row.id,
-        total: subtotal,
+        subtotal,
+        deliveryFee,
+        total,
         items: saleItems,
         paymentMethod: payment.method,
         paymentBreakdown: payment.breakdown,
