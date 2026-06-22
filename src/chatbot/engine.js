@@ -319,6 +319,77 @@ function parseGeoInput(input) {
   return { lat, lng, label };
 }
 
+function parseUpsellProductIds(raw) {
+  const text = String(raw || '').trim();
+  if (!text) return [];
+  try {
+    const parsed = JSON.parse(text);
+    if (Array.isArray(parsed)) {
+      return [...new Set(parsed.map((id) => Number(id)).filter((id) => Number.isInteger(id) && id > 0))];
+    }
+  } catch {}
+  return [...new Set(text.split(',').map((id) => Number(id.trim())).filter((id) => Number.isInteger(id) && id > 0))];
+}
+
+function parseUpsellOffers(raw) {
+  const text = String(raw || '').trim();
+  if (!text) return [];
+  try {
+    const parsed = JSON.parse(text);
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .map((offer, idx) => {
+        const question = String(offer?.question || '').trim();
+        const productIds = parseUpsellProductIds(offer?.productIds || []);
+        if (!question || !productIds.length) return null;
+        return {
+          id: String(offer?.id || `upsell_offer_${idx + 1}`),
+          question,
+          productIds,
+        };
+      })
+      .filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+function normalizeInfoUrl(raw) {
+  const text = String(raw || '').trim();
+  if (!text) return '';
+  if (/^https?:\/\//i.test(text)) return text;
+  if (/^[\w.-]+\.[a-z]{2,}(\/.*)?$/i.test(text)) return `https://${text}`;
+  return '';
+}
+
+function parseChatbotInfoOptions(raw) {
+  const text = String(raw || '').trim();
+  if (!text) return [];
+  try {
+    const parsed = JSON.parse(text);
+    if (!Array.isArray(parsed)) return [];
+    const used = new Set();
+    return parsed
+      .map((item, idx) => {
+        const label = String(item?.label || '').trim().slice(0, 42);
+        const message = String(item?.message || '').trim().slice(0, 300);
+        const url = normalizeInfoUrl(item?.url || '');
+        let id = String(item?.id || `info_${idx + 1}`)
+          .toLowerCase()
+          .replace(/[^a-z0-9_-]/g, '')
+          .slice(0, 48);
+        if (!id) id = `info_${idx + 1}`;
+        while (used.has(id)) id = `${id}_${Math.random().toString(36).slice(2, 5)}`;
+        used.add(id);
+        if (!label || (!message && !url)) return null;
+        return { id, label, message, url };
+      })
+      .filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
 function mapsUrl(lat, lng) {
   return `https://www.google.com/maps?q=${lat},${lng}`;
 }
@@ -337,6 +408,7 @@ function pricingSummary(state, currency) {
   const subtotal = cartTotal(state.cart);
   const deliveryFee = Number(state.customer?.deliveryFee || 0);
   const deliveryLabel = deliveryZoneServiceLabel(state.customer);
+  const orderNote = String(state.customer?.orderNote || '').trim();
   const lines = state.cart.map((it) => `• ${it.qty}x ${it.name} — ${money(it.price * it.qty, currency)}`);
   return [
     '🛒 *Tu pedido:*',
@@ -345,6 +417,7 @@ function pricingSummary(state, currency) {
     `*Subtotal: ${money(subtotal, currency)}*`,
     ...(deliveryFee > 0 ? [`*Envío${deliveryLabel ? ` (${deliveryLabel})` : ''}: ${money(deliveryFee, currency)}*`] : []),
     `*Total: ${money(subtotal + deliveryFee, currency)}*`,
+    ...(orderNote ? [`*🧾 Nota del pedido: ${orderNote}*`] : []),
   ].join('\n');
 }
 
@@ -369,8 +442,12 @@ function normalizeWhatsappNumber(raw) {
   return digits;
 }
 
-function mainOptions(cart) {
+function mainOptions(cart, infoOptions = []) {
   const opts = [{ label: '📋 Ver menú', value: 'menu' }];
+  (infoOptions || []).forEach((item) => {
+    if (!item?.label || !item?.id) return;
+    opts.push({ label: item.label, value: `info_${item.id}` });
+  });
   if (cart.length) {
     opts.push({ label: '🛒 Ver carrito', value: 'cart' });
     opts.push({ label: '✅ Sería todo, gracias.', value: 'checkout' });
@@ -486,6 +563,7 @@ function buildOrderText(businessName, cart, customer, delivery, currency) {
   const subtotal = cartTotal(cart);
   const deliveryFee = Number(customer?.deliveryFee || 0);
   const deliveryLabel = deliveryZoneServiceLabel(customer);
+  const orderNote = String(customer?.orderNote || '').trim();
   const lines = [
     `🧾 *Nuevo pedido — ${businessName}*`,
     '',
@@ -494,6 +572,7 @@ function buildOrderText(businessName, cart, customer, delivery, currency) {
     `*Subtotal: ${money(subtotal, currency)}*`,
     ...(deliveryFee > 0 ? [`*Envío${deliveryLabel ? ` (${deliveryLabel})` : ''}: ${money(deliveryFee, currency)}*`] : []),
     `*Total: ${money(subtotal + deliveryFee, currency)}*`,
+    ...(orderNote ? [`*🧾 Nota del pedido: ${orderNote}*`] : []),
     '',
     `👤 ${customer.name}`,
     `📞 ${customer.phone}`,
@@ -559,6 +638,33 @@ async function handleMessage(t, slug, sessionId, rawInput) {
     transfer: (await getSetting(t, 'chatbot_payment_pickup_transfer', '0')) === '1',
     card: (await getSetting(t, 'chatbot_payment_pickup_card', '0')) === '1',
   };
+  const upsellEnabled = (await getSetting(t, 'chatbot_upsell_enabled', '0')) === '1';
+  const legacyUpsellQuestion = String(
+    await getSetting(t, 'chatbot_upsell_question', '¿Deseas agregar alguno de estos productos a tu pedido?')
+  ).trim() || '¿Deseas agregar alguno de estos productos a tu pedido?';
+  const legacyUpsellProductIds = parseUpsellProductIds(await getSetting(t, 'chatbot_upsell_product_ids', '[]'));
+  const upsellOffersRaw = parseUpsellOffers(await getSetting(t, 'chatbot_upsell_offers_json', '[]'));
+  const chatbotInfoOptions = parseChatbotInfoOptions(await getSetting(t, 'chatbot_extra_options_json', '[]'));
+  const upsellOffersConfig = upsellOffersRaw.length
+    ? upsellOffersRaw
+    : (legacyUpsellProductIds.length
+      ? [{ id: 'legacy_offer_1', question: legacyUpsellQuestion, productIds: legacyUpsellProductIds }]
+      : []);
+  const upsellCatalog = upsellEnabled && upsellOffersConfig.length ? await activeProducts(t) : [];
+  const upsellById = new Map(upsellCatalog.map((p) => [Number(p.id), p]));
+  const upsellOffers = upsellOffersConfig
+    .map((offer) => {
+      const products = offer.productIds
+        .map((id) => upsellById.get(Number(id)))
+        .filter(Boolean);
+      if (!products.length) return null;
+      return {
+        id: String(offer.id),
+        question: String(offer.question || legacyUpsellQuestion).trim() || legacyUpsellQuestion,
+        products,
+      };
+    })
+    .filter(Boolean);
 
   let state = (await getState(t, sessionId)) || { step: 'start', cart: [], customer: {}, currency };
   state.currency = currency;
@@ -570,6 +676,11 @@ async function handleMessage(t, slug, sessionId, rawInput) {
     await saveState(t, sessionId, state);
     reply.cart = { items: state.cart, total: cartTotal(state.cart), totalLabel: money(cartTotal(state.cart), currency) };
     return reply;
+  };
+
+  const resetUpsellProgress = () => {
+    state.upsellDoneOfferIds = [];
+    state.upsellCurrentOfferId = '';
   };
 
   const goToPaymentOrConfirm = () => {
@@ -588,18 +699,116 @@ async function handleMessage(t, slug, sessionId, rawInput) {
     reply.options = chatPaymentOptions.map((opt) => ({ label: opt.label, value: opt.value }));
   };
 
+  const availableUpsellOffer = () => {
+    if (!upsellEnabled || !upsellOffers.length) return null;
+    const cartIds = new Set((state.cart || []).map((it) => Number(it.id)));
+    const doneIds = new Set((state.upsellDoneOfferIds || []).map((id) => String(id)));
+
+    for (const offer of upsellOffers) {
+      if (doneIds.has(String(offer.id))) continue;
+      const products = (offer.products || []).filter((p) => !cartIds.has(Number(p.id))).slice(0, 6);
+      if (!products.length) continue;
+      return { id: String(offer.id), question: offer.question, products };
+    }
+    return null;
+  };
+
+  const upsellOptions = (offer) => {
+    const opts = (offer?.products || []).map((p) => ({
+      label: `➕ ${p.name} (${money(p.price, currency)})`,
+      value: `upsell_add|${offer.id}|${p.id}`,
+    }));
+    opts.push({ label: '➡️ Siguiente ofrecimiento', value: `upsell_next|${offer.id}` });
+    opts.push({ label: '✅ Sería todo, gracias.', value: 'upsell_continue' });
+    return opts;
+  };
+
+  const continueCheckoutFlowCore = () => {
+    const hasReturningData =
+      Boolean(state.customer?.name) &&
+      Boolean(state.customer?.phone) &&
+      state.delivery === 'domicilio' &&
+      Boolean(state.customer?.address);
+
+    if (hasReturningData) {
+      reply.messages = ['Usaré tus datos guardados del último pedido para agilizar ✅'];
+      goToPaymentOrConfirm();
+      return;
+    }
+
+    state.step = 'checkout_identity_choice';
+    reply.messages = ['Antes de finalizar, ¿ya habías pedido con nosotros?'];
+    reply.options = [
+      { label: '🔁 Ya he pedido', value: 'returning_customer' },
+      { label: '👤 Soy cliente nuevo', value: 'checkout_new_customer' },
+    ];
+  };
+
+  const continueCheckoutFlow = () => {
+    const offerable = availableUpsellOffer();
+    if (offerable) {
+      state.step = 'upsell_offer';
+      state.upsellCurrentOfferId = offerable.id;
+      reply.messages = [offerable.question];
+      reply.options = upsellOptions(offerable);
+      return;
+    }
+    continueCheckoutFlowCore();
+  };
+
+  const markUpsellOfferDone = (offerId) => {
+    if (!offerId) return;
+    const done = new Set((state.upsellDoneOfferIds || []).map((id) => String(id)));
+    done.add(String(offerId));
+    state.upsellDoneOfferIds = [...done];
+    if (String(state.upsellCurrentOfferId || '') === String(offerId)) {
+      state.upsellCurrentOfferId = '';
+    }
+  };
+
+  const showPostSendOptions = () => {
+    reply.options = [
+      { label: '➕ Agregar más', value: 'menu' },
+      { label: '✅ Sería todo, gracias.', value: 'checkout' },
+      { label: '🛒 Ver carrito', value: 'cart' },
+    ];
+  };
+
+  const askOrderNoteAfterSend = () => {
+    state.step = 'ask_order_note_after_send_choice';
+    reply.messages.push('¿Deseas agregar una nota a tu pedido?');
+    reply.options = [
+      { label: '✅ Sí', value: 'order_note_yes' },
+      { label: '❌ No', value: 'order_note_no' },
+    ];
+  };
+
   // Comandos globales
   if (!input || lower === 'start' || lower === 'hola' || lower === 'inicio') {
     state.step = 'start';
     state.returningProfile = null;
+    resetUpsellProgress();
     reply.messages = [await getSetting(t, 'welcome_message', `¡Hola! Bienvenido a ${businessName} 👋`)];
-    reply.options = mainOptions(state.cart);
+    reply.options = mainOptions(state.cart, chatbotInfoOptions);
+    return finish();
+  }
+  if (lower.startsWith('info_')) {
+    const selectedId = String(lower.slice('info_'.length)).trim();
+    const selected = chatbotInfoOptions.find((item) => String(item.id) === selectedId);
+    if (!selected) {
+      reply.messages = ['Esa opción ya no está disponible.'];
+      reply.options = mainOptions(state.cart, chatbotInfoOptions);
+      return finish();
+    }
+    if (selected.message) reply.messages.push(selected.message);
+    if (selected.url) reply.messages.push(`🔗 ${selected.url}`);
+    reply.options = mainOptions(state.cart, chatbotInfoOptions);
     return finish();
   }
   if (lower === 'returning_customer') {
     if (!deliveryEnabled) {
       reply.messages = ['En este momento el negocio no tiene entregas a domicilio activas, así que no puedo recuperar dirección automática. Puedes pedir normalmente desde el menú.'];
-      reply.options = mainOptions(state.cart);
+      reply.options = mainOptions(state.cart, chatbotInfoOptions);
       return finish();
     }
     state.step = 'ask_returning_phone';
@@ -624,8 +833,9 @@ async function handleMessage(t, slug, sessionId, rawInput) {
   if (lower === 'clear_cart') {
     state.cart = [];
     state.step = 'start';
+    resetUpsellProgress();
     reply.messages = ['Listo, vacié tu carrito. ¿Empezamos de nuevo? 😊'];
-    reply.options = mainOptions(state.cart);
+    reply.options = mainOptions(state.cart, chatbotInfoOptions);
     return finish();
   }
 
@@ -664,6 +874,8 @@ async function handleMessage(t, slug, sessionId, rawInput) {
         }
       }
 
+      resetUpsellProgress();
+
       state.step = 'start';
       const summary = cartSummary(state.cart, currency);
       reply.messages = [
@@ -672,11 +884,7 @@ async function handleMessage(t, slug, sessionId, rawInput) {
           : 'No se pudo aplicar la selección.',
         summary,
       ];
-      reply.options = [
-        { label: '➕ Agregar más', value: 'menu' },
-        { label: '✅ Sería todo, gracias.', value: 'checkout' },
-        { label: '🛒 Ver carrito', value: 'cart' },
-      ];
+      askOrderNoteAfterSend();
       return finish();
     }
   }
@@ -698,21 +906,63 @@ async function handleMessage(t, slug, sessionId, rawInput) {
           state.cart.push({ id: prod.id, name: prod.name, price: prod.price, qty: finalQty });
         }
 
+        resetUpsellProgress();
+
         state.step = 'start';
         const lineTotal = money(finalQty * Number(prod.price || 0), currency);
         if (finalQty <= 0) {
           reply.messages = [`🗑️ Quité *${prod.name}* de tu pedido.`, cartSummary(state.cart, currency)];
+          showPostSendOptions();
         } else {
           reply.messages = [`✅ Agregado al checkout: *${finalQty}x ${prod.name}* = *${lineTotal}*.`, cartSummary(state.cart, currency)];
+          askOrderNoteAfterSend();
         }
-        reply.options = [
-          { label: '➕ Agregar más', value: 'menu' },
-          { label: '✅ Sería todo, gracias.', value: 'checkout' },
-          { label: '🛒 Ver carrito', value: 'cart' },
-        ];
         return finish();
       }
     }
+  }
+
+  if (state.step === 'ask_order_note_after_send_choice') {
+    if (lower === 'order_note_yes') {
+      state.step = 'ask_order_note_after_send_text';
+      reply.messages = ['Perfecto, escribe tus instrucciones para tu pedido (ej: hamburguesa sin cebolla).'];
+      reply.options = [{ label: 'Omitir nota', value: 'order_note_skip' }];
+      return finish();
+    }
+    if (lower === 'order_note_no') {
+      state.customer.orderNote = '';
+      continueCheckoutFlow();
+      return finish();
+    }
+    reply.messages = ['Elige una opción para continuar:'];
+    reply.options = [
+      { label: '✅ Sí', value: 'order_note_yes' },
+      { label: '❌ No', value: 'order_note_no' },
+    ];
+    return finish();
+  }
+
+  if (state.step === 'ask_order_note_after_send_text') {
+    if (lower === 'order_note_skip') {
+      state.customer.orderNote = '';
+      state.step = 'start';
+      reply.messages = ['Listo, continuamos sin nota.'];
+      showPostSendOptions();
+      return finish();
+    }
+
+    const note = String(input || '').trim();
+    if (note.length < 3) {
+      reply.messages = ['Escribe una instrucción más clara o toca "Omitir nota".'];
+      reply.options = [{ label: 'Omitir nota', value: 'order_note_skip' }];
+      return finish();
+    }
+
+    state.customer.orderNote = note.slice(0, 220);
+    state.step = 'start';
+    reply.messages = [`✅ Nota agregada: ${state.customer.orderNote}`, cartSummary(state.cart, currency)];
+    showPostSendOptions();
+    return finish();
   }
 
   if (lower.startsWith('prod_dec_')) {
@@ -725,6 +975,7 @@ async function handleMessage(t, slug, sessionId, rawInput) {
           state.cart = state.cart.filter((it) => it.id !== id);
         }
       }
+      resetUpsellProgress();
       state.step = 'choosing_product';
       Object.assign(reply, await showProducts(t, state, state.currentCategoryId));
       return finish();
@@ -739,6 +990,7 @@ async function handleMessage(t, slug, sessionId, rawInput) {
       const existing = state.cart.find((it) => it.id === prod.id);
       if (existing) existing.qty += 1;
       else state.cart.push({ id: prod.id, name: prod.name, price: prod.price, qty: 1 });
+      resetUpsellProgress();
 
       state.step = 'choosing_product';
       const menuReply = await showProducts(t, state, state.currentCategoryId);
@@ -757,6 +1009,7 @@ async function handleMessage(t, slug, sessionId, rawInput) {
       const existing = state.cart.find((it) => it.id === state.pendingProduct.id);
       if (existing) existing.qty += qty;
       else state.cart.push({ ...state.pendingProduct, qty });
+      resetUpsellProgress();
       const name = state.pendingProduct.name;
       state.pendingProduct = null;
       state.step = 'start';
@@ -901,24 +1154,112 @@ async function handleMessage(t, slug, sessionId, rawInput) {
       return finish();
     }
 
-    const hasReturningData =
-      Boolean(state.customer?.name) &&
-      Boolean(state.customer?.phone) &&
-      state.delivery === 'domicilio' &&
-      Boolean(state.customer?.address);
-
-    if (hasReturningData) {
-      reply.messages = ['Usaré tus datos guardados del último pedido para agilizar ✅'];
-      goToPaymentOrConfirm();
+    if (String(state.customer.orderNote || '').trim()) {
+      continueCheckoutFlow();
       return finish();
     }
 
-    state.step = 'checkout_identity_choice';
-    reply.messages = ['Antes de finalizar, ¿ya habías pedido con nosotros?'];
+    state.step = 'ask_order_note_choice';
+    reply.messages = ['¿Deseas agregar una nota a tu pedido? (Ej: hamburguesa sin cebolla)'];
     reply.options = [
-      { label: '🔁 Ya he pedido', value: 'returning_customer' },
-      { label: '👤 Soy cliente nuevo', value: 'checkout_new_customer' },
+      { label: '✅ Sí, agregar nota', value: 'order_note_yes' },
+      { label: '❌ No, continuar', value: 'order_note_no' },
     ];
+    return finish();
+  }
+
+  if (state.step === 'ask_order_note_choice') {
+    if (lower === 'order_note_yes') {
+      state.step = 'ask_order_note_text';
+      reply.messages = ['Perfecto. Escribe tus instrucciones para el pedido 📝'];
+      reply.options = [{ label: 'Omitir nota', value: 'order_note_skip' }];
+      return finish();
+    }
+    if (lower === 'order_note_no') {
+      state.customer.orderNote = '';
+      continueCheckoutFlow();
+      return finish();
+    }
+    reply.messages = ['Elige una opción para continuar:'];
+    reply.options = [
+      { label: '✅ Sí, agregar nota', value: 'order_note_yes' },
+      { label: '❌ No, continuar', value: 'order_note_no' },
+    ];
+    return finish();
+  }
+
+  if (state.step === 'ask_order_note_text') {
+    if (lower === 'order_note_skip') {
+      state.customer.orderNote = '';
+      continueCheckoutFlow();
+      return finish();
+    }
+
+    const note = String(input || '').trim();
+    if (note.length < 3) {
+      reply.messages = ['Escribe una nota un poco más clara o toca "Omitir nota".'];
+      reply.options = [{ label: 'Omitir nota', value: 'order_note_skip' }];
+      return finish();
+    }
+
+    state.customer.orderNote = note.slice(0, 220);
+    continueCheckoutFlow();
+    return finish();
+  }
+
+  if (state.step === 'upsell_offer') {
+    if (lower === 'upsell_continue') {
+      state.upsellDoneOfferIds = upsellOffers.map((offer) => String(offer.id));
+      state.upsellCurrentOfferId = '';
+      continueCheckoutFlowCore();
+      return finish();
+    }
+
+    if (lower.startsWith('upsell_next|')) {
+      const offerId = String(lower.split('|')[1] || '').trim();
+      markUpsellOfferDone(offerId);
+      continueCheckoutFlow();
+      return finish();
+    }
+
+    if (lower.startsWith('upsell_add|')) {
+      const parts = lower.split('|');
+      const offerId = String(parts[1] || '').trim();
+      const productId = Number(parts[2]);
+      const offer = upsellOffers.find((item) => String(item.id) === offerId);
+      const product = offer?.products?.find((item) => Number(item.id) === productId);
+      if (!offer || !product) {
+        const fallback = availableUpsellOffer();
+        reply.messages = ['Ese ofrecimiento ya no está disponible, intenta con otra opción.'];
+        if (fallback) reply.options = upsellOptions(fallback);
+        else reply.options = [{ label: '✅ Sería todo, gracias.', value: 'upsell_continue' }];
+        return finish();
+      }
+
+      const existing = state.cart.find((item) => Number(item.id) === Number(product.id));
+      if (existing) existing.qty += 1;
+      else state.cart.push({ id: product.id, name: product.name, price: product.price, qty: 1 });
+
+      markUpsellOfferDone(offerId);
+      reply.messages = [
+        `✅ Excelente elección: agregué *${product.name}* a tu pedido.`,
+        cartSummary(state.cart, currency),
+      ];
+      const nextOffer = availableUpsellOffer();
+      if (nextOffer) {
+        state.step = 'upsell_offer';
+        state.upsellCurrentOfferId = nextOffer.id;
+        reply.messages.push(nextOffer.question);
+        reply.options = upsellOptions(nextOffer);
+      } else {
+        continueCheckoutFlowCore();
+      }
+      return finish();
+    }
+
+    const offerables = availableUpsellOffer();
+    reply.messages = ['Elige una opción para continuar:'];
+    reply.options = offerables ? upsellOptions(offerables) : [{ label: '✅ Sería todo, gracias.', value: 'upsell_continue' }];
     return finish();
   }
 
@@ -1051,24 +1392,10 @@ async function handleMessage(t, slug, sessionId, rawInput) {
       state.customer.branchName = chosen.name;
       state.customer.branchAddress = chosen.address;
       state.customer.branchReference = chosen.reference;
-      if (locationEnabled) {
-        state.step = 'ask_location_optional';
-        reply.messages = [
-          `Perfecto, recogerás en *${chosen.name}* ✅\n${chosen.address}${chosen.reference ? `\nReferencia: ${chosen.reference}` : ''}`,
-          '¿Quieres compartir tu ubicación para ubicarte más fácil? (Opcional)',
-        ];
-        reply.options = [
-          { label: '📍 Compartir ubicación', value: 'share_location' },
-          { label: 'Omitir', value: 'skip_location' },
-        ];
-      } else {
-        state.step = 'confirm';
-        reply.messages = [
-          `Perfecto, recogerás en *${chosen.name}* ✅\n${chosen.address}${chosen.reference ? `\nReferencia: ${chosen.reference}` : ''}`,
-          confirmText(state, businessName, currency),
-        ];
-        reply.options = confirmOptions();
-      }
+      reply.messages = [
+        `Perfecto, recogerás en *${chosen.name}* ✅\n${chosen.address}${chosen.reference ? `\nReferencia: ${chosen.reference}` : ''}`,
+      ];
+      goToPaymentOrConfirm();
       return finish();
     }
     reply.messages = ['Elige una sucursal para continuar:'];
@@ -1310,12 +1637,48 @@ async function handleMessage(t, slug, sessionId, rawInput) {
       reply.options = [{ label: '🆕 Hacer otro pedido', value: 'start' }];
       return finish();
     }
+    if (lower === 'confirm_edit_note') {
+      state.step = 'confirm_edit_note_text';
+      reply.messages = ['Escribe la nota de tu pedido. Ejemplo: hamburguesa sin cebolla.'];
+      reply.options = [{ label: '🗑️ Quitar nota', value: 'confirm_remove_note' }];
+      return finish();
+    }
+    if (lower === 'confirm_remove_note') {
+      state.customer.orderNote = '';
+      state.step = 'confirm';
+      reply.messages = ['✅ Nota eliminada.', confirmText(state, businessName, currency)];
+      reply.options = confirmOptions();
+      return finish();
+    }
     if (lower === 'confirm_no') {
       state.step = 'start';
       reply.messages = ['Sin problema, tu carrito sigue guardado. ¿Qué deseas hacer?'];
-      reply.options = mainOptions(state.cart);
+      reply.options = mainOptions(state.cart, chatbotInfoOptions);
       return finish();
     }
+  }
+
+  if (state.step === 'confirm_edit_note_text') {
+    if (lower === 'confirm_remove_note') {
+      state.customer.orderNote = '';
+      state.step = 'confirm';
+      reply.messages = ['✅ Nota eliminada.', confirmText(state, businessName, currency)];
+      reply.options = confirmOptions();
+      return finish();
+    }
+
+    const note = String(input || '').trim();
+    if (note.length < 3) {
+      reply.messages = ['Escribe una nota más clara o toca "Quitar nota".'];
+      reply.options = [{ label: '🗑️ Quitar nota', value: 'confirm_remove_note' }];
+      return finish();
+    }
+
+    state.customer.orderNote = note.slice(0, 220);
+    state.step = 'confirm';
+    reply.messages = ['✅ Nota actualizada.', confirmText(state, businessName, currency)];
+    reply.options = confirmOptions();
+    return finish();
   }
 
   // Texto libre: busca producto por nombre
@@ -1325,6 +1688,7 @@ async function handleMessage(t, slug, sessionId, rawInput) {
     const existing = state.cart.find((it) => it.id === match.id);
     if (existing) existing.qty += 1;
     else state.cart.push({ id: match.id, name: match.name, price: match.price, qty: 1 });
+    resetUpsellProgress();
     reply.messages = [`¡Agregado! 1x *${match.name}* 🎉\n\n${cartSummary(state.cart, currency)}`];
     reply.options = [
       { label: '➕ Agregar más', value: 'menu' },
@@ -1336,7 +1700,7 @@ async function handleMessage(t, slug, sessionId, rawInput) {
   // IA opcional para preguntas libres
   const ai = await aiFallback(t, businessName, input);
   reply.messages = [ai || 'No estoy seguro de haber entendido 🤔 ¿Te ayudo con alguna de estas opciones?'];
-  reply.options = mainOptions(state.cart);
+  reply.options = mainOptions(state.cart, chatbotInfoOptions);
   return finish();
 }
 
@@ -1360,6 +1724,7 @@ function confirmText(state, businessName, currency) {
 function confirmOptions() {
   return [
     { label: '✅ Sí, confirmar', value: 'confirm_yes' },
+    { label: '📝 Editar nota', value: 'confirm_edit_note' },
     { label: '❌ No, regresar', value: 'confirm_no' },
   ];
 }

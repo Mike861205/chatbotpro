@@ -97,7 +97,36 @@
     }
     .cart-bar button:active { transform: scale(0.95); }
     /* ── Messages ── */
-    .messages { flex: 1; overflow-y: auto; padding: 20px 16px 14px; display: flex; flex-direction: column; gap: 10px; scroll-behavior: smooth; }
+    .messages { flex: 1; overflow-y: auto; padding: 20px 16px 14px; display: flex; flex-direction: column; gap: 10px; scroll-behavior: smooth; position: relative; z-index: 1; }
+    .floating-bg {
+      position: absolute;
+      inset: 0;
+      overflow: hidden;
+      pointer-events: none;
+      opacity: 0.12;
+      z-index: 0;
+    }
+    .floating-icon {
+      position: absolute;
+      font-size: 64px;
+      opacity: 0.5;
+      user-select: none;
+      animation: float 6s ease-in-out infinite;
+    }
+    .floating-icon:nth-child(1) { left: 8%; top: 10%; animation-delay: 0s; animation-duration: 7.2s; }
+    .floating-icon:nth-child(2) { right: 12%; top: 15%; animation-delay: 1s; animation-duration: 8.1s; }
+    .floating-icon:nth-child(3) { left: 15%; bottom: 20%; animation-delay: 2s; animation-duration: 6.8s; }
+    .floating-icon:nth-child(4) { right: 8%; bottom: 15%; animation-delay: 0.5s; animation-duration: 7.5s; }
+    .floating-icon:nth-child(5) { left: 20%; top: 40%; animation-delay: 1.5s; animation-duration: 6.5s; }
+    .floating-icon:nth-child(6) { right: 18%; top: 50%; animation-delay: 2.5s; animation-duration: 7.8s; }
+    .floating-icon:nth-child(7) { left: 10%; bottom: 30%; animation-delay: 3s; animation-duration: 8s; }
+    .floating-icon:nth-child(8) { right: 5%; top: 35%; animation-delay: 1.2s; animation-duration: 6.9s; }
+    @keyframes float {
+      0%, 100% { transform: translateY(0px) rotate(0deg); }
+      25% { transform: translateY(-15px) rotate(2deg); }
+      50% { transform: translateY(-8px) rotate(-1deg); }
+      75% { transform: translateY(-12px) rotate(1deg); }
+    }
     .msg {
       max-width: 84%; padding: 12px 16px; border-radius: 20px; font-size: 14.5px; line-height: 1.55;
       white-space: pre-wrap; word-wrap: break-word; animation: popIn 0.3s var(--ease);
@@ -110,6 +139,18 @@
       box-shadow: 0 4px 14px color-mix(in srgb, var(--primary) 35%, transparent);
     }
     .msg b { font-weight: 800; }
+    .msg .order-note-highlight {
+      display: inline-block;
+      margin-top: 6px;
+      font-size: 16.5px;
+      font-weight: 900;
+      letter-spacing: -0.15px;
+      color: #111827;
+      background: #fff4dc;
+      border: 1px solid #ffd08a;
+      border-radius: 10px;
+      padding: 5px 9px;
+    }
     /* ── Product cards ── */
     .prods { display: flex; flex-direction: column; gap: 9px; align-self: stretch; animation: popIn 0.3s var(--ease); }
     .prod {
@@ -194,14 +235,64 @@
     .bulk-send-btn:hover { transform: scale(1.03); }
     .bulk-send-btn:disabled { opacity: .5; cursor: not-allowed; transform: none; box-shadow: none; }
     /* ── Quick replies ── */
-    .options { display: flex; flex-wrap: wrap; gap: 8px; align-self: flex-start; animation: popIn 0.35s var(--ease); }
-    .opt {
-      background: #fff; border: 1.5px solid color-mix(in srgb, var(--primary) 45%, #fff); color: var(--primary);
-      border-radius: 999px; padding: 9px 17px; font-size: 13.5px; font-weight: 700; font-family: inherit;
-      cursor: pointer; transition: all 0.15s var(--ease); box-shadow: 0 2px 6px rgba(15,18,32,0.05);
+    .options {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(135px, 1fr));
+      gap: 9px;
+      align-self: stretch;
+      width: 100%;
+      animation: popIn 0.35s var(--ease);
     }
-    .opt:hover { background: var(--primary); color: #fff; border-color: var(--primary); transform: translateY(-1px); }
+    .opt {
+      position: relative;
+      overflow: hidden;
+      background: linear-gradient(140deg, color-mix(in srgb, var(--primary) 10%, #fff), #ffffff 62%);
+      border: 1.5px solid color-mix(in srgb, var(--primary) 34%, #dce3f4);
+      color: color-mix(in srgb, var(--primary) 88%, #ffffff);
+      border-radius: 14px;
+      min-height: 42px;
+      padding: 10px 14px;
+      font-size: 13px;
+      font-weight: 800;
+      letter-spacing: 0.15px;
+      font-family: inherit;
+      cursor: pointer;
+      text-align: center;
+      text-shadow: 0 0 12px color-mix(in srgb, var(--primary) 36%, transparent);
+      transition: all 0.18s var(--ease);
+      box-shadow: 0 3px 10px rgba(15,18,32,0.07), inset 0 1px 0 rgba(255,255,255,0.78);
+    }
+    .opt::after {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background: linear-gradient(120deg, transparent, rgba(255,255,255,0.42), transparent 62%);
+      opacity: 0;
+      transition: opacity 0.18s var(--ease);
+      pointer-events: none;
+    }
+    .opt:nth-child(3n+1) {
+      background: linear-gradient(140deg, color-mix(in srgb, var(--primary) 8%, #fff), #ffffff 60%);
+    }
+    .opt:nth-child(3n+2) {
+      background: linear-gradient(140deg, color-mix(in srgb, var(--primary) 12%, #fff), #ffffff 62%);
+    }
+    .opt:nth-child(3n) {
+      background: linear-gradient(140deg, color-mix(in srgb, var(--primary) 16%, #fff), #ffffff 64%);
+    }
+    .opt:hover {
+      background: linear-gradient(140deg, color-mix(in srgb, var(--primary) 22%, #fff), color-mix(in srgb, var(--primary) 12%, #fff));
+      color: color-mix(in srgb, var(--primary) 96%, #fff);
+      border-color: color-mix(in srgb, var(--primary) 56%, #bfc9e2);
+      transform: translateY(-2px);
+      box-shadow: 0 10px 20px color-mix(in srgb, var(--primary) 28%, transparent), inset 0 1px 0 rgba(255,255,255,0.82);
+    }
+    .opt:hover::after { opacity: 1; }
     .opt:active { transform: scale(0.96); }
+    @media (max-width: 430px) {
+      .options { grid-template-columns: 1fr 1fr; }
+      .opt { font-size: 12.5px; padding: 9px 12px; }
+    }
     /* ── WhatsApp CTA ── */
     .wa-btn {
       display: flex; align-items: center; justify-content: center; gap: 9px;
@@ -258,7 +349,18 @@
       <span class="ci"><i class="ph-fill ph-shopping-cart"></i><span id="cartInfo"></span></span>
       <button id="cartCheckout">Sería todo, gracias. <i class="ph-bold ph-arrow-right"></i></button>
     </div>
-    <div class="messages" id="messages"></div>
+    <div class="messages" id="messages">
+      <div class="floating-bg">
+        <div class="floating-icon">🍕</div>
+        <div class="floating-icon">💵</div>
+        <div class="floating-icon">🛵</div>
+        <div class="floating-icon">💻</div>
+        <div class="floating-icon">🍔</div>
+        <div class="floating-icon">📱</div>
+        <div class="floating-icon">🥤</div>
+        <div class="floating-icon">🍟</div>
+      </div>
+    </div>
     <div class="input-bar">
       <input type="text" id="input" placeholder="Escribe un mensaje…" maxlength="500" autocomplete="off" />
       <button id="sendBtn" title="Enviar"><i class="ph-fill ph-paper-plane-tilt"></i></button>
@@ -303,6 +405,7 @@
     function md(s) {
       return esc(s)
         .replace(/\*([^*]+)\*/g, '<b>$1</b>')
+        .replace(/<b>(🧾\s*Nota\s+del\s+pedido:[\s\S]*?)<\/b>/gi, '<span class="order-note-highlight"><b>$1</b></span>')
         .replace(/(https?:\/\/[^\s<]+)/g, '<a href="$1" target="_blank" rel="noopener noreferrer">$1</a>')
         .replace(/\n/g, '<br>');
     }
@@ -492,9 +595,36 @@
       }
 
       if (data.options && data.options.length) {
+        const optionsRaw = Array.isArray(data.options) ? data.options.slice() : [];
+        const grouped = {
+          primary: [],
+          categories: [],
+          rest: [],
+          cart: [],
+          checkout: [],
+        };
+        optionsRaw.forEach((o) => {
+          const value = String(o?.value || '');
+          if (value === 'menu') grouped.primary.push(o);
+          else if (value.startsWith('cat_')) grouped.categories.push(o);
+          else if (value === 'cart') grouped.cart.push(o);
+          else if (value === 'checkout') grouped.checkout.push(o);
+          else grouped.rest.push(o);
+        });
+        grouped.categories.sort((a, b) =>
+          String(a?.label || '').localeCompare(String(b?.label || ''), 'es', { sensitivity: 'base' })
+        );
+        const optionsOrdered = [
+          ...grouped.primary,
+          ...grouped.categories,
+          ...grouped.rest,
+          ...grouped.cart,
+          ...grouped.checkout,
+        ];
+
         const wrap = document.createElement('div');
         wrap.className = 'options';
-        data.options.forEach((o) => {
+        optionsOrdered.forEach((o) => {
           const b = document.createElement('button');
           b.className = 'opt';
           b.textContent = o.label;

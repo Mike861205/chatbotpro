@@ -81,6 +81,7 @@
         });
         const data = await res.json().catch(() => ({}));
         if (!res.ok) throw new Error(data.error || 'No se pudo iniciar sesión');
+        try { sessionStorage.setItem('cbp_auth_scope', 'cashier'); } catch {}
         location.href = data.redirectTo || '/app#pos';
       } catch (err) {
         showError(err.message || 'No se pudo iniciar sesión');

@@ -3,6 +3,9 @@ const config = require('../config');
 const { q, tdb } = require('../db');
 
 const COOKIE_NAME = 'cbp_token';
+const OWNER_COOKIE_NAME = 'cbp_owner_token';
+const CASHIER_COOKIE_NAME = 'cbp_cashier_token';
+const AUTH_SCOPE_HEADER = 'x-cbp-auth-scope';
 const SUPPORT_WHATSAPP = '526241370820';
 const SUPPORT_MESSAGE = 'tengo suspendiedo mi servicio y quiero realizar mi pago para activarlo';
 
@@ -18,21 +21,55 @@ function signToken(user, tenant) {
   );
 }
 
-function setAuthCookie(res, token) {
-  res.cookie(COOKIE_NAME, token, {
-    httpOnly: true,
-    sameSite: 'lax',
-    secure: process.env.NODE_ENV === 'production',
-    maxAge: 7 * 24 * 60 * 60 * 1000,
-  });
+function normalizeScope(raw) {
+  const val = String(raw || '').trim().toLowerCase();
+  if (val === 'owner' || val === 'cashier') return val;
+  return '';
 }
 
-function clearAuthCookie(res) {
-  res.clearCookie(COOKIE_NAME);
+function cookieNameForScope(scope) {
+  if (scope === 'cashier') return CASHIER_COOKIE_NAME;
+  return OWNER_COOKIE_NAME;
+}
+
+function cookieOptions() {
+  return {
+    httpOnly: true,
+    sameSite: 'lax',
+    path: '/',
+    secure: process.env.NODE_ENV === 'production',
+    maxAge: 7 * 24 * 60 * 60 * 1000,
+  };
+}
+
+function setAuthCookie(res, token, scope = 'owner') {
+  const normalized = normalizeScope(scope) || 'owner';
+  res.cookie(cookieNameForScope(normalized), token, cookieOptions());
+}
+
+function clearAuthCookie(res, scope = 'all') {
+  const normalized = normalizeScope(scope);
+  const clearOpts = { path: '/' };
+  if (!normalized || scope === 'all') {
+    res.clearCookie(OWNER_COOKIE_NAME, clearOpts);
+    res.clearCookie(CASHIER_COOKIE_NAME, clearOpts);
+    // Compatibilidad con sesiones antiguas
+    res.clearCookie(COOKIE_NAME, clearOpts);
+    return;
+  }
+  res.clearCookie(cookieNameForScope(normalized), clearOpts);
 }
 
 async function requireAuth(req, res, next) {
-  const token = req.cookies[COOKIE_NAME];
+  const requestedScope = normalizeScope(req.get(AUTH_SCOPE_HEADER));
+  let token = '';
+  if (requestedScope === 'owner') {
+    token = req.cookies[OWNER_COOKIE_NAME] || req.cookies[COOKIE_NAME] || '';
+  } else if (requestedScope === 'cashier') {
+    token = req.cookies[CASHIER_COOKIE_NAME] || req.cookies[COOKIE_NAME] || '';
+  } else {
+    token = req.cookies[OWNER_COOKIE_NAME] || req.cookies[CASHIER_COOKIE_NAME] || req.cookies[COOKIE_NAME] || '';
+  }
   if (!token) return res.status(401).json({ error: 'No autenticado' });
   try {
     const payload = jwt.verify(token, config.JWT_SECRET);

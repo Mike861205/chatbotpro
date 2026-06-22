@@ -119,6 +119,7 @@
           }
           throw new Error(data.error || 'Error');
         }
+        try { sessionStorage.setItem('cbp_auth_scope', 'owner'); } catch {}
         location.href = '/app';
       } catch (err) {
         document.getElementById('errorMsg').textContent = err.message;

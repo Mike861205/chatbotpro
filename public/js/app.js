@@ -12,6 +12,8 @@ let orderDateEnd = '';
 let customersDateStart = '';
 let customersDateEnd = '';
 let customersSort = 'orders_desc';
+let customersPage = 1;
+const CUSTOMERS_PAGE_SIZE = 10;
 let BRANCHES = [];
 let CASHIERS = [];
 let LAST_ORDERS = [];
@@ -36,6 +38,10 @@ let POS_CHATBOT_PAGE = 1;
 let POS_CHATBOT_TOTAL_PAGES = 1;
 const POS_CHATBOT_IMPORTING = new Set();
 let CHATBOT_SUBTAB = 'flow';
+let CHATBOT_UPSELL_PRODUCTS = [];
+let CHATBOT_UPSELL_SELECTED = new Set();
+let CHATBOT_UPSELL_OFFERS = [];
+let CHATBOT_INFO_OPTIONS = [];
 let DELIVERY_ZONES = [];
 let DELIVERY_ZONE_MAP = null;
 let DELIVERY_ZONE_LAYER = null;
@@ -47,10 +53,40 @@ let DELIVERY_DRAW_HELP_SHOWN = false;
 let DELIVERY_ZONES_PAGE = 1;
 const DELIVERY_ZONES_PAGE_SIZE = 5;
 let DELIVERY_ZONE_FILTER_BRANCH = 'all';
+const AUTH_SCOPE_KEY = 'cbp_auth_scope';
+const ORDER_ALERT_SOUND_KEY = 'cbp_order_alert_sound_enabled';
+const ORDER_ALERT_POLL_MS = 10000;
+const ORDER_ALERT_MAX_MS = 5000;
+let ORDER_ALERT_TIMER = null;
+let ORDER_ALERT_DAY_KEY = '';
+let ORDER_ALERT_SEEN_PENDING_IDS = new Set();
+let ORDER_ALERT_SOUND_ENABLED = true;
+let ORDER_ALERT_BOOTSTRAPPED = false;
+let ORDER_ALERT_AUDIO_CTX = null;
 
 const $ = (s) => document.querySelector(s);
 const fmtMoney = (n, c) =>
   new Intl.NumberFormat('es-MX', { style: 'currency', currency: c || (SETTINGS && SETTINGS.currency) || 'MXN' }).format(n || 0);
+
+function getAuthScope() {
+  try {
+    const val = String(sessionStorage.getItem(AUTH_SCOPE_KEY) || '').trim().toLowerCase();
+    return val === 'owner' || val === 'cashier' ? val : '';
+  } catch {
+    return '';
+  }
+}
+
+function setAuthScope(scope) {
+  const val = String(scope || '').trim().toLowerCase();
+  try {
+    if (val === 'owner' || val === 'cashier') {
+      sessionStorage.setItem(AUTH_SCOPE_KEY, val);
+    } else {
+      sessionStorage.removeItem(AUTH_SCOPE_KEY);
+    }
+  } catch {}
+}
 
 function isCashierUser() {
   return ME?.role === 'cashier';
@@ -65,6 +101,144 @@ function toast(msg, isErr = false) {
   t._t = setTimeout(() => (t.className = ''), 3200);
 }
 
+function orderDayKeyLocal() {
+  const now = new Date();
+  const m = String(now.getMonth() + 1).padStart(2, '0');
+  const d = String(now.getDate()).padStart(2, '0');
+  return `${now.getFullYear()}-${m}-${d}`;
+}
+
+function normalizeOrderStatus(status) {
+  return String(status || '').trim().toLowerCase();
+}
+
+function isPendingOrder(order) {
+  return normalizeOrderStatus(order?.status) === 'pendiente';
+}
+
+function ensureOrderAlertDayState() {
+  const dayKey = orderDayKeyLocal();
+  if (ORDER_ALERT_DAY_KEY === dayKey) return;
+  ORDER_ALERT_DAY_KEY = dayKey;
+  ORDER_ALERT_SEEN_PENDING_IDS = new Set();
+  ORDER_ALERT_BOOTSTRAPPED = false;
+}
+
+async function fetchTodayPendingOrders() {
+  const params = new URLSearchParams({ todayOnly: '1', status: 'pendiente' });
+  const rows = await api(`/api/orders?${params.toString()}`);
+  return Array.isArray(rows) ? rows.filter(isPendingOrder) : [];
+}
+
+function setPendingTodayCount(count) {
+  const safeCount = Number.isFinite(Number(count)) ? Math.max(0, Number(count)) : 0;
+  const badge = $('#pendingBadge');
+  if (badge) {
+    badge.style.display = safeCount ? 'inline-flex' : 'none';
+    badge.textContent = String(safeCount);
+  }
+  const info = $('#ordersPendingTodayInfo');
+  if (info) {
+    info.innerHTML = `<i class="ph-fill ph-bell-ringing"></i> Nuevos pendientes hoy: ${safeCount}`;
+  }
+}
+
+function loadOrderSoundPreference() {
+  try {
+    const raw = localStorage.getItem(ORDER_ALERT_SOUND_KEY);
+    ORDER_ALERT_SOUND_ENABLED = raw !== '0';
+  } catch {
+    ORDER_ALERT_SOUND_ENABLED = true;
+  }
+}
+
+function persistOrderSoundPreference() {
+  try {
+    localStorage.setItem(ORDER_ALERT_SOUND_KEY, ORDER_ALERT_SOUND_ENABLED ? '1' : '0');
+  } catch {}
+}
+
+function syncOrdersSoundToggleUI() {
+  const btn = $('#ordersSoundToggle');
+  if (!btn) return;
+  btn.classList.toggle('on', ORDER_ALERT_SOUND_ENABLED);
+  btn.classList.toggle('off', !ORDER_ALERT_SOUND_ENABLED);
+  btn.setAttribute('aria-pressed', String(ORDER_ALERT_SOUND_ENABLED));
+  btn.innerHTML = ORDER_ALERT_SOUND_ENABLED
+    ? '<i class="ph-fill ph-speaker-high"></i> Sonido pedidos: Activado'
+    : '<i class="ph-fill ph-speaker-slash"></i> Sonido pedidos: Silenciado';
+}
+
+function playIncomingOrderSound(maxMs = ORDER_ALERT_MAX_MS) {
+  if (!ORDER_ALERT_SOUND_ENABLED) return;
+  const AudioCtx = window.AudioContext || window.webkitAudioContext;
+  if (!AudioCtx) return;
+  if (!ORDER_ALERT_AUDIO_CTX) ORDER_ALERT_AUDIO_CTX = new AudioCtx();
+  const ctx = ORDER_ALERT_AUDIO_CTX;
+  if (ctx.state === 'suspended') {
+    ctx.resume().catch(() => {});
+  }
+  const totalDuration = Math.min(ORDER_ALERT_MAX_MS, Math.max(1200, Number(maxMs) || ORDER_ALERT_MAX_MS)) / 1000;
+  const motif = [
+    [740, 0.16],
+    [988, 0.17],
+    [1245, 0.22],
+    [988, 0.17],
+  ];
+  const baseStart = ctx.currentTime + 0.02;
+  let timeline = 0;
+  while (timeline < totalDuration) {
+    for (const [freq, len] of motif) {
+      if (timeline + len > totalDuration) break;
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(freq, baseStart + timeline);
+      gain.gain.setValueAtTime(0.0001, baseStart + timeline);
+      gain.gain.exponentialRampToValueAtTime(0.18, baseStart + timeline + 0.03);
+      gain.gain.exponentialRampToValueAtTime(0.0001, baseStart + timeline + len);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start(baseStart + timeline);
+      osc.stop(baseStart + timeline + len + 0.02);
+      timeline += len + 0.045;
+    }
+    timeline += 0.14;
+  }
+}
+
+async function refreshPendingOrdersMonitor({ allowSound = true } = {}) {
+  ensureOrderAlertDayState();
+  try {
+    const pendingOrders = await fetchTodayPendingOrders();
+    const currentIds = new Set(pendingOrders.map((order) => String(order.id)));
+    setPendingTodayCount(currentIds.size);
+
+    const newIds = [];
+    currentIds.forEach((id) => {
+      if (!ORDER_ALERT_SEEN_PENDING_IDS.has(id)) newIds.push(id);
+    });
+
+    if (ORDER_ALERT_BOOTSTRAPPED && allowSound && newIds.length) {
+      playIncomingOrderSound(4200);
+      if (CURRENT_VIEW === 'pedidos') {
+        toast(`Llegó ${newIds.length} pedido${newIds.length > 1 ? 's' : ''} nuevo${newIds.length > 1 ? 's' : ''}`);
+      }
+    }
+
+    ORDER_ALERT_SEEN_PENDING_IDS = currentIds;
+    ORDER_ALERT_BOOTSTRAPPED = true;
+  } catch {}
+}
+
+function startOrdersRealtimeMonitor() {
+  if (ORDER_ALERT_TIMER) clearInterval(ORDER_ALERT_TIMER);
+  refreshPendingOrdersMonitor({ allowSound: false });
+  ORDER_ALERT_TIMER = setInterval(() => {
+    refreshPendingOrdersMonitor({ allowSound: true });
+  }, ORDER_ALERT_POLL_MS);
+}
+
 function showSuspensionModal(message, whatsappUrl) {
   const modal = $('#suspensionModal');
   if (!modal) return;
@@ -76,7 +250,10 @@ function showSuspensionModal(message, whatsappUrl) {
 }
 
 async function api(path, opts = {}) {
-  const res = await fetch(path, opts);
+  const headers = new Headers(opts.headers || {});
+  const scope = getAuthScope();
+  if (scope) headers.set('x-cbp-auth-scope', scope);
+  const res = await fetch(path, { ...opts, headers });
   if (res.status === 401) {
     location.href = '/login';
     throw new Error('No autenticado');
@@ -165,6 +342,7 @@ const VIEW_META = {
   productos: ['Productos', 'Tu menú visible en el chatbot', 'ph-hamburger'],
   chatbot: ['Mi chatbot', 'Configura el flujo y comparte tu liga', 'ph-chat-circle-dots'],
   config: ['Mi negocio', 'Identidad, branding y contacto', 'ph-storefront'],
+  suscripciones: ['Suscripciones', 'Planes, beneficios y pago seguro', 'ph-crown'],
 };
 
 const VIEW_LOADERS = {
@@ -175,6 +353,7 @@ const VIEW_LOADERS = {
   productos: loadProducts,
   chatbot: fillBotForm,
   config: fillConfigForm,
+  suscripciones: () => {},
 };
 
 let CURRENT_VIEW = 'dashboard';
@@ -268,7 +447,8 @@ $('#menuToggle').addEventListener('click', () => {
 });
 $('#scrim').addEventListener('click', closeSidebar);
 $('#logoutBtn').addEventListener('click', async () => {
-  await fetch('/api/auth/logout', { method: 'POST' });
+  await api('/api/auth/logout', { method: 'POST' });
+  setAuthScope('');
   location.href = '/login';
 });
 
@@ -279,9 +459,7 @@ async function loadDashboard() {
   $('#stOrdersToday').textContent = s.today.count;
   $('#stPending').textContent = s.pending;
   $('#stAvgTicket').textContent = fmtMoney(s.avgTicket);
-  const badge = $('#pendingBadge');
-  badge.style.display = s.pending ? 'inline-flex' : 'none';
-  badge.textContent = s.pending;
+  refreshPendingOrdersMonitor({ allowSound: false });
 
   const primary = ME.tenant.primaryColor || '#ff6b35';
 
@@ -400,6 +578,7 @@ function ordersTableHTML(orders, editable = true) {
         <td><div class="cust">${custAvatar(o.customer?.name)}<div class="cmeta"><b>${esc(o.customer?.name || '—')}</b><span>${esc(o.customer?.phone || '')}</span></div></div></td>
         <td style="max-width:280px">${esc(items)}</td>
         <td style="white-space:nowrap">${deliveryText}${deliveryFeeText}${locationText}${cancelNoteText}</td>
+        <td style="white-space:nowrap;font-size:13px"><b>${esc(o.delivery === 'domicilio' ? (o.service_branch_name || '—') : (o.pickup_branch_name || '—'))}</b></td>
         <td><b>${fmtMoney(o.total)}</b></td>
         <td>${paymentText}</td>
         <td>${statusCell}</td>
@@ -407,7 +586,7 @@ function ordersTableHTML(orders, editable = true) {
       </tr>`;
     })
     .join('');
-  return `<table><thead><tr><th>Pedido</th><th>Cliente</th><th>Productos</th><th>Entrega</th><th>Total</th><th>Pago</th><th>Estatus</th><th>Fecha</th></tr></thead><tbody>${rows}</tbody></table>`;
+  return `<table><thead><tr><th>Pedido</th><th>Cliente</th><th>Productos</th><th>Entrega</th><th>Sucursal</th><th>Total</th><th>Pago</th><th>Estatus</th><th>Fecha</th></tr></thead><tbody>${rows}</tbody></table>`;
 }
 
 function renderOrdersPagination(totalItems) {
@@ -535,11 +714,11 @@ function rankBadge(pos) {
   return '';
 }
 
-function customersTableHTML(customers) {
+function customersTableHTML(customers, rankOffset = 0) {
   const rows = customers
     .map((c, idx) => `
       <tr>
-        <td><span class="rank-cell">${rankBadge(idx + 1)}<b class="rank-num">#${idx + 1}</b></span></td>
+        <td><span class="rank-cell">${rankBadge(rankOffset + idx + 1)}<b class="rank-num">#${rankOffset + idx + 1}</b></span></td>
         <td>
           <div class="cust">
             ${custAvatar(c.name)}
@@ -558,6 +737,33 @@ function customersTableHTML(customers) {
   return `<table><thead><tr><th>Rank</th><th>Cliente</th><th>Registro</th><th># Pedidos</th><th>Monto acumulado</th><th>Último pedido</th><th>Fidelidad</th></tr></thead><tbody>${rows}</tbody></table>`;
 }
 
+function renderCustomersPagination(totalItems) {
+  const holder = $('#customersPagination');
+  if (!holder) return;
+  const totalPages = Math.max(1, Math.ceil(totalItems / CUSTOMERS_PAGE_SIZE));
+  if (customersPage > totalPages) customersPage = totalPages;
+  holder.innerHTML = `
+    <div class="orders-pagination-inner">
+      <span class="orders-page-info">Página ${customersPage} de ${totalPages} · ${totalItems} clientes</span>
+      <div class="orders-page-actions">
+        <button class="btn btn-ghost" id="customersPrevPage" ${customersPage <= 1 ? 'disabled' : ''}><i class="ph-bold ph-caret-left"></i> Anterior</button>
+        <button class="btn btn-ghost" id="customersNextPage" ${customersPage >= totalPages ? 'disabled' : ''}>Siguiente <i class="ph-bold ph-caret-right"></i></button>
+      </div>
+    </div>
+  `;
+
+  $('#customersPrevPage')?.addEventListener('click', () => {
+    if (customersPage <= 1) return;
+    customersPage -= 1;
+    loadCustomers();
+  });
+  $('#customersNextPage')?.addEventListener('click', () => {
+    if (customersPage >= totalPages) return;
+    customersPage += 1;
+    loadCustomers();
+  });
+}
+
 async function loadCustomers() {
   const startInput = $('#customersDateStart');
   const endInput = $('#customersDateEnd');
@@ -573,10 +779,22 @@ async function loadCustomers() {
 
   const customers = await api(`/api/customers${params.toString() ? `?${params.toString()}` : ''}`);
   const table = $('#customersTable');
+  const pager = $('#customersPagination');
+  const hasDateFilter = Boolean(customersDateStart || customersDateEnd);
+  if (!hasDateFilter) customersPage = 1;
+  const totalPages = Math.max(1, Math.ceil(customers.length / CUSTOMERS_PAGE_SIZE));
+  if (customersPage > totalPages) customersPage = totalPages;
+  const startIdx = hasDateFilter ? (customersPage - 1) * CUSTOMERS_PAGE_SIZE : 0;
+  const pageCustomers = customers.slice(startIdx, startIdx + CUSTOMERS_PAGE_SIZE);
   if (!table) return;
   table.innerHTML = customers.length
-    ? customersTableHTML(customers)
+    ? customersTableHTML(pageCustomers, startIdx)
     : emptyHTML('ph-users-three', 'Sin clientes aún', 'Cuando lleguen pedidos por chatbot aquí verás los clientes con mayor fidelidad.');
+  if (pager) {
+    pager.style.display = hasDateFilter && customers.length > CUSTOMERS_PAGE_SIZE ? 'block' : 'none';
+    if (!hasDateFilter) pager.innerHTML = '';
+  }
+  if (hasDateFilter) renderCustomersPagination(customers.length);
 }
 
 $('#refreshCustomersBtn')?.addEventListener('click', loadCustomers);
@@ -591,12 +809,14 @@ $('#customersApplyFilters')?.addEventListener('click', () => {
   customersDateStart = start;
   customersDateEnd = end;
   customersSort = sort;
+  customersPage = 1;
   loadCustomers();
 });
 $('#customersClearFilters')?.addEventListener('click', () => {
   customersDateStart = '';
   customersDateEnd = '';
   customersSort = 'orders_desc';
+  customersPage = 1;
   const startInput = $('#customersDateStart');
   const endInput = $('#customersDateEnd');
   const sortInput = $('#customersSort');
@@ -607,19 +827,23 @@ $('#customersClearFilters')?.addEventListener('click', () => {
 });
 
 function formatExportRows(orders) {
-  return orders.map((o) => ({
-    pedido: `#${o.id}`,
-    cliente: o.customer?.name || '—',
-    telefono: o.customer?.phone || '',
-    productos: o.items.map((it) => `${it.qty}x ${it.name}`).join(', '),
-    entrega: o.delivery === 'domicilio' ? 'Domicilio' : `Recoger${o.pickup_branch_name ? ` (${o.pickup_branch_name})` : ''}`,
-    ubicacion: o.customer_location_text || '',
-    motivo_cancelacion: o.cancel_note || '',
-    metodo_pago: orderPaymentLabel(o.payment_method),
-    total: Number(o.total || 0),
-    estatus: o.status,
-    fecha: o.created_at || '',
-  }));
+  return orders.map((o) => {
+    const sucursal = o.delivery === 'domicilio' ? (o.service_branch_name || '—') : (o.pickup_branch_name || '—');
+    return {
+      pedido: `#${o.id}`,
+      cliente: o.customer?.name || '—',
+      telefono: o.customer?.phone || '',
+      productos: o.items.map((it) => `${it.qty}x ${it.name}`).join(', '),
+      entrega: o.delivery === 'domicilio' ? 'Domicilio' : `Recoger${o.pickup_branch_name ? ` (${o.pickup_branch_name})` : ''}`,
+      sucursal: sucursal,
+      ubicacion: o.customer_location_text || '',
+      motivo_cancelacion: o.cancel_note || '',
+      metodo_pago: orderPaymentLabel(o.payment_method),
+      total: Number(o.total || 0),
+      estatus: o.status,
+      fecha: o.created_at || '',
+    };
+  });
 }
 
 function exportOrdersExcel() {
@@ -631,6 +855,7 @@ function exportOrdersExcel() {
     Telefono: r.telefono,
     Productos: r.productos,
     Entrega: r.entrega,
+    Sucursal: r.sucursal,
     Ubicacion: r.ubicacion,
     MotivoCancelacion: r.motivo_cancelacion,
     MetodoPago: r.metodo_pago,
@@ -670,12 +895,7 @@ $('#expExcelBtn')?.addEventListener('click', exportOrdersExcel);
 $('#expPdfBtn')?.addEventListener('click', exportOrdersPdf);
 
 async function loadDashboardBadge() {
-  try {
-    const s = await api('/api/dashboard/stats');
-    const badge = $('#pendingBadge');
-    badge.style.display = s.pending ? 'inline-flex' : 'none';
-    badge.textContent = s.pending;
-  } catch {}
+  await refreshPendingOrdersMonitor({ allowSound: false });
 }
 
 $('#orderFilter').addEventListener('click', (e) => {
@@ -719,6 +939,13 @@ $('#ordersClearDate')?.addEventListener('click', () => {
   if (end) end.value = '';
   orderPage = 1;
   loadOrders();
+});
+
+$('#ordersSoundToggle')?.addEventListener('click', () => {
+  ORDER_ALERT_SOUND_ENABLED = !ORDER_ALERT_SOUND_ENABLED;
+  persistOrderSoundPreference();
+  syncOrdersSoundToggleUI();
+  toast(ORDER_ALERT_SOUND_ENABLED ? 'Sonido de pedidos activado' : 'Sonido de pedidos silenciado');
 });
 
 /* ===== Punto de venta ===== */
@@ -1430,20 +1657,20 @@ function renderPosFinanceStrip() {
   const expectedCash = session?.expectedCash || 0;
   const movementNet = moneyNum(totals.movements.income - totals.movements.withdrawal - totals.movements.expense);
   const cards = [
-    { icon: 'ph-safe', title: 'Fondo inicial', value: session?.opening_amount || 0, tone: 'primary' },
-    { icon: 'ph-bag-plus', title: 'Ventas del turno', value: totals.totalSales, tone: 'blue' },
-    { icon: 'ph-coins', title: 'Efectivo en ventas', value: totals.collected.cash, tone: 'green' },
+    { icon: 'ph-wallet', title: 'Fondo inicial', value: session?.opening_amount || 0, tone: 'primary' },
+    { icon: 'ph-chart-line-up', title: 'Ventas del turno', value: totals.totalSales, tone: 'blue' },
+    { icon: 'ph-money', title: 'Efectivo en ventas', value: totals.collected.cash, tone: 'green' },
     { icon: 'ph-credit-card', title: 'Tarjeta', value: totals.collected.card, tone: 'violet' },
-    { icon: 'ph-arrow-up-right', title: 'Transferencia', value: totals.collected.transfer, tone: 'cyan' },
-    { icon: 'ph-shuffle', title: 'Movimientos netos', value: movementNet, tone: movementNet < 0 ? 'red' : 'amber' },
-    { icon: 'ph-prohibit', title: 'Cancelaciones', value: totals.cancellations.total, tone: 'red' },
-    { icon: 'ph-lock', title: 'Efectivo esperado', value: expectedCash, tone: 'ink' },
+    { icon: 'ph-bank', title: 'Transferencia', value: totals.collected.transfer, tone: 'cyan' },
+    { icon: 'ph-arrows-down-up', title: 'Movimientos netos', value: movementNet, tone: movementNet < 0 ? 'red' : 'amber' },
+    { icon: 'ph-x-circle', title: 'Cancelaciones', value: totals.cancellations.total, tone: 'red' },
+    { icon: 'ph-calculator', title: 'Efectivo esperado', value: expectedCash, tone: 'ink' },
   ];
   el.innerHTML = cards
     .map(
       (card) => `<div class="pos-fin-card tone-${card.tone}">
-        <div class="pos-fin-ic"><i class="ph-bold ${card.icon}"></i></div>
-        <div>
+        <div class="pos-fin-ic"><i class="ph-fill ${card.icon}"></i></div>
+        <div class="pos-fin-copy">
           <span>${card.title}</span>
           <b>${fmtMoney(card.value)}</b>
           <small>${session ? `Tickets: ${totals.tickets}` : 'Caja cerrada'}</small>
@@ -2754,12 +2981,15 @@ function fitDeliveryZonesBounds() {
 }
 
 function setChatbotSubtab(tab) {
-  CHATBOT_SUBTAB = tab === 'delivery' ? 'delivery' : 'flow';
+  CHATBOT_SUBTAB = tab === 'delivery' || tab === 'upsell' ? tab : 'flow';
   const isDelivery = CHATBOT_SUBTAB === 'delivery';
-  $('#chatbotTabFlow')?.classList.toggle('active', !isDelivery);
+  const isUpsell = CHATBOT_SUBTAB === 'upsell';
+  $('#chatbotTabFlow')?.classList.toggle('active', CHATBOT_SUBTAB === 'flow');
   $('#chatbotTabDelivery')?.classList.toggle('active', isDelivery);
-  $('#chatbotFlowPanel').hidden = isDelivery;
+  $('#chatbotTabUpsell')?.classList.toggle('active', isUpsell);
+  $('#chatbotFlowPanel').hidden = CHATBOT_SUBTAB !== 'flow';
   $('#chatbotDeliveryPanel').hidden = !isDelivery;
+  $('#chatbotUpsellPanel').hidden = !isUpsell;
   if (isDelivery) {
     ensureDeliveryZoneMap();
     setTimeout(() => {
@@ -2767,6 +2997,389 @@ function setChatbotSubtab(tab) {
       fitDeliveryZonesBounds();
     }, 80);
   }
+}
+
+function normalizeInfoUrl(raw) {
+  const text = String(raw || '').trim();
+  if (!text) return '';
+  if (/^https?:\/\//i.test(text)) return text;
+  if (/^[\w.-]+\.[a-z]{2,}(\/.*)?$/i.test(text)) return `https://${text}`;
+  return '';
+}
+
+function parseChatbotInfoOptions(raw) {
+  const text = String(raw || '').trim();
+  if (!text) return [];
+  try {
+    const parsed = JSON.parse(text);
+    if (!Array.isArray(parsed)) return [];
+    const used = new Set();
+    return parsed
+      .map((item, idx) => {
+        const label = String(item?.label || '').trim().slice(0, 42);
+        const message = String(item?.message || '').trim().slice(0, 300);
+        const url = normalizeInfoUrl(item?.url || '');
+        let id = String(item?.id || `info_${idx + 1}`)
+          .toLowerCase()
+          .replace(/[^a-z0-9_-]/g, '')
+          .slice(0, 48);
+        if (!id) id = `info_${idx + 1}`;
+        while (used.has(id)) id = `${id}_${Math.random().toString(36).slice(2, 5)}`;
+        used.add(id);
+        if (!label || (!message && !url)) return null;
+        return { id, label, message, url };
+      })
+      .filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+function setChatbotInfoEditorState(entry = null) {
+  $('#botInfoOptionId').value = entry?.id || '';
+  $('#botInfoOptionLabel').value = entry?.label || '';
+  $('#botInfoOptionMessage').value = entry?.message || '';
+  $('#botInfoOptionUrl').value = entry?.url || '';
+  $('#botInfoOptionSaveBtn').innerHTML = entry
+    ? '<i class="ph-bold ph-floppy-disk"></i> Guardar cambios'
+    : '<i class="ph-bold ph-plus-circle"></i> Agregar opción';
+  $('#botInfoOptionHint').textContent = entry
+    ? 'Modo edición activo. Recuerda guardar flujo para publicar cambios.'
+    : 'Estas opciones se guardan con el botón "Guardar flujo".';
+}
+
+function resetChatbotInfoEditor() {
+  setChatbotInfoEditorState(null);
+}
+
+function renderChatbotInfoOptionsList() {
+  const host = $('#botInfoOptionsList');
+  if (!host) return;
+  const count = CHATBOT_INFO_OPTIONS.length;
+  $('#botInfoOptionsCount').textContent = `${count} opcion${count === 1 ? '' : 'es'}`;
+
+  if (!count) {
+    host.innerHTML = emptyHTML('ph-info', 'Sin opciones extra', 'Puedes agregar Horarios, Ofertas de trabajo, Ubicación o Promociones.');
+    return;
+  }
+
+  host.innerHTML = CHATBOT_INFO_OPTIONS.map((entry) => `
+    <div class="chatbot-info-item">
+      <div class="meta">
+        <div class="label">${esc(entry.label)}</div>
+        ${entry.message ? `<div class="message">${esc(entry.message)}</div>` : ''}
+        ${entry.url ? `<a class="url" href="${esc(entry.url)}" target="_blank" rel="noopener">${esc(entry.url)}</a>` : ''}
+      </div>
+      <div class="actions">
+        <button class="btn btn-ghost btn-icon" type="button" data-info-up="${esc(entry.id)}" title="Subir"><i class="ph-bold ph-arrow-up"></i></button>
+        <button class="btn btn-ghost btn-icon" type="button" data-info-down="${esc(entry.id)}" title="Bajar"><i class="ph-bold ph-arrow-down"></i></button>
+        <button class="btn btn-ghost btn-icon" type="button" data-info-edit="${esc(entry.id)}" title="Editar"><i class="ph-bold ph-pencil-simple"></i></button>
+        <button class="btn btn-danger btn-icon" type="button" data-info-del="${esc(entry.id)}" title="Eliminar"><i class="ph-bold ph-trash"></i></button>
+      </div>
+    </div>
+  `).join('');
+
+  host.querySelectorAll('[data-info-edit]').forEach((button) => {
+    button.addEventListener('click', () => {
+      const entry = CHATBOT_INFO_OPTIONS.find((item) => item.id === button.dataset.infoEdit);
+      if (entry) setChatbotInfoEditorState(entry);
+    });
+  });
+
+  host.querySelectorAll('[data-info-up]').forEach((button) => {
+    button.addEventListener('click', () => {
+      const id = String(button.dataset.infoUp || '');
+      const idx = CHATBOT_INFO_OPTIONS.findIndex((item) => item.id === id);
+      if (idx <= 0) return;
+      const next = [...CHATBOT_INFO_OPTIONS];
+      [next[idx - 1], next[idx]] = [next[idx], next[idx - 1]];
+      CHATBOT_INFO_OPTIONS = next;
+      renderChatbotInfoOptionsList();
+    });
+  });
+
+  host.querySelectorAll('[data-info-down]').forEach((button) => {
+    button.addEventListener('click', () => {
+      const id = String(button.dataset.infoDown || '');
+      const idx = CHATBOT_INFO_OPTIONS.findIndex((item) => item.id === id);
+      if (idx < 0 || idx >= CHATBOT_INFO_OPTIONS.length - 1) return;
+      const next = [...CHATBOT_INFO_OPTIONS];
+      [next[idx], next[idx + 1]] = [next[idx + 1], next[idx]];
+      CHATBOT_INFO_OPTIONS = next;
+      renderChatbotInfoOptionsList();
+    });
+  });
+
+  host.querySelectorAll('[data-info-del]').forEach((button) => {
+    button.addEventListener('click', async () => {
+      const id = String(button.dataset.infoDel || '');
+      const entry = CHATBOT_INFO_OPTIONS.find((item) => item.id === id);
+      if (!(await askConfirm('¿Eliminar opción informativa?', `Se eliminará "${entry?.label || 'sin título'}".`))) return;
+      CHATBOT_INFO_OPTIONS = CHATBOT_INFO_OPTIONS.filter((item) => item.id !== id);
+      if (String($('#botInfoOptionId')?.value || '') === id) resetChatbotInfoEditor();
+      renderChatbotInfoOptionsList();
+      toast('Opción informativa eliminada');
+    });
+  });
+}
+
+function fillChatbotInfoOptionsFromSettings() {
+  CHATBOT_INFO_OPTIONS = parseChatbotInfoOptions(SETTINGS?.chatbot_extra_options_json || '[]');
+  resetChatbotInfoEditor();
+  renderChatbotInfoOptionsList();
+}
+
+function parseUpsellProductIds(raw) {
+  const text = String(raw || '').trim();
+  if (!text) return [];
+  try {
+    const parsed = JSON.parse(text);
+    if (Array.isArray(parsed)) {
+      return [...new Set(parsed.map((id) => Number(id)).filter((id) => Number.isInteger(id) && id > 0))];
+    }
+  } catch {}
+  return [...new Set(text.split(',').map((id) => Number(id.trim())).filter((id) => Number.isInteger(id) && id > 0))];
+}
+
+function parseUpsellOffers(raw) {
+  const text = String(raw || '').trim();
+  if (!text) return [];
+  try {
+    const parsed = JSON.parse(text);
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .map((offer, idx) => {
+        const question = String(offer?.question || '').trim();
+        const productIds = parseUpsellProductIds(offer?.productIds || []);
+        if (!question || !productIds.length) return null;
+        return {
+          id: String(offer?.id || `upsell_offer_${idx + 1}`),
+          question,
+          productIds,
+        };
+      })
+      .filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+function getLegacyUpsellOfferFromSettings() {
+  const enabled = (SETTINGS?.chatbot_upsell_enabled || '0') === '1';
+  const question = String(SETTINGS?.chatbot_upsell_question || '').trim();
+  const productIds = parseUpsellProductIds(SETTINGS?.chatbot_upsell_product_ids || '[]');
+  if (!enabled || !question || !productIds.length) return [];
+  return [{ id: 'legacy_offer_1', question, productIds }];
+}
+
+function setUpsellEditorState(offer = null) {
+  $('#botUpsellOfferId').value = offer?.id || '';
+  $('#botUpsellQuestion').value = offer?.question || '¿Deseas agregar alguno de estos productos a tu pedido?';
+  CHATBOT_UPSELL_SELECTED = new Set(offer?.productIds || []);
+  $('#upsellSaveBtn').innerHTML = offer
+    ? '<i class="ph-bold ph-floppy-disk"></i> Guardar cambios'
+    : '<i class="ph-bold ph-floppy-disk"></i> Guardar ofrecimiento';
+  $('#upsellEditingHint').textContent = offer
+    ? 'Modo edición activo: modifica pregunta o productos y guarda cambios.'
+    : 'Crea un ofrecimiento con su pregunta y selecciona productos.';
+  renderUpsellProductsPicker();
+  renderUpsellOffersList();
+}
+
+function resetUpsellEditor() {
+  setUpsellEditorState(null);
+}
+
+function productMapById() {
+  const map = new Map();
+  (CHATBOT_UPSELL_PRODUCTS || []).forEach((p) => map.set(Number(p.id), p));
+  return map;
+}
+
+function normalizeUpsellOffersWithProducts(offers) {
+  const productsById = productMapById();
+  const hasCatalog = productsById.size > 0;
+  return (offers || [])
+    .map((offer, idx) => {
+      const question = String(offer?.question || '').trim();
+      const id = String(offer?.id || `upsell_offer_${idx + 1}`);
+      const productIds = parseUpsellProductIds(offer?.productIds || [])
+        .filter((pid) => {
+          if (!hasCatalog) return true;
+          return productsById.has(Number(pid)) && Number(productsById.get(Number(pid))?.active ?? 0) === 1;
+        });
+      if (!question || !productIds.length) return null;
+      return { id, question, productIds };
+    })
+    .filter(Boolean);
+}
+
+function renderUpsellProductsPicker() {
+  const host = $('#upsellProductsPicker');
+  if (!host) return;
+
+  const activeProducts = (CHATBOT_UPSELL_PRODUCTS || []).filter((p) => Number(p?.active ?? 0) === 1);
+  const validIds = new Set(activeProducts.map((p) => Number(p.id)));
+  CHATBOT_UPSELL_SELECTED = new Set([...CHATBOT_UPSELL_SELECTED].filter((id) => validIds.has(Number(id))));
+
+  if (!activeProducts.length) {
+    host.innerHTML = emptyHTML('ph-hamburger', 'Sin productos activos', 'Activa productos en tu menú para poder sugerirlos en el upsell.');
+    $('#upsellProductsCounter').textContent = 'Seleccionados: 0';
+    return;
+  }
+
+  host.innerHTML = activeProducts
+    .map((p) => {
+      const selected = CHATBOT_UPSELL_SELECTED.has(Number(p.id));
+      return `
+        <button type="button" class="upsell-product-item ${selected ? 'active' : ''}" data-upsell-product="${p.id}">
+          <div class="meta">
+            <div class="name">${esc(p.name)}</div>
+            <div class="cat">${esc(p.category_name || 'Sin categoría')}</div>
+          </div>
+          <div class="price">${fmtMoney(p.price)}</div>
+        </button>
+      `;
+    })
+    .join('');
+
+  host.querySelectorAll('[data-upsell-product]').forEach((button) => {
+    button.addEventListener('click', () => {
+      const id = Number(button.dataset.upsellProduct);
+      if (!Number.isInteger(id) || id <= 0) return;
+      if (CHATBOT_UPSELL_SELECTED.has(id)) CHATBOT_UPSELL_SELECTED.delete(id);
+      else CHATBOT_UPSELL_SELECTED.add(id);
+      renderUpsellProductsPicker();
+    });
+  });
+
+  $('#upsellProductsCounter').textContent = `Seleccionados: ${CHATBOT_UPSELL_SELECTED.size}`;
+}
+
+function renderUpsellOffersList() {
+  const host = $('#upsellOffersList');
+  if (!host) return;
+  const productsById = productMapById();
+  const editingId = String($('#botUpsellOfferId')?.value || '').trim();
+  $('#upsellOffersCount').textContent = `${CHATBOT_UPSELL_OFFERS.length} ofrecimiento${CHATBOT_UPSELL_OFFERS.length === 1 ? '' : 's'}`;
+
+  if (!CHATBOT_UPSELL_OFFERS.length) {
+    host.innerHTML = emptyHTML('ph-list-checks', 'Sin ofrecimientos guardados', 'Crea tu primer ofrecimiento para aumentar el ticket de venta.');
+    return;
+  }
+
+  host.innerHTML = CHATBOT_UPSELL_OFFERS.map((offer, idx) => {
+    const chips = offer.productIds.map((pid) => {
+      const prod = productsById.get(Number(pid));
+      const label = prod?.name || `Producto #${pid}`;
+      return `<span class="upsell-offer-chip">${esc(label)}</span>`;
+    }).join('');
+    const canMoveUp = idx > 0;
+    const canMoveDown = idx < CHATBOT_UPSELL_OFFERS.length - 1;
+    return `
+      <div class="upsell-offer-card ${editingId && editingId === offer.id ? 'editing' : ''}">
+        <div class="upsell-offer-head">
+          <div>
+            <div class="upsell-offer-q">${idx + 1}. ${esc(offer.question)}</div>
+            <div class="hint">${offer.productIds.length} producto${offer.productIds.length === 1 ? '' : 's'} sugerido${offer.productIds.length === 1 ? '' : 's'}</div>
+          </div>
+          <div class="upsell-offer-actions">
+            <button class="btn btn-ghost btn-icon" type="button" data-upsell-up="${esc(offer.id)}" title="Subir" ${canMoveUp ? '' : 'disabled'}><i class="ph-bold ph-arrow-up"></i></button>
+            <button class="btn btn-ghost btn-icon" type="button" data-upsell-down="${esc(offer.id)}" title="Bajar" ${canMoveDown ? '' : 'disabled'}><i class="ph-bold ph-arrow-down"></i></button>
+            <button class="btn btn-ghost btn-icon" type="button" data-upsell-edit="${esc(offer.id)}" title="Editar ofrecimiento"><i class="ph-bold ph-pencil-simple"></i></button>
+            <button class="btn btn-danger btn-icon" type="button" data-upsell-del="${esc(offer.id)}" title="Eliminar ofrecimiento"><i class="ph-bold ph-trash"></i></button>
+          </div>
+        </div>
+        <div class="upsell-offer-products">${chips}</div>
+      </div>
+    `;
+  }).join('');
+
+  host.querySelectorAll('[data-upsell-edit]').forEach((button) => {
+    button.addEventListener('click', () => {
+      const offer = CHATBOT_UPSELL_OFFERS.find((item) => item.id === button.dataset.upsellEdit);
+      if (!offer) return;
+      setUpsellEditorState(offer);
+    });
+  });
+
+  host.querySelectorAll('[data-upsell-up]').forEach((button) => {
+    button.addEventListener('click', async () => {
+      const id = String(button.dataset.upsellUp || '');
+      const idx = CHATBOT_UPSELL_OFFERS.findIndex((item) => item.id === id);
+      if (idx <= 0) return;
+      const next = [...CHATBOT_UPSELL_OFFERS];
+      [next[idx - 1], next[idx]] = [next[idx], next[idx - 1]];
+      CHATBOT_UPSELL_OFFERS = next;
+      renderUpsellOffersList();
+      await persistUpsellOffersSettings();
+      toast('Ofrecimiento movido hacia arriba');
+    });
+  });
+
+  host.querySelectorAll('[data-upsell-down]').forEach((button) => {
+    button.addEventListener('click', async () => {
+      const id = String(button.dataset.upsellDown || '');
+      const idx = CHATBOT_UPSELL_OFFERS.findIndex((item) => item.id === id);
+      if (idx < 0 || idx >= CHATBOT_UPSELL_OFFERS.length - 1) return;
+      const next = [...CHATBOT_UPSELL_OFFERS];
+      [next[idx], next[idx + 1]] = [next[idx + 1], next[idx]];
+      CHATBOT_UPSELL_OFFERS = next;
+      renderUpsellOffersList();
+      await persistUpsellOffersSettings();
+      toast('Ofrecimiento movido hacia abajo');
+    });
+  });
+
+  host.querySelectorAll('[data-upsell-del]').forEach((button) => {
+    button.addEventListener('click', async () => {
+      const offer = CHATBOT_UPSELL_OFFERS.find((item) => item.id === button.dataset.upsellDel);
+      if (!(await askConfirm('¿Eliminar ofrecimiento?', `Se eliminará el ofrecimiento: "${offer?.question || 'sin texto'}"`))) return;
+      CHATBOT_UPSELL_OFFERS = CHATBOT_UPSELL_OFFERS.filter((item) => item.id !== button.dataset.upsellDel);
+      if (String($('#botUpsellOfferId')?.value || '') === String(button.dataset.upsellDel)) {
+        resetUpsellEditor();
+      }
+      if (!CHATBOT_UPSELL_OFFERS.length && $('#botUpsellEnabled')?.checked) {
+        $('#botUpsellEnabled').checked = false;
+      }
+      await persistUpsellOffersSettings();
+      toast('Ofrecimiento eliminado');
+    });
+  });
+}
+
+async function persistUpsellOffersSettings() {
+  const enabled = $('#botUpsellEnabled')?.checked ? '1' : '0';
+  const fd = new FormData();
+  fd.append('chatbot_upsell_enabled', enabled);
+  fd.append('chatbot_upsell_offers_json', JSON.stringify(CHATBOT_UPSELL_OFFERS));
+
+  // Compatibilidad con llaves legacy para versiones previas.
+  const first = CHATBOT_UPSELL_OFFERS[0];
+  fd.append('chatbot_upsell_question', first?.question || '¿Deseas agregar alguno de estos productos a tu pedido?');
+  fd.append('chatbot_upsell_product_ids', JSON.stringify(first?.productIds || []));
+
+  await api('/api/settings', { method: 'PUT', body: fd });
+  SETTINGS = await api('/api/settings');
+}
+
+function fillUpsellFormFromSettings() {
+  const enabled = (SETTINGS?.chatbot_upsell_enabled || '0') === '1';
+  if ($('#botUpsellEnabled')) $('#botUpsellEnabled').checked = enabled;
+
+  const parsed = parseUpsellOffers(SETTINGS?.chatbot_upsell_offers_json || '[]');
+  CHATBOT_UPSELL_OFFERS = parsed.length ? parsed : getLegacyUpsellOfferFromSettings();
+  CHATBOT_UPSELL_OFFERS = normalizeUpsellOffersWithProducts(CHATBOT_UPSELL_OFFERS);
+
+  resetUpsellEditor();
+  renderUpsellOffersList();
+}
+
+async function loadUpsellProducts() {
+  CHATBOT_UPSELL_PRODUCTS = await api('/api/products');
+  CHATBOT_UPSELL_OFFERS = normalizeUpsellOffersWithProducts(CHATBOT_UPSELL_OFFERS);
+  renderUpsellProductsPicker();
+  renderUpsellOffersList();
 }
 
 function renderDeliveryZonesList() {
@@ -2949,6 +3562,7 @@ function ensureDeliveryZoneMap() {
 function initDeliveryZoneModuleEvents() {
   $('#chatbotTabFlow')?.addEventListener('click', () => setChatbotSubtab('flow'));
   $('#chatbotTabDelivery')?.addEventListener('click', () => setChatbotSubtab('delivery'));
+  $('#chatbotTabUpsell')?.addEventListener('click', () => setChatbotSubtab('upsell'));
 
   $('#deliveryStartDraw')?.addEventListener('click', () => {
     const next = !DELIVERY_DRAW_ACTIVE;
@@ -3031,7 +3645,7 @@ function initDeliveryZoneModuleEvents() {
   });
 }
 
-function fillBotForm() {
+async function fillBotForm() {
   if (!SETTINGS) return;
   const link = `${location.origin}/${SETTINGS.slug}`;
   $('#chatLink').value = link;
@@ -3042,13 +3656,22 @@ function fillBotForm() {
   $('#botDelivery').checked = SETTINGS.delivery_enabled === '1';
   $('#botPickup').checked = SETTINGS.pickup_enabled === '1';
   $('#botLocation').checked = SETTINGS.location_enabled !== '0';
+  fillChatbotInfoOptionsFromSettings();
   DELIVERY_ZONES = parseDeliveryZones(SETTINGS.delivery_zones_geojson || '[]');
   DELIVERY_ZONES_PAGE = 1;
   DELIVERY_ZONE_FILTER_BRANCH = 'all';
+  fillUpsellFormFromSettings();
   renderDeliveryBranchOptions();
   setDeliveryColor($('#deliveryZoneColor')?.value || '#0ea5e9');
   resetDeliveryZoneEditor();
   renderDeliveryZonesList();
+  try {
+    await loadUpsellProducts();
+  } catch (err) {
+    CHATBOT_UPSELL_PRODUCTS = [];
+    renderUpsellProductsPicker();
+    console.warn('[upsell] No se pudo cargar productos para upsell:', err?.message || err);
+  }
   if (CHATBOT_SUBTAB === 'delivery') {
     ensureDeliveryZoneMap();
     drawDeliveryZones();
@@ -3057,7 +3680,7 @@ function fillBotForm() {
       fitDeliveryZonesBounds();
     }, 80);
   }
-  loadBranches();
+  await loadBranches();
 }
 $('#copyLinkBtn').addEventListener('click', () => {
   navigator.clipboard.writeText($('#chatLink').value);
@@ -3074,9 +3697,92 @@ $('#botForm').addEventListener('submit', async (e) => {
   fd.append('delivery_enabled', $('#botDelivery').checked ? '1' : '0');
   fd.append('pickup_enabled', $('#botPickup').checked ? '1' : '0');
   fd.append('location_enabled', $('#botLocation').checked ? '1' : '0');
+  fd.append('chatbot_extra_options_json', JSON.stringify(CHATBOT_INFO_OPTIONS));
   await api('/api/settings', { method: 'PUT', body: fd });
   toast('Flujo del chatbot guardado');
   SETTINGS = await api('/api/settings');
+});
+
+$('#botInfoOptionSaveBtn')?.addEventListener('click', () => {
+  const editId = String($('#botInfoOptionId')?.value || '').trim();
+  const label = String($('#botInfoOptionLabel')?.value || '').trim().slice(0, 42);
+  const message = String($('#botInfoOptionMessage')?.value || '').trim().slice(0, 300);
+  const url = normalizeInfoUrl($('#botInfoOptionUrl')?.value || '');
+
+  if (!label) return toast('Escribe el texto del botón', true);
+  if (!message && !url) return toast('Agrega un mensaje o un enlace para esta opción', true);
+  if ($('#botInfoOptionUrl')?.value && !url) return toast('El enlace no es válido. Usa formato https://...', true);
+
+  const payload = {
+    id: editId || `info_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+    label,
+    message,
+    url,
+  };
+
+  if (editId) {
+    CHATBOT_INFO_OPTIONS = CHATBOT_INFO_OPTIONS.map((item) => (item.id === editId ? payload : item));
+  } else {
+    CHATBOT_INFO_OPTIONS.push(payload);
+  }
+
+  CHATBOT_INFO_OPTIONS = parseChatbotInfoOptions(JSON.stringify(CHATBOT_INFO_OPTIONS));
+  renderChatbotInfoOptionsList();
+  resetChatbotInfoEditor();
+  toast(editId ? 'Opción actualizada (falta guardar flujo)' : 'Opción agregada (falta guardar flujo)');
+});
+
+$('#botInfoOptionNewBtn')?.addEventListener('click', () => {
+  resetChatbotInfoEditor();
+});
+
+$('#upsellForm')?.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const enabled = $('#botUpsellEnabled')?.checked;
+  const editId = String($('#botUpsellOfferId')?.value || '').trim();
+  const question = String($('#botUpsellQuestion')?.value || '').trim();
+  if (!question || question.length < 8) {
+    return toast('Escribe una pregunta más clara para el ofrecimiento', true);
+  }
+  if (!CHATBOT_UPSELL_SELECTED.size) {
+    return toast('Selecciona al menos un producto para este ofrecimiento', true);
+  }
+
+  const payload = {
+    id: editId || `upsell_offer_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+    question: question.slice(0, 260),
+    productIds: [...CHATBOT_UPSELL_SELECTED],
+  };
+
+  if (editId) {
+    CHATBOT_UPSELL_OFFERS = CHATBOT_UPSELL_OFFERS.map((offer) => (offer.id === editId ? payload : offer));
+  } else {
+    CHATBOT_UPSELL_OFFERS.push(payload);
+  }
+
+  if (enabled && !CHATBOT_UPSELL_OFFERS.length) {
+    return toast('Debes tener al menos un ofrecimiento guardado para activar esta función', true);
+  }
+
+  CHATBOT_UPSELL_OFFERS = normalizeUpsellOffersWithProducts(CHATBOT_UPSELL_OFFERS);
+  await persistUpsellOffersSettings();
+  renderUpsellOffersList();
+  resetUpsellEditor();
+  toast(editId ? 'Ofrecimiento actualizado' : 'Ofrecimiento guardado');
+});
+
+$('#upsellNewBtn')?.addEventListener('click', () => {
+  resetUpsellEditor();
+  toast('Listo para crear un nuevo ofrecimiento');
+});
+
+$('#botUpsellEnabled')?.addEventListener('change', async () => {
+  if ($('#botUpsellEnabled').checked && !CHATBOT_UPSELL_OFFERS.length) {
+    $('#botUpsellEnabled').checked = false;
+    return toast('Primero guarda al menos un ofrecimiento para poder activarlo', true);
+  }
+  await persistUpsellOffersSettings();
+  toast($('#botUpsellEnabled').checked ? 'Ofrecimiento inteligente activado' : 'Ofrecimiento inteligente desactivado');
 });
 
 initDeliveryZoneModuleEvents();
@@ -3387,7 +4093,16 @@ function openCashierModal(cashier = null) {
 
 /* ===== Boot ===== */
 async function boot(navigateToHash = true) {
+  const scopeFromUrl = String(new URLSearchParams(location.search).get('scope') || '').trim().toLowerCase();
+  if (scopeFromUrl === 'owner' || scopeFromUrl === 'cashier') {
+    setAuthScope(scopeFromUrl);
+    const cleanUrl = `${location.pathname}${location.hash || ''}`;
+    history.replaceState(null, '', cleanUrl);
+  }
+
   ME = await api('/api/auth/me');
+  if (ME?.role === 'cashier') setAuthScope('cashier');
+  if (ME?.role === 'owner') setAuthScope('owner');
   SETTINGS = await api('/api/settings');
   applyUserScopeUI();
 
@@ -3405,6 +4120,9 @@ async function boot(navigateToHash = true) {
   $('#userBizName').textContent = cashier ? (ME.branchName || ME.tenant.businessName) : ME.tenant.businessName;
   $('#userName').textContent = cashier ? `@${ME.username} · cajero` : `@${ME.username}`;
   $('#openChatLink').href = `/${ME.tenant.slug}`;
+  loadOrderSoundPreference();
+  syncOrdersSoundToggleUI();
+  startOrdersRealtimeMonitor();
 
   if (navigateToHash) {
     const fallbackView = cashier ? 'pos' : 'dashboard';

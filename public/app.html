@@ -10,7 +10,7 @@
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/bold/style.css" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/fill/style.css" />
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-  <link rel="stylesheet" href="/static/css/styles.css?v=20260619c" />
+  <link rel="stylesheet" href="/static/css/styles.css?v=20260622f" />
   <link rel="icon" type="image/svg+xml" href="/static/favicon.svg" />
   <link rel="icon" type="image/png" href="/static/chatbotpro100.png" />
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
@@ -31,16 +31,17 @@
         <div><span id="brandName">ChatBotPro</span><small>Panel de control</small></div>
       </div>
       <nav>
-        <div class="nav-label">Principal</div>
-        <a href="#dashboard" data-view="dashboard" class="active"><span class="nav-ic"><i class="ph-fill ph-house"></i></span><span>Dashboard</span></a>
-        <a href="#pedidos" data-view="pedidos"><span class="nav-ic"><i class="ph-fill ph-receipt"></i></span><span>Pedidos</span> <span id="pendingBadge" class="count" style="display:none"></span></a>
-        <a href="#clientes" data-view="clientes"><span class="nav-ic"><i class="ph-fill ph-users-three"></i></span><span>Clientes</span></a>
-        <a href="#pos" data-view="pos"><span class="nav-ic"><i class="ph-fill ph-cash-register"></i></span><span>Punto de venta</span></a>
-        <a href="#productos" data-view="productos"><span class="nav-ic"><i class="ph-fill ph-bowl-food"></i></span><span>Productos</span></a>
-        <div class="nav-label">Chatbot</div>
-        <a href="#chatbot" data-view="chatbot"><span class="nav-ic"><i class="ph-fill ph-chat-circle-dots"></i></span><span>Mi chatbot</span></a>
-        <div class="nav-label">Negocio</div>
-        <a href="#config" data-view="config"><span class="nav-ic"><i class="ph-fill ph-storefront"></i></span><span>Mi negocio</span></a>
+        <div class="nav-label nav-label-principal"><i class="ph-fill ph-chart-pie-slice"></i> Principal</div>
+        <a href="#dashboard" data-view="dashboard" class="active" data-color="indigo"><span class="nav-ic"><i class="ph-fill ph-house"></i></span><span>Dashboard</span></a>
+        <a href="#pedidos" data-view="pedidos" data-color="orange"><span class="nav-ic"><i class="ph-fill ph-receipt"></i></span><span>Pedidos</span> <span id="pendingBadge" class="count" style="display:none"></span></a>
+        <a href="#clientes" data-view="clientes" data-color="blue"><span class="nav-ic"><i class="ph-fill ph-users-three"></i></span><span>Clientes</span></a>
+        <a href="#pos" data-view="pos" data-color="emerald"><span class="nav-ic"><i class="ph-fill ph-cash-register"></i></span><span>Punto de venta</span></a>
+        <a href="#productos" data-view="productos" data-color="rose"><span class="nav-ic"><i class="ph-fill ph-bowl-food"></i></span><span>Productos</span></a>
+        <div class="nav-label nav-label-chatbot"><i class="ph-fill ph-chat-circle-dots"></i> Chatbot</div>
+        <a href="#chatbot" data-view="chatbot" data-color="cyan"><span class="nav-ic"><i class="ph-fill ph-chat-circle-dots"></i></span><span>Mi chatbot</span></a>
+        <div class="nav-label nav-label-negocio"><i class="ph-fill ph-briefcase"></i> Negocio</div>
+        <a href="#config" data-view="config" data-color="amber"><span class="nav-ic"><i class="ph-fill ph-storefront"></i></span><span>Mi negocio</span></a>
+        <a href="#suscripciones" data-view="suscripciones" data-color="violet"><span class="nav-ic"><i class="ph-fill ph-crown"></i></span><span>Suscripciones</span></a>
       </nav>
       <div class="foot">
         <div class="user-chip">
@@ -108,6 +109,12 @@
             <button class="btn btn-ghost orders-today-toggle on" id="ordersTodayToggle" aria-pressed="true">
               <i class="ph-bold ph-calendar-check"></i> Solo pedidos del día: Activado
             </button>
+            <div class="orders-live-tools">
+              <span class="orders-pending-today" id="ordersPendingTodayInfo"><i class="ph-fill ph-bell-ringing"></i> Nuevos pendientes hoy: 0</span>
+              <button class="btn btn-ghost orders-sound-toggle on" id="ordersSoundToggle" type="button" aria-pressed="true">
+                <i class="ph-fill ph-speaker-high"></i> Sonido pedidos: Activado
+              </button>
+            </div>
             <div class="orders-range">
               <div class="field" style="margin:0">
                 <label>Desde</label>
@@ -161,6 +168,7 @@
             </div>
           </div>
           <div class="table-wrap" id="customersTable"></div>
+          <div class="orders-pagination" id="customersPagination"></div>
         </div>
       </section>
 
@@ -229,11 +237,11 @@
         <div class="chatbot-subtabs">
           <button type="button" class="active" id="chatbotTabFlow"><i class="ph-bold ph-chats-circle"></i> Flujo del chatbot</button>
           <button type="button" id="chatbotTabDelivery"><i class="ph-bold ph-truck"></i> Servicio a domicilio</button>
+          <button type="button" id="chatbotTabUpsell"><i class="ph-bold ph-rocket-launch"></i> Ofrecimiento inteligente</button>
         </div>
 
         <div id="chatbotFlowPanel">
-          <div class="grid-2">
-            <div class="card">
+          <div class="card">
             <h3><i class="ph-bold ph-chats-circle"></i> Flujo del chatbot</h3>
             <form id="botForm">
               <div class="field">
@@ -246,11 +254,40 @@
                 <input type="tel" id="botWhatsapp" placeholder="5213312345678 (con lada del país)" />
                 <div class="hint">Aquí llegará el resumen de cada pedido confirmado.</div>
               </div>
+
+              <div class="field">
+                <label><i class="ph-bold ph-megaphone-simple"></i> Opciones informativas para clientes</label>
+                <div class="hint" style="margin-bottom:10px">Crea botones extra al entrar al chat (ej. Horarios, Ofertas de trabajo, Ubicación, Promociones).</div>
+                <input type="hidden" id="botInfoOptionId" />
+                <div class="row-2" style="margin-bottom:10px">
+                  <div class="field" style="margin:0">
+                    <label><i class="ph-bold ph-text-t"></i> Texto del botón</label>
+                    <input type="text" id="botInfoOptionLabel" maxlength="42" placeholder="Ej. Horarios" />
+                  </div>
+                  <div class="field" style="margin:0">
+                    <label><i class="ph-bold ph-link"></i> Enlace opcional</label>
+                    <input type="url" id="botInfoOptionUrl" placeholder="https://tudominio.com/empleos" />
+                  </div>
+                </div>
+                <div class="field" style="margin:0 0 10px">
+                  <label><i class="ph-bold ph-chat-text"></i> Mensaje para mostrar</label>
+                  <textarea id="botInfoOptionMessage" rows="2" placeholder="Ej. Nuestro horario es de 12:00 pm a 9:00 pm todos los días."></textarea>
+                </div>
+                <div class="upsell-actions-row" style="margin-bottom:10px">
+                  <button class="btn btn-ghost" type="button" id="botInfoOptionSaveBtn"><i class="ph-bold ph-plus-circle"></i> Agregar opción</button>
+                  <button class="btn btn-ghost" type="button" id="botInfoOptionNewBtn"><i class="ph-bold ph-broom"></i> Nueva</button>
+                </div>
+                <div class="hint" id="botInfoOptionHint">Estas opciones se guardan con el botón "Guardar flujo".</div>
+                <div class="hint" style="margin-top:8px"><b id="botInfoOptionsCount">0 opciones</b></div>
+                <div class="chatbot-info-options" id="botInfoOptionsList" style="margin-top:8px"></div>
+              </div>
+
               <button class="btn btn-primary" type="submit"><i class="ph-bold ph-floppy-disk"></i> Guardar flujo</button>
             </form>
-            </div>
-            <div class="card">
-              <h3><i class="ph-bold ph-truck"></i> Opciones de entrega</h3>
+          </div>
+
+          <div class="card">
+            <h3><i class="ph-bold ph-truck"></i> Opciones de entrega</h3>
               <div class="toggle-row">
                 <div class="t-info"><i class="ph-bold ph-moped"></i><div><b>Entrega a domicilio</b><span>El bot pedirá la dirección del cliente</span></div></div>
                 <label class="switch"><input type="checkbox" id="botDelivery" /><span class="track"></span></label>
@@ -264,10 +301,9 @@
                 <label class="switch"><input type="checkbox" id="botLocation" /><span class="track"></span></label>
               </div>
               <div class="hint" style="margin-top:6px"><i class="ph ph-info"></i> Los cambios en estas opciones se guardan con el botón "Guardar flujo".</div>
-            </div>
           </div>
 
-          <div class="card" style="margin-top:16px">
+          <div class="card">
             <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
               <h3><i class="ph-bold ph-buildings"></i> Sucursales de recogida</h3>
               <button class="btn btn-primary" id="addBranchBtn"><i class="ph-bold ph-plus-circle"></i> Nueva sucursal</button>
@@ -343,6 +379,45 @@
             <div id="deliveryZoneMap" class="delivery-zone-map"></div>
           </div>
         </div>
+
+        <div id="chatbotUpsellPanel" hidden>
+          <div class="grid-2">
+            <div class="card">
+              <h3><i class="ph-bold ph-rocket-launch"></i> Ofrecimiento inteligente</h3>
+              <form id="upsellForm">
+                <input type="hidden" id="botUpsellOfferId" />
+                <div class="toggle-row">
+                  <div class="t-info"><i class="ph-bold ph-trend-up"></i><div><b>Activar upsell automático</b><span>El chatbot sugerirá productos extra al cerrar el pedido.</span></div></div>
+                  <label class="switch"><input type="checkbox" id="botUpsellEnabled" /><span class="track"></span></label>
+                </div>
+                <div class="field" style="margin-top:14px">
+                  <label><i class="ph-bold ph-chat-text"></i> Pregunta de ofrecimiento</label>
+                  <textarea id="botUpsellQuestion" rows="3" placeholder="Ej. ¿Deseas agregar alguno de estos productos a tu pedido?"></textarea>
+                  <div class="hint">Este texto se mostrará antes de finalizar el checkout.</div>
+                </div>
+                <div class="upsell-actions-row">
+                  <button class="btn btn-primary" id="upsellSaveBtn" type="submit"><i class="ph-bold ph-floppy-disk"></i> Guardar ofrecimiento</button>
+                  <button class="btn btn-ghost" id="upsellNewBtn" type="button"><i class="ph-bold ph-plus-circle"></i> Nuevo ofrecimiento</button>
+                </div>
+                <div class="hint" id="upsellEditingHint" style="margin-top:8px">Crea un ofrecimiento con su pregunta y selecciona productos.</div>
+              </form>
+            </div>
+            <div class="card">
+              <h3><i class="ph-bold ph-selection-plus"></i> Productos para upsell</h3>
+              <div class="hint" style="margin-bottom:10px">Selecciona productos activos de tu menú para sugerirlos como venta adicional.</div>
+              <div id="upsellProductsPicker" class="upsell-products-picker"></div>
+              <div class="hint" id="upsellProductsCounter" style="margin-top:10px">Seleccionados: 0</div>
+            </div>
+          </div>
+          <div class="card" style="margin-top:16px">
+            <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
+              <h3><i class="ph-bold ph-list-checks"></i> Ofrecimientos guardados</h3>
+              <span class="hint" id="upsellOffersCount">0 ofrecimientos</span>
+            </div>
+            <div class="hint" style="margin-top:4px">El orden de esta lista es el orden en que el chatbot hará las preguntas.</div>
+            <div id="upsellOffersList" class="upsell-offers-list" style="margin-top:12px"></div>
+          </div>
+        </div>
       </section>
 
       <!-- ──────── Mi negocio ──────── -->
@@ -372,6 +447,13 @@
               </div>
               <button class="btn btn-primary" type="submit"><i class="ph-bold ph-floppy-disk"></i> Guardar identidad</button>
             </form>
+            <hr style="margin:18px 0;border:none;border-top:1px solid var(--line)" />
+            <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
+              <h3><i class="ph-bold ph-users-three"></i> Cajeros y cajas</h3>
+              <button class="btn btn-primary" id="addCashierBtn"><i class="ph-bold ph-plus-circle"></i> Nuevo cajero</button>
+            </div>
+            <div class="hint" style="margin-top:8px">Crea un cajero por sucursal y comparte su liga directa de caja para abrir el POS en esa sucursal.</div>
+            <div class="table-wrap" id="cashiersTable" style="margin-top:14px"></div>
           </div>
           <div class="card">
             <h3><i class="ph-bold ph-map-pin"></i> Horarios y Medios de pagos</h3>
@@ -455,13 +537,139 @@
             </form>
           </div>
         </div>
-        <div class="card" style="margin-top:16px">
-          <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
-            <h3><i class="ph-bold ph-users-three"></i> Cajeros y cajas</h3>
-            <button class="btn btn-primary" id="addCashierBtn"><i class="ph-bold ph-plus-circle"></i> Nuevo cajero</button>
+      </section>
+
+      <!-- ──────── Suscripciones ──────── -->
+      <section class="section" id="view-suscripciones">
+        <div class="subs-page">
+          <div class="subs-hero">
+            <div class="subs-hero-content">
+              <span class="subs-eyebrow"><i class="ph-fill ph-sparkle"></i> Plan ChatBotPro</span>
+              <h2>Tu restaurante <span class="grad-text">vendiendo 24/7</span> con automatización inteligente</h2>
+              <p>Elige tu plan, paga seguro con tarjeta y empieza a recibir pedidos por chatbot al instante.</p>
+              <div class="subs-hero-meta">
+                <span class="meta-chip"><i class="ph-fill ph-check-circle"></i> Sin contrato anual</span>
+                <span class="meta-chip"><i class="ph-fill ph-credit-card"></i> Débito o crédito</span>
+                <span class="meta-chip"><i class="ph-fill ph-arrows-clockwise"></i> Cancela cuando quieras</span>
+              </div>
+            </div>
+            <div class="subs-hero-badge">
+              <span class="badge-pill"><i class="ph-fill ph-fire"></i> OFERTA 1ER AÑO</span>
+              <span class="badge-off">-30% OFF</span>
+            </div>
           </div>
-          <div class="hint" style="margin-top:8px">Crea un cajero por sucursal y comparte su liga directa de caja para abrir el POS en esa sucursal.</div>
-          <div class="table-wrap" id="cashiersTable" style="margin-top:14px"></div>
+
+          <div class="subs-plans">
+            <article class="plan-card plan-regular">
+              <div class="plan-icon"><i class="ph-fill ph-package"></i></div>
+              <div class="plan-label">Plan mensual regular</div>
+              <div class="plan-price"><span class="cur">$</span><span class="amt">999</span><span class="per">/ mes MXN</span></div>
+              <ul class="plan-points">
+                <li><i class="ph-bold ph-check-circle"></i> Acceso completo al sistema</li>
+                <li><i class="ph-bold ph-check-circle"></i> Soporte estándar incluido</li>
+              </ul>
+            </article>
+            <article class="plan-card plan-promo">
+              <span class="plan-flag"><i class="ph-fill ph-star"></i> Más popular</span>
+              <div class="plan-icon promo"><i class="ph-fill ph-rocket-launch"></i></div>
+              <div class="plan-label">Promoción primer año</div>
+              <div class="plan-price big">
+                <span class="cur">$</span><span class="amt">699</span><span class="per">/ mes MXN</span>
+              </div>
+              <div class="plan-old">Antes <s>$999</s> · Ahorras <b>$3,600</b> al año</div>
+              <ul class="plan-points">
+                <li><i class="ph-bold ph-check-circle"></i> Todo lo del plan regular</li>
+                <li><i class="ph-bold ph-check-circle"></i> Precio fijo durante 12 meses</li>
+                <li><i class="ph-bold ph-check-circle"></i> Onboarding prioritario</li>
+              </ul>
+            </article>
+          </div>
+
+          <div class="subs-benefits-card">
+            <div class="subs-section-title">
+              <h3><i class="ph-fill ph-stack"></i> Todo lo que incluye tu suscripción</h3>
+              <span>6 módulos clave para crecer tu restaurante</span>
+            </div>
+            <div class="benefits-grid">
+              <div class="benefit-tile tile-teal">
+                <div class="benefit-ic"><i class="ph-fill ph-chat-circle-dots"></i></div>
+                <h4>Chatbot inteligente</h4>
+                <p>Toma pedidos por WhatsApp y web automáticamente con tu menú.</p>
+              </div>
+              <div class="benefit-tile tile-orange">
+                <div class="benefit-ic"><i class="ph-fill ph-receipt"></i></div>
+                <h4>Pedidos en tiempo real</h4>
+                <p>Control de estados, notas y seguimiento desde un solo panel.</p>
+              </div>
+              <div class="benefit-tile tile-blue">
+                <div class="benefit-ic"><i class="ph-fill ph-storefront"></i></div>
+                <h4>Panel completo</h4>
+                <p>Menú, branding, clientes y configuración del negocio integrados.</p>
+              </div>
+              <div class="benefit-tile tile-pink">
+                <div class="benefit-ic"><i class="ph-fill ph-cash-register"></i></div>
+                <h4>Punto de venta</h4>
+                <p>POS con cajeros, control de caja y cierres por sucursal.</p>
+              </div>
+              <div class="benefit-tile tile-violet">
+                <div class="benefit-ic"><i class="ph-fill ph-trend-up"></i></div>
+                <h4>Mejoras continuas</h4>
+                <p>Nuevas funciones y actualizaciones para vender más cada mes.</p>
+              </div>
+              <div class="benefit-tile tile-green">
+                <div class="benefit-ic"><i class="ph-fill ph-headset"></i></div>
+                <h4>Soporte humano</h4>
+                <p>Asistencia para configurar tu chatbot y resolver dudas rápidas.</p>
+              </div>
+            </div>
+          </div>
+
+          <div class="subs-pay-card">
+            <div class="pay-left">
+              <div class="pay-visual" aria-hidden="true">
+                <div class="pay-card pay-card-front">
+                  <div class="pay-card-top">
+                    <span class="pay-chip"></span>
+                    <span class="pay-network"><i class="ph-fill ph-credit-card"></i> VISA · MC</span>
+                  </div>
+                  <div class="pay-card-num">•••• •••• •••• 4242</div>
+                  <div class="pay-card-bot">
+                    <div><small>Titular</small><b>TU NEGOCIO</b></div>
+                    <div><small>Vence</small><b>12/29</b></div>
+                  </div>
+                </div>
+                <div class="pay-card pay-card-back">
+                  <i class="ph-fill ph-shield-check"></i>
+                  <span>Pago protegido</span>
+                </div>
+              </div>
+            </div>
+
+            <div class="pay-right">
+              <span class="pay-eyebrow"><i class="ph-fill ph-lock-key"></i> Pago seguro</span>
+              <h3>Procesado por <span class="stripe-brand">Stripe</span></h3>
+              <p>Acepta tarjeta de débito y crédito con cifrado de nivel bancario. Nunca almacenamos tus datos.</p>
+
+              <div class="trust-strip">
+                <div class="trust-item"><i class="ph-fill ph-shield-check"></i><span>SSL · TLS 1.3</span></div>
+                <div class="trust-item"><i class="ph-fill ph-fingerprint"></i><span>3D Secure</span></div>
+                <div class="trust-item"><i class="ph-fill ph-lock-key"></i><span>PCI-DSS</span></div>
+                <div class="trust-item"><i class="ph-fill ph-check-circle"></i><span>Cobro verificado</span></div>
+              </div>
+
+              <div class="card-brands" aria-label="Tarjetas aceptadas">
+                <span class="brand visa">VISA</span>
+                <span class="brand mc"><span class="mc-dot a"></span><span class="mc-dot b"></span></span>
+                <span class="brand amex">AMEX</span>
+                <span class="brand stripe"><i class="ph-fill ph-credit-card"></i> Stripe</span>
+              </div>
+
+              <a class="btn btn-primary pay-cta" href="https://buy.stripe.com/00wcN44Zn33H3BV5DU4c80i" target="_blank" rel="noopener noreferrer">
+                <i class="ph-fill ph-credit-card"></i> Pagar mi Plan Mensual
+              </a>
+              <div class="pay-foot"><i class="ph-bold ph-info"></i> Serás redirigido al checkout seguro de Stripe.</div>
+            </div>
+          </div>
         </div>
       </section>
     </main>

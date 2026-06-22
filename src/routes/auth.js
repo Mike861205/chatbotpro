@@ -49,7 +49,7 @@ router.post('/register', async (req, res, next) => {
     // Crea el SCHEMA AISLADO del tenant en Neon con valores por defecto
     await initTenantDefaults(cleanSlug, businessName.trim());
 
-    setAuthCookie(res, signToken(u.rows[0], tenant));
+    setAuthCookie(res, signToken(u.rows[0], tenant), 'owner');
     res.json({ ok: true, slug: cleanSlug });
   } catch (e) {
     next(e);
@@ -82,7 +82,7 @@ router.post('/login', async (req, res, next) => {
         whatsappUrl: supportWhatsappUrl(),
       });
     }
-    setAuthCookie(res, signToken(user, tenant));
+    setAuthCookie(res, signToken(user, tenant), 'owner');
     res.json({ ok: true, slug: tenant.slug });
   } catch (e) {
     next(e);
@@ -160,7 +160,7 @@ router.post('/cashier-login', async (req, res, next) => {
     setAuthCookie(res, signToken(
       { id: row.uid, username: row.username },
       { id: row.tid, slug: row.tenant_slug }
-    ));
+    ), 'cashier');
     res.json({ ok: true, redirectTo: '/app#pos' });
   } catch (e) {
     next(e);
@@ -168,7 +168,8 @@ router.post('/cashier-login', async (req, res, next) => {
 });
 
 router.post('/logout', (req, res) => {
-  clearAuthCookie(res);
+  const scope = String(req.get('x-cbp-auth-scope') || 'all').trim().toLowerCase();
+  clearAuthCookie(res, scope || 'all');
   res.json({ ok: true });
 });
 

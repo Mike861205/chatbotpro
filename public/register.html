@@ -75,7 +75,7 @@
           </div>
           <div class="field">
             <label><i class="ph-bold ph-link"></i> Slug (liga de tu negocio) *</label>
-            <input type="text" id="slug" placeholder="tacos-el-guero" required pattern="[a-z0-9\-]{3,40}" />
+            <input type="text" id="slug" placeholder="tacos-el-guero" required pattern="[a-z0-9\-]{3,40}" readonly title="Se genera automáticamente desde el nombre del negocio" />
             <div class="hint">Tu chatbot vivirá en: <b id="slugPreview" style="color:var(--primary)">…</b></div>
           </div>
           <div class="row-2">
@@ -104,13 +104,13 @@
     const slugify = (s) => s.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '')
       .replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40);
     bizInput.addEventListener('input', () => {
-      if (!slugInput.dataset.touched) slugInput.value = slugify(bizInput.value);
+      slugInput.value = slugify(bizInput.value);
       updatePreview();
     });
-    slugInput.addEventListener('input', () => { slugInput.dataset.touched = '1'; slugInput.value = slugify(slugInput.value); updatePreview(); });
     function updatePreview() {
       document.getElementById('slugPreview').textContent = location.origin + '/' + (slugInput.value || '…');
     }
+    slugInput.value = slugify(bizInput.value);
     updatePreview();
 
     document.getElementById('regForm').addEventListener('submit', async (e) => {
@@ -134,6 +134,7 @@
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || 'Error');
+        try { sessionStorage.setItem('cbp_auth_scope', 'owner'); } catch {}
         location.href = '/app';
       } catch (err) {
         document.getElementById('errorMsg').textContent = err.message;
