@@ -1,9 +1,10 @@
 const express = require('express');
-const { requireAuth } = require('../middleware/auth');
+const { requireAuth, requireOwner } = require('../middleware/auth');
 const { createImageUpload, deleteManagedUpload, optimizeUploadedImage, safeUnlink } = require('../utils/uploads');
 
 const router = express.Router();
 router.use(requireAuth);
+router.use(requireOwner);
 
 const upload = createImageUpload({
   scopeResolver: (req) => req.tenant.slug,

@@ -41,28 +41,60 @@ function parseDeliveryZones(raw) {
   try {
     const parsed = JSON.parse(String(raw || '[]'));
     if (!Array.isArray(parsed)) return [];
+
+    const normalizePoint = (point) => {
+      if (!Array.isArray(point) || point.length < 2) return null;
+      const a = Number(point[0]);
+      const b = Number(point[1]);
+      if (!Number.isFinite(a) || !Number.isFinite(b)) return null;
+      // Prefer [lat,lng], fallback from [lng,lat] (GeoJSON)
+      if (Math.abs(a) <= 90 && Math.abs(b) <= 180) return [a, b];
+      if (Math.abs(a) <= 180 && Math.abs(b) <= 90) return [b, a];
+      return null;
+    };
+
+    const extractPoints = (zone) => {
+      if (Array.isArray(zone?.points)) return zone.points.map(normalizePoint).filter(Boolean);
+      const coordinates = zone?.geometry?.coordinates;
+      if (Array.isArray(coordinates) && Array.isArray(coordinates[0]) && Array.isArray(coordinates[0][0])) {
+        // GeoJSON polygon format: [ [ [lng, lat], ... ] ]
+        return coordinates[0].map(normalizePoint).filter(Boolean);
+      }
+      return [];
+    };
+
     return parsed
       .map((zone, i) => {
-        const points = Array.isArray(zone?.points)
-          ? zone.points
-              .map((p) => [Number(p?.[0]), Number(p?.[1])])
-              .filter((p) => Number.isFinite(p[0]) && Number.isFinite(p[1]))
-          : [];
-        const fee = Number(zone?.fee);
-        const name = String(zone?.name || '').trim();
+        const props = zone?.properties && typeof zone.properties === 'object' ? zone.properties : zone;
+        const points = extractPoints(zone);
+        const fee = Number(props?.fee);
+        const name = String(props?.name || '').trim();
         if (!name || !Number.isFinite(fee) || fee < 0 || points.length < 3) return null;
         return {
-          id: String(zone?.id || `zone-${i + 1}`),
+          id: String(props?.id || zone?.id || `zone-${i + 1}`),
           name,
           fee,
+          color: String(props?.color || zone?.color || '#0ea5e9'),
           points,
-          active: zone?.active !== false,
+          active: props?.active !== false,
         };
       })
       .filter(Boolean);
   } catch {
     return [];
   }
+}
+
+function extractColonyLabel(reverseGeo) {
+  const source = reverseGeo?.address || {};
+  return String(
+    source.neighbourhood ||
+      source.suburb ||
+      source.city_district ||
+      source.residential ||
+      source.quarter ||
+      ''
+  ).trim();
 }
 
 function pointInPolygon(point, polygon) {
@@ -146,7 +178,7 @@ function matchDeliveryFeeRule(rules, candidates) {
 
 async function resolveDeliveryFee(geo, address, rules, zones = []) {
   if (!Number.isFinite(geo?.lat) || !Number.isFinite(geo?.lng)) {
-    return { fee: 0, zoneName: '', resolvedLabel: '' };
+    return { fee: 0, zoneName: '', branchId: null, branchName: '', resolvedLabel: '' };
   }
 
   const activeZones = Array.isArray(zones) ? zones.filter((zone) => zone.active && Array.isArray(zone.points) && zone.points.length >= 3) : [];
@@ -154,22 +186,38 @@ async function resolveDeliveryFee(geo, address, rules, zones = []) {
   // Si hay zonas dibujadas, la resolución es 100% por polígono para evitar latencia innecesaria.
   if (activeZones.length) {
     const zoneMatch = activeZones.find((zone) => pointInPolygon([geo.lat, geo.lng], zone.points));
+    const reverseGeo = await reverseGeocodeLocation(geo.lat, geo.lng);
+    const colony = extractColonyLabel(reverseGeo);
+    const resolvedLabel = colony || reverseGeo?.display_name || (zoneMatch ? zoneMatch.name : '');
     if (zoneMatch) {
-      return { fee: zoneMatch.fee, zoneName: zoneMatch.name, resolvedLabel: zoneMatch.name };
+      return {
+        fee: zoneMatch.fee,
+        zoneName: zoneMatch.name,
+        branchId: zoneMatch.branchId != null && zoneMatch.branchId !== '' ? Number(zoneMatch.branchId) : null,
+        branchName: zoneMatch.branchName || '',
+        resolvedLabel,
+      };
     }
-    return { fee: 0, zoneName: '', resolvedLabel: '' };
+    return { fee: 0, zoneName: '', branchId: null, branchName: '', resolvedLabel };
   }
 
   if (!rules.length) {
-    return { fee: 0, zoneName: '', resolvedLabel: '' };
+    return { fee: 0, zoneName: '', branchId: null, branchName: '', resolvedLabel: '' };
   }
 
   const reverseGeo = await reverseGeocodeLocation(geo.lat, geo.lng);
   const { resolvedLabel, candidates } = buildLocationCandidates(geo, address, reverseGeo);
   const match = matchDeliveryFeeRule(rules, candidates);
-  if (!match) return { fee: 0, zoneName: '', resolvedLabel };
+  if (!match) return { fee: 0, zoneName: '', branchId: null, branchName: '', resolvedLabel };
 
-  return { fee: match.fee, zoneName: match.zoneName, resolvedLabel };
+  return { fee: match.fee, zoneName: match.zoneName, branchId: null, branchName: '', resolvedLabel };
+}
+
+function deliveryZoneServiceLabel(customer) {
+  const zoneName = String(customer?.deliveryZoneName || '').trim();
+  const branchName = String(customer?.deliveryBranchName || '').trim();
+  if (zoneName && branchName) return `${zoneName} · sucursal ${branchName}`;
+  return zoneName || branchName;
 }
 
 async function getAiRuntimeConfig() {
@@ -277,15 +325,10 @@ function mapsUrl(lat, lng) {
 
 function locationSummary(customer) {
   const hasCoords = Number.isFinite(customer?.locationLat) && Number.isFinite(customer?.locationLng);
-  const locationLabel = String(customer?.locationText || '').trim();
-  if (!hasCoords && !locationLabel) return '';
+  if (!hasCoords && !customer?.locationResolved) return '';
 
   const lines = [];
-  if (locationLabel) lines.push(`🧭 Ubicación compartida: ${locationLabel}`);
-  if (hasCoords) {
-    lines.push(`📍 Coordenadas: ${customer.locationLat.toFixed(5)}, ${customer.locationLng.toFixed(5)}`);
-    lines.push(`🗺️ Abrir en Maps: ${mapsUrl(customer.locationLat, customer.locationLng)}`);
-  }
+  if (hasCoords) lines.push(`🗺️ Abrir en Maps: ${mapsUrl(customer.locationLat, customer.locationLng)}`);
   if (customer?.locationResolved) lines.push(`🏘️ Referencia Maps: ${customer.locationResolved}`);
   return lines.join('\n');
 }
@@ -293,13 +336,14 @@ function locationSummary(customer) {
 function pricingSummary(state, currency) {
   const subtotal = cartTotal(state.cart);
   const deliveryFee = Number(state.customer?.deliveryFee || 0);
+  const deliveryLabel = deliveryZoneServiceLabel(state.customer);
   const lines = state.cart.map((it) => `• ${it.qty}x ${it.name} — ${money(it.price * it.qty, currency)}`);
   return [
     '🛒 *Tu pedido:*',
     ...lines,
     '',
     `*Subtotal: ${money(subtotal, currency)}*`,
-    ...(deliveryFee > 0 ? [`*Envío${state.customer?.deliveryZoneName ? ` (${state.customer.deliveryZoneName})` : ''}: ${money(deliveryFee, currency)}*`] : []),
+    ...(deliveryFee > 0 ? [`*Envío${deliveryLabel ? ` (${deliveryLabel})` : ''}: ${money(deliveryFee, currency)}*`] : []),
     `*Total: ${money(subtotal + deliveryFee, currency)}*`,
   ].join('\n');
 }
@@ -329,7 +373,7 @@ function mainOptions(cart) {
   const opts = [{ label: '📋 Ver menú', value: 'menu' }];
   if (cart.length) {
     opts.push({ label: '🛒 Ver carrito', value: 'cart' });
-    opts.push({ label: '✅ Finalizar pedido', value: 'checkout' });
+    opts.push({ label: '✅ Sería todo, gracias.', value: 'checkout' });
   }
   return opts;
 }
@@ -363,6 +407,8 @@ async function findReturningCustomerByPhone(t, phoneRaw) {
        o.notes AS customer_reference,
        o.delivery_fee::float AS delivery_fee,
        o.delivery_zone_name,
+      o.service_branch_id,
+      o.service_branch_name,
        to_char(o.created_at AT TIME ZONE 'America/Mexico_City', 'DD Mon YYYY, HH24:MI') AS last_delivery_at
      FROM {s}.customers c
      JOIN {s}.orders o ON o.customer_id = c.id
@@ -388,6 +434,8 @@ async function findReturningCustomerByPhone(t, phoneRaw) {
     reference: String(row.customer_reference || '').trim(),
     deliveryFee: Number(row.delivery_fee || 0),
     deliveryZoneName: row.delivery_zone_name || '',
+    deliveryBranchId: Number.isFinite(Number(row.service_branch_id)) ? Number(row.service_branch_id) : null,
+    deliveryBranchName: row.service_branch_name || '',
     lastDeliveryAt: row.last_delivery_at || '',
   };
 }
@@ -411,12 +459,14 @@ async function showMenu(t, state) {
 
 async function showProducts(t, state, categoryId) {
   let products = await activeProducts(t);
+  state.currentCategoryId = Number.isFinite(Number(categoryId)) ? Number(categoryId) : null;
   if (categoryId) {
     const cat = await t.get('SELECT name FROM {s}.categories WHERE id = $1', [categoryId]);
     if (cat) products = products.filter((p) => p.category === cat.name);
   }
   state.step = 'choosing_product';
   const currency = state.currency;
+  const qtyById = new Map((state.cart || []).map((it) => [Number(it.id), Number(it.qty || 0)]));
   return {
     messages: ['Elige un producto para agregarlo a tu pedido:'],
     products: products.map((p) => ({
@@ -426,6 +476,7 @@ async function showProducts(t, state, categoryId) {
       price: p.price,
       priceLabel: money(p.price, currency),
       image: p.image,
+      qty: qtyById.get(Number(p.id)) || 0,
     })),
     options: [{ label: '⬅️ Volver', value: 'start' }, ...(state.cart.length ? mainOptions(state.cart).slice(1) : [])],
   };
@@ -434,13 +485,14 @@ async function showProducts(t, state, categoryId) {
 function buildOrderText(businessName, cart, customer, delivery, currency) {
   const subtotal = cartTotal(cart);
   const deliveryFee = Number(customer?.deliveryFee || 0);
+  const deliveryLabel = deliveryZoneServiceLabel(customer);
   const lines = [
     `🧾 *Nuevo pedido — ${businessName}*`,
     '',
     ...cart.map((it) => `• ${it.qty}x ${it.name} — ${money(it.price * it.qty, currency)}`),
     '',
     `*Subtotal: ${money(subtotal, currency)}*`,
-    ...(deliveryFee > 0 ? [`*Envío${customer?.deliveryZoneName ? ` (${customer.deliveryZoneName})` : ''}: ${money(deliveryFee, currency)}*`] : []),
+    ...(deliveryFee > 0 ? [`*Envío${deliveryLabel ? ` (${deliveryLabel})` : ''}: ${money(deliveryFee, currency)}*`] : []),
     `*Total: ${money(subtotal + deliveryFee, currency)}*`,
     '',
     `👤 ${customer.name}`,
@@ -449,6 +501,7 @@ function buildOrderText(businessName, cart, customer, delivery, currency) {
     delivery === 'domicilio'
       ? `📍 Entrega a domicilio: ${customer.address}`
       : `🏪 Recoger en sucursal${customer.branchName ? `: ${customer.branchName}` : ''}`,
+    ...(delivery === 'domicilio' && customer?.deliveryBranchName ? [`🏪 Atiende: Sucursal ${customer.deliveryBranchName}`] : []),
     ...(delivery === 'domicilio' && customer?.reference ? [`📝 Referencia cliente: ${customer.reference}`] : []),
   ];
   const locationDetails = locationSummary(customer);
@@ -561,7 +614,7 @@ async function handleMessage(t, slug, sessionId, rawInput) {
     reply.messages = [cartSummary(state.cart, currency)];
     reply.options = state.cart.length
       ? [
-          { label: '✅ Finalizar pedido', value: 'checkout' },
+          { label: '✅ Sería todo, gracias.', value: 'checkout' },
           { label: '➕ Agregar más', value: 'menu' },
           { label: '🗑️ Vaciar carrito', value: 'clear_cart' },
         ]
@@ -583,15 +636,116 @@ async function handleMessage(t, slug, sessionId, rawInput) {
   }
 
   // Selección de producto
+  if (lower.startsWith('prod_apply_')) {
+    const raw = lower.slice('prod_apply_'.length).trim();
+    const parts = raw ? raw.split(',').filter(Boolean) : [];
+    const parsed = parts
+      .map((part) => {
+        const [idStr, qtyStr] = part.split('-');
+        return { id: Number(idStr), qty: Number(qtyStr) };
+      })
+      .filter((it) => Number.isFinite(it.id) && Number.isFinite(it.qty) && it.qty >= 0 && it.qty <= 50)
+      .map((it) => ({ id: it.id, qty: Math.floor(it.qty) }));
+
+    if (parsed.length) {
+      const lines = [];
+      for (const item of parsed) {
+        const prod = await t.get('SELECT id, name, price::float AS price FROM {s}.products WHERE id = $1 AND active = 1', [item.id]);
+        if (!prod) continue;
+
+        const existing = state.cart.find((it) => it.id === prod.id);
+        if (item.qty <= 0) {
+          state.cart = state.cart.filter((it) => it.id !== prod.id);
+          lines.push(`• Quitado: *${prod.name}*`);
+        } else {
+          if (existing) existing.qty = item.qty;
+          else state.cart.push({ id: prod.id, name: prod.name, price: prod.price, qty: item.qty });
+          lines.push(`• *${item.qty}x ${prod.name}* = *${money(item.qty * Number(prod.price || 0), currency)}*`);
+        }
+      }
+
+      state.step = 'start';
+      const summary = cartSummary(state.cart, currency);
+      reply.messages = [
+        lines.length
+          ? `✅ Cantidades confirmadas al checkout:\n${lines.join('\n')}`
+          : 'No se pudo aplicar la selección.',
+        summary,
+      ];
+      reply.options = [
+        { label: '➕ Agregar más', value: 'menu' },
+        { label: '✅ Sería todo, gracias.', value: 'checkout' },
+        { label: '🛒 Ver carrito', value: 'cart' },
+      ];
+      return finish();
+    }
+  }
+
+  if (lower.startsWith('prod_set_')) {
+    const parts = lower.split('_');
+    const id = Number(parts[2]);
+    const qty = Number(parts[3]);
+    if (Number.isFinite(id) && Number.isFinite(qty) && qty >= 0 && qty <= 50) {
+      const prod = await t.get('SELECT id, name, price::float AS price FROM {s}.products WHERE id = $1 AND active = 1', [id]);
+      if (prod) {
+        const existing = state.cart.find((it) => it.id === prod.id);
+        const finalQty = Math.floor(qty);
+        if (finalQty <= 0) {
+          state.cart = state.cart.filter((it) => it.id !== prod.id);
+        } else if (existing) {
+          existing.qty = finalQty;
+        } else {
+          state.cart.push({ id: prod.id, name: prod.name, price: prod.price, qty: finalQty });
+        }
+
+        state.step = 'start';
+        const lineTotal = money(finalQty * Number(prod.price || 0), currency);
+        if (finalQty <= 0) {
+          reply.messages = [`🗑️ Quité *${prod.name}* de tu pedido.`, cartSummary(state.cart, currency)];
+        } else {
+          reply.messages = [`✅ Agregado al checkout: *${finalQty}x ${prod.name}* = *${lineTotal}*.`, cartSummary(state.cart, currency)];
+        }
+        reply.options = [
+          { label: '➕ Agregar más', value: 'menu' },
+          { label: '✅ Sería todo, gracias.', value: 'checkout' },
+          { label: '🛒 Ver carrito', value: 'cart' },
+        ];
+        return finish();
+      }
+    }
+  }
+
+  if (lower.startsWith('prod_dec_')) {
+    const id = Number(lower.slice('prod_dec_'.length));
+    if (Number.isFinite(id)) {
+      const existing = state.cart.find((it) => it.id === id);
+      if (existing) {
+        existing.qty -= 1;
+        if (existing.qty <= 0) {
+          state.cart = state.cart.filter((it) => it.id !== id);
+        }
+      }
+      state.step = 'choosing_product';
+      Object.assign(reply, await showProducts(t, state, state.currentCategoryId));
+      return finish();
+    }
+  }
+
   if (lower.startsWith('prod_')) {
     const prod = await t.get('SELECT id, name, price::float AS price FROM {s}.products WHERE id = $1 AND active = 1', [
       Number(lower.slice(5)),
     ]);
     if (prod) {
-      state.step = 'awaiting_qty';
-      state.pendingProduct = { id: prod.id, name: prod.name, price: prod.price };
-      reply.messages = [`*${prod.name}* — ${money(prod.price, currency)}\n¿Cuántos quieres?`];
-      reply.options = [1, 2, 3, 4, 5].map((n) => ({ label: String(n), value: `qty_${n}` }));
+      const existing = state.cart.find((it) => it.id === prod.id);
+      if (existing) existing.qty += 1;
+      else state.cart.push({ id: prod.id, name: prod.name, price: prod.price, qty: 1 });
+
+      state.step = 'choosing_product';
+      const menuReply = await showProducts(t, state, state.currentCategoryId);
+      const currentQty = state.cart.find((it) => it.id === prod.id)?.qty || 0;
+      reply.messages = [`✅ Llevas *${currentQty}x ${prod.name}* en tu pedido.`, ...menuReply.messages];
+      reply.products = menuReply.products;
+      reply.options = menuReply.options;
       return finish();
     }
   }
@@ -609,12 +763,15 @@ async function handleMessage(t, slug, sessionId, rawInput) {
       reply.messages = [`¡Agregado! ${qty}x *${name}* 🎉\n\n${cartSummary(state.cart, currency)}`];
       reply.options = [
         { label: '➕ Agregar más', value: 'menu' },
-        { label: '✅ Finalizar pedido', value: 'checkout' },
+        { label: '✅ Sería todo, gracias.', value: 'checkout' },
       ];
       return finish();
     }
-    reply.messages = ['Por favor indícame una cantidad válida (1 a 50).'];
-    reply.options = [1, 2, 3].map((n) => ({ label: String(n), value: `qty_${n}` }));
+    reply.messages = ['Puedes tocar el botón + del producto para agregar más unidades, o elegir "➕ Agregar más".'];
+    reply.options = [
+      { label: '➕ Agregar más', value: 'menu' },
+      { label: '✅ Sería todo, gracias.', value: 'checkout' },
+    ];
     return finish();
   }
 
@@ -656,6 +813,8 @@ async function handleMessage(t, slug, sessionId, rawInput) {
       state.customer.locationResolved = p.locationResolved || '';
       state.customer.deliveryFee = Number(p.deliveryFee || 0);
       state.customer.deliveryZoneName = p.deliveryZoneName || '';
+      state.customer.deliveryBranchId = Number.isFinite(Number(p.deliveryBranchId)) ? Number(p.deliveryBranchId) : null;
+      state.customer.deliveryBranchName = p.deliveryBranchName || '';
       state.customer.reference = p.reference || '';
       state.delivery = 'domicilio';
       if (state.cart.length) {
@@ -699,6 +858,8 @@ async function handleMessage(t, slug, sessionId, rawInput) {
       state.customer.locationResolved = '';
       state.customer.deliveryFee = 0;
       state.customer.deliveryZoneName = '';
+      state.customer.deliveryBranchId = null;
+      state.customer.deliveryBranchName = '';
       state.customer.reference = '';
 
       const branches = await t.all('SELECT id, name, address, reference FROM {s}.branches WHERE active = 1 ORDER BY name');
@@ -944,6 +1105,8 @@ async function handleMessage(t, slug, sessionId, rawInput) {
         const feeInfo = await resolveDeliveryFee(geo, state.customer.address, deliveryFeeRules, deliveryZones);
         state.customer.deliveryFee = feeInfo.fee;
         state.customer.deliveryZoneName = feeInfo.zoneName;
+        state.customer.deliveryBranchId = Number.isFinite(Number(feeInfo.branchId)) ? Number(feeInfo.branchId) : null;
+        state.customer.deliveryBranchName = feeInfo.branchName || '';
         state.customer.locationResolved = feeInfo.resolvedLabel;
       }
       state.step = 'ask_reference';
@@ -1014,6 +1177,8 @@ async function handleMessage(t, slug, sessionId, rawInput) {
         const feeInfo = await resolveDeliveryFee(geo, state.customer.address, deliveryFeeRules, deliveryZones);
         state.customer.deliveryFee = feeInfo.fee;
         state.customer.deliveryZoneName = feeInfo.zoneName;
+        state.customer.deliveryBranchId = Number.isFinite(Number(feeInfo.branchId)) ? Number(feeInfo.branchId) : null;
+        state.customer.deliveryBranchName = feeInfo.branchName || '';
         state.customer.locationResolved = feeInfo.resolvedLabel;
       }
       if (state.delivery === 'domicilio') {
@@ -1099,10 +1264,16 @@ async function handleMessage(t, slug, sessionId, rawInput) {
       const subtotal = cartTotal(state.cart);
       const deliveryFee = Number(state.customer.deliveryFee || 0);
       const total = subtotal + deliveryFee;
+      const serviceBranchId = state.delivery === 'domicilio'
+        ? (Number.isFinite(Number(state.customer.deliveryBranchId)) ? Number(state.customer.deliveryBranchId) : null)
+        : (Number.isFinite(Number(state.customer.branchId)) ? Number(state.customer.branchId) : null);
+      const serviceBranchName = state.delivery === 'domicilio'
+        ? (state.customer.deliveryBranchName || null)
+        : (state.customer.branchName || null);
       const orderRow = await t.get(
         `INSERT INTO {s}.orders
-         (customer_id, items, subtotal, total, status, channel, delivery, notes, pickup_branch_id, pickup_branch_name, customer_location_lat, customer_location_lng, customer_location_text, customer_location_resolved, delivery_fee, delivery_zone_name)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16) RETURNING id`,
+         (customer_id, items, subtotal, total, status, channel, delivery, notes, pickup_branch_id, pickup_branch_name, customer_location_lat, customer_location_lng, customer_location_text, customer_location_resolved, delivery_fee, delivery_zone_name, service_branch_id, service_branch_name)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18) RETURNING id`,
         [
           customer.id,
           JSON.stringify(state.cart),
@@ -1120,6 +1291,8 @@ async function handleMessage(t, slug, sessionId, rawInput) {
           state.customer.locationResolved || null,
           deliveryFee,
           state.customer.deliveryZoneName || null,
+          serviceBranchId,
+          serviceBranchName,
         ]
       );
       await t.run('UPDATE {s}.orders SET payment_method = $1 WHERE id = $2', [state.customer.paymentMethod || '', orderRow.id]);
@@ -1149,10 +1322,14 @@ async function handleMessage(t, slug, sessionId, rawInput) {
   const products = await activeProducts(t);
   const match = products.find((p) => p.name.toLowerCase().includes(lower) && lower.length >= 3);
   if (match) {
-    state.step = 'awaiting_qty';
-    state.pendingProduct = { id: match.id, name: match.name, price: match.price };
-    reply.messages = [`¡Encontré *${match.name}*! — ${money(match.price, currency)}\n¿Cuántos quieres?`];
-    reply.options = [1, 2, 3, 4, 5].map((n) => ({ label: String(n), value: `qty_${n}` }));
+    const existing = state.cart.find((it) => it.id === match.id);
+    if (existing) existing.qty += 1;
+    else state.cart.push({ id: match.id, name: match.name, price: match.price, qty: 1 });
+    reply.messages = [`¡Agregado! 1x *${match.name}* 🎉\n\n${cartSummary(state.cart, currency)}`];
+    reply.options = [
+      { label: '➕ Agregar más', value: 'menu' },
+      { label: '✅ Sería todo, gracias.', value: 'checkout' },
+    ];
     return finish();
   }
 
@@ -1173,6 +1350,7 @@ function confirmText(state, businessName, currency) {
     (state.delivery === 'domicilio'
       ? `📍 ${c.address}`
       : `🏪 Recoger en sucursal${c.branchName ? `: ${c.branchName}` : ''}`) +
+    (state.delivery === 'domicilio' && c.deliveryBranchName ? `\n🏪 Atiende: Sucursal ${c.deliveryBranchName}` : '') +
     (state.delivery === 'domicilio' && c.reference ? `\n📝 Referencia: ${c.reference}` : '') +
     (locationDetails ? `\n${locationDetails}` : '') +
     '\n\n¿Confirmamos tu pedido?'

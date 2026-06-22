@@ -8,6 +8,8 @@
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/regular/style.css" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/bold/style.css" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/fill/style.css" />
+  <link rel="icon" type="image/svg+xml" href="/static/favicon.svg" />
+  <link rel="icon" type="image/png" href="/static/chatbotpro100.png" />
   <style>
     :root { --primary: #ff6b35; --ink: #171c2e; --ease: cubic-bezier(0.22, 1, 0.36, 1); }
     * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -52,16 +54,46 @@
       justify-content: space-between; align-items: center; gap: 10px;
       animation: slideDown 0.35s var(--ease);
     }
+    .cart-bar.bump {
+      animation: cartBump 0.34s var(--ease);
+    }
+    @keyframes cartBump {
+      0% { transform: translateY(0) scale(1); }
+      35% { transform: translateY(-2px) scale(1.02); }
+      100% { transform: translateY(0) scale(1); }
+    }
     @keyframes slideDown { from { opacity: 0; transform: translateY(-12px); } }
     .cart-bar.show { display: flex; }
     .cart-bar .ci { font-size: 13px; font-weight: 800; color: var(--ink); display: flex; align-items: center; gap: 8px; }
     .cart-bar .ci i { color: var(--primary); font-size: 17px; }
+    .cart-bar .delta {
+      margin-left: 2px;
+      padding: 2px 8px;
+      border-radius: 999px;
+      font-size: 11px;
+      font-weight: 900;
+      color: #fff;
+      background: linear-gradient(135deg, #22c55e, #16a34a);
+      box-shadow: 0 6px 14px rgba(34, 197, 94, 0.35);
+      animation: deltaPop 0.9s var(--ease);
+    }
+    @keyframes deltaPop {
+      0% { opacity: 0; transform: translateY(6px) scale(0.85); }
+      30% { opacity: 1; transform: translateY(-2px) scale(1.04); }
+      100% { opacity: 0; transform: translateY(-12px) scale(0.95); }
+    }
     .cart-bar button {
       background: linear-gradient(135deg, var(--primary), color-mix(in srgb, var(--primary) 70%, #ffb088));
       color: #fff; border: none; border-radius: 999px; padding: 9px 18px; font-weight: 800; font-size: 12.5px;
       cursor: pointer; font-family: inherit; display: flex; align-items: center; gap: 6px;
       box-shadow: 0 5px 14px color-mix(in srgb, var(--primary) 40%, transparent);
       transition: transform 0.15s var(--ease);
+    }
+    .cart-bar button.bump { animation: cartBtnPulse 0.34s var(--ease); }
+    @keyframes cartBtnPulse {
+      0% { transform: scale(1); }
+      40% { transform: scale(1.05); }
+      100% { transform: scale(1); }
     }
     .cart-bar button:active { transform: scale(0.95); }
     /* ── Messages ── */
@@ -82,7 +114,7 @@
     .prods { display: flex; flex-direction: column; gap: 9px; align-self: stretch; animation: popIn 0.3s var(--ease); }
     .prod {
       background: #fff; border-radius: 18px; padding: 11px 13px; display: flex; gap: 13px;
-      align-items: center; cursor: pointer; box-shadow: 0 2px 8px rgba(15,18,32,0.06);
+      align-items: center; box-shadow: 0 2px 8px rgba(15,18,32,0.06);
       transition: transform 0.18s var(--ease), box-shadow 0.18s; border: 1.5px solid transparent;
     }
     .prod:hover { transform: translateY(-2px); border-color: var(--primary); box-shadow: 0 8px 22px rgba(15,18,32,0.1); }
@@ -97,12 +129,70 @@
     .prod .pinfo { flex: 1; min-width: 0; }
     .prod .pname { font-weight: 800; font-size: 14px; letter-spacing: -0.1px; }
     .prod .pdesc { font-size: 12px; color: #8b91a6; overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; margin-top: 2px; }
-    .prod .pright { display: flex; flex-direction: column; align-items: flex-end; gap: 5px; flex-shrink: 0; }
+    .prod .pright { display: flex; flex-direction: column; align-items: flex-end; gap: 7px; flex-shrink: 0; }
     .prod .pprice { font-weight: 800; color: var(--primary); font-size: 14.5px; }
-    .prod .padd {
-      width: 28px; height: 28px; border-radius: 10px; background: color-mix(in srgb, var(--primary) 12%, #fff);
-      color: var(--primary); display: flex; align-items: center; justify-content: center; font-size: 15px;
+    .prod .qty-ctl {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      background: #f5f7fc;
+      border: 1px solid #dfe4f2;
+      border-radius: 999px;
+      padding: 3px;
     }
+    .prod .qty-btn {
+      width: 24px;
+      height: 24px;
+      border: none;
+      border-radius: 999px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 12px;
+      cursor: pointer;
+      font-family: inherit;
+      transition: transform .14s var(--ease), background .14s var(--ease), color .14s var(--ease);
+    }
+    .prod .qty-btn.plus { background: color-mix(in srgb, var(--primary) 16%, #fff); color: var(--primary); }
+    .prod .qty-btn.minus { background: #eef2f9; color: #7a849f; }
+    .prod .qty-btn:hover { transform: scale(1.08); }
+    .prod .qty-val {
+      min-width: 22px;
+      text-align: center;
+      font-size: 12px;
+      font-weight: 900;
+      color: #4f5a76;
+    }
+    .prod .qty-send {
+      border: none;
+      border-radius: 999px;
+      padding: 6px 10px;
+      font-size: 11px;
+      font-weight: 800;
+      font-family: inherit;
+      color: #fff;
+      background: linear-gradient(135deg, var(--primary), color-mix(in srgb, var(--primary) 70%, #ffb088));
+      cursor: pointer;
+      transition: transform .14s var(--ease), opacity .14s var(--ease);
+    }
+    .prod .qty-send:hover { transform: scale(1.04); }
+    .prod .qty-send:disabled { opacity: .55; cursor: not-allowed; transform: none; }
+    .bulk-send-wrap { display: flex; justify-content: flex-end; margin-top: 6px; }
+    .bulk-send-btn {
+      border: none;
+      border-radius: 999px;
+      padding: 9px 14px;
+      font-size: 12px;
+      font-weight: 800;
+      font-family: inherit;
+      color: #fff;
+      background: linear-gradient(135deg, var(--primary), color-mix(in srgb, var(--primary) 70%, #ffb088));
+      cursor: pointer;
+      transition: transform .14s var(--ease), opacity .14s var(--ease);
+      box-shadow: 0 6px 14px color-mix(in srgb, var(--primary) 30%, transparent);
+    }
+    .bulk-send-btn:hover { transform: scale(1.03); }
+    .bulk-send-btn:disabled { opacity: .5; cursor: not-allowed; transform: none; box-shadow: none; }
     /* ── Quick replies ── */
     .options { display: flex; flex-wrap: wrap; gap: 8px; align-self: flex-start; animation: popIn 0.35s var(--ease); }
     .opt {
@@ -166,7 +256,7 @@
     </div>
     <div class="cart-bar" id="cartBar">
       <span class="ci"><i class="ph-fill ph-shopping-cart"></i><span id="cartInfo"></span></span>
-      <button id="cartCheckout">Finalizar <i class="ph-bold ph-arrow-right"></i></button>
+      <button id="cartCheckout">Sería todo, gracias. <i class="ph-bold ph-arrow-right"></i></button>
     </div>
     <div class="messages" id="messages"></div>
     <div class="input-bar">
@@ -178,8 +268,34 @@
   <script>
     const slug = location.pathname.split('/').pop();
     let sessionId = sessionStorage.getItem('cbp_session_' + slug) || null;
+    let lastCartItemsCount = 0;
     const messagesEl = document.getElementById('messages');
     const inputEl = document.getElementById('input');
+
+    function animateCartDelta(delta) {
+      if (!delta || delta <= 0) return;
+      const bar = document.getElementById('cartBar');
+      const checkoutBtn = document.getElementById('cartCheckout');
+      if (!bar) return;
+
+      bar.classList.remove('bump');
+      void bar.offsetWidth;
+      bar.classList.add('bump');
+
+      if (checkoutBtn) {
+        checkoutBtn.classList.remove('bump');
+        void checkoutBtn.offsetWidth;
+        checkoutBtn.classList.add('bump');
+      }
+
+      const prevDelta = bar.querySelector('.delta');
+      if (prevDelta) prevDelta.remove();
+      const d = document.createElement('span');
+      d.className = 'delta';
+      d.textContent = `+${delta}`;
+      bar.querySelector('.ci')?.appendChild(d);
+      setTimeout(() => d.remove(), 900);
+    }
 
     function esc(s) {
       return String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -204,10 +320,15 @@
       messagesEl.querySelectorAll('.options, .prods, .wa-btn').forEach((el) => el.remove());
     }
 
-    async function shareLocation() {
+    async function shareLocation(triggerBtn) {
       if (!navigator.geolocation) {
         send('location_error', null);
         return;
+      }
+
+      if (triggerBtn) {
+        triggerBtn.disabled = true;
+        triggerBtn.textContent = 'Obteniendo ubicación…';
       }
 
       const getPosition = (opts) =>
@@ -215,41 +336,52 @@
           navigator.geolocation.getCurrentPosition(resolve, reject, opts);
         });
 
+      const pickBetterPosition = (current, candidate) => {
+        if (!current) return candidate;
+        const currAcc = Number(current?.coords?.accuracy || Infinity);
+        const nextAcc = Number(candidate?.coords?.accuracy || Infinity);
+        return nextAcc < currAcc ? candidate : current;
+      };
+
       const sendGeo = (pos) => {
-        const lat = pos.coords.latitude;
-        const lng = pos.coords.longitude;
+        const lat = Number(pos?.coords?.latitude);
+        const lng = Number(pos?.coords?.longitude);
+        if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+          send('location_error', null);
+          return;
+        }
         const label = `${lat.toFixed(5)}, ${lng.toFixed(5)}`;
         send(`geo:${lat},${lng}|${label}`, '📍 Ubicación compartida');
       };
 
       try {
-        let pos;
-        try {
-          // Primer intento: rápido, pero con timeout suficiente para aceptar permisos sin fallar.
-          pos = await getPosition({ enableHighAccuracy: false, timeout: 12000, maximumAge: 60000 });
-        } catch (err) {
-          // Si no hay permiso, salimos; si fue timeout/posición no disponible, hacemos reintento interno.
-          if (err && err.code === 1) throw err;
-          pos = await getPosition({ enableHighAccuracy: true, timeout: 12000, maximumAge: 0 });
-        }
+        // Intento rápido para responder pronto al clic del cliente.
+        let best = await getPosition({ enableHighAccuracy: false, timeout: 7000, maximumAge: 15000 });
+        const quickAcc = Number(best?.coords?.accuracy || Infinity);
 
-        const accuracy = Number(pos?.coords?.accuracy || 9999);
-        if (accuracy > 120) {
+        // Si viene muy imprecisa, mejoramos con GPS más preciso.
+        if (quickAcc > 120) {
           try {
-            pos = await getPosition({ enableHighAccuracy: true, timeout: 8000, maximumAge: 0 });
+            const retry = await getPosition({ enableHighAccuracy: true, timeout: 9000, maximumAge: 0 });
+            best = pickBetterPosition(best, retry);
           } catch {
-            // Si falla mejora de precisión, usamos la coordenada ya capturada para no bloquear al cliente.
+            // Si falla la mejora, usamos la mejor lectura disponible sin bloquear más.
           }
         }
 
-        sendGeo(pos);
+        sendGeo(best);
       } catch {
         send('location_error', null);
+      } finally {
+        if (triggerBtn) {
+          triggerBtn.disabled = false;
+          triggerBtn.textContent = '📍 Compartir ubicación';
+        }
       }
     }
 
-    function onOption(o) {
-      if (o.value === 'share_location') return shareLocation();
+    function onOption(o, triggerBtn = null) {
+      if (o.value === 'share_location') return shareLocation(triggerBtn);
       send(o.value, o.label);
     }
 
@@ -270,17 +402,83 @@
       if (data.products && data.products.length) {
         const wrap = document.createElement('div');
         wrap.className = 'prods';
+        const pendingChanges = new Map();
+        let bulkBtn = null;
+
+        function updateBulkState() {
+          if (!bulkBtn) return;
+          bulkBtn.disabled = pendingChanges.size === 0;
+        }
+
         data.products.forEach((p) => {
           const card = document.createElement('div');
           card.className = 'prod';
+          const serverQty = Number(p.qty || 0);
           card.innerHTML = `
             <div class="pimg">${p.image ? `<img src="${esc(p.image)}" alt="" loading="lazy">` : '<i class="ph ph-fork-knife"></i>'}</div>
             <div class="pinfo"><div class="pname">${esc(p.name)}</div><div class="pdesc">${esc(p.description || '')}</div></div>
-            <div class="pright"><span class="pprice">${esc(p.priceLabel)}</span><span class="padd"><i class="ph-bold ph-plus"></i></span></div>`;
-          card.addEventListener('click', () => send(`prod_${p.id}`, p.name));
+            <div class="pright">
+              <span class="pprice">${esc(p.priceLabel)}</span>
+              <div class="qty-ctl" data-qty-wrap>
+                <button class="qty-btn minus" type="button" data-dec="${p.id}" ${serverQty <= 0 ? 'disabled' : ''}><i class="ph-bold ph-minus"></i></button>
+                <span class="qty-val">${serverQty}</span>
+                <button class="qty-btn plus" type="button" data-inc="${p.id}"><i class="ph-bold ph-plus"></i></button>
+                <button class="qty-send" type="button" data-send="${p.id}" disabled>Enviar</button>
+              </div>
+            </div>`;
+
+          let draftQty = serverQty;
+          const minusBtn = card.querySelector('[data-dec]');
+          const sendBtn = card.querySelector('[data-send]');
+          const qtyVal = card.querySelector('.qty-val');
+
+          function redrawQty() {
+            if (qtyVal) qtyVal.textContent = String(draftQty);
+            if (minusBtn) minusBtn.disabled = draftQty <= 0;
+            if (sendBtn) sendBtn.disabled = draftQty === serverQty;
+            if (draftQty === serverQty) pendingChanges.delete(String(p.id));
+            else pendingChanges.set(String(p.id), draftQty);
+            updateBulkState();
+          }
+
+          card.querySelector('[data-inc]')?.addEventListener('click', (e) => {
+            e.stopPropagation();
+            if (draftQty >= 50) return;
+            draftQty += 1;
+            redrawQty();
+          });
+          card.querySelector('[data-dec]')?.addEventListener('click', (e) => {
+            e.stopPropagation();
+            if (draftQty <= 0) return;
+            draftQty -= 1;
+            redrawQty();
+          });
+          card.querySelector('[data-send]')?.addEventListener('click', (e) => {
+            e.stopPropagation();
+            send(`prod_set_${p.id}_${draftQty}`, null);
+          });
+          redrawQty();
           wrap.appendChild(card);
         });
+
+        const bulkWrap = document.createElement('div');
+        bulkWrap.className = 'bulk-send-wrap';
+        bulkBtn = document.createElement('button');
+        bulkBtn.className = 'bulk-send-btn';
+        bulkBtn.type = 'button';
+        bulkBtn.textContent = 'Enviar todo';
+        bulkBtn.disabled = true;
+        bulkBtn.addEventListener('click', () => {
+          if (!pendingChanges.size) return;
+          const payload = Array.from(pendingChanges.entries())
+            .map(([id, qty]) => `${id}-${qty}`)
+            .join(',');
+          send(`prod_apply_${payload}`, null);
+        });
+        bulkWrap.appendChild(bulkBtn);
+
         messagesEl.appendChild(wrap);
+        messagesEl.appendChild(bulkWrap);
       }
 
       if (data.order && data.order.whatsappLink) {
@@ -300,7 +498,7 @@
           const b = document.createElement('button');
           b.className = 'opt';
           b.textContent = o.label;
-          b.addEventListener('click', () => onOption(o));
+          b.addEventListener('click', () => onOption(o, b));
           wrap.appendChild(b);
         });
         messagesEl.appendChild(wrap);
@@ -311,8 +509,12 @@
         const n = data.cart.items.reduce((s, it) => s + it.qty, 0);
         document.getElementById('cartInfo').textContent = `${n} producto${n > 1 ? 's' : ''} · ${data.cart.totalLabel}`;
         bar.classList.add('show');
+        const delta = Math.max(0, n - lastCartItemsCount);
+        animateCartDelta(delta);
+        lastCartItemsCount = n;
       } else {
         bar.classList.remove('show');
+        lastCartItemsCount = 0;
       }
       scrollDown();
     }
@@ -348,7 +550,7 @@
     inputEl.addEventListener('keydown', (e) => {
       if (e.key === 'Enter') document.getElementById('sendBtn').click();
     });
-    document.getElementById('cartCheckout').addEventListener('click', () => send('checkout', '✅ Finalizar pedido'));
+    document.getElementById('cartCheckout').addEventListener('click', () => send('checkout', '✅ Sería todo, gracias.'));
 
     async function init() {
       try {

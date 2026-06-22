@@ -11,6 +11,8 @@
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/fill/style.css" />
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
   <link rel="stylesheet" href="/static/css/styles.css?v=20260619c" />
+  <link rel="icon" type="image/svg+xml" href="/static/favicon.svg" />
+  <link rel="icon" type="image/png" href="/static/chatbotpro100.png" />
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
@@ -25,7 +27,7 @@
     <!-- ════════ Sidebar ════════ -->
     <aside class="sidebar" id="sidebar">
       <div class="brand">
-        <span class="dot" id="brandMark"><i class="ph-fill ph-robot"></i></span>
+        <span class="dot dot-logo" id="brandMark"><img src="/static/chatbotpro100.png" alt="" /></span>
         <div><span id="brandName">ChatBotPro</span><small>Panel de control</small></div>
       </div>
       <nav>
@@ -60,6 +62,7 @@
           </div>
         </div>
         <a class="btn btn-primary" id="openChatLink" href="#" target="_blank"><i class="ph-bold ph-chat-circle-dots"></i> Ver mi chatbot</a>
+        <span class="cashier-branch-banner" id="cashierBranchBanner"><i class="ph-bold ph-storefront"></i> <span id="cashierBranchLabel">—</span></span>
       </div>
 
       <!-- ──────── Dashboard ──────── -->
@@ -102,8 +105,8 @@
             </div>
           </div>
           <div class="orders-filters" id="ordersDateFilters">
-            <button class="btn btn-ghost orders-today-toggle" id="ordersTodayToggle" aria-pressed="false">
-              <i class="ph-bold ph-calendar-check"></i> Solo pedidos del día: Desactivado
+            <button class="btn btn-ghost orders-today-toggle on" id="ordersTodayToggle" aria-pressed="true">
+              <i class="ph-bold ph-calendar-check"></i> Solo pedidos del día: Activado
             </button>
             <div class="orders-range">
               <div class="field" style="margin:0">
@@ -279,6 +282,13 @@
             <div class="card">
               <h3><i class="ph-bold ph-map-trifold"></i> Servicio a domicilio</h3>
               <div class="hint" style="margin-bottom:12px">Dibuja tus zonas de entrega directamente en el mapa y asigna un costo por zona.</div>
+              <input type="hidden" id="deliveryZoneEditId" />
+              <div class="field">
+                <label><i class="ph-bold ph-storefront"></i> Sucursal de la zona</label>
+                <select id="deliveryZoneBranch">
+                  <option value="">Zona general</option>
+                </select>
+              </div>
               <div class="field">
                 <label><i class="ph-bold ph-flag-banner"></i> Nombre de zona</label>
                 <input type="text" id="deliveryZoneName" placeholder="Ej. Zona Centro" />
@@ -311,13 +321,21 @@
                 <button class="btn btn-ghost" type="button" id="deliveryStartDraw"><i class="ph-bold ph-pencil-simple-line"></i> Iniciar dibujo</button>
                 <button class="btn btn-ghost" type="button" id="deliveryUndoPoint"><i class="ph-bold ph-arrow-counter-clockwise"></i> Deshacer punto</button>
                 <button class="btn btn-primary" type="button" id="deliverySaveZone"><i class="ph-bold ph-plus-circle"></i> Guardar zona</button>
+                <button class="btn btn-ghost" type="button" id="deliveryCancelEdit" hidden><i class="ph-bold ph-x-circle"></i> Cancelar edición</button>
               </div>
               <div class="hint" id="deliveryDrawHint" style="margin-top:8px">Activa "Iniciar dibujo" y toca el mapa para crear el polígono de tu zona.</div>
             </div>
             <div class="card">
               <h3><i class="ph-bold ph-list-bullets"></i> Zonas configuradas</h3>
+              <div class="field" style="margin-bottom:12px">
+                <label><i class="ph-bold ph-funnel"></i> Ver zonas de</label>
+                <select id="deliveryZoneFilterBranch">
+                  <option value="all">Todas las sucursales</option>
+                </select>
+              </div>
               <div id="deliveryZonesList" class="delivery-zones-list"></div>
-              <button class="btn btn-primary" type="button" id="deliverySaveAll" style="margin-top:12px"><i class="ph-bold ph-floppy-disk"></i> Guardar servicio a domicilio</button>
+              <div id="deliveryZonesPager" class="delivery-zones-pager"></div>
+              <div class="hint" style="margin-top:12px">Las zonas se guardan automáticamente al crear, editar o eliminar.</div>
             </div>
           </div>
           <div class="card" style="margin-top:16px">
@@ -437,6 +455,14 @@
             </form>
           </div>
         </div>
+        <div class="card" style="margin-top:16px">
+          <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
+            <h3><i class="ph-bold ph-users-three"></i> Cajeros y cajas</h3>
+            <button class="btn btn-primary" id="addCashierBtn"><i class="ph-bold ph-plus-circle"></i> Nuevo cajero</button>
+          </div>
+          <div class="hint" style="margin-top:8px">Crea un cajero por sucursal y comparte su liga directa de caja para abrir el POS en esa sucursal.</div>
+          <div class="table-wrap" id="cashiersTable" style="margin-top:14px"></div>
+        </div>
       </section>
     </main>
   </div>
@@ -518,6 +544,50 @@
         <div class="modal-actions">
           <button type="button" class="btn btn-ghost" id="branchCancel">Cancelar</button>
           <button type="submit" class="btn btn-primary"><i class="ph-bold ph-check"></i> Guardar sucursal</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- ════════ Modal cajero ════════ -->
+  <div class="modal-bg" id="cashierModal">
+    <div class="modal" style="max-width:560px">
+      <h3 id="cashierModalTitle"><i class="ph-bold ph-user-plus"></i> Nuevo cajero</h3>
+      <form id="cashierForm">
+        <input type="hidden" id="cashierId" />
+        <div class="field">
+          <label><i class="ph-bold ph-user"></i> Nombre visible *</label>
+          <input type="text" id="cashierDisplayName" required placeholder="Caja Auroras - Ana" />
+        </div>
+        <div class="row-2">
+          <div class="field">
+            <label><i class="ph-bold ph-at"></i> Usuario *</label>
+            <input type="text" id="cashierUsername" required placeholder="auroras.caja1" />
+          </div>
+          <div class="field">
+            <label><i class="ph-bold ph-storefront"></i> Sucursal *</label>
+            <select id="cashierBranch" required>
+              <option value="">Selecciona una sucursal</option>
+            </select>
+          </div>
+        </div>
+        <div class="field">
+          <label><i class="ph-bold ph-link"></i> Liga de caja *</label>
+          <input type="text" id="cashierSlug" required placeholder="auroras-caja1" />
+          <div class="hint" id="cashierLinkPreview">La caja estará disponible en /caja/...</div>
+        </div>
+        <div class="field">
+          <label><i class="ph-bold ph-key"></i> Contraseña</label>
+          <input type="password" id="cashierPassword" minlength="8" placeholder="Mínimo 8 caracteres" />
+          <div class="hint">Obligatoria al crear. En edición, déjala vacía para conservar la actual.</div>
+        </div>
+        <div class="toggle-row" style="margin-bottom:0">
+          <div class="t-info"><i class="ph-bold ph-eye"></i><div><b>Cajero activo</b><span>Podrá entrar a su caja y operar el POS</span></div></div>
+          <label class="switch"><input type="checkbox" id="cashierActive" checked /><span class="track"></span></label>
+        </div>
+        <div class="modal-actions">
+          <button type="button" class="btn btn-ghost" id="cashierCancel">Cancelar</button>
+          <button type="submit" class="btn btn-primary"><i class="ph-bold ph-check"></i> Guardar cajero</button>
         </div>
       </form>
     </div>

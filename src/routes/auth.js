@@ -1,6 +1,6 @@
 const express = require('express');
 const bcrypt = require('bcryptjs');
-const { q, initTenantDefaults } = require('../db');
+const { q, tdb, initTenantDefaults } = require('../db');
 const { encrypt, decrypt } = require('../utils/crypto');
 const { signToken, setAuthCookie, clearAuthCookie, requireAuth } = require('../middleware/auth');
 
@@ -65,6 +65,9 @@ router.post('/login', async (req, res, next) => {
     if (!user || !(await bcrypt.compare(password, user.password_hash))) {
       return res.status(401).json({ error: 'Usuario o contraseña incorrectos' });
     }
+    if (!Number(user.active)) {
+      return res.status(403).json({ error: 'Este usuario está inactivo' });
+    }
     const t = await q('SELECT * FROM tenants WHERE id = $1', [user.tenant_id]);
     const tenant = t.rows[0];
     if (!tenant) return res.status(401).json({ error: 'Tenant no encontrado' });
@@ -86,6 +89,84 @@ router.post('/login', async (req, res, next) => {
   }
 });
 
+router.get('/cashier-info/:slug', async (req, res, next) => {
+  try {
+    const cashierSlug = String(req.params.slug || '').trim().toLowerCase();
+    const found = await q(
+      `SELECT u.id AS uid, u.username, u.display_name, u.branch_id, u.cashier_slug, u.active,
+              t.id AS tid, t.slug AS tenant_slug, t.business_name, t.logo, t.primary_color,
+              t.account_status, t.billing_status
+       FROM users u
+       JOIN tenants t ON t.id = u.tenant_id
+       WHERE u.cashier_slug = $1 AND u.role = 'cashier'
+       LIMIT 1`,
+      [cashierSlug]
+    );
+    const cashier = found.rows[0];
+    if (!cashier || !Number(cashier.active)) return res.status(404).json({ error: 'Caja no encontrada' });
+    if (cashier.account_status !== 'active' || cashier.billing_status === 'suspended') {
+      return res.status(403).json({ error: 'Esta caja no está disponible actualmente' });
+    }
+    const tenantDb = tdb(cashier.tenant_slug);
+    const branch = cashier.branch_id ? await tenantDb.get('SELECT id, name FROM {s}.branches WHERE id = $1 LIMIT 1', [Number(cashier.branch_id)]) : null;
+    res.json({
+      cashierSlug: cashier.cashier_slug,
+      username: cashier.username,
+      displayName: cashier.display_name || cashier.username,
+      branchId: branch?.id || null,
+      branchName: branch?.name || '',
+      tenant: {
+        slug: cashier.tenant_slug,
+        businessName: cashier.business_name,
+        logo: cashier.logo,
+        primaryColor: cashier.primary_color,
+      },
+    });
+  } catch (e) {
+    next(e);
+  }
+});
+
+router.post('/cashier-login', async (req, res, next) => {
+  try {
+    const cashierSlug = String(req.body?.cashierSlug || '').trim().toLowerCase();
+    const password = String(req.body?.password || '');
+    if (!cashierSlug || !password) return res.status(400).json({ error: 'La clave de acceso es obligatoria' });
+    const found = await q(
+      `SELECT u.id AS uid, u.username, u.password_hash, u.active, u.role, u.cashier_slug,
+              t.id AS tid, t.slug AS tenant_slug, t.business_name, t.account_status, t.billing_status
+       FROM users u
+       JOIN tenants t ON t.id = u.tenant_id
+       WHERE u.cashier_slug = $1 AND u.role = 'cashier'
+       LIMIT 1`,
+      [cashierSlug]
+    );
+    const row = found.rows[0];
+    if (!row || !Number(row.active) || !(await bcrypt.compare(password, row.password_hash))) {
+      return res.status(401).json({ error: 'Acceso incorrecto' });
+    }
+    if (row.account_status !== 'active') {
+      return res.status(403).json({ error: 'La cuenta del negocio está inactiva. Contacta al administrador.' });
+    }
+    if (row.billing_status === 'suspended') {
+      return res.status(403).json({
+        error: 'Suspendido por falta de pago. Ponte en contacto con tu asesor.',
+        errorCode: 'BILLING_SUSPENDED',
+        supportPhone: SUPPORT_WHATSAPP,
+        whatsappUrl: supportWhatsappUrl(),
+      });
+    }
+    // Usamos ids correctos: uid del usuario y tid del tenant (evita conflicto de columna id en join)
+    setAuthCookie(res, signToken(
+      { id: row.uid, username: row.username },
+      { id: row.tid, slug: row.tenant_slug }
+    ));
+    res.json({ ok: true, redirectTo: '/app#pos' });
+  } catch (e) {
+    next(e);
+  }
+});
+
 router.post('/logout', (req, res) => {
   clearAuthCookie(res);
   res.json({ ok: true });
@@ -94,6 +175,11 @@ router.post('/logout', (req, res) => {
 router.get('/me', requireAuth, (req, res) => {
   res.json({
     username: req.user.username,
+    role: req.user.role,
+    displayName: req.user.displayName,
+    branchId: req.user.branchId,
+    branchName: req.user.branchName,
+    cashierSlug: req.user.cashierSlug,
     tenant: {
       slug: req.tenant.slug,
       businessName: req.tenant.business_name,

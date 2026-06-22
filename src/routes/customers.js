@@ -1,9 +1,10 @@
 const express = require('express');
-const { requireAuth } = require('../middleware/auth');
+const { requireAuth, requireOwner } = require('../middleware/auth');
 const { decrypt } = require('../utils/crypto');
 
 const router = express.Router();
 router.use(requireAuth);
+router.use(requireOwner);
 
 function decodeCustomerField(value, fallback = '') {
   const raw = String(value || '').trim();

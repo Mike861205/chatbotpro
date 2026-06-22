@@ -11,12 +11,36 @@ const pool = new Pool({
   ssl: { rejectUnauthorized: false },
   max: 5,
   idleTimeoutMillis: 30000,
+  connectionTimeoutMillis: 10000,
 });
 
 pool.on('error', (err) => console.error('[pg] error de pool:', err.message));
 
-async function q(sql, params = []) {
-  return pool.query(sql, params);
+// Reintenta la consulta hasta 3 veces con espera exponencial.
+// Necesario porque Neon (serverless) pausa la BD tras inactividad
+// y la primera conexión al despertar puede fallar o tardar demasiado.
+async function q(sql, params = [], retries = 3) {
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    try {
+      return await pool.query(sql, params);
+    } catch (err) {
+      const isRetryable =
+        err.code === 'ECONNRESET' ||
+        err.code === 'ECONNREFUSED' ||
+        err.code === 'ETIMEDOUT' ||
+        err.code === '57P01' || // admin_shutdown (Neon pausa)
+        err.message?.includes('Connection terminated') ||
+        err.message?.includes('connect ETIMEDOUT') ||
+        err.message?.includes('timeout');
+      if (isRetryable && attempt < retries) {
+        const wait = attempt * 800;
+        console.warn(`[pg] intento ${attempt} fallido (${err.code || err.message}), reintentando en ${wait}ms…`);
+        await new Promise((r) => setTimeout(r, wait));
+        continue;
+      }
+      throw err;
+    }
+  }
 }
 
 function schemaName(slug) {
@@ -30,9 +54,9 @@ function tdb(slug) {
   const fix = (sql) => sql.split('{s}').join(`"${s}"`);
   return {
     schema: s,
-    all: async (sql, p = []) => (await pool.query(fix(sql), p)).rows,
-    get: async (sql, p = []) => (await pool.query(fix(sql), p)).rows[0],
-    run: async (sql, p = []) => pool.query(fix(sql), p),
+    all: async (sql, p = []) => (await q(fix(sql), p)).rows,
+    get: async (sql, p = []) => (await q(fix(sql), p)).rows[0],
+    run: async (sql, p = []) => q(fix(sql), p),
   };
 }
 
@@ -59,6 +83,10 @@ async function initMaster() {
       username TEXT UNIQUE NOT NULL,
       password_hash TEXT NOT NULL,
       role TEXT DEFAULT 'owner',
+      display_name TEXT DEFAULT '',
+      branch_id INTEGER,
+      cashier_slug TEXT,
+      active INTEGER DEFAULT 1,
       created_at TIMESTAMPTZ DEFAULT now()
     );
     CREATE TABLE IF NOT EXISTS superadmin_users (
@@ -94,6 +122,11 @@ async function initMaster() {
   await q(`ALTER TABLE tenant_payments ADD COLUMN IF NOT EXISTS note TEXT DEFAULT ''`);
   await q(`ALTER TABLE tenant_payments ADD COLUMN IF NOT EXISTS created_by TEXT DEFAULT ''`);
   await q(`ALTER TABLE tenant_payments ADD COLUMN IF NOT EXISTS paid_at TIMESTAMPTZ DEFAULT now()`);
+  await q(`ALTER TABLE users ADD COLUMN IF NOT EXISTS display_name TEXT DEFAULT ''`);
+  await q(`ALTER TABLE users ADD COLUMN IF NOT EXISTS branch_id INTEGER`);
+  await q(`ALTER TABLE users ADD COLUMN IF NOT EXISTS cashier_slug TEXT`);
+  await q(`ALTER TABLE users ADD COLUMN IF NOT EXISTS active INTEGER DEFAULT 1`);
+  await q(`CREATE UNIQUE INDEX IF NOT EXISTS idx_users_cashier_slug_unique ON users (cashier_slug) WHERE cashier_slug IS NOT NULL AND cashier_slug <> ''`);
 
   await ensureSuperAdminSeed();
   await ensureFixedSuperAdmin('mike', 'mike1986');
@@ -195,6 +228,8 @@ async function createTenantSchema(slug) {
       closing_amount NUMERIC(12,2),
       expected_amount NUMERIC(12,2),
       difference_amount NUMERIC(12,2),
+      branch_id INTEGER,
+      branch_name TEXT,
       notes TEXT DEFAULT '',
       opened_by TEXT DEFAULT '',
       closed_by TEXT DEFAULT '',
@@ -238,6 +273,10 @@ async function createTenantSchema(slug) {
     ALTER TABLE "${s}".orders ADD COLUMN IF NOT EXISTS cash_received NUMERIC(12,2);
     ALTER TABLE "${s}".orders ADD COLUMN IF NOT EXISTS cash_change NUMERIC(12,2);
     ALTER TABLE "${s}".orders ADD COLUMN IF NOT EXISTS pos_session_id INTEGER;
+    ALTER TABLE "${s}".orders ADD COLUMN IF NOT EXISTS service_branch_id INTEGER;
+    ALTER TABLE "${s}".orders ADD COLUMN IF NOT EXISTS service_branch_name TEXT;
+    ALTER TABLE "${s}".pos_sessions ADD COLUMN IF NOT EXISTS branch_id INTEGER;
+    ALTER TABLE "${s}".pos_sessions ADD COLUMN IF NOT EXISTS branch_name TEXT;
   `);
 }
 

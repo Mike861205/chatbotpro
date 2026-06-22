@@ -6,13 +6,14 @@ let topChart = null;
 let orderStatusFilter = '';
 let orderPage = 1;
 const ORDER_PAGE_SIZE = 10;
-let orderTodayOnly = false;
+let orderTodayOnly = true;
 let orderDateStart = '';
 let orderDateEnd = '';
 let customersDateStart = '';
 let customersDateEnd = '';
 let customersSort = 'orders_desc';
 let BRANCHES = [];
+let CASHIERS = [];
 let LAST_ORDERS = [];
 let POS_OVERVIEW = null;
 let POS_CART = [];
@@ -43,10 +44,17 @@ let DELIVERY_DRAW_POINTS = [];
 let DELIVERY_DRAW_MARKERS = [];
 let DELIVERY_DRAW_PREVIEW = null;
 let DELIVERY_DRAW_HELP_SHOWN = false;
+let DELIVERY_ZONES_PAGE = 1;
+const DELIVERY_ZONES_PAGE_SIZE = 5;
+let DELIVERY_ZONE_FILTER_BRANCH = 'all';
 
 const $ = (s) => document.querySelector(s);
 const fmtMoney = (n, c) =>
   new Intl.NumberFormat('es-MX', { style: 'currency', currency: c || (SETTINGS && SETTINGS.currency) || 'MXN' }).format(n || 0);
+
+function isCashierUser() {
+  return ME?.role === 'cashier';
+}
 
 function toast(msg, isErr = false) {
   const t = $('#toast');
@@ -172,6 +180,7 @@ const VIEW_LOADERS = {
 let CURRENT_VIEW = 'dashboard';
 
 function normalizeView(view) {
+  if (isCashierUser()) return 'pos';
   return VIEW_META[view] ? view : 'dashboard';
 }
 
@@ -179,6 +188,26 @@ function resetMainScroll() {
   const main = document.querySelector('.main');
   if (main) main.scrollTop = 0;
   window.scrollTo(0, 0);
+}
+
+function applyUserScopeUI() {
+  const cashierMode = isCashierUser();
+  document.body.classList.toggle('cashier-mode', cashierMode);
+  document.querySelectorAll('.sidebar nav a').forEach((a) => {
+    const allowed = !cashierMode || a.dataset.view === 'pos';
+    a.hidden = !allowed;
+  });
+  const chatLink = $('#openChatLink');
+  if (chatLink) chatLink.hidden = cashierMode;
+  const banner = $('#cashierBranchBanner');
+  if (banner) banner.style.display = cashierMode ? 'inline-flex' : 'none';
+  const bannerLabel = $('#cashierBranchLabel');
+  if (bannerLabel && cashierMode) bannerLabel.textContent = ME?.branchName ? `Sucursal: ${ME.branchName}` : 'Punto de venta';
+  if (cashierMode) {
+    $('#viewTitle').innerHTML = '<i class="ph-bold ph-cash-register"></i> Punto de venta';
+    $('#viewSub').textContent = ME?.branchName ? `Sucursal ${ME.branchName}` : 'Caja operativa';
+    $('#brandName').textContent = ME?.branchName || ME?.tenant?.businessName || 'Caja';
+  }
 }
 
 async function navigate(view) {
@@ -222,6 +251,10 @@ document.querySelectorAll('.sidebar nav a').forEach((a) =>
 );
 
 globalThis.addEventListener('hashchange', () => {
+  if (isCashierUser()) {
+    history.replaceState(null, '', '#pos');
+    return;
+  }
   const view = normalizeView((location.hash || '#dashboard').slice(1));
   if (view !== CURRENT_VIEW) navigate(view);
 });
@@ -494,11 +527,19 @@ function customerLoyaltyBadge(ordersCount, totalSpent) {
   return '<span class="loyalty-pill base">Nueva</span>';
 }
 
+function rankBadge(pos) {
+  if (pos === 1) return `<span class="rank-badge rank-gold"   title="1° lugar">🥇</span>`;
+  if (pos === 2) return `<span class="rank-badge rank-silver" title="2° lugar">🥈</span>`;
+  if (pos === 3) return `<span class="rank-badge rank-bronze" title="3° lugar">🥉</span>`;
+  if (pos <= 20) return `<span class="rank-badge rank-loyal"  title="Cliente fiel">🏅</span>`;
+  return '';
+}
+
 function customersTableHTML(customers) {
   const rows = customers
     .map((c, idx) => `
       <tr>
-        <td><b>#${idx + 1}</b></td>
+        <td><span class="rank-cell">${rankBadge(idx + 1)}<b class="rank-num">#${idx + 1}</b></span></td>
         <td>
           <div class="cust">
             ${custAvatar(c.name)}
@@ -1317,8 +1358,16 @@ function renderPosDeliveryStrip() {
   if (!el) return;
   const session = POS_OVERVIEW?.activeSession;
   const delivery = session?.totals?.delivery || { tickets: 0, total: 0, fees: 0 };
-  if (!session || !delivery.tickets) { el.innerHTML = ''; return; }
+  if (!session) { el.innerHTML = ''; return; }
+  const branchHtml = session?.branch_name
+    ? `<div class="pos-delivery-branch"><i class="ph-bold ph-storefront"></i><span>Sucursal activa: ${esc(session.branch_name)}</span></div>`
+    : '';
+  if (!delivery.tickets) {
+    el.innerHTML = branchHtml;
+    return;
+  }
   el.innerHTML = `
+    ${branchHtml}
     <div class="pos-delivery-wrap">
       <div class="pos-delivery-header">
         <i class="ph-bold ph-moped"></i>
@@ -1408,11 +1457,50 @@ function renderPosSession() {
   const el = $('#posSessionCard');
   const session = POS_OVERVIEW?.activeSession;
   if (!session) {
+    const branches = Array.isArray(POS_OVERVIEW?.branches) ? POS_OVERVIEW.branches : [];
+    const blockedIds = new Set((POS_OVERVIEW?.blockedBranchIds || []).map(Number));
+    const cashierBranchId = isCashierUser() ? String(ME?.branchId || '') : '';
+
+    // Si el cajero tiene su sucursal bloqueada por otra caja, avísalo
+    if (isCashierUser() && ME?.branchId && blockedIds.has(Number(ME.branchId))) {
+      el.style.display = 'block';
+      el.innerHTML = `
+        <h3><i class="ph-bold ph-lock-key-open"></i> Apertura de caja</h3>
+        <div class="hint" style="color:var(--red);background:var(--red-soft);border-radius:10px;padding:12px">
+          <i class="ph-bold ph-warning"></i>
+          La sucursal <b>${esc(ME.branchName || '')}</b> ya tiene una caja abierta por otro usuario.
+          Contacta al administrador para cerrarla antes de operar.
+        </div>`;
+      return;
+    }
+
+    const branchField = branches.length
+      ? isCashierUser()
+        ? `
+          <div class="field">
+            <label><i class="ph-bold ph-storefront"></i> Sucursal asignada</label>
+            <input type="text" value="${esc(ME?.branchName || 'Sucursal asignada')}" disabled />
+            <input type="hidden" id="posBranchSelect" value="${esc(cashierBranchId)}" />
+          </div>`
+        : `
+          <div class="field">
+            <label><i class="ph-bold ph-storefront"></i> Sucursal</label>
+            <select id="posBranchSelect">
+              <option value="">Selecciona una sucursal</option>
+              ${branches.map((branch) => {
+                const blocked = blockedIds.has(Number(branch.id));
+                return `<option value="${esc(String(branch.id))}" ${blocked ? 'disabled' : ''}>${esc(branch.name)}${blocked ? ' — caja abierta' : ''}</option>`;
+              }).join('')}
+            </select>
+            ${blockedIds.size ? `<div class="hint" style="margin-top:4px"><i class="ph ph-info"></i> Las sucursales marcadas tienen caja abierta por un cajero y no están disponibles.</div>` : ''}
+          </div>`
+      : '<div class="hint" style="margin-bottom:12px">No hay sucursales activas configuradas. La caja operará como general.</div>';
     el.style.display = 'block';
     el.innerHTML = `
       <h3><i class="ph-bold ph-lock-key-open"></i> Apertura de caja</h3>
       <p class="hint" style="margin:-8px 0 18px">Abre una caja para empezar a registrar ventas, ingresos, retiros y gastos del turno.</p>
       <form id="posOpenForm">
+        ${branchField}
         <div class="row-2">
           <div class="field">
             <label><i class="ph-bold ph-wallet"></i> Fondo inicial</label>
@@ -1432,6 +1520,7 @@ function renderPosSession() {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
+            branchId: Number($('#posBranchSelect')?.value || 0) || null,
             openingAmount: Number($('#posOpeningAmount').value || 0),
             notes: $('#posOpeningNote').value,
           }),
@@ -1444,8 +1533,12 @@ function renderPosSession() {
     });
     return;
   }
-  el.innerHTML = '';
-  el.style.display = 'none';
+  el.style.display = 'block';
+  el.innerHTML = `
+    <div class="pos-session-active">
+      <h3><i class="ph-bold ph-storefront"></i> Caja activa</h3>
+      <div class="hint">${session.branch_name ? `Sucursal: ${esc(session.branch_name)}` : 'Sucursal general'} · Abierta por ${esc(session.opened_by || '—')}</div>
+    </div>`;
 }
 
 function renderPosCatalog() {
@@ -1801,7 +1894,7 @@ async function loadPosChatbotQueue(page = 1) {
   table.style.webkitOverflowScrolling = 'touch';
 
   if (!POS_CHATBOT_QUEUE.length) {
-    table.innerHTML = emptyHTML('ph-chat-circle-dots', 'Sin pedidos chatbot por importar hoy', 'Aquí se muestran solo pedidos del día de operación para cobrarlos en caja.');
+    table.innerHTML = emptyHTML('ph-chat-circle-dots', 'Sin pedidos chatbot por importar hoy', `Aquí se muestran solo pedidos del día de operación${data.sessionBranchName ? ` de la sucursal ${data.sessionBranchName}` : ''} para cobrarlos en caja.`);
     info.textContent = `Página ${POS_CHATBOT_PAGE} de ${POS_CHATBOT_TOTAL_PAGES} · ${Number(data.total || 0)} pedidos`;
     const prev = $('#posChatbotQueuePrev');
     const next = $('#posChatbotQueueNext');
@@ -1862,7 +1955,7 @@ async function loadPosChatbotQueue(page = 1) {
       })
       .join('')}</tbody></table>`;
   }
-  info.textContent = `Página ${POS_CHATBOT_PAGE} de ${POS_CHATBOT_TOTAL_PAGES} · ${Number(data.total || 0)} pedidos`;
+  info.textContent = `Página ${POS_CHATBOT_PAGE} de ${POS_CHATBOT_TOTAL_PAGES} · ${Number(data.total || 0)} pedidos${data.sessionBranchName ? ` · ${data.sessionBranchName}` : ''}`;
   table.scrollLeft = 0;
   const prev = $('#posChatbotQueuePrev');
   const next = $('#posChatbotQueueNext');
@@ -2474,7 +2567,7 @@ function openProdModal(p = null) {
 }
 $('#addProdBtn').addEventListener('click', () => openProdModal());
 $('#prodCancel').addEventListener('click', () => $('#prodModal').classList.remove('show'));
-[$('#prodModal'), $('#catModal'), $('#confirmModal'), $('#branchModal'), $('#posMovementModal'), $('#posCloseModal'), $('#posSalesHistoryModal'), $('#posPaymentEditModal'), $('#orderCancelReasonModal')].forEach((m) =>
+[$('#prodModal'), $('#catModal'), $('#confirmModal'), $('#branchModal'), $('#cashierModal'), $('#posMovementModal'), $('#posCloseModal'), $('#posSalesHistoryModal'), $('#posPaymentEditModal'), $('#orderCancelReasonModal')].forEach((m) =>
   m.addEventListener('click', (e) => {
     if (e.target === m) m.classList.remove('show');
   })
@@ -2509,29 +2602,155 @@ function parseDeliveryZones(raw) {
   try {
     const parsed = JSON.parse(String(raw || '[]'));
     if (!Array.isArray(parsed)) return [];
+
+    const normalizePoint = (point) => {
+      if (!Array.isArray(point) || point.length < 2) return null;
+      const a = Number(point[0]);
+      const b = Number(point[1]);
+      if (!Number.isFinite(a) || !Number.isFinite(b)) return null;
+      // Prefer [lat,lng], fallback from [lng,lat] (GeoJSON)
+      if (Math.abs(a) <= 90 && Math.abs(b) <= 180) return [a, b];
+      if (Math.abs(a) <= 180 && Math.abs(b) <= 90) return [b, a];
+      return null;
+    };
+
+    const extractPoints = (zone) => {
+      if (Array.isArray(zone?.points)) return zone.points.map(normalizePoint).filter(Boolean);
+      const coordinates = zone?.geometry?.coordinates;
+      if (Array.isArray(coordinates) && Array.isArray(coordinates[0]) && Array.isArray(coordinates[0][0])) {
+        return coordinates[0].map(normalizePoint).filter(Boolean);
+      }
+      return [];
+    };
+
     return parsed
       .map((zone, i) => {
-        const points = Array.isArray(zone?.points)
-          ? zone.points
-              .map((p) => [Number(p?.[0]), Number(p?.[1])])
-              .filter((p) => Number.isFinite(p[0]) && Number.isFinite(p[1]))
-          : [];
-        const fee = Number(zone?.fee);
-        const name = String(zone?.name || '').trim();
+        const props = zone?.properties && typeof zone.properties === 'object' ? zone.properties : zone;
+        const points = extractPoints(zone);
+        const fee = Number(props?.fee);
+        const name = String(props?.name || '').trim();
         if (!name || !Number.isFinite(fee) || fee < 0 || points.length < 3) return null;
         return {
-          id: String(zone?.id || `zone-${i + 1}`),
+          id: String(props?.id || zone?.id || `zone-${i + 1}`),
           name,
           fee,
-          color: String(zone?.color || '#0ea5e9'),
+          color: String(props?.color || zone?.color || '#0ea5e9'),
           points,
-          active: zone?.active !== false,
+          active: props?.active !== false,
+          branchId: props?.branchId != null && props?.branchId !== '' ? String(props.branchId) : '',
+          branchName: String(props?.branchName || '').trim(),
         };
       })
       .filter(Boolean);
   } catch {
     return [];
   }
+}
+
+function deliveryZoneFilterMatches(zone) {
+  if (DELIVERY_ZONE_FILTER_BRANCH === 'all') return true;
+  if (DELIVERY_ZONE_FILTER_BRANCH === 'general') return !String(zone.branchId || '');
+  return String(zone.branchId || '') === DELIVERY_ZONE_FILTER_BRANCH;
+}
+
+function getVisibleDeliveryZones() {
+  return DELIVERY_ZONES.filter(deliveryZoneFilterMatches);
+}
+
+function findBranchName(branchId) {
+  if (!branchId) return '';
+  const branch = BRANCHES.find((item) => String(item.id) === String(branchId));
+  return branch?.name || '';
+}
+
+function zoneBranchLabel(zone) {
+  return findBranchName(zone?.branchId) || String(zone?.branchName || '').trim() || 'Zona general';
+}
+
+function syncDeliveryEditorButtons() {
+  const isEditing = Boolean($('#deliveryZoneEditId')?.value);
+  const saveBtn = $('#deliverySaveZone');
+  const cancelBtn = $('#deliveryCancelEdit');
+  if (saveBtn) {
+    saveBtn.innerHTML = isEditing
+      ? '<i class="ph-bold ph-floppy-disk"></i> Guardar cambios'
+      : '<i class="ph-bold ph-plus-circle"></i> Guardar zona';
+  }
+  if (cancelBtn) cancelBtn.hidden = !isEditing;
+}
+
+function resetDeliveryZoneEditor() {
+  $('#deliveryZoneEditId').value = '';
+  $('#deliveryZoneName').value = '';
+  $('#deliveryZoneFee').value = '';
+  if ($('#deliveryZoneBranch')) $('#deliveryZoneBranch').value = DELIVERY_ZONE_FILTER_BRANCH !== 'all' && DELIVERY_ZONE_FILTER_BRANCH !== 'general' ? DELIVERY_ZONE_FILTER_BRANCH : '';
+  setDeliveryColor('#0ea5e9');
+  clearDeliveryDrawing();
+  redrawDeliveryPreview();
+  $('#deliveryDrawHint').textContent = 'Activa "Iniciar dibujo" y toca el mapa para crear el polígono de tu zona.';
+  syncDeliveryEditorButtons();
+}
+
+function loadDeliveryZoneIntoEditor(zone) {
+  if (!zone) return;
+  ensureDeliveryZoneMap();
+  $('#deliveryZoneEditId').value = zone.id;
+  $('#deliveryZoneName').value = zone.name || '';
+  $('#deliveryZoneFee').value = String(zone.fee ?? '');
+  if ($('#deliveryZoneBranch')) $('#deliveryZoneBranch').value = String(zone.branchId || '');
+  setDeliveryColor(zone.color || '#0ea5e9');
+  clearDeliveryDrawing();
+  DELIVERY_DRAW_POINTS = (zone.points || []).map((point) => [Number(point[0]), Number(point[1])]);
+  if (DELIVERY_ZONE_MAP && globalThis.L) {
+    DELIVERY_DRAW_MARKERS = DELIVERY_DRAW_POINTS.map((point) =>
+      L.circleMarker(point, { radius: 4, color: $('#deliveryZoneColor')?.value || '#0ea5e9', weight: 2, fillOpacity: 1 }).addTo(DELIVERY_ZONE_MAP)
+    );
+  }
+  redrawDeliveryPreview();
+  setDeliveryDrawingActive(true);
+  $('#deliveryDrawHint').textContent = `Editando zona: ${zone.name}. Puedes ajustar puntos y luego guardar cambios.`;
+  syncDeliveryEditorButtons();
+}
+
+async function persistDeliveryZones(successMessage) {
+  const fd = new FormData();
+  fd.append('delivery_zones_geojson', JSON.stringify(DELIVERY_ZONES));
+  await api('/api/settings', { method: 'PUT', body: fd });
+  SETTINGS.delivery_zones_geojson = JSON.stringify(DELIVERY_ZONES);
+  if (successMessage) toast(successMessage);
+}
+
+function renderDeliveryBranchOptions() {
+  const branchSelect = $('#deliveryZoneBranch');
+  const filterSelect = $('#deliveryZoneFilterBranch');
+  if (branchSelect) {
+    const current = branchSelect.value;
+    branchSelect.innerHTML = ['<option value="">Zona general</option>']
+      .concat(BRANCHES.map((branch) => `<option value="${esc(String(branch.id))}">${esc(branch.name)}</option>`))
+      .join('');
+    branchSelect.value = BRANCHES.some((branch) => String(branch.id) === current) ? current : '';
+  }
+  if (filterSelect) {
+    const options = [
+      '<option value="all">Todas las sucursales</option>',
+      '<option value="general">Solo zonas generales</option>',
+      ...BRANCHES.map((branch) => `<option value="${esc(String(branch.id))}">${esc(branch.name)}</option>`),
+    ];
+    filterSelect.innerHTML = options.join('');
+    const canKeep = DELIVERY_ZONE_FILTER_BRANCH === 'all' || DELIVERY_ZONE_FILTER_BRANCH === 'general' || BRANCHES.some((branch) => String(branch.id) === DELIVERY_ZONE_FILTER_BRANCH);
+    if (!canKeep) DELIVERY_ZONE_FILTER_BRANCH = 'all';
+    filterSelect.value = DELIVERY_ZONE_FILTER_BRANCH;
+  }
+}
+
+function fitDeliveryZonesBounds() {
+  const visibleZones = getVisibleDeliveryZones();
+  if (!DELIVERY_ZONE_MAP || !visibleZones.length) return;
+  const allPoints = visibleZones.flatMap((z) => z.points || []).filter((p) => Array.isArray(p) && p.length === 2);
+  if (!allPoints.length) return;
+  const bounds = L.latLngBounds(allPoints.map((p) => L.latLng(Number(p[0]), Number(p[1]))));
+  if (!bounds.isValid()) return;
+  DELIVERY_ZONE_MAP.fitBounds(bounds, { padding: [24, 24], maxZoom: 16 });
 }
 
 function setChatbotSubtab(tab) {
@@ -2543,35 +2762,90 @@ function setChatbotSubtab(tab) {
   $('#chatbotDeliveryPanel').hidden = !isDelivery;
   if (isDelivery) {
     ensureDeliveryZoneMap();
-    setTimeout(() => DELIVERY_ZONE_MAP?.invalidateSize(), 80);
+    setTimeout(() => {
+      DELIVERY_ZONE_MAP?.invalidateSize();
+      fitDeliveryZonesBounds();
+    }, 80);
   }
 }
 
 function renderDeliveryZonesList() {
   const host = $('#deliveryZonesList');
+  const pager = $('#deliveryZonesPager');
   if (!host) return;
-  if (!DELIVERY_ZONES.length) {
-    host.innerHTML = emptyHTML('ph-map-pin', 'Sin zonas aún', 'Dibuja tu primera zona y asígnale un costo de envío.');
+  const visibleZones = getVisibleDeliveryZones();
+  if (!visibleZones.length) {
+    const emptyTitle = DELIVERY_ZONE_FILTER_BRANCH === 'all' ? 'Sin zonas aún' : 'Sin zonas para esta sucursal';
+    const emptyText = DELIVERY_ZONE_FILTER_BRANCH === 'all'
+      ? 'Dibuja tu primera zona y asígnale un costo de envío.'
+      : 'Cambia de sucursal o crea una zona para este contexto.';
+    host.innerHTML = emptyHTML('ph-map-pin', emptyTitle, emptyText);
+    if (pager) pager.innerHTML = '';
     return;
   }
-  host.innerHTML = DELIVERY_ZONES.map((zone) => `
+
+  const totalPages = Math.max(1, Math.ceil(visibleZones.length / DELIVERY_ZONES_PAGE_SIZE));
+  if (DELIVERY_ZONES_PAGE > totalPages) DELIVERY_ZONES_PAGE = totalPages;
+  const start = (DELIVERY_ZONES_PAGE - 1) * DELIVERY_ZONES_PAGE_SIZE;
+  const pagedZones = visibleZones.slice(start, start + DELIVERY_ZONES_PAGE_SIZE);
+
+  host.innerHTML = pagedZones.map((zone) => `
     <div class="delivery-zone-item">
       <div class="meta">
         <span class="swatch" style="background:${esc(zone.color)}"></span>
-        <div>
+        <div class="meta-text">
           <b>${esc(zone.name)}</b>
           <small>${zone.points.length} puntos · ${fmtMoney(zone.fee)}</small>
+          <div class="branch-tag"><i class="ph-bold ph-storefront"></i> ${esc(zoneBranchLabel(zone))}</div>
         </div>
       </div>
-      <button class="btn btn-danger btn-icon" type="button" data-delivery-zone-del="${esc(zone.id)}" title="Eliminar zona"><i class="ph-bold ph-trash"></i></button>
+      <div class="actions">
+        <button class="btn btn-ghost btn-icon" type="button" data-delivery-zone-edit="${esc(zone.id)}" title="Editar zona"><i class="ph-bold ph-pencil-simple"></i></button>
+        <button class="btn btn-danger btn-icon" type="button" data-delivery-zone-del="${esc(zone.id)}" title="Eliminar zona"><i class="ph-bold ph-trash"></i></button>
+      </div>
     </div>
   `).join('');
 
-  host.querySelectorAll('[data-delivery-zone-del]').forEach((btn) => {
+  if (pager) {
+    pager.innerHTML = totalPages > 1
+      ? `
+        <span class="hint">Página ${DELIVERY_ZONES_PAGE} de ${totalPages} · ${visibleZones.length} zonas</span>
+        <div class="pager-actions">
+          <button class="btn btn-ghost" type="button" id="deliveryZonesPrev" ${DELIVERY_ZONES_PAGE <= 1 ? 'disabled' : ''}><i class="ph-bold ph-caret-left"></i> Anterior</button>
+          <button class="btn btn-ghost" type="button" id="deliveryZonesNext" ${DELIVERY_ZONES_PAGE >= totalPages ? 'disabled' : ''}>Siguiente <i class="ph-bold ph-caret-right"></i></button>
+        </div>
+      `
+      : `<span class="hint">Mostrando ${visibleZones.length} zona${visibleZones.length === 1 ? '' : 's'}</span>`;
+
+    $('#deliveryZonesPrev')?.addEventListener('click', () => {
+      if (DELIVERY_ZONES_PAGE <= 1) return;
+      DELIVERY_ZONES_PAGE -= 1;
+      renderDeliveryZonesList();
+    });
+    $('#deliveryZonesNext')?.addEventListener('click', () => {
+      if (DELIVERY_ZONES_PAGE >= totalPages) return;
+      DELIVERY_ZONES_PAGE += 1;
+      renderDeliveryZonesList();
+    });
+  }
+
+  host.querySelectorAll('[data-delivery-zone-edit]').forEach((btn) => {
     btn.addEventListener('click', () => {
+      const zone = DELIVERY_ZONES.find((item) => item.id === btn.dataset.deliveryZoneEdit);
+      if (!zone) return;
+      loadDeliveryZoneIntoEditor(zone);
+    });
+  });
+
+  host.querySelectorAll('[data-delivery-zone-del]').forEach((btn) => {
+    btn.addEventListener('click', async () => {
       DELIVERY_ZONES = DELIVERY_ZONES.filter((z) => z.id !== btn.dataset.deliveryZoneDel);
+      const nextPages = Math.max(1, Math.ceil(DELIVERY_ZONES.length / DELIVERY_ZONES_PAGE_SIZE));
+      if (DELIVERY_ZONES_PAGE > nextPages) DELIVERY_ZONES_PAGE = nextPages;
       drawDeliveryZones();
       renderDeliveryZonesList();
+      if ($('#deliveryZoneEditId')?.value === btn.dataset.deliveryZoneDel) resetDeliveryZoneEditor();
+      await persistDeliveryZones('Zona eliminada');
     });
   });
 }
@@ -2641,14 +2915,15 @@ function redrawDeliveryPreview() {
 function drawDeliveryZones() {
   if (!DELIVERY_ZONE_LAYER) return;
   DELIVERY_ZONE_LAYER.clearLayers();
-  DELIVERY_ZONES.forEach((zone) => {
+  getVisibleDeliveryZones().forEach((zone) => {
     const polygon = L.polygon(zone.points, {
       color: zone.color || '#0ea5e9',
       weight: 2,
       fillOpacity: 0.22,
     }).addTo(DELIVERY_ZONE_LAYER);
-    polygon.bindPopup(`<b>${esc(zone.name)}</b><br/>Envío: ${fmtMoney(zone.fee)}`);
+    polygon.bindPopup(`<b>${esc(zone.name)}</b><br/>Sucursal: ${esc(zoneBranchLabel(zone))}<br/>Envío: ${fmtMoney(zone.fee)}`);
   });
+  fitDeliveryZonesBounds();
 }
 
 function ensureDeliveryZoneMap() {
@@ -2695,6 +2970,16 @@ function initDeliveryZoneModuleEvents() {
   });
   $('#deliveryColorCustomBtn')?.addEventListener('click', () => $('#deliveryZoneColor')?.click());
   $('#deliveryZoneColor')?.addEventListener('input', (e) => setDeliveryColor(e.target.value));
+  $('#deliveryZoneFilterBranch')?.addEventListener('change', (e) => {
+    DELIVERY_ZONE_FILTER_BRANCH = e.target.value || 'all';
+    DELIVERY_ZONES_PAGE = 1;
+    renderDeliveryZonesList();
+    drawDeliveryZones();
+    if (DELIVERY_ZONE_FILTER_BRANCH !== 'all' && DELIVERY_ZONE_FILTER_BRANCH !== 'general' && $('#deliveryZoneBranch')) {
+      $('#deliveryZoneBranch').value = DELIVERY_ZONE_FILTER_BRANCH;
+    }
+  });
+  $('#deliveryCancelEdit')?.addEventListener('click', () => resetDeliveryZoneEditor());
 
   $('#deliveryUndoPoint')?.addEventListener('click', () => {
     if (!DELIVERY_DRAW_POINTS.length) return;
@@ -2707,38 +2992,42 @@ function initDeliveryZoneModuleEvents() {
       : 'Sin puntos capturados. Inicia dibujo y toca el mapa.';
   });
 
-  $('#deliverySaveZone')?.addEventListener('click', () => {
+  $('#deliverySaveZone')?.addEventListener('click', async () => {
+    const editId = ($('#deliveryZoneEditId')?.value || '').trim();
     const name = ($('#deliveryZoneName')?.value || '').trim();
     const fee = Number($('#deliveryZoneFee')?.value || '0');
     const color = $('#deliveryZoneColor')?.value || '#0ea5e9';
+    const branchId = String($('#deliveryZoneBranch')?.value || '').trim();
+    const branchName = branchId ? findBranchName(branchId) : '';
     if (!name) return toast('Escribe un nombre de zona', true);
     if (!Number.isFinite(fee) || fee < 0) return toast('El costo de envío no es válido', true);
     if (DELIVERY_DRAW_POINTS.length < 3) return toast('Dibuja al menos 3 puntos para formar la zona', true);
 
-    DELIVERY_ZONES.push({
-      id: `zone_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+    const zonePayload = {
+      id: editId || `zone_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
       name,
       fee,
       color,
       points: [...DELIVERY_DRAW_POINTS],
       active: true,
-    });
+      branchId,
+      branchName,
+    };
+    if (editId) {
+      DELIVERY_ZONES = DELIVERY_ZONES.map((zone) => (zone.id === editId ? zonePayload : zone));
+    } else {
+      DELIVERY_ZONES.push(zonePayload);
+    }
+    if (DELIVERY_ZONE_FILTER_BRANCH !== 'all' && DELIVERY_ZONE_FILTER_BRANCH !== 'general' && branchId && DELIVERY_ZONE_FILTER_BRANCH !== branchId) {
+      DELIVERY_ZONE_FILTER_BRANCH = branchId;
+      if ($('#deliveryZoneFilterBranch')) $('#deliveryZoneFilterBranch').value = branchId;
+    }
+    DELIVERY_ZONES_PAGE = Math.max(1, Math.ceil(DELIVERY_ZONES.length / DELIVERY_ZONES_PAGE_SIZE));
 
-    clearDeliveryDrawing();
+    resetDeliveryZoneEditor();
     drawDeliveryZones();
     renderDeliveryZonesList();
-    $('#deliveryZoneName').value = '';
-    $('#deliveryZoneFee').value = '';
-    $('#deliveryDrawHint').textContent = 'Zona agregada. Guarda para aplicar cambios al chatbot.';
-    toast('Zona agregada al mapa');
-  });
-
-  $('#deliverySaveAll')?.addEventListener('click', async () => {
-    const fd = new FormData();
-    fd.append('delivery_zones_geojson', JSON.stringify(DELIVERY_ZONES));
-    await api('/api/settings', { method: 'PUT', body: fd });
-    SETTINGS = await api('/api/settings');
-    toast('Servicio a domicilio guardado');
+    await persistDeliveryZones(editId ? 'Zona actualizada' : 'Zona guardada');
   });
 }
 
@@ -2754,12 +3043,19 @@ function fillBotForm() {
   $('#botPickup').checked = SETTINGS.pickup_enabled === '1';
   $('#botLocation').checked = SETTINGS.location_enabled !== '0';
   DELIVERY_ZONES = parseDeliveryZones(SETTINGS.delivery_zones_geojson || '[]');
+  DELIVERY_ZONES_PAGE = 1;
+  DELIVERY_ZONE_FILTER_BRANCH = 'all';
+  renderDeliveryBranchOptions();
   setDeliveryColor($('#deliveryZoneColor')?.value || '#0ea5e9');
+  resetDeliveryZoneEditor();
   renderDeliveryZonesList();
   if (CHATBOT_SUBTAB === 'delivery') {
     ensureDeliveryZoneMap();
     drawDeliveryZones();
-    setTimeout(() => DELIVERY_ZONE_MAP?.invalidateSize(), 80);
+    setTimeout(() => {
+      DELIVERY_ZONE_MAP?.invalidateSize();
+      fitDeliveryZonesBounds();
+    }, 80);
   }
   loadBranches();
 }
@@ -2807,6 +3103,9 @@ function branchesTableHTML(rows) {
 
 async function loadBranches() {
   BRANCHES = await api('/api/branches');
+  renderDeliveryBranchOptions();
+  renderDeliveryZonesList();
+  drawDeliveryZones();
   $('#branchTable').innerHTML = branchesTableHTML(BRANCHES);
   document.querySelectorAll('[data-edit-branch]').forEach((b) =>
     b.addEventListener('click', () => openBranchModal(BRANCHES.find((x) => x.id == b.dataset.editBranch)))
@@ -2854,6 +3153,43 @@ $('#branchForm').addEventListener('submit', async (e) => {
   loadBranches();
 });
 
+$('#addCashierBtn')?.addEventListener('click', async () => {
+  try {
+    await ensureBranchesLoaded();
+    if (!BRANCHES.length) return toast('Primero crea al menos una sucursal activa', true);
+    openCashierModal();
+  } catch (err) {
+    toast(err.message, true);
+  }
+});
+
+$('#cashierCancel')?.addEventListener('click', () => $('#cashierModal').classList.remove('show'));
+$('#cashierSlug')?.addEventListener('input', syncCashierLinkPreview);
+
+$('#cashierForm')?.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const id = Number($('#cashierId')?.value || 0);
+  const payload = {
+    displayName: $('#cashierDisplayName').value,
+    username: $('#cashierUsername').value,
+    branchId: Number($('#cashierBranch').value || 0),
+    cashierSlug: $('#cashierSlug').value,
+    password: $('#cashierPassword').value,
+    active: $('#cashierActive').checked ? 1 : 0,
+  };
+  if (!id && String(payload.password || '').trim().length < 8) {
+    return toast('La contraseña del cajero debe tener al menos 8 caracteres', true);
+  }
+  await api(id ? `/api/cashiers/${id}` : '/api/cashiers', {
+    method: id ? 'PUT' : 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  $('#cashierModal').classList.remove('show');
+  toast(id ? 'Cajero actualizado' : 'Cajero creado');
+  await loadCashiers();
+});
+
 /* ===== Mi negocio ===== */
 const PALETTE = ['#ff6b35', '#e11d48', '#d97706', '#16a34a', '#0891b2', '#2563eb', '#7c3aed', '#db2777', '#171c2e'];
 
@@ -2895,6 +3231,7 @@ function fillConfigForm() {
   $('#cfgTicketShowLogo').value = SETTINGS.ticket_show_logo === '0' ? '0' : '1';
   $('#logoPreview').innerHTML = SETTINGS.logo ? `<img src="${esc(SETTINGS.logo)}" alt="" />` : '<i class="ph ph-image"></i>';
   renderSwatches();
+  if (!isCashierUser()) loadCashiers().catch((err) => toast(err.message, true));
 }
 $('#cfgLogo').addEventListener('change', () => {
   const f = $('#cfgLogo').files[0];
@@ -2961,24 +3298,119 @@ function esc(s) {
   return String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
 
+async function ensureBranchesLoaded() {
+  if (BRANCHES.length) return BRANCHES;
+  BRANCHES = await api('/api/branches');
+  return BRANCHES;
+}
+
+function cashierLinkUrl(cashierSlug) {
+  return `${location.origin}/caja/${cashierSlug}`;
+}
+
+function syncCashierBranchOptions(selected = '') {
+  const select = $('#cashierBranch');
+  if (!select) return;
+  select.innerHTML = ['<option value="">Selecciona una sucursal</option>']
+    .concat(BRANCHES.map((branch) => `<option value="${esc(String(branch.id))}">${esc(branch.name)}</option>`))
+    .join('');
+  select.value = selected || '';
+}
+
+function syncCashierLinkPreview() {
+  const slug = String($('#cashierSlug')?.value || '').trim().toLowerCase();
+  const preview = $('#cashierLinkPreview');
+  if (!preview) return;
+  preview.innerHTML = slug
+    ? `<span class="cashier-link-preview"><i class="ph-bold ph-link"></i> ${esc(cashierLinkUrl(slug))}</span>`
+    : 'La caja estará disponible en /caja/...';
+}
+
+function cashiersTableHTML(rows) {
+  if (!rows.length) return emptyHTML('ph-users-three', 'Aún no hay cajeros', 'Crea un cajero por sucursal para abrir una caja dedicada con su propia liga.');
+  const body = rows.map((cashier) => `
+    <tr>
+      <td><b>${esc(cashier.displayName || cashier.username)}</b><div style="font-size:12px;color:var(--ink-3)">@${esc(cashier.username)}</div></td>
+      <td><span class="cashier-chip"><i class="ph-bold ph-storefront"></i>${esc(cashier.branchName || 'Sin sucursal')}</span></td>
+      <td><a href="${esc(cashierLinkUrl(cashier.cashierSlug))}" target="_blank">${esc(cashier.cashierSlug)}</a></td>
+      <td><span class="badge ${cashier.active ? 'b-entregado' : 'b-cancelado'}">${cashier.active ? 'Activo' : 'Inactivo'}</span></td>
+      <td style="display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap">
+        <button class="btn btn-ghost" type="button" data-copy-cashier-link="${esc(cashier.cashierSlug)}"><i class="ph-bold ph-copy"></i> Copiar link</button>
+        <button class="btn btn-ghost" type="button" data-edit-cashier="${cashier.id}"><i class="ph-bold ph-pencil-simple"></i> Editar</button>
+        <button class="btn btn-danger btn-icon" type="button" data-del-cashier="${cashier.id}" title="Eliminar cajero"><i class="ph-bold ph-trash"></i></button>
+      </td>
+    </tr>`).join('');
+  return `<table><thead><tr><th>Cajero</th><th>Sucursal</th><th>Liga de caja</th><th>Estatus</th><th style="text-align:right">Acciones</th></tr></thead><tbody>${body}</tbody></table>`;
+}
+
+async function loadCashiers() {
+  if (isCashierUser()) return;
+  await ensureBranchesLoaded();
+  CASHIERS = await api('/api/cashiers');
+  const host = $('#cashiersTable');
+  if (!host) return;
+  host.innerHTML = cashiersTableHTML(CASHIERS);
+  document.querySelectorAll('[data-copy-cashier-link]').forEach((button) =>
+    button.addEventListener('click', async () => {
+      await navigator.clipboard.writeText(cashierLinkUrl(button.dataset.copyCashierLink));
+      toast('Liga de caja copiada');
+    })
+  );
+  document.querySelectorAll('[data-edit-cashier]').forEach((button) =>
+    button.addEventListener('click', () => openCashierModal(CASHIERS.find((item) => Number(item.id) === Number(button.dataset.editCashier))))
+  );
+  document.querySelectorAll('[data-del-cashier]').forEach((button) =>
+    button.addEventListener('click', async () => {
+      const cashier = CASHIERS.find((item) => Number(item.id) === Number(button.dataset.delCashier));
+      if (!(await askConfirm('¿Eliminar cajero?', `Se eliminará el acceso de caja de ${cashier?.displayName || 'este cajero'}.`))) return;
+      await api(`/api/cashiers/${button.dataset.delCashier}`, { method: 'DELETE' });
+      toast('Cajero eliminado');
+      await loadCashiers();
+    })
+  );
+}
+
+function openCashierModal(cashier = null) {
+  $('#cashierModalTitle').innerHTML = cashier
+    ? '<i class="ph-bold ph-pencil-simple"></i> Editar cajero'
+    : '<i class="ph-bold ph-user-plus"></i> Nuevo cajero';
+  $('#cashierId').value = cashier ? cashier.id : '';
+  $('#cashierDisplayName').value = cashier ? cashier.displayName : '';
+  $('#cashierUsername').value = cashier ? cashier.username : '';
+  $('#cashierSlug').value = cashier ? cashier.cashierSlug : '';
+  $('#cashierPassword').value = '';
+  $('#cashierActive').checked = cashier ? Boolean(cashier.active) : true;
+  syncCashierBranchOptions(cashier?.branchId ? String(cashier.branchId) : '');
+  syncCashierLinkPreview();
+  $('#cashierModal').classList.add('show');
+}
+
 /* ===== Boot ===== */
 async function boot(navigateToHash = true) {
   ME = await api('/api/auth/me');
   SETTINGS = await api('/api/settings');
+  applyUserScopeUI();
+
   document.documentElement.style.setProperty('--primary', ME.tenant.primaryColor || '#ff6b35');
-  $('#brandName').textContent = ME.tenant.businessName;
-  $('#userBizName').textContent = ME.tenant.businessName;
-  $('#userName').textContent = '@' + ME.username;
-  $('#brandMark').innerHTML = ME.tenant.logo
-    ? `<img src="${esc(ME.tenant.logo)}" alt="" />`
-    : '<i class="ph-fill ph-robot"></i>';
-  $('#avatar').innerHTML = ME.tenant.logo
-    ? `<img src="${esc(ME.tenant.logo)}" alt="" />`
-    : esc(ME.tenant.businessName.charAt(0).toUpperCase());
+  const cashier = isCashierUser();
+
+  const defaultBrandLogo = '/static/chatbotpro100.png';
+  const tenantLogo = String(ME?.tenant?.logo || '').trim();
+  const safeTenantLogo = esc(tenantLogo);
+  const brandLogoSrc = tenantLogo || defaultBrandLogo;
+
+  $('#brandMark').innerHTML = `<img src="${esc(brandLogoSrc)}" alt="ChatBotPro" onerror="this.onerror=null;this.src='${defaultBrandLogo}'" />`;
+  $('#avatar').innerHTML = `<img src="${safeTenantLogo || defaultBrandLogo}" alt="" onerror="this.onerror=null;this.src='${defaultBrandLogo}'" />`;
+  $('#brandName').textContent = cashier ? (ME.branchName || ME.tenant.businessName) : ME.tenant.businessName;
+  $('#userBizName').textContent = cashier ? (ME.branchName || ME.tenant.businessName) : ME.tenant.businessName;
+  $('#userName').textContent = cashier ? `@${ME.username} · cajero` : `@${ME.username}`;
   $('#openChatLink').href = `/${ME.tenant.slug}`;
+
   if (navigateToHash) {
-    const view = (location.hash || '#dashboard').slice(1);
-    navigate(VIEW_META[view] ? view : 'dashboard');
+    const fallbackView = cashier ? 'pos' : 'dashboard';
+    const hashView = (location.hash || '').slice(1);
+    const view = cashier ? 'pos' : (VIEW_META[hashView] ? hashView : fallbackView);
+    navigate(view);
   }
 }
 

@@ -1,8 +1,9 @@
 const express = require('express');
-const { requireAuth } = require('../middleware/auth');
+const { requireAuth, requireOwner } = require('../middleware/auth');
 
 const router = express.Router();
 router.use(requireAuth);
+router.use(requireOwner);
 
 const TZ = 'America/Mexico_City';
 

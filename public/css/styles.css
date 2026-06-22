@@ -28,6 +28,11 @@
   --shadow-lg: 0 18px 50px rgba(23, 28, 46, 0.16);
   --sidebar-w: 264px;
   --ease: cubic-bezier(0.22, 1, 0.36, 1);
+
+  --brand-logo-hero: 106px;
+  --brand-logo-auth: 64px;
+  --brand-logo-sidebar: 54px;
+  --brand-logo-zoom: 1.28;
 }
 * { box-sizing: border-box; margin: 0; padding: 0; }
 html { scroll-behavior: smooth; }
@@ -155,6 +160,22 @@ label { display: flex; align-items: center; gap: 6px; font-size: 12.5px; font-we
   display: grid;
   gap: 10px;
 }
+.delivery-zones-pager {
+  margin-top: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.delivery-zones-pager .pager-actions {
+  display: inline-flex;
+  gap: 8px;
+}
+.delivery-zones-pager .btn {
+  padding: 8px 12px;
+  font-size: 12px;
+}
 .delivery-zone-item {
   border: 1px solid var(--line);
   border-radius: 12px;
@@ -171,6 +192,9 @@ label { display: flex; align-items: center; gap: 6px; font-size: 12.5px; font-we
   gap: 10px;
   min-width: 0;
 }
+.delivery-zone-item .meta-text {
+  min-width: 0;
+}
 .delivery-zone-item .swatch {
   width: 14px;
   height: 14px;
@@ -185,6 +209,43 @@ label { display: flex; align-items: center; gap: 6px; font-size: 12.5px; font-we
 .delivery-zone-item small {
   color: var(--ink-3);
   font-size: 12px;
+}
+.delivery-zone-item .branch-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 4px;
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: #eef7ff;
+  color: #2563eb;
+  font-size: 11px;
+  font-weight: 700;
+}
+.delivery-zone-item .actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.pos-delivery-branch,
+.pos-session-active {
+  margin-bottom: 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: linear-gradient(135deg, #f8fbff, #eef6ff);
+}
+.pos-delivery-branch {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 700;
+}
+.pos-delivery-branch i,
+.pos-session-active h3 i {
+  color: var(--primary);
 }
 @media (max-width: 900px) {
   .delivery-zone-map {
@@ -235,6 +296,68 @@ label { display: flex; align-items: center; gap: 6px; font-size: 12.5px; font-we
   display: flex; align-items: center; justify-content: center; font-size: 32px; color: #fff;
   box-shadow: 0 14px 38px var(--primary-glow); margin-bottom: 26px;
 }
+.auth-hero .mark.mark-logo {
+  width: var(--brand-logo-hero);
+  height: var(--brand-logo-hero);
+  background: transparent;
+  box-shadow: none;
+  border-radius: 0;
+  overflow: visible;
+}
+.auth-hero .mark.mark-logo img {
+  width: var(--brand-logo-hero);
+  height: var(--brand-logo-hero);
+  object-fit: contain;
+  border-radius: 0;
+  transform: scale(var(--brand-logo-zoom));
+  transform-origin: center;
+  filter: drop-shadow(0 4px 14px rgba(0,0,0,.4));
+}
+.auth-hero .hero-brandline {
+  position: relative;
+  margin: -6px 0 18px;
+  display: inline-flex;
+  flex-direction: column;
+  gap: 2px;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+}
+.auth-hero .hero-brandline strong {
+  font-size: 22px;
+  font-weight: 900;
+  line-height: 1;
+  background: linear-gradient(92deg, #8bf4ff 0%, #c9f7ff 42%, #fff3a2 72%, #ffd36b 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  text-shadow: 0 0 18px rgba(118, 241, 255, 0.35), 0 0 30px rgba(255, 210, 108, 0.28);
+}
+.auth-hero .hero-brandline span {
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1.2;
+  color: #d9f6ff;
+  text-shadow: 0 0 10px rgba(113, 232, 255, 0.4), 0 0 16px rgba(255, 205, 115, 0.25);
+}
+.auth-hero .hero-brandline::after {
+  content: '';
+  position: absolute;
+  left: -12%;
+  top: -8px;
+  width: 36%;
+  height: calc(100% + 12px);
+  background: linear-gradient(110deg, transparent 0%, rgba(255,255,255,0.72) 48%, transparent 100%);
+  filter: blur(0.6px);
+  transform: skewX(-14deg);
+  animation: brandSweep 3.2s ease-in-out infinite;
+  pointer-events: none;
+}
+@keyframes brandSweep {
+  0% { transform: translateX(-30%) skewX(-14deg); opacity: 0; }
+  18% { opacity: 0.88; }
+  50% { transform: translateX(205%) skewX(-14deg); opacity: 0; }
+  100% { transform: translateX(205%) skewX(-14deg); opacity: 0; }
+}
 .auth-hero h1 { font-size: 42px; line-height: 1.12; margin-bottom: 16px; font-weight: 800; letter-spacing: -0.5px; }
 .auth-hero h1 em { font-style: normal; background: var(--grad); -webkit-background-clip: text; background-clip: text; color: transparent; }
 .auth-hero p { font-size: 16.5px; opacity: 0.78; max-width: 480px; line-height: 1.65; }
@@ -253,7 +376,24 @@ label { display: flex; align-items: center; gap: 6px; font-size: 12.5px; font-we
 .auth-card .logo .dot {
   width: 42px; height: 42px; border-radius: 13px; background: var(--grad);
   display: flex; align-items: center; justify-content: center; font-size: 21px; color: #fff;
-  box-shadow: 0 8px 20px var(--primary-glow);
+  box-shadow: 0 8px 20px var(--primary-glow); overflow: hidden;
+}
+.auth-card .logo .dot.dot-logo {
+  width: var(--brand-logo-auth);
+  height: var(--brand-logo-auth);
+  background: transparent;
+  box-shadow: none;
+  border-radius: 0;
+  overflow: visible;
+}
+.auth-card .logo .dot.dot-logo img {
+  width: var(--brand-logo-auth);
+  height: var(--brand-logo-auth);
+  object-fit: contain;
+  border-radius: 0;
+  transform: scale(var(--brand-logo-zoom));
+  transform-origin: center;
+  filter: drop-shadow(0 2px 6px rgba(0,0,0,.32));
 }
 .auth-card h2 { font-size: 27px; margin-bottom: 8px; font-weight: 800; letter-spacing: -0.3px; }
 .auth-card .sub { color: var(--ink-2); margin-bottom: 28px; font-size: 15px; }
@@ -466,6 +606,16 @@ label { display: flex; align-items: center; gap: 6px; font-size: 12.5px; font-we
   .wa-fab { padding: 14px; }
 }
 
+@media (max-width: 560px) {
+  :root {
+    --brand-logo-hero: 72px;
+    --brand-logo-auth: 44px;
+    --brand-logo-sidebar: 38px;
+  }
+}
+  .auth-hero .hero-brandline strong { font-size: 18px; }
+  .auth-hero .hero-brandline span { font-size: 11px; }
+
 @media (min-width: 940px) { .auth-hero { display: flex; } }
 
 /* ============================================================
@@ -491,7 +641,23 @@ label { display: flex; align-items: center; gap: 6px; font-size: 12.5px; font-we
   box-shadow: 0 8px 22px var(--primary-glow);
   overflow: hidden;
 }
-.sidebar .brand .dot img { width: 100%; height: 100%; object-fit: cover; }
+.sidebar .brand .dot.dot-logo {
+  width: var(--brand-logo-sidebar);
+  height: var(--brand-logo-sidebar);
+  background: transparent;
+  box-shadow: none;
+  border-radius: 0;
+  overflow: visible;
+}
+.sidebar .brand .dot img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  border-radius: 0;
+  transform: scale(var(--brand-logo-zoom));
+  transform-origin: center;
+  filter: drop-shadow(0 2px 6px rgba(0,0,0,.35));
+}
 .sidebar .brand small { display: block; font-size: 11px; font-weight: 600; color: #6e7591; letter-spacing: 0.6px; text-transform: uppercase; margin-top: 1px; }
 .sidebar nav { flex: 1; padding: 8px 14px; display: flex; flex-direction: column; gap: 3px; overflow-y: auto; }
 .sidebar nav .nav-label {
@@ -596,6 +762,19 @@ tbody tr { transition: background 0.14s; }
 tbody tr:hover { background: #f8fafd; }
 tr:last-child td { border-bottom: none; }
 .cust { display: flex; align-items: center; gap: 11px; }
+
+/* ---------- Rank badges (customers table) ---------- */
+.rank-cell { display: flex; align-items: center; gap: 6px; }
+.rank-num  { font-size: 13px; color: var(--ink-2); }
+.rank-badge { font-size: 22px; line-height: 1; display: inline-block; }
+.rank-gold   { filter: drop-shadow(0 0 6px rgba(255,200,0,.7)); animation: rank-pulse 2.4s ease-in-out infinite; }
+.rank-silver { filter: drop-shadow(0 0 5px rgba(180,190,210,.8)); }
+.rank-bronze { filter: drop-shadow(0 0 5px rgba(200,130,60,.7)); }
+.rank-loyal  { filter: drop-shadow(0 0 3px rgba(180,140,255,.5)); opacity: .9; }
+@keyframes rank-pulse {
+  0%,100% { filter: drop-shadow(0 0 6px rgba(255,200,0,.7)); }
+  50%      { filter: drop-shadow(0 0 12px rgba(255,200,0,1)); }
+}
 .cust .cav {
   width: 36px; height: 36px; border-radius: 11px; flex-shrink: 0;
   display: flex; align-items: center; justify-content: center;
@@ -678,6 +857,71 @@ tr:last-child td { border-bottom: none; }
   cursor: not-allowed;
   background: linear-gradient(135deg, #7c3aed88 0%, #2563eb88 100%);
   box-shadow: none;
+}
+
+.cashier-link-preview {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-radius: 10px;
+  background: #f8fbff;
+  border: 1px solid #dbeafe;
+  color: var(--ink-2);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.cashier-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  border-radius: 999px;
+  background: #eef7ff;
+  color: #2563eb;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+body.cashier-mode .sidebar nav .nav-label,
+body.cashier-mode .sidebar nav a:not([data-view="pos"]),
+body.cashier-mode #openChatLink,
+body.cashier-mode #view-dashboard,
+body.cashier-mode #view-pedidos,
+body.cashier-mode #view-clientes,
+body.cashier-mode #view-productos,
+body.cashier-mode #view-chatbot,
+body.cashier-mode #view-config {
+  display: none !important;
+}
+
+/* Cajero: sidebar colapsado solo muestra Punto de venta */
+body.cashier-mode .sidebar {
+  width: var(--sidebar-w);
+}
+body.cashier-mode .sidebar .brand small {
+  content: 'Cajero';
+}
+body.cashier-mode .topbar {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+}
+body.cashier-mode .cashier-branch-banner {
+  display: inline-flex;
+}
+.cashier-branch-banner {
+  display: none;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 14px;
+  border-radius: 10px;
+  background: linear-gradient(135deg, #eef6ff, #dbeafe);
+  border: 1px solid #bfdbfe;
+  color: #1d4ed8;
+  font-size: 13px;
+  font-weight: 800;
 }
 
 /* ── POS chatbot queue responsive modal ── */
@@ -934,9 +1178,10 @@ tr:last-child td { border-bottom: none; }
 
 @media (max-width: 680px) {
   #posChatbotQueueModal .table-wrap {
-    max-height: calc(92dvh - 300px);
-  }
-  #posChatbotQueueModal .pos-chatbot-modal-foot {
+    --brand-logo-hero: 90px;
+    --brand-logo-auth: 56px;
+    --brand-logo-sidebar: 46px;
+    --brand-logo-zoom: 1.2;
     gap: 8px;
   }
   #posChatbotQueueModal .pos-chatbot-modal-foot > .hint {
@@ -2033,7 +2278,7 @@ select.status-sel {
 /* ---------- Modal ---------- */
 .modal-bg {
   display: none; position: fixed; inset: 0; background: rgba(15,18,32,0.5);
-  backdrop-filter: blur(7px); z-index: 60; align-items: center; justify-content: center; padding: 20px;
+  backdrop-filter: blur(7px); z-index: 1400; align-items: center; justify-content: center; padding: 20px;
 }
 .modal-bg.show { display: flex; animation: fadeIn 0.2s; }
 @keyframes fadeIn { from { opacity: 0; } }

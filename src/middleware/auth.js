@@ -36,6 +36,11 @@ async function requireAuth(req, res, next) {
   if (!token) return res.status(401).json({ error: 'No autenticado' });
   try {
     const payload = jwt.verify(token, config.JWT_SECRET);
+    const userResult = await q('SELECT * FROM users WHERE id = $1', [payload.uid]);
+    const authUser = userResult.rows[0];
+    if (!authUser || !Number(authUser.active)) {
+      return res.status(401).json({ error: 'Usuario inactivo o no encontrado' });
+    }
     const { rows } = await q('SELECT * FROM tenants WHERE id = $1', [payload.tid]);
     if (!rows[0]) return res.status(401).json({ error: 'Tenant no encontrado' });
     if (rows[0].account_status !== 'active') {
@@ -49,9 +54,26 @@ async function requireAuth(req, res, next) {
         whatsappUrl: supportWhatsappUrl(),
       });
     }
-    req.user = payload;
     req.tenant = rows[0];
     req.tdb = tdb(rows[0].slug); // schema aislado del tenant autenticado
+    let branchName = '';
+    const branchId = Number.isInteger(Number(authUser.branch_id)) && Number(authUser.branch_id) > 0 ? Number(authUser.branch_id) : null;
+    if (branchId) {
+      const branchRow = await req.tdb.get('SELECT id, name FROM {s}.branches WHERE id = $1 LIMIT 1', [branchId]);
+      branchName = branchRow?.name || '';
+    }
+    req.user = {
+      uid: authUser.id,
+      tid: rows[0].id,
+      slug: rows[0].slug,
+      username: authUser.username,
+      role: authUser.role || 'owner',
+      displayName: authUser.display_name || authUser.username,
+      branchId,
+      branchName,
+      cashierSlug: authUser.cashier_slug || '',
+      active: Number(authUser.active || 0),
+    };
     next();
   } catch (e) {
     if (e.name === 'JsonWebTokenError' || e.name === 'TokenExpiredError') {
@@ -61,4 +83,12 @@ async function requireAuth(req, res, next) {
   }
 }
 
-module.exports = { signToken, setAuthCookie, clearAuthCookie, requireAuth, COOKIE_NAME };
+function requireOwner(req, res, next) {
+  if (!req.user) return res.status(401).json({ error: 'No autenticado' });
+  if (req.user.role !== 'owner') {
+    return res.status(403).json({ error: 'No tienes permiso para acceder a este módulo' });
+  }
+  next();
+}
+
+module.exports = { signToken, setAuthCookie, clearAuthCookie, requireAuth, requireOwner, COOKIE_NAME };

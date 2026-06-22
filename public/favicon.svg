@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <defs>
+    <clipPath id="logoCircle">
+      <circle cx="256" cy="256" r="246" />
+    </clipPath>
+  </defs>
+  <rect width="512" height="512" fill="none" />
+  <image href="/static/chatbotpro100.png" x="0" y="0" width="512" height="512" preserveAspectRatio="xMidYMid meet" clip-path="url(#logoCircle)" />
+  <circle cx="256" cy="256" r="246" fill="none" stroke="rgba(255,255,255,0.16)" stroke-width="2" />
+</svg>

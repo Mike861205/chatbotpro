@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Caja POS — ChatBotPro</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/regular/style.css">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/bold/style.css">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/fill/style.css">
+  <link rel="stylesheet" href="/static/css/styles.css">
+  <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
+  <link rel="icon" type="image/png" href="/static/chatbotpro100.png">
+</head>
+<body>
+  <div class="auth-wrap">
+    <div class="auth-hero">
+      <div class="glow"></div>
+      <div class="mark mark-logo"><img src="/static/chatbotpro100.png" alt="ChatBotPro"></div>
+      <div class="hero-brandline">
+        <strong>CHAT BOT PRO</strong>
+        <span>PUNTO DE VENTA POR SUCURSAL</span>
+      </div>
+      <h1>Acceso a <em>caja</em></h1>
+      <p id="cashierTenantText">Cargando caja asignada…</p>
+    </div>
+    <div class="auth-panel">
+      <div class="auth-card">
+        <div class="logo"><span class="dot dot-logo"><img src="/static/chatbotpro100.png" alt=""></span> ChatBotPro</div>
+        <h2 id="cashierTitle">Acceso de cajero</h2>
+        <p class="sub" id="cashierSub">Ingresa tu clave para abrir el punto de venta de esta sucursal.</p>
+        <div class="error-box" id="error"><i class="ph-fill ph-warning-circle"></i><span id="errorMsg"></span></div>
+        <form id="cashierLoginForm">
+          <div class="field">
+            <label for="cashierPassword"><i class="ph-bold ph-key"></i> Clave de acceso</label>
+            <input type="password" id="cashierPassword" required minlength="8" autocomplete="current-password" placeholder="Tu contraseña">
+          </div>
+          <button class="btn btn-primary btn-block" type="submit" id="cashierLoginBtn"><i class="ph-bold ph-sign-in"></i> Entrar a caja</button>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const slug = location.pathname.split('/').pop();
+    const errorBox = document.getElementById('error');
+    const errorMsg = document.getElementById('errorMsg');
+    const btn = document.getElementById('cashierLoginBtn');
+    const passInput = document.getElementById('cashierPassword');
+
+    function showError(msg) {
+      errorMsg.textContent = msg;
+      errorBox.style.display = 'flex';
+    }
+
+    function hideError() {
+      errorBox.style.display = 'none';
+      errorMsg.textContent = '';
+    }
+
+    async function loadCashierInfo() {
+      hideError();
+      const res = await fetch(`/api/auth/cashier-info/${slug}`);
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || 'No se encontró la caja');
+      document.title = `${data.tenant.businessName} — Caja ${data.branchName || ''}`.trim();
+      document.getElementById('cashierTenantText').textContent = `${data.tenant.businessName} · ${data.branchName || 'Sucursal asignada'}`;
+      document.getElementById('cashierTitle').textContent = data.displayName || 'Acceso de cajero';
+      document.getElementById('cashierSub').textContent = `Sucursal ${data.branchName || 'asignada'} · usuario ${data.username}`;
+      if (data.tenant.primaryColor) document.documentElement.style.setProperty('--primary', data.tenant.primaryColor);
+    }
+
+    document.getElementById('cashierLoginForm').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      hideError();
+      btn.disabled = true;
+      try {
+        const res = await fetch('/api/auth/cashier-login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ cashierSlug: slug, password: passInput.value }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || 'No se pudo iniciar sesión');
+        location.href = data.redirectTo || '/app#pos';
+      } catch (err) {
+        showError(err.message || 'No se pudo iniciar sesión');
+      } finally {
+        btn.disabled = false;
+      }
+    });
+
+    loadCashierInfo().catch((err) => showError(err.message || 'No se encontró la caja'));
+  </script>
+</body>
+</html>

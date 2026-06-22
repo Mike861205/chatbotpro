@@ -34,32 +34,48 @@ function normalizeIsoDate(value) {
   return date;
 }
 
-async function getOpenSession(t) {
-  return t.get(
-    `SELECT id, status, opening_amount::float AS opening_amount, closing_amount::float AS closing_amount,
+/**
+ * Retorna la sesión abierta del usuario:
+ * - Cajero: filtra por branch_id (su sucursal asignada).
+ * - Admin/owner: filtra por opened_by (solo ve su propia sesión abierta).
+ * Esto permite que varias sucursales tengan sesiones abiertas simultáneamente.
+ */
+async function getOpenSession(t, { forUsername = null, forBranchId = null } = {}) {
+  const SEL = `SELECT id, status, opening_amount::float AS opening_amount, closing_amount::float AS closing_amount,
             expected_amount::float AS expected_amount, difference_amount::float AS difference_amount,
+            branch_id, branch_name,
             notes, opened_by, closed_by,
             to_char(opened_at AT TIME ZONE '${TZ}', 'DD Mon YYYY, HH24:MI') AS opened_at,
             to_char(closed_at AT TIME ZONE '${TZ}', 'DD Mon YYYY, HH24:MI') AS closed_at
-     FROM {s}.pos_sessions
-     WHERE status = 'open'
-     ORDER BY opened_at DESC
-     LIMIT 1`
-  );
+     FROM {s}.pos_sessions`;
+
+  const branchId = Number.isInteger(Number(forBranchId)) && Number(forBranchId) > 0 ? Number(forBranchId) : null;
+  if (branchId) {
+    return t.get(`${SEL} WHERE status = 'open' AND branch_id = $1 ORDER BY opened_at DESC LIMIT 1`, [branchId]);
+  }
+  if (forUsername) {
+    return t.get(`${SEL} WHERE status = 'open' AND opened_by = $1 ORDER BY opened_at DESC LIMIT 1`, [forUsername]);
+  }
+  return t.get(`${SEL} WHERE status = 'open' ORDER BY opened_at DESC LIMIT 1`);
 }
 
-async function getLastClosedSession(t) {
-  return t.get(
-    `SELECT id, status, opening_amount::float AS opening_amount, closing_amount::float AS closing_amount,
+async function getLastClosedSession(t, { forUsername = null, forBranchId = null } = {}) {
+  const SEL = `SELECT id, status, opening_amount::float AS opening_amount, closing_amount::float AS closing_amount,
             expected_amount::float AS expected_amount, difference_amount::float AS difference_amount,
+            branch_id, branch_name,
             notes, opened_by, closed_by,
             to_char(opened_at AT TIME ZONE '${TZ}', 'DD Mon YYYY, HH24:MI') AS opened_at,
             to_char(closed_at AT TIME ZONE '${TZ}', 'DD Mon YYYY, HH24:MI') AS closed_at
-     FROM {s}.pos_sessions
-     WHERE status = 'closed'
-     ORDER BY closed_at DESC NULLS LAST
-     LIMIT 1`
-  );
+     FROM {s}.pos_sessions`;
+
+  const branchId = Number.isInteger(Number(forBranchId)) && Number(forBranchId) > 0 ? Number(forBranchId) : null;
+  if (branchId) {
+    return t.get(`${SEL} WHERE status = 'closed' AND branch_id = $1 ORDER BY closed_at DESC NULLS LAST LIMIT 1`, [branchId]);
+  }
+  if (forUsername) {
+    return t.get(`${SEL} WHERE status = 'closed' AND opened_by = $1 ORDER BY closed_at DESC NULLS LAST LIMIT 1`, [forUsername]);
+  }
+  return t.get(`${SEL} WHERE status = 'closed' ORDER BY closed_at DESC NULLS LAST LIMIT 1`);
 }
 
 async function getSessionTotals(t, sessionId) {
@@ -146,7 +162,7 @@ async function loadChatbotOrderForImport(t, orderId) {
   return t.get(
     `SELECT o.id, o.customer_id, o.items, o.total::float AS total, o.status, o.channel, o.delivery, o.notes,
             o.payment_method, o.pickup_branch_name, o.customer_location_text, o.customer_location_resolved,
-            o.delivery_fee::float AS delivery_fee, o.delivery_zone_name,
+            o.delivery_fee::float AS delivery_fee, o.delivery_zone_name, o.service_branch_id, o.service_branch_name,
             to_char(o.created_at AT TIME ZONE '${TZ}', 'DD Mon YYYY, HH24:MI') AS created_at,
             c.name_enc, c.phone_enc, c.address_enc
      FROM {s}.orders o
@@ -165,6 +181,7 @@ function chatbotSummaryNote(order) {
   parts.push(`Pedido chatbot #${order.id}`);
   parts.push(`Cliente: ${name}${phone ? ` (${phone})` : ''}`);
   parts.push(`Entrega: ${order.delivery === 'domicilio' ? 'Domicilio' : `Recoger${order.pickup_branch_name ? ` · ${order.pickup_branch_name}` : ''}`}`);
+  if (order.service_branch_name) parts.push(`Sucursal gestora: ${order.service_branch_name}`);
   if (address) parts.push(`Dirección: ${address}`);
   if (order.customer_location_text) parts.push(`Ubicación: ${order.customer_location_text}`);
   if (order.customer_location_resolved) parts.push(`Referencia mapa: ${order.customer_location_resolved}`);
@@ -205,6 +222,7 @@ async function listSalesHistoryPage(t, options = {}) {
     filter = 'today',
     startDate = null,
     endDate = null,
+    branchId = null,
   } = options;
   const safePage = Math.max(1, Number(page) || 1);
   const safeSize = 10;
@@ -213,6 +231,11 @@ async function listSalesHistoryPage(t, options = {}) {
 
   const params = [];
   const where = [`channel = 'pos'`];
+
+  if (Number.isInteger(Number(branchId)) && Number(branchId) > 0) {
+    params.push(Number(branchId));
+    where.push(`service_branch_id = $${params.length}`);
+  }
 
   if (safeFilter === 'today') {
     where.push(`${localCreatedAt}::date = (now() AT TIME ZONE '${TZ}')::date`);
@@ -336,9 +359,21 @@ function normalizePayment(method, paymentInput, total, cashReceivedInput) {
   return { method, breakdown, cashReceived, cashChange };
 }
 
+function userSessionContext(user) {
+  return {
+    forUsername: user?.username || null,
+    forBranchId: user?.branchId || null,
+  };
+}
+
 router.get('/overview', async (req, res, next) => {
   try {
     const categories = await req.tdb.all('SELECT id, name, sort FROM {s}.categories ORDER BY sort, name');
+    const branches = await req.tdb.all('SELECT id, name, address, reference, active FROM {s}.branches WHERE active = 1 ORDER BY name');
+    // Sessiones activas de otras sucursales (para bloquear selección en admin)
+    const allOpenSessions = await req.tdb.all(
+      `SELECT branch_id, branch_name, opened_by FROM {s}.pos_sessions WHERE status = 'open'`
+    );
     const products = await req.tdb.all(
       `SELECT p.id, p.category_id, p.name, p.description, p.price::float AS price, p.image, c.name AS category_name
        FROM {s}.products p
@@ -346,7 +381,8 @@ router.get('/overview', async (req, res, next) => {
        WHERE p.active = 1
        ORDER BY COALESCE(c.sort, 0), c.name NULLS FIRST, p.name`
     );
-    const session = await getOpenSession(req.tdb);
+    const ctx = userSessionContext(req.user);
+    const session = await getOpenSession(req.tdb, ctx);
     const sessionTotals = session ? await getSessionTotals(req.tdb, session.id) : null;
     const activeSession = session
       ? {
@@ -355,15 +391,22 @@ router.get('/overview', async (req, res, next) => {
           expectedCash: expectedCashForSession(session, sessionTotals),
         }
       : null;
-    const lastClosedSession = await getLastClosedSession(req.tdb);
+    const lastClosedSession = await getLastClosedSession(req.tdb, ctx);
     const chatbotIntegrationEnabled = await isChatbotPosIntegrationEnabled(req.tdb);
+
+    // Sucursales bloqueadas por otras sesiones abiertas (distintas al usuario actual)
+    const blockedBranchIds = allOpenSessions
+      .filter((s) => s.branch_id && s.opened_by !== req.user.username)
+      .map((s) => Number(s.branch_id));
 
     res.json({
       categories,
+      branches,
       products,
       activeSession,
       lastClosedSession,
       chatbotIntegrationEnabled,
+      blockedBranchIds,
       recentSales: await listRecentSales(req.tdb, activeSession?.id || null),
       recentMovements: await listRecentMovements(req.tdb, activeSession?.id || null),
     });
@@ -376,36 +419,55 @@ router.get('/chatbot-orders', async (req, res, next) => {
   try {
     const enabled = await isChatbotPosIntegrationEnabled(req.tdb);
     if (!enabled) return res.status(403).json({ error: 'Activa la integración de pedidos chatbot en Mi negocio para usar esta función' });
+    const session = await getOpenSession(req.tdb, userSessionContext(req.user));
 
     const pageSize = 10;
     const safePage = Math.max(1, Number(req.query.page || 1) || 1);
+    const countParams = [Array.from(CHATBOT_IMPORTABLE_STATUSES)];
+    const branchFilter = session?.branch_id
+      ? ` AND COALESCE(o.service_branch_id, o.pickup_branch_id) = $2`
+      : '';
+    if (session?.branch_id) countParams.push(Number(session.branch_id));
 
     const totalRow = await req.tdb.get(
       `SELECT COUNT(*)::int AS c
        FROM {s}.orders o
        WHERE o.channel = 'chatbot'
          AND o.status = ANY($1::text[])
+         ${branchFilter}
          AND (o.created_at AT TIME ZONE '${TZ}')::date = (now() AT TIME ZONE '${TZ}')::date`,
-      [Array.from(CHATBOT_IMPORTABLE_STATUSES)]
+      countParams
     );
     const total = Number(totalRow?.c || 0);
     const totalPages = Math.max(1, Math.ceil(total / pageSize));
     const boundedPage = Math.min(safePage, totalPages);
     const offset = (boundedPage - 1) * pageSize;
 
+    const rowParams = [Array.from(CHATBOT_IMPORTABLE_STATUSES)];
+    let limitIndex = 2;
+    let offsetIndex = 3;
+    if (session?.branch_id) {
+      rowParams.push(Number(session.branch_id));
+      limitIndex = 3;
+      offsetIndex = 4;
+    }
+    rowParams.push(pageSize, offset);
+
     const rows = await req.tdb.all(
       `SELECT o.id, o.items, o.total::float AS total, o.status, o.delivery, o.notes, o.payment_method,
               o.pickup_branch_name, o.customer_location_text, o.customer_location_resolved,
+              o.service_branch_id, o.service_branch_name,
               to_char(o.created_at AT TIME ZONE '${TZ}', 'DD Mon YYYY, HH24:MI') AS created_at,
               c.name_enc, c.phone_enc
        FROM {s}.orders o
        LEFT JOIN {s}.customers c ON c.id = o.customer_id
        WHERE o.channel = 'chatbot'
          AND o.status = ANY($1::text[])
+         ${branchFilter}
          AND (o.created_at AT TIME ZONE '${TZ}')::date = (now() AT TIME ZONE '${TZ}')::date
        ORDER BY o.id ASC
-       LIMIT $2 OFFSET $3`,
-      [Array.from(CHATBOT_IMPORTABLE_STATUSES), pageSize, offset]
+       LIMIT $${limitIndex} OFFSET $${offsetIndex}`,
+      rowParams
     );
 
     const result = rows.map((row) => ({
@@ -416,6 +478,8 @@ router.get('/chatbot-orders', async (req, res, next) => {
       payment_method: row.payment_method || 'cash',
       notes: row.notes || '',
       pickup_branch_name: row.pickup_branch_name,
+      service_branch_id: row.service_branch_id,
+      service_branch_name: row.service_branch_name,
       customer_location_text: row.customer_location_text,
       customer_location_resolved: row.customer_location_resolved,
       created_at: row.created_at,
@@ -424,7 +488,7 @@ router.get('/chatbot-orders', async (req, res, next) => {
       items: JSON.parse(row.items || '[]'),
     }));
 
-    res.json({ rows: result, page: boundedPage, pageSize, total, totalPages });
+    res.json({ rows: result, page: boundedPage, pageSize, total, totalPages, sessionBranchName: session?.branch_name || '' });
   } catch (e) {
     next(e);
   }
@@ -435,7 +499,7 @@ router.post('/chatbot-orders/:id/import', async (req, res, next) => {
     const enabled = await isChatbotPosIntegrationEnabled(req.tdb);
     if (!enabled) return res.status(403).json({ error: 'Activa la integración de pedidos chatbot en Mi negocio para usar esta función' });
 
-    const session = await getOpenSession(req.tdb);
+    const session = await getOpenSession(req.tdb, userSessionContext(req.user));
     if (!session) return res.status(400).json({ error: 'Abre una caja antes de importar pedidos chatbot al POS' });
 
     const id = Number(req.params.id);
@@ -444,6 +508,9 @@ router.post('/chatbot-orders/:id/import', async (req, res, next) => {
     const sourceOrder = await loadChatbotOrderForImport(req.tdb, id);
     if (!sourceOrder) return res.status(404).json({ error: 'No se encontró el pedido de chatbot' });
     if (sourceOrder.channel !== 'chatbot') return res.status(409).json({ error: 'Este pedido ya fue integrado al POS' });
+    if (session.branch_id && Number(sourceOrder.service_branch_id || 0) > 0 && Number(sourceOrder.service_branch_id) !== Number(session.branch_id)) {
+      return res.status(409).json({ error: `Este pedido corresponde a la sucursal ${sourceOrder.service_branch_name || 'asignada'} y no a la caja abierta.` });
+    }
     if (!CHATBOT_IMPORTABLE_STATUSES.has(sourceOrder.status)) {
       return res.status(409).json({ error: 'Solo puedes integrar pedidos chatbot activos (no cancelados ni entregados)' });
     }
@@ -478,6 +545,8 @@ router.post('/chatbot-orders/:id/import', async (req, res, next) => {
            pos_session_id = $1,
            payment_method = $2,
            payment_breakdown = $3,
+           service_branch_id = $7,
+           service_branch_name = $8,
            cash_received = CASE WHEN $2 = 'cash' THEN total ELSE NULL END,
            cash_change = 0,
            notes = CASE
@@ -491,7 +560,7 @@ router.post('/chatbot-orders/:id/import', async (req, res, next) => {
        RETURNING id, total::float AS total, payment_method, payment_breakdown, cash_received::float AS cash_received,
                  cash_change::float AS cash_change, notes, items,
                  to_char(created_at AT TIME ZONE '${TZ}', 'DD Mon YYYY, HH24:MI') AS created_at`,
-      [session.id, paymentMethod, JSON.stringify(paymentBreakdown), mergedNote, id, Array.from(CHATBOT_IMPORTABLE_STATUSES)]
+      [session.id, paymentMethod, JSON.stringify(paymentBreakdown), mergedNote, id, Array.from(CHATBOT_IMPORTABLE_STATUSES), session.branch_id || null, session.branch_name || null]
     );
 
     if (!update.rowCount) {
@@ -530,13 +599,14 @@ router.post('/chatbot-orders/:id/import', async (req, res, next) => {
 
 router.get('/sales-history', async (req, res, next) => {
   try {
+    const session = await getOpenSession(req.tdb, userSessionContext(req.user));
     const page = Number(req.query.page || 1);
     const filter = String(req.query.filter || 'today').trim();
     const startDate = normalizeIsoDate(req.query.startDate);
     const endDate = normalizeIsoDate(req.query.endDate);
     if (req.query.startDate && !startDate) throw badRequest('La fecha inicial no es válida');
     if (req.query.endDate && !endDate) throw badRequest('La fecha final no es válida');
-    const data = await listSalesHistoryPage(req.tdb, { page, filter, startDate, endDate });
+    const data = await listSalesHistoryPage(req.tdb, { page, filter, startDate, endDate, branchId: session?.branch_id || null });
     res.json(data);
   } catch (e) {
     if (e.statusCode === 400) return res.status(400).json({ error: e.message });
@@ -546,17 +616,41 @@ router.get('/sales-history', async (req, res, next) => {
 
 router.post('/session/open', async (req, res, next) => {
   try {
-    const existing = await getOpenSession(req.tdb);
-    if (existing) return res.status(409).json({ error: 'Ya hay una caja abierta' });
     const openingAmount = n(req.body?.openingAmount);
     const notes = String(req.body?.notes || '').trim().slice(0, 240);
+    const branchIdRaw = req.user.role === 'cashier' ? Number(req.user.branchId || 0) : Number(req.body?.branchId);
+    const activeBranches = await req.tdb.all('SELECT id, name FROM {s}.branches WHERE active = 1 ORDER BY name');
+    const selectedBranch = Number.isInteger(branchIdRaw) && branchIdRaw > 0
+      ? activeBranches.find((branch) => Number(branch.id) === branchIdRaw)
+      : null;
+    if (activeBranches.length && !selectedBranch) {
+      return res.status(400).json({ error: 'Selecciona la sucursal para abrir la caja' });
+    }
+
+    // Verificar que el usuario no tenga ya una caja abierta
+    const myExisting = await getOpenSession(req.tdb, userSessionContext(req.user));
+    if (myExisting) return res.status(409).json({ error: 'Ya tienes una caja abierta' });
+
+    // Verificar que la sucursal no esté ya tomada por otro usuario
+    if (selectedBranch) {
+      const branchConflict = await req.tdb.get(
+        `SELECT id, opened_by FROM {s}.pos_sessions WHERE status = 'open' AND branch_id = $1 LIMIT 1`,
+        [selectedBranch.id]
+      );
+      if (branchConflict) {
+        return res.status(409).json({
+          error: `La sucursal "${selectedBranch.name}" ya tiene una caja abierta (por ${branchConflict.opened_by}). Debe cerrarse antes de abrirla desde aquí.`,
+        });
+      }
+    }
+
     const row = await req.tdb.get(
-      `INSERT INTO {s}.pos_sessions (status, opening_amount, notes, opened_by)
-       VALUES ('open', $1, $2, $3)
+      `INSERT INTO {s}.pos_sessions (status, opening_amount, branch_id, branch_name, notes, opened_by)
+       VALUES ('open', $1, $2, $3, $4, $5)
        RETURNING id`,
-      [openingAmount, notes, req.user.username]
+      [openingAmount, selectedBranch?.id || null, selectedBranch?.name || null, notes, req.user.username]
     );
-    const session = await getOpenSession(req.tdb);
+    const session = await getOpenSession(req.tdb, userSessionContext(req.user));
     res.json({ ok: true, sessionId: row.id, activeSession: { ...session, totals: await getSessionTotals(req.tdb, row.id), expectedCash: openingAmount } });
   } catch (e) {
     next(e);
@@ -565,7 +659,7 @@ router.post('/session/open', async (req, res, next) => {
 
 router.post('/session/close', async (req, res, next) => {
   try {
-    const session = await getOpenSession(req.tdb);
+    const session = await getOpenSession(req.tdb, userSessionContext(req.user));
     if (!session) return res.status(400).json({ error: 'No hay una caja abierta' });
     const totals = await getSessionTotals(req.tdb, session.id);
     const expectedAmount = expectedCashForSession(session, totals);
@@ -580,7 +674,7 @@ router.post('/session/close', async (req, res, next) => {
        WHERE id = $6`,
       [closingAmount, expectedAmount, differenceAmount, notes, req.user.username, session.id]
     );
-    const closed = await getLastClosedSession(req.tdb);
+    const closed = await getLastClosedSession(req.tdb, userSessionContext(req.user));
     res.json({
       ok: true,
       closedSession: closed,
@@ -596,7 +690,7 @@ router.post('/session/close', async (req, res, next) => {
 
 router.post('/movements', async (req, res, next) => {
   try {
-    const session = await getOpenSession(req.tdb);
+    const session = await getOpenSession(req.tdb, userSessionContext(req.user));
     if (!session) return res.status(400).json({ error: 'Abre una caja antes de registrar movimientos' });
     const kind = String(req.body?.kind || '').trim();
     const amount = n(req.body?.amount);
@@ -616,7 +710,7 @@ router.post('/movements', async (req, res, next) => {
 
 async function createPosSale(req, res, next) {
   try {
-    const session = await getOpenSession(req.tdb);
+    const session = await getOpenSession(req.tdb, userSessionContext(req.user));
     if (!session) return res.status(400).json({ error: 'Abre una caja antes de registrar una venta' });
     const items = Array.isArray(req.body?.items) ? req.body.items : [];
     if (!items.length) return res.status(400).json({ error: 'Agrega al menos un producto al ticket' });
@@ -651,8 +745,8 @@ async function createPosSale(req, res, next) {
     const notes = String(req.body?.notes || '').trim().slice(0, 240);
     const row = await req.tdb.get(
       `INSERT INTO {s}.orders
-       (customer_id, items, subtotal, total, status, channel, delivery, notes, payment_method, payment_breakdown, cash_received, cash_change, pos_session_id, delivery_fee)
-       VALUES (NULL, $1, $2, $3, 'entregado', 'pos', $4, $5, $6, $7, $8, $9, $10, $11)
+       (customer_id, items, subtotal, total, status, channel, delivery, notes, payment_method, payment_breakdown, cash_received, cash_change, pos_session_id, delivery_fee, service_branch_id, service_branch_name)
+       VALUES (NULL, $1, $2, $3, 'entregado', 'pos', $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
        RETURNING id`,
       [
         JSON.stringify(saleItems),
@@ -666,6 +760,8 @@ async function createPosSale(req, res, next) {
         payment.cashChange || null,
         session.id,
         deliveryFee,
+        session.branch_id || null,
+        session.branch_name || null,
       ]
     );
     const totals = await getSessionTotals(req.tdb, session.id);

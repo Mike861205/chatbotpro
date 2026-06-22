@@ -1,6 +1,6 @@
 const express = require('express');
 const { q, getSetting, setSetting } = require('../db');
-const { requireAuth } = require('../middleware/auth');
+const { requireAuth, requireOwner } = require('../middleware/auth');
 const { createImageUpload, deleteManagedUpload, optimizeUploadedImage, safeUnlink } = require('../utils/uploads');
 
 const router = express.Router();
@@ -51,6 +51,7 @@ router.get('/', async (req, res, next) => {
 router.put('/', upload.single('logo'), async (req, res, next) => {
   let nextLogoPath = null;
   try {
+    if (req.user.role !== 'owner') return res.status(403).json({ error: 'No tienes permiso para modificar la configuración' });
     const body = req.body || {};
     for (const k of SETTING_KEYS) {
       if (body[k] !== undefined) await setSetting(req.tdb, k, body[k]);
