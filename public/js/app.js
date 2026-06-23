@@ -1124,6 +1124,12 @@ function syncPosCartFromCatalog() {
   const byId = new Map((POS_OVERVIEW?.products || []).map((product) => [Number(product.id), product]));
   POS_CART = POS_CART.filter((item) => byId.has(Number(item.id))).map((item) => {
     const product = byId.get(Number(item.id));
+    if (item._cartKey) {
+      return {
+        ...item,
+        image: product.image,
+      };
+    }
     return {
       ...item,
       name: product.name,
@@ -1546,7 +1552,16 @@ async function loadPos() {
 function addPosProduct(productId) {
   const product = (POS_OVERVIEW?.products || []).find((item) => Number(item.id) === Number(productId));
   if (!product) return;
-  const existing = POS_CART.find((item) => Number(item.id) === Number(product.id));
+
+  // Si tiene variantes o grupos de modificadores, mostrar modal de configuración
+  const hasVariants = Array.isArray(product.variants) && product.variants.length > 1;
+  const hasModifiers = Array.isArray(product.modifierGroups) && product.modifierGroups.length > 0;
+  if (hasVariants || hasModifiers) {
+    openPosProductConfigModal(product);
+    return;
+  }
+
+  const existing = POS_CART.find((item) => Number(item.id) === Number(product.id) && !item._cartKey);
   if (existing) {
     existing.qty += 1;
   } else {
@@ -1556,11 +1571,164 @@ function addPosProduct(productId) {
   renderPosCart();
 }
 
-function updatePosQty(productId, delta) {
-  const item = POS_CART.find((entry) => Number(entry.id) === Number(productId));
+// ── Modal configurador de producto (POS) ──
+let POS_CONFIG_PRODUCT = null;
+let POS_CONFIG_VARIANT_ID = null;
+let POS_CONFIG_MODIFIER_SELECTIONS = {}; // { groupId: [optionId, ...] }
+
+function openPosProductConfigModal(product) {
+  POS_CONFIG_PRODUCT = product;
+  POS_CONFIG_VARIANT_ID = null;
+  POS_CONFIG_MODIFIER_SELECTIONS = {};
+
+  $('#posProductConfigTitle').innerHTML = `<i class="ph-bold ph-sliders"></i> ${esc(product.name)}`;
+  renderPosProductConfigBody();
+  $('#posProductConfigModal').classList.add('show');
+}
+
+function renderPosProductConfigBody() {
+  const product = POS_CONFIG_PRODUCT;
+  if (!product) return;
+  const hasVariants = Array.isArray(product.variants) && product.variants.length > 1;
+  const hasModifiers = Array.isArray(product.modifierGroups) && product.modifierGroups.length > 0;
+  let html = '';
+
+  if (hasVariants) {
+    html += `<div class="pos-config-section"><div class="pos-config-label"><i class="ph-bold ph-stack"></i> Elige una opción</div><div class="pos-config-variants">`;
+    for (const v of product.variants) {
+      const sel = POS_CONFIG_VARIANT_ID === v.id;
+      html += `<button type="button" class="pos-variant-btn${sel?' active':''}" data-variant-id="${v.id}" data-variant-price="${v.price}">${esc(v.name)}<span>${fmtMoney(v.price)}</span></button>`;
+    }
+    html += `</div></div>`;
+  }
+
+  if (hasModifiers) {
+    for (const g of product.modifierGroups) {
+      const sel = POS_CONFIG_MODIFIER_SELECTIONS[g.id] || [];
+      const minLabel = g.min_selections > 0 ? `<span class="pos-config-required">Requerido (mín ${g.min_selections})</span>` : '<span class="pos-config-optional">Opcional</span>';
+      html += `<div class="pos-config-section"><div class="pos-config-label"><i class="ph-bold ph-sliders-horizontal"></i> ${esc(g.name)} <small>máx ${g.max_selections}</small> ${minLabel}</div><div class="pos-config-options">`;
+      for (const o of g.options) {
+        const checked = sel.includes(o.id);
+        const extraLabel = Number(o.extra_price) > 0 ? `<span>+${fmtMoney(o.extra_price)}</span>` : '';
+        html += `<button type="button" class="pos-modifier-btn${checked?' active':''}" data-group-id="${g.id}" data-opt-id="${o.id}" data-extra-price="${o.extra_price}" data-max="${g.max_selections}">${esc(o.name)}${extraLabel}</button>`;
+      }
+      html += `</div></div>`;
+    }
+  }
+
+  if (!html) html = `<div class="hint" style="text-align:center;padding:16px">${esc(product.name)} — ${fmtMoney(product.price)}</div>`;
+  $('#posProductConfigBody').innerHTML = html;
+
+  // Events
+  document.querySelectorAll('#posProductConfigBody .pos-variant-btn').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      POS_CONFIG_VARIANT_ID = Number(btn.dataset.variantId);
+      renderPosProductConfigBody();
+    });
+  });
+  document.querySelectorAll('#posProductConfigBody .pos-modifier-btn').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const gid = Number(btn.dataset.groupId);
+      const oid = Number(btn.dataset.optId);
+      const max = Number(btn.dataset.max) || 1;
+      if (!POS_CONFIG_MODIFIER_SELECTIONS[gid]) POS_CONFIG_MODIFIER_SELECTIONS[gid] = [];
+      const sel = POS_CONFIG_MODIFIER_SELECTIONS[gid];
+      const idx = sel.indexOf(oid);
+      if (idx >= 0) {
+        sel.splice(idx, 1);
+      } else {
+        if (max === 1) {
+          POS_CONFIG_MODIFIER_SELECTIONS[gid] = [oid];
+        } else {
+          if (sel.length < max) sel.push(oid);
+        }
+      }
+      renderPosProductConfigBody();
+    });
+  });
+}
+
+$('#posProductConfigCancel')?.addEventListener('click', () => $('#posProductConfigModal').classList.remove('show'));
+$('#posProductConfigAdd')?.addEventListener('click', () => {
+  const product = POS_CONFIG_PRODUCT;
+  if (!product) return;
+  const hasVariants = Array.isArray(product.variants) && product.variants.length > 1;
+
+  // Validate variant required
+  if (hasVariants && !POS_CONFIG_VARIANT_ID) {
+    toast('Selecciona una variante para continuar', true);
+    return;
+  }
+
+  // Validate required modifier groups
+  for (const g of (product.modifierGroups || [])) {
+    const sel = POS_CONFIG_MODIFIER_SELECTIONS[g.id] || [];
+    if (g.min_selections > 0 && sel.length < g.min_selections) {
+      toast(`Selecciona al menos ${g.min_selections} opción en "${g.name}"`, true);
+      return;
+    }
+  }
+
+  // Build cart item
+  let finalPrice = Number(product.price);
+  let variantName = null;
+  if (hasVariants && POS_CONFIG_VARIANT_ID) {
+    const v = product.variants.find((v) => v.id === POS_CONFIG_VARIANT_ID);
+    if (v) { finalPrice = Number(v.price); variantName = v.name; }
+  }
+
+  const modifiersDetail = [];
+  let modifiersExtra = 0;
+  let modifiersLabelParts = [];
+  for (const g of (product.modifierGroups || [])) {
+    const sel = POS_CONFIG_MODIFIER_SELECTIONS[g.id] || [];
+    if (!sel.length) continue;
+    const chosenOpts = g.options.filter((o) => sel.includes(o.id));
+    modifiersDetail.push({ groupId: g.id, groupName: g.name, options: chosenOpts.map((o) => ({ id: o.id, name: o.name, extraPrice: Number(o.extra_price) })) });
+    modifiersExtra += chosenOpts.reduce((sum, o) => sum + Number(o.extra_price), 0);
+    modifiersLabelParts.push(chosenOpts.map((o) => o.name).join('/'));
+  }
+  finalPrice += modifiersExtra;
+
+  const modifiersLabel = modifiersLabelParts.join(' · ');
+  const displayName = [product.name, variantName, modifiersLabel].filter(Boolean).join(' · ');
+  const cartKey = `${product.id}_${POS_CONFIG_VARIANT_ID || 'base'}_${modifiersLabel}`;
+
+  const existing = POS_CART.find((item) => item._cartKey === cartKey);
+  if (existing) {
+    existing.qty += 1;
+  } else {
+    POS_CART.push({
+      id: Number(product.id),
+      name: displayName,
+      price: finalPrice,
+      image: product.image,
+      qty: 1,
+      _cartKey: cartKey,
+      variantId: POS_CONFIG_VARIANT_ID,
+      variantName,
+      modifiers: modifiersDetail,
+      modifiersLabel,
+      modifiersExtraPrice: modifiersExtra,
+    });
+  }
+
+  $('#posProductConfigModal').classList.remove('show');
+  setPosPaymentDefaults();
+  renderPosCart();
+});
+
+function updatePosQty(productId, delta, cartKey) {
+  const item = cartKey
+    ? POS_CART.find((entry) => entry._cartKey === cartKey)
+    : POS_CART.find((entry) => Number(entry.id) === Number(productId) && !entry._cartKey);
   if (!item) return;
   item.qty += delta;
-  if (item.qty <= 0) POS_CART = POS_CART.filter((entry) => Number(entry.id) !== Number(productId));
+  if (item.qty <= 0) {
+    POS_CART = cartKey
+      ? POS_CART.filter((entry) => entry._cartKey !== cartKey)
+      : POS_CART.filter((entry) => !(Number(entry.id) === Number(productId) && !entry._cartKey));
+  }
   setPosPaymentDefaults();
   renderPosCart();
 }
@@ -1838,18 +2006,22 @@ function renderPosCart() {
   const sessionHint = session ? '' : '<div class="hint" style="margin-top:10px">Abre una caja para poder finalizar ventas.</div>';
   const cartHtml = POS_CART.length
     ? `<div class="pos-cart-list">
-        ${POS_CART.map((item) => `
+        ${POS_CART.map((item) => {
+          const ck = item._cartKey ? `data-cart-key="${esc(item._cartKey)}"` : '';
+          const pid = `data-pos-dec="${item.id}" data-cart-key="${esc(item._cartKey||'')}"`;
+          return `
           <div class="pos-cart-item">
             <div>
               <b>${esc(item.name)}</b>
               <small>${fmtMoney(item.price)} c/u</small>
             </div>
             <div class="pos-cart-actions">
-              <button type="button" class="btn btn-ghost btn-icon" data-pos-dec="${item.id}"><i class="ph-bold ph-minus"></i></button>
+              <button type="button" class="btn btn-ghost btn-icon pos-dec-btn" data-pid="${item.id}" ${ck}><i class="ph-bold ph-minus"></i></button>
               <span>${item.qty}</span>
-              <button type="button" class="btn btn-ghost btn-icon" data-pos-inc="${item.id}"><i class="ph-bold ph-plus"></i></button>
+              <button type="button" class="btn btn-ghost btn-icon pos-inc-btn" data-pid="${item.id}" ${ck}><i class="ph-bold ph-plus"></i></button>
             </div>
-          </div>`).join('')}
+          </div>`;
+        }).join('')}
       </div>
       ${POS_IS_DELIVERY && deliveryFeeAmt > 0
         ? `<div class="pos-total-line pos-subtotal-line"><span>Subtotal</span><b>${fmtMoney(subtotalItems)}</b></div>
@@ -1888,8 +2060,8 @@ function renderPosCart() {
     <h3><i class="ph-bold ph-shopping-cart"></i> Ticket actual</h3>
     ${cartHtml}`;
 
-  document.querySelectorAll('[data-pos-dec]').forEach((button) => button.addEventListener('click', () => updatePosQty(button.dataset.posDec, -1)));
-  document.querySelectorAll('[data-pos-inc]').forEach((button) => button.addEventListener('click', () => updatePosQty(button.dataset.posInc, 1)));
+  document.querySelectorAll('.pos-dec-btn').forEach((button) => button.addEventListener('click', () => updatePosQty(button.dataset.pid, -1, button.dataset.cartKey || null)));
+  document.querySelectorAll('.pos-inc-btn').forEach((button) => button.addEventListener('click', () => updatePosQty(button.dataset.pid, 1, button.dataset.cartKey || null)));
   document.querySelectorAll('[data-pos-method]').forEach((button) =>
     button.addEventListener('click', () => {
       POS_PAYMENT_METHOD = button.dataset.posMethod;
@@ -1944,7 +2116,18 @@ function renderPosCart() {
     e.preventDefault();
     try {
       const payload = {
-        items: POS_CART.map((item) => ({ productId: item.id, qty: item.qty })),
+        items: POS_CART.map((item) => ({
+          productId: item.id,
+          qty: item.qty,
+          name: item.name,
+          price: Number(item.price),
+          cartKey: item._cartKey || null,
+          variantId: item.variantId || null,
+          variantName: item.variantName || null,
+          modifiers: Array.isArray(item.modifiers) ? item.modifiers : [],
+          modifiersLabel: item.modifiersLabel || '',
+          modifiersExtraPrice: Number(item.modifiersExtraPrice || 0),
+        })),
         paymentMethod: POS_PAYMENT_METHOD,
         payments: {
           cash: Number($('#posMixCash')?.value || 0),
@@ -2577,15 +2760,17 @@ function renderCategoryChips() {
   const host = $('#catChips');
   if (!host) return;
   const allOn = PRODUCT_CAT_FILTER === 'all';
+  const totalProducts = PRODUCTS_CACHE.length;
   const chips = [
-    `<button type="button" class="chip chip-cat chip-all ${allOn ? 'on' : ''}" data-cat-filter="all"><i class="ph-bold ph-squares-four"></i> Todos</button>`,
+    `<button type="button" class="chip chip-cat chip-all ${allOn ? 'on' : ''}" data-cat-filter="all"><span class="chip-ic"><i class="ph-bold ph-squares-four"></i></span><span class="chip-label">Todos</span><span class="chip-count">${totalProducts}</span></button>`,
   ];
   if (CATS.length) {
     chips.push(
       ...CATS.map((cat) => {
         const tone = categoryTone(cat);
         const on = String(PRODUCT_CAT_FILTER) === String(cat.id);
-        return `<button type="button" class="chip chip-cat ${on ? 'on' : ''}" data-cat-filter="${cat.id}" style="--chip-bg:${tone.bg};--chip-border:${tone.border};--chip-ink:${tone.ink}"><i class="ph-bold ph-folder"></i> ${esc(cat.name)} <span class="x" data-delcat="${cat.id}" title="Eliminar categoria"><i class="ph-bold ph-x"></i></span></button>`;
+        const count = PRODUCTS_CACHE.filter((p) => String(p.category_id || '') === String(cat.id)).length;
+        return `<button type="button" class="chip chip-cat ${on ? 'on' : ''}" data-cat-filter="${cat.id}" style="--chip-bg:${tone.bg};--chip-border:${tone.border};--chip-ink:${tone.ink}"><span class="chip-ic"><i class="ph-bold ph-folder"></i></span><span class="chip-label">${esc(cat.name)}</span><span class="chip-count">${count}</span><span class="x" data-delcat="${cat.id}" title="Eliminar categoria"><i class="ph-bold ph-x"></i></span></button>`;
       })
     );
   }
@@ -2635,7 +2820,10 @@ function renderProductsGrid() {
   if (PRODUCT_VIEW_MODE === 'detail') {
     grid.innerHTML = visible
       .map(
-        (p) => `<article class="prod-row ${p.active ? '' : 'inactive'}">
+        (p) => {
+          const varBadge = (p.variants?.length > 1) ? `<span class="prod-badge prod-badge-variant"><i class="ph-bold ph-stack"></i> ${p.variants.length} variantes</span>` : '';
+          const modBadge = (p.modifierGroups?.length > 0) ? `<span class="prod-badge prod-badge-mod"><i class="ph-bold ph-sliders"></i> ${p.modifierGroups.length} grupo${p.modifierGroups.length > 1 ? 's' : ''}</span>` : '';
+          return `<article class="prod-row ${p.active ? '' : 'inactive'}">
       <div class="thumb">
         ${p.image ? `<img src="${esc(p.image)}" alt="" loading="lazy" />` : '<i class="ph ph-fork-knife"></i>'}
       </div>
@@ -2644,6 +2832,7 @@ function renderProductsGrid() {
           <div>
             <div class="name">${esc(p.name)}</div>
             ${p.category_name ? `<div class="cat">${esc(p.category_name)}</div>` : ''}
+            ${varBadge || modBadge ? `<div class="prod-badges-row">${varBadge}${modBadge}</div>` : ''}
           </div>
           <span class="price-tag">${fmtMoney(p.price)}</span>
         </div>
@@ -2654,27 +2843,36 @@ function renderProductsGrid() {
         <button class="btn btn-ghost" data-edit="${p.id}"><i class="ph-bold ph-pencil-simple"></i> Editar</button>
         <button class="btn btn-danger btn-icon" data-del="${p.id}" title="Eliminar"><i class="ph-bold ph-trash"></i></button>
       </div>
-    </article>`
+    </article>`;
+        }
       )
       .join('');
   } else if (PRODUCT_VIEW_MODE === 'compact') {
     grid.innerHTML = visible
       .map(
-        (p) => `<article class="prod-mini ${p.active ? '' : 'inactive'}">
+        (p) => {
+          const extras = [];
+          if (p.variants?.length > 1) extras.push(`<span class="prod-badge prod-badge-variant"><i class="ph-bold ph-stack"></i>${p.variants.length}</span>`);
+          if (p.modifierGroups?.length > 0) extras.push(`<span class="prod-badge prod-badge-mod"><i class="ph-bold ph-sliders"></i>${p.modifierGroups.length}</span>`);
+          return `<article class="prod-mini ${p.active ? '' : 'inactive'}">
       <div class="mini-thumb">${p.image ? `<img src="${esc(p.image)}" alt="" loading="lazy" />` : '<i class="ph ph-fork-knife"></i>'}</div>
-      <div class="mini-name">${esc(p.name)}</div>
+      <div class="mini-name">${esc(p.name)}${extras.length ? ` ${extras.join('')}` : ''}</div>
       <div class="mini-price">${fmtMoney(p.price)}</div>
       <div class="mini-actions">
         <button class="btn btn-ghost" data-edit="${p.id}"><i class="ph-bold ph-pencil-simple"></i></button>
         <button class="btn btn-danger btn-icon" data-del="${p.id}" title="Eliminar"><i class="ph-bold ph-trash"></i></button>
       </div>
-    </article>`
+    </article>`;
+        }
       )
       .join('');
   } else {
     grid.innerHTML = visible
       .map(
-        (p) => `<div class="prod-card ${p.active ? '' : 'inactive'}">
+        (p) => {
+          const varBadge = (p.variants?.length > 1) ? `<span class="prod-badge prod-badge-variant"><i class="ph-bold ph-stack"></i> ${p.variants.length} var.</span>` : '';
+          const modBadge = (p.modifierGroups?.length > 0) ? `<span class="prod-badge prod-badge-mod"><i class="ph-bold ph-sliders"></i> ${p.modifierGroups.length} opc.</span>` : '';
+          return `<div class="prod-card ${p.active ? '' : 'inactive'}">
       <div class="img">
         ${p.image ? `<img src="${esc(p.image)}" alt="" loading="lazy" />` : '<i class="ph ph-fork-knife"></i>'}
         <span class="state-dot ${p.active ? 'on' : 'off'}">${p.active ? 'ACTIVO' : 'OCULTO'}</span>
@@ -2684,12 +2882,14 @@ function renderProductsGrid() {
         ${p.category_name ? `<span class="cat">${esc(p.category_name)}</span>` : ''}
         <div class="name">${esc(p.name)}</div>
         <div class="desc">${esc(p.description || '')}</div>
+        ${varBadge || modBadge ? `<div class="prod-badges-row">${varBadge}${modBadge}</div>` : ''}
       </div>
       <div class="actions">
         <button class="btn btn-ghost" data-edit="${p.id}"><i class="ph-bold ph-pencil-simple"></i> Editar</button>
         <button class="btn btn-danger btn-icon" data-del="${p.id}" title="Eliminar"><i class="ph-bold ph-trash"></i></button>
       </div>
-    </div>`
+    </div>`;
+        }
       )
       .join('');
   }
@@ -2790,12 +2990,314 @@ function openProdModal(p = null) {
   $('#pCat').value = p && p.category_id ? p.category_id : '';
   $('#pActive').checked = p ? !!p.active : true;
   resetDropzone(p && p.image ? p.image : null);
+
+  // Reset tabs
+  switchProdTab('basic');
+
+  // Load variants and modifier groups from cache if editing
+  CURRENT_PROD_VARIANTS = (p && p.variants) ? JSON.parse(JSON.stringify(p.variants)) : [];
+  CURRENT_PROD_MODIFIER_GROUPS = (p && p.modifierGroups) ? JSON.parse(JSON.stringify(p.modifierGroups)) : [];
+  renderVariantsList();
+  renderModifierGroupsList();
+  renderProdTabCounters();
+  renderProdExtrasPreview(p);
+
   $('#prodModal').classList.add('show');
 }
+
+// ── Variantes y Modificadores: estado local del modal ──
+let CURRENT_PROD_VARIANTS = [];
+let CURRENT_PROD_MODIFIER_GROUPS = [];
+
+function switchProdTab(tab) {
+  document.querySelectorAll('.prod-modal-tabs button').forEach((btn) => {
+    btn.classList.toggle('active', btn.dataset.prodTab === tab);
+  });
+  document.querySelectorAll('.prod-tab-panel').forEach((panel) => {
+    panel.hidden = panel.id !== `prodTab${tab.charAt(0).toUpperCase()}${tab.slice(1)}`;
+    panel.classList.toggle('active', !panel.hidden);
+  });
+}
+
+function renderProdTabCounters() {
+  // Update counter badges on the tab buttons
+  document.querySelectorAll('.prod-modal-tabs button').forEach((btn) => {
+    btn.querySelectorAll('.tab-count').forEach((el) => el.remove());
+    if (btn.dataset.prodTab === 'variants' && CURRENT_PROD_VARIANTS.length) {
+      btn.insertAdjacentHTML('beforeend', `<span class="tab-count">${CURRENT_PROD_VARIANTS.length}</span>`);
+    }
+    if (btn.dataset.prodTab === 'modifiers' && CURRENT_PROD_MODIFIER_GROUPS.length) {
+      btn.insertAdjacentHTML('beforeend', `<span class="tab-count">${CURRENT_PROD_MODIFIER_GROUPS.length}</span>`);
+    }
+  });
+}
+
+function renderProdExtrasPreview(p) {
+  const container = $('#prodExtrasPreview');
+  if (!container) return;
+  const vCount = CURRENT_PROD_VARIANTS.length;
+  const mCount = CURRENT_PROD_MODIFIER_GROUPS.length;
+  if (!vCount && !mCount) {
+    container.innerHTML = '';
+    return;
+  }
+  const varHtml = vCount > 1
+    ? `<div class="extras-preview-item" data-goto="variants">
+        <div class="extras-preview-ic variant-ic"><i class="ph-bold ph-stack"></i></div>
+        <div>
+          <b>${vCount} variantes de precio</b>
+          <span>${CURRENT_PROD_VARIANTS.map((v) => `${esc(v.name)} ${fmtMoney(v.price)}`).join(' · ')}</span>
+        </div>
+        <i class="ph-bold ph-caret-right"></i>
+       </div>`
+    : '';
+  const modHtml = mCount
+    ? `<div class="extras-preview-item" data-goto="modifiers">
+        <div class="extras-preview-ic modifier-ic"><i class="ph-bold ph-sliders"></i></div>
+        <div>
+          <b>${mCount} grupo${mCount > 1 ? 's' : ''} de opciones</b>
+          <span>${CURRENT_PROD_MODIFIER_GROUPS.map((g) => `${esc(g.name)} (${(g.options||[]).length} opciones)`).join(' · ')}</span>
+        </div>
+        <i class="ph-bold ph-caret-right"></i>
+       </div>`
+    : '';
+  container.innerHTML = `<div class="extras-preview-card">${varHtml}${modHtml}</div>`;
+  container.querySelectorAll('[data-goto]').forEach((el) => {
+    el.addEventListener('click', () => {
+      switchProdTab(el.dataset.goto);
+    });
+  });
+}
+
+document.querySelectorAll('.prod-modal-tabs button').forEach((btn) => {
+  btn.addEventListener('click', () => switchProdTab(btn.dataset.prodTab));
+});
+
+function renderVariantsList() {
+  const el = $('#variantsList');
+  if (!el) return;
+  if (!CURRENT_PROD_VARIANTS.length) {
+    el.innerHTML = '<div class="hint" style="text-align:center;padding:10px 0"><i class="ph ph-stack"></i> Sin variantes. El precio base se usará directamente.</div>';
+    return;
+  }
+  el.innerHTML = CURRENT_PROD_VARIANTS.map((v, i) => `
+    <div class="variant-row" data-vi="${i}">
+      <input class="variant-name" type="text" placeholder="Ej: 1 kg" value="${esc(v.name)}" style="flex:1;min-width:100px" />
+      <input class="variant-price" type="number" step="0.01" min="0" placeholder="Precio" value="${v.price || ''}" style="width:100px" />
+      <button type="button" class="btn-icon btn-ghost variant-del" title="Eliminar variante"><i class="ph-bold ph-trash"></i></button>
+    </div>`).join('');
+  el.querySelectorAll('.variant-name').forEach((inp) => {
+    inp.addEventListener('input', (e) => {
+      const i = Number(e.target.closest('[data-vi]').dataset.vi);
+      CURRENT_PROD_VARIANTS[i].name = e.target.value;
+    });
+  });
+  el.querySelectorAll('.variant-price').forEach((inp) => {
+    inp.addEventListener('input', (e) => {
+      const i = Number(e.target.closest('[data-vi]').dataset.vi);
+      CURRENT_PROD_VARIANTS[i].price = Number(e.target.value) || 0;
+    });
+  });
+  el.querySelectorAll('.variant-del').forEach((btn) => {
+    btn.addEventListener('click', (e) => {
+      const i = Number(e.target.closest('[data-vi]').dataset.vi);
+      CURRENT_PROD_VARIANTS.splice(i, 1);
+      renderVariantsList();
+      renderProdTabCounters();
+    });
+  });
+}
+
+$('#addVariantBtn')?.addEventListener('click', () => {
+  CURRENT_PROD_VARIANTS.push({ id: null, name: '', price: 0, sort: CURRENT_PROD_VARIANTS.length, active: 1 });
+  renderVariantsList();
+  renderProdTabCounters();
+});
+
+function renderModifierGroupsList() {
+  const el = $('#modifierGroupsList');
+  if (!el) return;
+  if (!CURRENT_PROD_MODIFIER_GROUPS.length) {
+    el.innerHTML = '<div class="hint" style="text-align:center;padding:10px 0"><i class="ph ph-sliders"></i> Sin grupos de opciones.</div>';
+    return;
+  }
+  el.innerHTML = CURRENT_PROD_MODIFIER_GROUPS.map((g, gi) => `
+    <div class="modifier-group-card" data-gi="${gi}">
+      <div class="modifier-group-head">
+        <input class="mg-name" type="text" placeholder="Ej: Mitades, Extras, Punto de cocción…" value="${esc(g.name)}" style="flex:1;font-weight:700" />
+        <select class="mg-min" title="Mínimo de selecciones requeridas" style="width:88px">
+          ${[0,1,2,3].map((n) => `<option value="${n}" ${Number(g.min_selections)===n?'selected':''}>${n} mín</option>`).join('')}
+        </select>
+        <select class="mg-max" title="Máximo de selecciones permitidas" style="width:88px">
+          ${[1,2,3,4,5,6,8,10].map((n) => `<option value="${n}" ${Number(g.max_selections)===n?'selected':''}>${n} máx</option>`).join('')}
+        </select>
+        <button type="button" class="btn-icon btn-ghost mg-del" title="Eliminar grupo"><i class="ph-bold ph-trash"></i></button>
+      </div>
+      <div class="modifier-options-list" data-gi="${gi}">
+        ${(g.options||[]).map((o, oi) => `
+          <div class="modifier-option-row" data-oi="${oi}">
+            <input class="mo-name" type="text" placeholder="Ej: Pepperoni" value="${esc(o.name)}" style="flex:1;min-width:100px" />
+            <input class="mo-extra" type="number" step="0.01" min="0" placeholder="+$0" title="Costo extra" value="${o.extra_price||''}" style="width:88px" />
+            <button type="button" class="btn-icon btn-ghost mo-del" title="Eliminar opción"><i class="ph-bold ph-x"></i></button>
+          </div>`).join('')}
+      </div>
+      <button type="button" class="btn btn-ghost mo-add" data-gi="${gi}" style="margin-top:6px;font-size:12px"><i class="ph-bold ph-plus"></i> Agregar opción</button>
+    </div>`).join('');
+
+  el.querySelectorAll('.mg-name').forEach((inp) => {
+    inp.addEventListener('input', (e) => {
+      CURRENT_PROD_MODIFIER_GROUPS[Number(e.target.closest('[data-gi]').dataset.gi)].name = e.target.value;
+    });
+  });
+  el.querySelectorAll('.mg-min').forEach((sel) => {
+    sel.addEventListener('change', (e) => {
+      CURRENT_PROD_MODIFIER_GROUPS[Number(e.target.closest('[data-gi]').dataset.gi)].min_selections = Number(e.target.value);
+    });
+  });
+  el.querySelectorAll('.mg-max').forEach((sel) => {
+    sel.addEventListener('change', (e) => {
+      CURRENT_PROD_MODIFIER_GROUPS[Number(e.target.closest('[data-gi]').dataset.gi)].max_selections = Number(e.target.value);
+    });
+  });
+  el.querySelectorAll('.mg-del').forEach((btn) => {
+    btn.addEventListener('click', (e) => {
+      CURRENT_PROD_MODIFIER_GROUPS.splice(Number(e.target.closest('[data-gi]').dataset.gi), 1);
+      renderModifierGroupsList();
+      renderProdTabCounters();
+    });
+  });
+  el.querySelectorAll('.mo-name').forEach((inp) => {
+    inp.addEventListener('input', (e) => {
+      const gi = Number(e.target.closest('[data-gi]').dataset.gi);
+      const oi = Number(e.target.closest('[data-oi]').dataset.oi);
+      CURRENT_PROD_MODIFIER_GROUPS[gi].options[oi].name = e.target.value;
+    });
+  });
+  el.querySelectorAll('.mo-extra').forEach((inp) => {
+    inp.addEventListener('input', (e) => {
+      const gi = Number(e.target.closest('[data-gi]').dataset.gi);
+      const oi = Number(e.target.closest('[data-oi]').dataset.oi);
+      CURRENT_PROD_MODIFIER_GROUPS[gi].options[oi].extra_price = Number(e.target.value) || 0;
+    });
+  });
+  el.querySelectorAll('.mo-del').forEach((btn) => {
+    btn.addEventListener('click', (e) => {
+      const gi = Number(e.target.closest('[data-gi]').dataset.gi);
+      const oi = Number(e.target.closest('[data-oi]').dataset.oi);
+      CURRENT_PROD_MODIFIER_GROUPS[gi].options.splice(oi, 1);
+      renderModifierGroupsList();
+    });
+  });
+  el.querySelectorAll('.mo-add').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const gi = Number(btn.dataset.gi);
+      CURRENT_PROD_MODIFIER_GROUPS[gi].options = CURRENT_PROD_MODIFIER_GROUPS[gi].options || [];
+      CURRENT_PROD_MODIFIER_GROUPS[gi].options.push({ id: null, name: '', extra_price: 0, sort: CURRENT_PROD_MODIFIER_GROUPS[gi].options.length, active: 1 });
+      renderModifierGroupsList();
+    });
+  });
+}
+
+$('#addModifierGroupBtn')?.addEventListener('click', () => {
+  CURRENT_PROD_MODIFIER_GROUPS.push({ id: null, name: '', min_selections: 0, max_selections: 1, sort: CURRENT_PROD_MODIFIER_GROUPS.length, options: [] });
+  renderModifierGroupsList();
+  renderProdTabCounters();
+});
+
+async function saveProductExtras(productId) {
+  const existing = PRODUCTS_CACHE.find((p) => p.id == productId);
+  const existingVariants = existing?.variants || [];
+  const existingGroups = existing?.modifierGroups || [];
+
+  // Sync variants
+  const keepVariantIds = new Set();
+  for (let i = 0; i < CURRENT_PROD_VARIANTS.length; i++) {
+    const v = CURRENT_PROD_VARIANTS[i];
+    if (!v.name.trim()) continue;
+    if (v.id) {
+      await api(`/api/products/${productId}/variants/${v.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: v.name, price: v.price, sort: i, active: 1 }),
+      });
+      keepVariantIds.add(v.id);
+    } else {
+      const newV = await api(`/api/products/${productId}/variants`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: v.name, price: v.price, sort: i }),
+      });
+      keepVariantIds.add(newV.id);
+    }
+  }
+  for (const ev of existingVariants) {
+    if (!keepVariantIds.has(ev.id)) {
+      await api(`/api/products/${productId}/variants/${ev.id}`, { method: 'DELETE' }).catch(() => {});
+    }
+  }
+
+  // Sync modifier groups
+  const keepGroupIds = new Set();
+  for (let gi = 0; gi < CURRENT_PROD_MODIFIER_GROUPS.length; gi++) {
+    const g = CURRENT_PROD_MODIFIER_GROUPS[gi];
+    if (!g.name.trim()) continue;
+    let groupId = g.id;
+    if (groupId) {
+      await api(`/api/products/${productId}/modifier-groups/${groupId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: g.name, min_selections: g.min_selections, max_selections: g.max_selections, sort: gi }),
+      });
+    } else {
+      const newG = await api(`/api/products/${productId}/modifier-groups`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: g.name, min_selections: g.min_selections, max_selections: g.max_selections, sort: gi }),
+      });
+      groupId = newG.id;
+    }
+    keepGroupIds.add(groupId);
+
+    // Sync options
+    const existingGroup = existingGroups.find((eg) => eg.id === g.id);
+    const existingOpts = existingGroup?.options || [];
+    const keepOptIds = new Set();
+    for (let oi = 0; oi < (g.options || []).length; oi++) {
+      const o = g.options[oi];
+      if (!o.name.trim()) continue;
+      if (o.id) {
+        await api(`/api/products/${productId}/modifier-groups/${groupId}/options/${o.id}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: o.name, extra_price: o.extra_price, sort: oi, active: 1 }),
+        });
+        keepOptIds.add(o.id);
+      } else {
+        const newO = await api(`/api/products/${productId}/modifier-groups/${groupId}/options`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: o.name, extra_price: o.extra_price, sort: oi }),
+        });
+        keepOptIds.add(newO.id);
+      }
+    }
+    for (const eo of existingOpts) {
+      if (!keepOptIds.has(eo.id)) {
+        await api(`/api/products/${productId}/modifier-groups/${groupId}/options/${eo.id}`, { method: 'DELETE' }).catch(() => {});
+      }
+    }
+  }
+  for (const eg of existingGroups) {
+    if (!keepGroupIds.has(eg.id)) {
+      await api(`/api/products/${productId}/modifier-groups/${eg.id}`, { method: 'DELETE' }).catch(() => {});
+    }
+  }
+}
+
 $('#addProdBtn').addEventListener('click', () => openProdModal());
 $('#prodCancel').addEventListener('click', () => $('#prodModal').classList.remove('show'));
-[$('#prodModal'), $('#catModal'), $('#confirmModal'), $('#branchModal'), $('#cashierModal'), $('#posMovementModal'), $('#posCloseModal'), $('#posSalesHistoryModal'), $('#posPaymentEditModal'), $('#orderCancelReasonModal')].forEach((m) =>
-  m.addEventListener('click', (e) => {
+[$('#prodModal'), $('#catModal'), $('#confirmModal'), $('#branchModal'), $('#cashierModal'), $('#posMovementModal'), $('#posCloseModal'), $('#posSalesHistoryModal'), $('#posPaymentEditModal'), $('#orderCancelReasonModal'), $('#posProductConfigModal')].forEach((m) =>
+  m && m.addEventListener('click', (e) => {
     if (e.target === m) m.classList.remove('show');
   })
 );
@@ -2813,7 +3315,9 @@ $('#prodForm').addEventListener('submit', async (e) => {
   fd.append('active', $('#pActive').checked ? '1' : '0');
   if ($('#pImage').files[0]) fd.append('image', $('#pImage').files[0]);
   try {
-    await api(id ? `/api/products/${id}` : '/api/products', { method: id ? 'PUT' : 'POST', body: fd });
+    const saved = await api(id ? `/api/products/${id}` : '/api/products', { method: id ? 'PUT' : 'POST', body: fd });
+    const productId = id || saved?.id;
+    if (productId) await saveProductExtras(productId).catch((err) => console.warn('[variants] save error:', err));
     $('#prodModal').classList.remove('show');
     toast(id ? 'Producto actualizado' : '¡Producto creado!');
     loadProducts();

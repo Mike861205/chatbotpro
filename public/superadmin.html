@@ -8,23 +8,26 @@
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/regular/style.css" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/bold/style.css" />
   <link rel="stylesheet" href="/static/css/styles.css" />
+  <link rel="icon" type="image/svg+xml" href="/static/favicon.svg?v=20260623" />
+  <link rel="icon" type="image/png" href="/static/chatbotpro100.png?v=20260623" />
+  <link rel="shortcut icon" href="/static/chatbotpro100.png?v=20260623" />
 </head>
 <body>
   <div class="app-shell">
     <aside class="sidebar" id="saSidebar">
       <div class="brand">
-        <div class="logo-wrap"><div class="logo-dot" id="saBrandLogoDot"><i class="ph-fill ph-crown"></i><img id="saBrandLogo" alt="Logo SuperAdmin" hidden /></div></div>
+        <div class="logo-wrap"><div class="logo-dot has-image" id="saBrandLogoDot"><i class="ph-fill ph-crown"></i><img id="saBrandLogo" src="/static/chatbotpro100.png?v=20260623" alt="Logo SuperAdmin" /></div></div>
         <div>
           <h2>SuperAdmin</h2>
           <small>Control central</small>
         </div>
       </div>
       <nav>
-        <a href="#tenants" data-sa-view="tenants" class="active"><span class="nav-ic"><i class="ph-fill ph-buildings"></i></span><span>Tenants</span></a>
-        <a href="#integrations" data-sa-view="integrations"><span class="nav-ic"><i class="ph-fill ph-plugs-connected"></i></span><span>Integraciones</span></a>
+        <a href="#tenants" data-sa-view="tenants" data-color="cyan" class="active"><span class="nav-ic"><i class="ph-fill ph-buildings"></i></span><span>Tenants</span><span class="sa-module-icon"><i class="ph-bold ph-users-three"></i></span></a>
+        <a href="#integrations" data-sa-view="integrations" data-color="amber"><span class="nav-ic"><i class="ph-fill ph-plugs-connected"></i></span><span>Integraciones</span><span class="sa-module-icon"><i class="ph-bold ph-gear-six"></i></span></a>
       </nav>
       <div class="user-pill" style="margin-top:auto">
-        <div class="avatar" style="background:linear-gradient(135deg,#2563eb,#0ea5e9)"><i class="ph-bold ph-user-gear"></i></div>
+        <div class="avatar has-image" id="saUserBrandLogoWrap" style="background:linear-gradient(135deg,#2563eb,#0ea5e9)"><i class="ph-bold ph-user-gear"></i><img id="saUserBrandLogo" src="/static/chatbotpro100.png?v=20260623" alt="Logo institucional" /></div>
         <div>
           <b id="saUserName">superadmin</b>
           <small>Plataforma</small>
@@ -103,10 +106,10 @@
               <div class="hint">Selecciona una imagen desde tu dispositivo (móvil o PC). Máximo 8 MB.</div>
             </div>
             <div class="sa-logo-preview">
-              <div class="sa-logo-preview-dot"><i class="ph-fill ph-crown" id="saBrandLogoPreviewIcon"></i><img id="saBrandLogoPreview" alt="Preview logo SuperAdmin" hidden /></div>
+              <div class="sa-logo-preview-dot has-image"><i class="ph-fill ph-crown" id="saBrandLogoPreviewIcon"></i><img id="saBrandLogoPreview" src="/static/chatbotpro100.png?v=20260623" alt="Preview logo SuperAdmin" /></div>
               <div>
                 <b>Vista previa del menú</b>
-                <small>Si no subes logo, se mostrará el icono por defecto.</small>
+                <small>Si no subes logo, se mostrará el logo institucional de ChatBotPro.</small>
               </div>
             </div>
             <button class="btn btn-ghost" type="button" id="saUploadBrandLogo"><i class="ph-bold ph-upload-simple"></i> Subir logo</button>

@@ -17,6 +17,13 @@ function n(value) {
   return Number.isFinite(num) ? Number(num.toFixed(2)) : 0;
 }
 
+function normalizePublicMediaPath(raw) {
+  const value = String(raw || '').trim();
+  if (!value) return '';
+  if (/^(https?:)?\/\//i.test(value) || value.startsWith('data:') || value.startsWith('blob:')) return value;
+  return value.startsWith('/') ? value : `/${value.replace(/^\/+/, '')}`;
+}
+
 function sameMoney(a, b) {
   return Math.abs(n(a) - n(b)) < 0.01;
 }
@@ -149,6 +156,59 @@ function expectedCashForSession(session, totals) {
 async function isChatbotPosIntegrationEnabled(t) {
   const value = await getSetting(t, 'chatbot_pos_integration_enabled', '0');
   return String(value || '0') === '1';
+}
+
+async function getProductExtrasMaps(t, productIds = []) {
+  const ids = [...new Set((productIds || []).map((id) => Number(id)).filter((id) => Number.isInteger(id) && id > 0))];
+  const variantsMap = new Map();
+  const groupsMap = new Map();
+  if (!ids.length) return { variantsMap, groupsMap };
+
+  const variants = await t.all(
+    `SELECT id, product_id, name, price::float AS price, sort, active
+     FROM {s}.product_variants
+     WHERE active = 1 AND product_id = ANY($1::int[])
+     ORDER BY product_id, sort, id`,
+    [ids]
+  );
+
+  for (const v of variants) {
+    if (!variantsMap.has(v.product_id)) variantsMap.set(v.product_id, []);
+    variantsMap.get(v.product_id).push(v);
+  }
+
+  const groups = await t.all(
+    `SELECT id, product_id, name, min_selections, max_selections, sort
+     FROM {s}.modifier_groups
+     WHERE product_id = ANY($1::int[])
+     ORDER BY product_id, sort, id`,
+    [ids]
+  );
+
+  const groupIds = groups.map((g) => Number(g.id)).filter((id) => Number.isInteger(id) && id > 0);
+  const options = groupIds.length
+    ? await t.all(
+      `SELECT id, group_id, name, extra_price::float AS extra_price, sort, active
+       FROM {s}.modifier_options
+       WHERE active = 1 AND group_id = ANY($1::int[])
+       ORDER BY group_id, sort, id`,
+      [groupIds]
+    )
+    : [];
+
+  const optionsByGroup = new Map();
+  for (const o of options) {
+    if (!optionsByGroup.has(o.group_id)) optionsByGroup.set(o.group_id, []);
+    optionsByGroup.get(o.group_id).push(o);
+  }
+
+  for (const g of groups) {
+    const group = { ...g, options: optionsByGroup.get(g.id) || [] };
+    if (!groupsMap.has(g.product_id)) groupsMap.set(g.product_id, []);
+    groupsMap.get(g.product_id).push(group);
+  }
+
+  return { variantsMap, groupsMap };
 }
 
 function paymentBreakdownForMethod(method, total) {
@@ -381,6 +441,13 @@ router.get('/overview', async (req, res, next) => {
        WHERE p.active = 1
        ORDER BY COALESCE(c.sort, 0), c.name NULLS FIRST, p.name`
     );
+    const { variantsMap, groupsMap } = await getProductExtrasMaps(req.tdb, products.map((p) => p.id));
+    const productsWithExtras = products.map((p) => ({
+      ...p,
+      image: normalizePublicMediaPath(p.image),
+      variants: variantsMap.get(p.id) || [],
+      modifierGroups: groupsMap.get(p.id) || [],
+    }));
     const ctx = userSessionContext(req.user);
     const session = await getOpenSession(req.tdb, ctx);
     const sessionTotals = session ? await getSessionTotals(req.tdb, session.id) : null;
@@ -402,7 +469,7 @@ router.get('/overview', async (req, res, next) => {
     res.json({
       categories,
       branches,
-      products,
+      products: productsWithExtras,
       activeSession,
       lastClosedSession,
       chatbotIntegrationEnabled,
@@ -728,11 +795,29 @@ async function createPosSale(req, res, next) {
       const qty = Number(item.qty);
       if (!product || !product.active) throw new Error('Uno de los productos ya no está disponible');
       if (!Number.isInteger(qty) || qty <= 0) throw new Error('La cantidad de un producto es inválida');
+
+      const requestedName = String(item.name || '').trim();
+      const requestedPrice = Number(item.price);
+      const hasCustomLine = Boolean(item.cartKey || item.variantId || item.modifiersLabel || Array.isArray(item.modifiers));
+
+      const finalName = hasCustomLine
+        ? (requestedName || product.name)
+        : product.name;
+      const finalPrice = hasCustomLine && Number.isFinite(requestedPrice) && requestedPrice >= 0
+        ? n(requestedPrice)
+        : n(product.price);
+
       return {
         id: product.id,
-        name: product.name,
-        price: n(product.price),
+        name: finalName,
+        price: finalPrice,
         qty,
+        variantId: item.variantId ? Number(item.variantId) : null,
+        variantName: item.variantName ? String(item.variantName).trim() : null,
+        modifiers: Array.isArray(item.modifiers) ? item.modifiers : [],
+        modifiersLabel: item.modifiersLabel ? String(item.modifiersLabel).trim() : '',
+        modifiersExtraPrice: Number.isFinite(Number(item.modifiersExtraPrice)) ? n(item.modifiersExtraPrice) : 0,
+        _cartKey: item.cartKey ? String(item.cartKey) : null,
       };
     });
     const subtotal = n(saleItems.reduce((sum, item) => sum + item.price * item.qty, 0));

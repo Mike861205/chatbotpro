@@ -561,12 +561,18 @@
 
           <div class="subs-plans">
             <article class="plan-card plan-regular">
+              <span class="plan-compare-badge"><i class="ph-fill ph-arrow-bend-down-right"></i> Mejor valor en promoción</span>
               <div class="plan-icon"><i class="ph-fill ph-package"></i></div>
               <div class="plan-label">Plan mensual regular</div>
+              <div class="plan-regular-old">Precio de lista <s>$999</s></div>
               <div class="plan-price"><span class="cur">$</span><span class="amt">999</span><span class="per">/ mes MXN</span></div>
+              <div class="plan-regular-note">Ideal si prefieres pagar mes a mes sin aprovechar la promoción anual.</div>
               <ul class="plan-points">
                 <li><i class="ph-bold ph-check-circle"></i> Acceso completo al sistema</li>
                 <li><i class="ph-bold ph-check-circle"></i> Soporte estándar incluido</li>
+                <li><i class="ph-bold ph-check-circle"></i> Menú, pedidos, clientes y panel en una sola cuenta</li>
+                <li><i class="ph-bold ph-check-circle"></i> Punto de venta y caja por sucursal</li>
+                <li><i class="ph-bold ph-check-circle"></i> Actualizaciones continuas sin costo extra</li>
               </ul>
             </article>
             <article class="plan-card plan-promo">
@@ -582,6 +588,15 @@
                 <li><i class="ph-bold ph-check-circle"></i> Precio fijo durante 12 meses</li>
                 <li><i class="ph-bold ph-check-circle"></i> Onboarding prioritario</li>
               </ul>
+              <div class="plan-pay-trust">
+                <span><i class="ph-fill ph-shield-check"></i> Pago seguro</span>
+                <span><i class="ph-fill ph-credit-card"></i> Débito / crédito</span>
+                <span><i class="ph-fill ph-lock-key"></i> Stripe protegido</span>
+              </div>
+              <a class="btn btn-primary plan-pay-cta" href="https://buy.stripe.com/00wcN44Zn33H3BV5DU4c80i" target="_blank" rel="noopener noreferrer">
+                <i class="ph-fill ph-credit-card"></i> Pagar mi plan mensual
+              </a>
+              <div class="plan-pay-foot"><i class="ph-bold ph-sparkle"></i> Activa tu promoción hoy mismo con checkout seguro.</div>
             </article>
           </div>
 
@@ -677,36 +692,71 @@
 
   <!-- ════════ Modal producto ════════ -->
   <div class="modal-bg" id="prodModal">
-    <div class="modal">
+    <div class="modal" style="max-width:640px">
       <h3 id="prodModalTitle"><i class="ph-bold ph-plus-circle"></i> Nuevo producto</h3>
+      <!-- Pestañas del modal -->
+      <div class="prod-modal-tabs" id="prodModalTabs">
+        <button type="button" class="active" data-prod-tab="basic"><i class="ph-bold ph-info"></i> Info básica</button>
+        <button type="button" data-prod-tab="variants"><i class="ph-bold ph-stack"></i> Variantes de precio</button>
+        <button type="button" data-prod-tab="modifiers"><i class="ph-bold ph-sliders"></i> Ingredientes / Opciones</button>
+      </div>
       <form id="prodForm">
         <input type="hidden" id="pId" />
-        <div class="field">
-          <label><i class="ph-bold ph-image"></i> Foto del producto</label>
-          <div class="dropzone" id="dropzone">
-            <div class="dz-empty">
-              <i class="ph ph-cloud-arrow-up"></i>
-              <p>Arrastra una imagen o <b>haz clic para elegir</b></p>
+        <!-- Pestaña: Info básica -->
+        <div class="prod-tab-panel active" id="prodTabBasic">
+          <div class="field">
+            <label><i class="ph-bold ph-image"></i> Foto del producto</label>
+            <div class="dropzone" id="dropzone">
+              <div class="dz-empty">
+                <i class="ph ph-cloud-arrow-up"></i>
+                <p>Arrastra una imagen o <b>haz clic para elegir</b></p>
+              </div>
+              <div class="dz-preview"><img id="dzImg" alt="" /><span>Cambiar imagen</span></div>
+              <input type="file" id="pImage" accept="image/*" />
             </div>
-            <div class="dz-preview"><img id="dzImg" alt="" /><span>Cambiar imagen</span></div>
-            <input type="file" id="pImage" accept="image/*" />
           </div>
+          <div class="field"><label><i class="ph-bold ph-tag"></i> Nombre *</label><input type="text" id="pName" required placeholder="Hamburguesa clásica" /></div>
+          <div class="field"><label><i class="ph-bold ph-text-align-left"></i> Descripción</label><textarea id="pDesc" rows="2" placeholder="Carne 150g, queso, lechuga y tomate"></textarea></div>
+          <div class="row-2">
+            <div class="field"><label><i class="ph-bold ph-currency-dollar"></i> Precio base *</label><input type="number" id="pPrice" step="0.01" min="0" required placeholder="99.00" /><div class="hint">Si usas variantes, este precio es el de referencia.</div></div>
+            <div class="field"><label><i class="ph-bold ph-folder"></i> Categoría</label><select id="pCat"><option value="">Sin categoría</option></select></div>
+          </div>
+          <div class="toggle-row" style="margin-bottom:0">
+            <div class="t-info"><i class="ph-bold ph-eye"></i><div><b>Visible en el chatbot</b><span>Los clientes podrán pedirlo</span></div></div>
+            <label class="switch"><input type="checkbox" id="pActive" checked /><span class="track"></span></label>
+          </div>
+          <!-- Ficha técnica: extras configurados -->
+          <div id="prodExtrasPreview" style="margin-top:14px"></div>
         </div>
-        <div class="field"><label><i class="ph-bold ph-tag"></i> Nombre *</label><input type="text" id="pName" required placeholder="Hamburguesa clásica" /></div>
-        <div class="field"><label><i class="ph-bold ph-text-align-left"></i> Descripción</label><textarea id="pDesc" rows="2" placeholder="Carne 150g, queso, lechuga y tomate"></textarea></div>
-        <div class="row-2">
-          <div class="field"><label><i class="ph-bold ph-currency-dollar"></i> Precio *</label><input type="number" id="pPrice" step="0.01" min="0" required placeholder="99.00" /></div>
-          <div class="field"><label><i class="ph-bold ph-folder"></i> Categoría</label><select id="pCat"><option value="">Sin categoría</option></select></div>
+        <!-- Pestaña: Variantes de precio -->
+        <div class="prod-tab-panel" id="prodTabVariants" hidden>
+          <div class="hint" style="margin-bottom:12px"><i class="ph-bold ph-info"></i> Usa variantes cuando el mismo producto tiene distintos tamaños o cantidades con precios diferentes. Ej: <b>1 kg → $300</b> / <b>½ kg → $140</b>. Si defines variantes, el cliente elegirá una antes de agregar al carrito.</div>
+          <div id="variantsList" class="variants-list"></div>
+          <button type="button" class="btn btn-ghost" id="addVariantBtn" style="margin-top:8px"><i class="ph-bold ph-plus-circle"></i> Agregar variante</button>
         </div>
-        <div class="toggle-row" style="margin-bottom:0">
-          <div class="t-info"><i class="ph-bold ph-eye"></i><div><b>Visible en el chatbot</b><span>Los clientes podrán pedirlo</span></div></div>
-          <label class="switch"><input type="checkbox" id="pActive" checked /><span class="track"></span></label>
+        <!-- Pestaña: Ingredientes / Opciones -->
+        <div class="prod-tab-panel" id="prodTabModifiers" hidden>
+          <div class="hint" style="margin-bottom:12px"><i class="ph-bold ph-info"></i> Crea grupos de opciones que el cliente puede elegir. Ej: <b>Mitades</b> (pepperoni / pastor), <b>Extras</b> (queso extra / jalapeño). Puedes requerir selección mínima por grupo.</div>
+          <div id="modifierGroupsList" class="modifier-groups-list"></div>
+          <button type="button" class="btn btn-ghost" id="addModifierGroupBtn" style="margin-top:8px"><i class="ph-bold ph-plus-circle"></i> Agregar grupo de opciones</button>
         </div>
         <div class="modal-actions">
           <button type="button" class="btn btn-ghost" id="prodCancel">Cancelar</button>
           <button type="submit" class="btn btn-primary" id="prodSave"><i class="ph-bold ph-check"></i> Guardar producto</button>
         </div>
       </form>
+    </div>
+  </div>
+
+  <!-- ════════ Modal configurador POS (variantes + modificadores) ════════ -->
+  <div class="modal-bg" id="posProductConfigModal">
+    <div class="modal" style="max-width:480px">
+      <h3 id="posProductConfigTitle"><i class="ph-bold ph-sliders"></i> Personalizar producto</h3>
+      <div id="posProductConfigBody"></div>
+      <div class="modal-actions">
+        <button type="button" class="btn btn-ghost" id="posProductConfigCancel">Cancelar</button>
+        <button type="button" class="btn btn-primary" id="posProductConfigAdd"><i class="ph-bold ph-shopping-cart"></i> Agregar al carrito</button>
+      </div>
     </div>
   </div>
 

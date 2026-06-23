@@ -289,11 +289,17 @@ async function saveState(t, sessionId, state) {
 }
 
 async function activeProducts(t) {
-  return t.all(
+  const rows = await t.all(
     `SELECT p.id, p.name, p.description, p.price::float AS price, p.image, c.name AS category
      FROM {s}.products p LEFT JOIN {s}.categories c ON c.id = p.category_id
      WHERE p.active = 1 ORDER BY c.sort, c.name, p.name`
   );
+  return rows.map((p) => ({
+    ...p,
+    image: String(p.image || '').trim()
+      ? (String(p.image).startsWith('/') ? String(p.image) : `/${String(p.image).replace(/^\/+/, '')}`)
+      : '',
+  }));
 }
 
 function cartTotal(cart) {
@@ -302,7 +308,10 @@ function cartTotal(cart) {
 
 function cartSummary(cart, currency) {
   if (!cart.length) return 'Tu carrito está vacío 🛒';
-  const lines = cart.map((it) => `• ${it.qty}x ${it.name} — ${money(it.price * it.qty, currency)}`);
+  const lines = cart.map((it) => {
+    const modNote = it.modifiersLabel ? `\n  _${it.modifiersLabel}_` : '';
+    return `• ${it.qty}x ${it.name}${it.variantName ? ` (${it.variantName})` : ''}${modNote} — ${money(it.price * it.qty, currency)}`;
+  });
   return `🛒 *Tu pedido:*\n${lines.join('\n')}\n\n*Total: ${money(cartTotal(cart), currency)}*`;
 }
 
@@ -409,7 +418,14 @@ function pricingSummary(state, currency) {
   const deliveryFee = Number(state.customer?.deliveryFee || 0);
   const deliveryLabel = deliveryZoneServiceLabel(state.customer);
   const orderNote = String(state.customer?.orderNote || '').trim();
-  const lines = state.cart.map((it) => `• ${it.qty}x ${it.name} — ${money(it.price * it.qty, currency)}`);
+  const lines = state.cart.map((it) => {
+    const hasVariantInName = it.variantName
+      ? String(it.name || '').toLowerCase().includes(String(it.variantName || '').toLowerCase())
+      : false;
+    const variantLabel = it.variantName && !hasVariantInName ? ` (${it.variantName})` : '';
+    const modifiersText = it.modifiersLabel ? `\n  Opciones: ${it.modifiersLabel}` : '';
+    return `• ${it.qty}x ${it.name}${variantLabel}${modifiersText} — ${money(it.price * it.qty, currency)}`;
+  });
   return [
     '🛒 *Tu pedido:*',
     ...lines,
@@ -559,6 +575,140 @@ async function showProducts(t, state, categoryId) {
   };
 }
 
+// ── Variantes / Modificadores: helpers ──
+function addPendingProductToCart(state) {
+  const prod = state.pendingProduct;
+  if (!prod) return;
+  const variantId = state.pendingVariantId || null;
+  const variantName = state.pendingVariantName || null;
+  let finalPrice = variantId ? (state.pendingVariantPrice ?? prod.price) : prod.price;
+
+  const modifiersDetail = [];
+  const modifiersLabelParts = [];
+  let modifiersExtra = 0;
+  for (const g of (prod.groups || [])) {
+    const selIds = state.pendingModifiers[g.id] || [];
+    if (!selIds.length) continue;
+    const chosenOpts = (g.options || []).filter((o) => selIds.includes(o.id));
+    modifiersDetail.push({ groupId: g.id, groupName: g.name, options: chosenOpts.map((o) => ({ id: o.id, name: o.name, extraPrice: Number(o.extra_price) })) });
+    modifiersExtra += chosenOpts.reduce((s, o) => s + Number(o.extra_price), 0);
+    modifiersLabelParts.push(chosenOpts.map((o) => o.name).join('/'));
+  }
+  finalPrice += modifiersExtra;
+  const modifiersLabel = modifiersLabelParts.join(' · ');
+  const displayName = [prod.name, variantName].filter(Boolean).join(' · ');
+  const cartKey = `${prod.id}_${variantId || 'base'}_${modifiersLabel}`;
+
+  const existing = state.cart.find((it) => it._cartKey === cartKey);
+  const qtyToAdd = Math.max(1, Number(state.pendingAddQty || 1));
+  if (existing) {
+    existing.qty += qtyToAdd;
+  } else {
+    state.cart.push({
+      id: prod.id,
+      name: displayName,
+      price: finalPrice,
+      qty: qtyToAdd,
+      _cartKey: cartKey,
+      variantId,
+      variantName,
+      modifiers: modifiersDetail,
+      modifiersLabel,
+      modifiersExtraPrice: modifiersExtra,
+    });
+  }
+
+  state.pendingProduct = null;
+  state.pendingVariantId = null;
+  state.pendingVariantName = null;
+  state.pendingVariantPrice = null;
+  state.pendingAddQty = null;
+  state.pendingModifiers = {};
+  state.pendingModifierGroupIndex = 0;
+}
+
+async function loadProductConfig(t, productId) {
+  const prod = await t.get('SELECT id, name, price::float AS price FROM {s}.products WHERE id = $1 AND active = 1', [Number(productId)]);
+  if (!prod) return null;
+  const variants = await t.all(
+    'SELECT id, name, price::float AS price FROM {s}.product_variants WHERE product_id = $1 AND active = 1 ORDER BY sort, id',
+    [prod.id]
+  );
+  const groups = await t.all(
+    'SELECT id, name, min_selections, max_selections FROM {s}.modifier_groups WHERE product_id = $1 ORDER BY sort, id',
+    [prod.id]
+  );
+  for (const g of groups) {
+    g.options = await t.all(
+      'SELECT id, name, extra_price::float AS extra_price FROM {s}.modifier_options WHERE group_id = $1 AND active = 1 ORDER BY sort, id',
+      [g.id]
+    );
+  }
+  return {
+    ...prod,
+    variants,
+    groups,
+    hasVariants: variants.length > 1,
+    hasModifiers: groups.length > 0,
+  };
+}
+
+async function replyNextModifierGroup(state, reply, currency, t, finish, keepMessages = false) {
+  const prod = state.pendingProduct;
+  if (!prod) { state.step = 'start'; return finish(); }
+  const groups = prod.groups || [];
+  const gi = state.pendingModifierGroupIndex || 0;
+  const group = groups[gi];
+
+  if (!group) {
+    addPendingProductToCart(state);
+    const summary = cartSummary(state.cart, currency);
+    state.step = 'start';
+    reply.messages = (keepMessages ? reply.messages : []).concat([
+      `✅ Agregado con tus opciones.\n\n${summary}`,
+      '¿Deseas agregar más productos o finalizar tu pedido?',
+    ]);
+    reply.products = null;
+    reply.options = [
+      { label: '➕ Agregar más productos', value: 'menu' },
+      { label: '✅ Sería todo, gracias.', value: 'checkout' },
+      { label: '🛒 Ver carrito', value: 'cart' },
+    ];
+    return finish();
+  }
+
+  const sel = state.pendingModifiers[group.id] || [];
+  const maxSel = Number(group.max_selections) || 1;
+  const minSel = Number(group.min_selections) || 0;
+  const reqLabel = group.min_selections > 0 ? ` _(obligatorio, mín ${group.min_selections})_` : ' _(opcional)_';
+  const checkedLabel = (o) => sel.includes(o.id) ? '✅ ' : '';
+  const optOptions = (group.options || []).map((o) => ({
+    label: `${checkedLabel(o)}${o.name}${Number(o.extra_price) > 0 ? ` +${money(o.extra_price, currency)}` : ''}`,
+    value: `mod_opt_${o.id}`,
+  }));
+
+  const nextLabel = gi < groups.length - 1 ? '➡️ Siguiente grupo' : '✅ Enviar selección';
+  optOptions.push({ label: nextLabel, value: 'mod_next' });
+  if (sel.length) optOptions.push({ label: '🧹 Limpiar selección', value: 'mod_clear' });
+  if (group.min_selections === 0) optOptions.push({ label: '⏭️ Omitir', value: 'mod_skip' });
+
+  const selText = sel.length
+    ? `\nSeleccionados: ${(group.options || []).filter((o) => sel.includes(o.id)).map((o) => o.name).join(', ')}`
+    : '';
+  if (keepMessages) {
+    const progress = `(${sel.length}/${maxSel})`;
+    if (sel.length < minSel) {
+      reply.messages = [`*${group.name}* ${progress}: falta seleccionar ${minSel - sel.length} para continuar.${selText}`];
+    } else {
+      reply.messages = [`*${group.name}* ${progress}: puedes elegir más o tocar *${nextLabel}*.${selText}`];
+    }
+  } else {
+    reply.messages = [`*${group.name}*${reqLabel} — elige hasta ${maxSel} y después toca *${nextLabel}*.${selText}`];
+  }
+  reply.options = optOptions;
+  return finish();
+}
+
 function buildOrderText(businessName, cart, customer, delivery, currency) {
   const subtotal = cartTotal(cart);
   const deliveryFee = Number(customer?.deliveryFee || 0);
@@ -567,7 +717,11 @@ function buildOrderText(businessName, cart, customer, delivery, currency) {
   const lines = [
     `🧾 *Nuevo pedido — ${businessName}*`,
     '',
-    ...cart.map((it) => `• ${it.qty}x ${it.name} — ${money(it.price * it.qty, currency)}`),
+    ...cart.map((it) => {
+      const varLine = it.variantName ? ` (${it.variantName})` : '';
+      const modLine = it.modifiersLabel ? `\n  Opciones: ${it.modifiersLabel}` : '';
+      return `• ${it.qty}x ${it.name}${varLine}${modLine} — ${money(it.price * it.qty, currency)}`;
+    }),
     '',
     `*Subtotal: ${money(subtotal, currency)}*`,
     ...(deliveryFee > 0 ? [`*Envío${deliveryLabel ? ` (${deliveryLabel})` : ''}: ${money(deliveryFee, currency)}*`] : []),
@@ -737,7 +891,7 @@ async function handleMessage(t, slug, sessionId, rawInput) {
     }
 
     state.step = 'checkout_identity_choice';
-    reply.messages = ['Antes de finalizar, ¿ya habías pedido con nosotros?'];
+    reply.messages = ['Antes de finalizar, ¿ya habías pedido con nosotros por este chatbot?'];
     reply.options = [
       { label: '🔁 Ya he pedido', value: 'returning_customer' },
       { label: '👤 Soy cliente nuevo', value: 'checkout_new_customer' },
@@ -858,6 +1012,48 @@ async function handleMessage(t, slug, sessionId, rawInput) {
       .map((it) => ({ id: it.id, qty: Math.floor(it.qty) }));
 
     if (parsed.length) {
+      const configurableItems = [];
+      for (const item of parsed) {
+        if (item.qty <= 0) continue;
+        const cfg = await loadProductConfig(t, item.id);
+        if (cfg && (cfg.hasVariants || cfg.hasModifiers)) configurableItems.push({ item, cfg });
+      }
+
+      if (configurableItems.length > 1) {
+        reply.messages = ['Tienes varios productos con configuración (variantes/opciones). Para evitar errores, agrégalos uno por uno tocando el producto en el menú.'];
+        reply.options = [
+          { label: '📋 Ver menú', value: 'menu' },
+          { label: '🛒 Ver carrito', value: 'cart' },
+        ];
+        return finish();
+      }
+
+      if (configurableItems.length === 1 && parsed.length === 1) {
+        const { item, cfg } = configurableItems[0];
+        state.pendingProduct = { id: cfg.id, name: cfg.name, price: cfg.price, variants: cfg.variants, groups: cfg.groups };
+        state.pendingAddQty = Math.max(1, Number(item.qty || 1));
+        state.pendingVariantId = null;
+        state.pendingModifiers = {};
+        state.pendingModifierGroupIndex = 0;
+        if (cfg.hasVariants) {
+          state.step = 'choosing_variant';
+          reply.messages = [`¿Cómo lo quieres? Elige una opción de *${cfg.name}* para ${state.pendingAddQty} unidad(es):`];
+          reply.options = cfg.variants.map((v) => ({ label: `${v.name} — ${money(v.price, currency)}`, value: `variant_${v.id}` }));
+          return finish();
+        }
+        state.step = 'choosing_modifiers';
+        return replyNextModifierGroup(state, reply, currency, t, finish);
+      }
+
+      if (configurableItems.length === 1 && parsed.length > 1) {
+        reply.messages = ['Incluiste un producto con variantes/opciones junto con otros productos. Primero configura ese producto por separado, luego confirma los demás.'];
+        reply.options = [
+          { label: '📋 Ver menú', value: 'menu' },
+          { label: '🛒 Ver carrito', value: 'cart' },
+        ];
+        return finish();
+      }
+
       const lines = [];
       for (const item of parsed) {
         const prod = await t.get('SELECT id, name, price::float AS price FROM {s}.products WHERE id = $1 AND active = 1', [item.id]);
@@ -894,8 +1090,25 @@ async function handleMessage(t, slug, sessionId, rawInput) {
     const id = Number(parts[2]);
     const qty = Number(parts[3]);
     if (Number.isFinite(id) && Number.isFinite(qty) && qty >= 0 && qty <= 50) {
-      const prod = await t.get('SELECT id, name, price::float AS price FROM {s}.products WHERE id = $1 AND active = 1', [id]);
+      const cfg = await loadProductConfig(t, id);
+      const prod = cfg;
       if (prod) {
+        if ((cfg.hasVariants || cfg.hasModifiers) && Math.floor(qty) > 0) {
+          state.pendingProduct = { id: cfg.id, name: cfg.name, price: cfg.price, variants: cfg.variants, groups: cfg.groups };
+          state.pendingAddQty = Math.floor(qty);
+          state.pendingVariantId = null;
+          state.pendingModifiers = {};
+          state.pendingModifierGroupIndex = 0;
+          if (cfg.hasVariants) {
+            state.step = 'choosing_variant';
+            reply.messages = [`¿Cómo lo quieres? Elige una opción de *${cfg.name}* para ${state.pendingAddQty} unidad(es):`];
+            reply.options = cfg.variants.map((v) => ({ label: `${v.name} — ${money(v.price, currency)}`, value: `variant_${v.id}` }));
+            return finish();
+          }
+          state.step = 'choosing_modifiers';
+          return replyNextModifierGroup(state, reply, currency, t, finish);
+        }
+
         const existing = state.cart.find((it) => it.id === prod.id);
         const finalQty = Math.floor(qty);
         if (finalQty <= 0) {
@@ -983,22 +1196,151 @@ async function handleMessage(t, slug, sessionId, rawInput) {
   }
 
   if (lower.startsWith('prod_')) {
-    const prod = await t.get('SELECT id, name, price::float AS price FROM {s}.products WHERE id = $1 AND active = 1', [
-      Number(lower.slice(5)),
-    ]);
+    const prod = await loadProductConfig(t, Number(lower.slice(5)));
     if (prod) {
-      const existing = state.cart.find((it) => it.id === prod.id);
+      const hasVariants = prod.hasVariants;
+      const hasModifiers = prod.hasModifiers;
+
+      if (hasVariants || hasModifiers) {
+        state.pendingProduct = { id: prod.id, name: prod.name, price: prod.price, variants: prod.variants, groups: prod.groups };
+        state.pendingAddQty = 1;
+        state.pendingVariantId = null;
+        state.pendingModifiers = {}; // { groupId: [optId, ...] }
+        state.pendingModifierGroupIndex = 0;
+
+        if (hasVariants) {
+          state.step = 'choosing_variant';
+          const varOptions = prod.variants.map((v) => ({ label: `${v.name} — ${money(v.price, currency)}`, value: `variant_${v.id}` }));
+          reply.messages = [`¿Cómo lo quieres? Elige una opción de *${prod.name}*:`];
+          reply.options = varOptions;
+          return finish();
+        }
+        // No variants, go straight to modifiers
+        state.step = 'choosing_modifiers';
+        return replyNextModifierGroup(state, reply, currency, t, finish);
+      }
+
+      const existing = state.cart.find((it) => it.id === prod.id && !it._cartKey);
       if (existing) existing.qty += 1;
       else state.cart.push({ id: prod.id, name: prod.name, price: prod.price, qty: 1 });
       resetUpsellProgress();
 
       state.step = 'choosing_product';
       const menuReply = await showProducts(t, state, state.currentCategoryId);
-      const currentQty = state.cart.find((it) => it.id === prod.id)?.qty || 0;
+      const currentQty = state.cart.find((it) => it.id === prod.id && !it._cartKey)?.qty || 0;
       reply.messages = [`✅ Llevas *${currentQty}x ${prod.name}* en tu pedido.`, ...menuReply.messages];
       reply.products = menuReply.products;
       reply.options = menuReply.options;
       return finish();
+    }
+  }
+
+  // Elegir variante
+  if (state.step === 'choosing_variant' && lower.startsWith('variant_')) {
+    const variantId = Number(lower.slice('variant_'.length));
+    const prod = state.pendingProduct;
+    if (prod) {
+      const variant = prod.variants.find((v) => v.id === variantId);
+      if (variant) {
+        state.pendingVariantId = variantId;
+        state.pendingVariantName = variant.name;
+        state.pendingVariantPrice = variant.price;
+        if (prod.groups && prod.groups.length > 0) {
+          state.pendingModifierGroupIndex = 0;
+          state.step = 'choosing_modifiers';
+          return replyNextModifierGroup(state, reply, currency, t, finish);
+        }
+        // No modifiers — add to cart
+        addPendingProductToCart(state);
+        const summary = cartSummary(state.cart, currency);
+        state.step = 'start';
+        reply.messages = [
+          `✅ Agregado: *${state.cart[state.cart.length - 1]?.name || prod.name}*.\n\n${summary}`,
+          '¿Deseas agregar más productos o finalizar tu pedido?',
+        ];
+        reply.products = null;
+        reply.options = [
+          { label: '➕ Agregar más productos', value: 'menu' },
+          { label: '✅ Sería todo, gracias.', value: 'checkout' },
+          { label: '🛒 Ver carrito', value: 'cart' },
+        ];
+        return finish();
+      }
+    }
+    reply.messages = ['Por favor elige una de las opciones disponibles.'];
+    return finish();
+  }
+
+  // Elegir modificadores
+  if (state.step === 'choosing_modifiers') {
+    const prod = state.pendingProduct;
+    if (!prod) {
+      state.step = 'start';
+      return finish();
+    }
+    const groups = prod.groups || [];
+    const gi = state.pendingModifierGroupIndex || 0;
+    const group = groups[gi];
+    if (!group) {
+      // All groups done, add to cart
+      addPendingProductToCart(state);
+      const summary = cartSummary(state.cart, currency);
+      state.step = 'start';
+      reply.messages = [
+        `✅ Agregado con tus opciones.\n\n${summary}`,
+        '¿Deseas agregar más productos o finalizar tu pedido?',
+      ];
+      reply.products = null;
+      reply.options = [
+        { label: '➕ Agregar más productos', value: 'menu' },
+        { label: '✅ Sería todo, gracias.', value: 'checkout' },
+        { label: '🛒 Ver carrito', value: 'cart' },
+      ];
+      return finish();
+    }
+
+    if (lower.startsWith('mod_opt_')) {
+      const optId = Number(lower.slice('mod_opt_'.length));
+      if (!state.pendingModifiers[group.id]) state.pendingModifiers[group.id] = [];
+      const sel = state.pendingModifiers[group.id];
+      const idx = sel.indexOf(optId);
+      const max = Number(group.max_selections) || 1;
+      if (idx >= 0) {
+        sel.splice(idx, 1); // toggle off
+      } else if (max === 1) {
+        state.pendingModifiers[group.id] = [optId];
+      } else if (sel.length < max) {
+        sel.push(optId);
+      } else {
+        reply.messages = [`Ya llegaste al máximo (${max}) en *${group.name}*. Desmarca una opción o confirma.`];
+        return replyNextModifierGroup(state, reply, currency, t, finish, true);
+      }
+      return replyNextModifierGroup(state, reply, currency, t, finish, true);
+    }
+
+    if (lower === 'mod_clear') {
+      state.pendingModifiers[group.id] = [];
+      reply.messages = [`Limpié tu selección en *${group.name}*.`];
+      return replyNextModifierGroup(state, reply, currency, t, finish, true);
+    }
+
+    if (lower === 'mod_next') {
+      const sel = state.pendingModifiers[group.id] || [];
+      if (group.min_selections > 0 && sel.length < group.min_selections) {
+        reply.messages = [`Por favor selecciona al menos ${group.min_selections} opción de *${group.name}*.`];
+        return replyNextModifierGroup(state, reply, currency, t, finish, true);
+      }
+      state.pendingModifierGroupIndex = gi + 1;
+      return replyNextModifierGroup(state, reply, currency, t, finish);
+    }
+
+    if (lower === 'mod_skip') {
+      if (group.min_selections > 0) {
+        reply.messages = [`La sección *${group.name}* es obligatoria. Por favor elige al menos una opción.`];
+        return replyNextModifierGroup(state, reply, currency, t, finish, true);
+      }
+      state.pendingModifierGroupIndex = gi + 1;
+      return replyNextModifierGroup(state, reply, currency, t, finish);
     }
   }
 

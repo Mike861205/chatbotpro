@@ -277,6 +277,30 @@ async function createTenantSchema(slug) {
     ALTER TABLE "${s}".orders ADD COLUMN IF NOT EXISTS service_branch_name TEXT;
     ALTER TABLE "${s}".pos_sessions ADD COLUMN IF NOT EXISTS branch_id INTEGER;
     ALTER TABLE "${s}".pos_sessions ADD COLUMN IF NOT EXISTS branch_name TEXT;
+    CREATE TABLE IF NOT EXISTS "${s}".product_variants (
+      id SERIAL PRIMARY KEY,
+      product_id INTEGER NOT NULL,
+      name TEXT NOT NULL,
+      price NUMERIC(12,2) NOT NULL DEFAULT 0,
+      sort INTEGER DEFAULT 0,
+      active INTEGER DEFAULT 1
+    );
+    CREATE TABLE IF NOT EXISTS "${s}".modifier_groups (
+      id SERIAL PRIMARY KEY,
+      product_id INTEGER NOT NULL,
+      name TEXT NOT NULL,
+      min_selections INTEGER DEFAULT 0,
+      max_selections INTEGER DEFAULT 1,
+      sort INTEGER DEFAULT 0
+    );
+    CREATE TABLE IF NOT EXISTS "${s}".modifier_options (
+      id SERIAL PRIMARY KEY,
+      group_id INTEGER NOT NULL,
+      name TEXT NOT NULL,
+      extra_price NUMERIC(12,2) DEFAULT 0,
+      sort INTEGER DEFAULT 0,
+      active INTEGER DEFAULT 1
+    );
   `);
 }
 

@@ -9,6 +9,7 @@ let SA_DEPLOY_POLL_TIMER = null;
 
 const $ = (s) => document.querySelector(s);
 let SA_CLOCK_TIMER = null;
+const SA_DEFAULT_LOGO = '/static/chatbotpro100.png?v=20260623';
 
 function toast(msg, isErr = false) {
   const t = $('#toast');
@@ -50,34 +51,32 @@ function normalizeLogoUrl(raw) {
 }
 
 function applySuperAdminLogo(rawUrl) {
-  const logoUrl = normalizeLogoUrl(rawUrl);
+  const logoUrl = normalizeLogoUrl(rawUrl) || SA_DEFAULT_LOGO;
   const logo = $('#saBrandLogo');
   const logoDot = $('#saBrandLogoDot');
   const preview = $('#saBrandLogoPreview');
   const previewIcon = $('#saBrandLogoPreviewIcon');
+  const previewDot = document.querySelector('.sa-logo-preview-dot');
+  const userLogo = $('#saUserBrandLogo');
+  const userLogoWrap = $('#saUserBrandLogoWrap');
 
   if (logo && logoDot) {
-    if (logoUrl) {
-      logo.src = logoUrl;
-      logo.hidden = false;
-      logoDot.classList.add('has-image');
-    } else {
-      logo.removeAttribute('src');
-      logo.hidden = true;
-      logoDot.classList.remove('has-image');
-    }
+    logo.src = logoUrl;
+    logo.hidden = false;
+    logoDot.classList.add('has-image');
   }
 
   if (preview && previewIcon) {
-    if (logoUrl) {
-      preview.src = logoUrl;
-      preview.hidden = false;
-      previewIcon.hidden = true;
-    } else {
-      preview.removeAttribute('src');
-      preview.hidden = true;
-      previewIcon.hidden = false;
-    }
+    preview.src = logoUrl;
+    preview.hidden = false;
+    previewIcon.hidden = true;
+    if (previewDot) previewDot.classList.add('has-image');
+  }
+
+  if (userLogo && userLogoWrap) {
+    userLogo.src = logoUrl;
+    userLogo.hidden = false;
+    userLogoWrap.classList.add('has-image');
   }
 }
 
@@ -91,6 +90,9 @@ function applySuperAdminLogoFromFile(file) {
   const logoDot = $('#saBrandLogoDot');
   const preview = $('#saBrandLogoPreview');
   const previewIcon = $('#saBrandLogoPreviewIcon');
+  const previewDot = document.querySelector('.sa-logo-preview-dot');
+  const userLogo = $('#saUserBrandLogo');
+  const userLogoWrap = $('#saUserBrandLogoWrap');
 
   if (logo && logoDot) {
     logo.src = objectUrl;
@@ -102,6 +104,13 @@ function applySuperAdminLogoFromFile(file) {
     preview.src = objectUrl;
     preview.hidden = false;
     previewIcon.hidden = true;
+    if (previewDot) previewDot.classList.add('has-image');
+  }
+
+  if (userLogo && userLogoWrap) {
+    userLogo.src = objectUrl;
+    userLogo.hidden = false;
+    userLogoWrap.classList.add('has-image');
   }
 }
 

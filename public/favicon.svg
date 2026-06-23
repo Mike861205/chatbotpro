@@ -1,10 +1,17 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
   <defs>
-    <clipPath id="logoCircle">
-      <circle cx="256" cy="256" r="246" />
-    </clipPath>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#ff9f5c"/>
+      <stop offset="50%" stop-color="#ff6b35"/>
+      <stop offset="100%" stop-color="#ef4f22"/>
+    </linearGradient>
+    <linearGradient id="shine" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#ffffff" stop-opacity="0.66"/>
+      <stop offset="100%" stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
   </defs>
-  <rect width="512" height="512" fill="none" />
-  <image href="/static/chatbotpro100.png" x="0" y="0" width="512" height="512" preserveAspectRatio="xMidYMid meet" clip-path="url(#logoCircle)" />
-  <circle cx="256" cy="256" r="246" fill="none" stroke="rgba(255,255,255,0.16)" stroke-width="2" />
+  <rect x="4" y="4" width="56" height="56" rx="16" fill="url(#bg)"/>
+  <rect x="8" y="8" width="48" height="22" rx="10" fill="url(#shine)"/>
+  <path d="M23 20h11.5a7.5 7.5 0 0 1 0 15H28v9h-5V20zm5 4.5v6h6.4a3 3 0 0 0 0-6H28z" fill="#fff"/>
+  <path d="M39 20h4.5a8.5 8.5 0 0 1 0 17H39v7h-5V20h5zm0 4.5v8h4.2a4 4 0 0 0 0-8H39z" fill="#ffe9d9"/>
 </svg>
