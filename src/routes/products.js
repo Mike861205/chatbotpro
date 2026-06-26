@@ -1,5 +1,10 @@
 const express = require('express');
+const fs = require('node:fs/promises');
+const OpenAI = require('openai');
 const { requireAuth, requireOwner } = require('../middleware/auth');
+const config = require('../config');
+const { getSuperAdminSetting } = require('../db');
+const { decrypt } = require('../utils/crypto');
 const { createImageUpload, deleteManagedUpload, optimizeUploadedImage, safeUnlink } = require('../utils/uploads');
 
 const router = express.Router();
@@ -11,6 +16,147 @@ const upload = createImageUpload({
   allowedMimePattern: /^image\/(png|jpe?g|webp|gif)$/,
   tempPrefix: 'prod',
 });
+
+const uploadAiMenu = createImageUpload({
+  scopeResolver: (req) => req.tenant.slug,
+  allowedMimePattern: /^image\/(png|jpe?g|webp|gif)$/,
+  tempPrefix: 'prod-ai',
+});
+
+const aiClientCache = new Map();
+
+function normalizeCategoryName(name) {
+  return String(name || '').trim().toLowerCase();
+}
+
+function normalizeLooseText(value) {
+  return String(value || '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function normalizeWordForMatch(word) {
+  const w = normalizeLooseText(word);
+  if (w.length <= 3) return w;
+  if (w.endsWith('es') && w.length > 5) return w.slice(0, -2);
+  if (w.endsWith('s') && w.length > 4) return w.slice(0, -1);
+  return w;
+}
+
+function categoryMatchKey(name) {
+  const tokens = normalizeLooseText(name)
+    .split(' ')
+    .map(normalizeWordForMatch)
+    .filter(Boolean)
+    .sort();
+  return tokens.join(' ');
+}
+
+function pickExistingCategory(categoryMap, rawName) {
+  const cleanName = String(rawName || '').trim();
+  if (!cleanName) return null;
+
+  const exact = categoryMap.get(categoryMatchKey(cleanName));
+  if (exact) return exact;
+
+  const loose = normalizeLooseText(cleanName).replace(/\s/g, '');
+  if (!loose) return null;
+  for (const cat of categoryMap.values()) {
+    const target = normalizeLooseText(cat.name).replace(/\s/g, '');
+    if (!target) continue;
+    if (target.includes(loose) || loose.includes(target)) return cat;
+  }
+  return null;
+}
+
+function detectVariantMeta(row) {
+  const rawName = String(row?.name || '').trim();
+  if (!rawName) return { baseName: '', variantName: '' };
+
+  const explicitBase = String(row?.variantGroup || '').trim();
+  const explicitVariant = String(row?.variantName || '').trim();
+  if (explicitBase && explicitVariant) {
+    return { baseName: explicitBase, variantName: explicitVariant };
+  }
+
+  const paren = rawName.match(/^(.+?)\s*\(([^)]+)\)\s*$/);
+  if (paren) {
+    return { baseName: paren[1].trim(), variantName: paren[2].trim() };
+  }
+
+  const suffix = rawName.match(/^(.+?)\s+(chica|mediana|grande|jumbo|familiar|personal|individual|doble|triple|litro|2 litros|500ml|1l|1 kg|1\/2 kg|medio kilo|kilo|combo [0-9]+)$/i);
+  if (suffix) {
+    return { baseName: suffix[1].trim(), variantName: suffix[2].trim() };
+  }
+
+  const hyphen = rawName.match(/^(.+?)\s*[-:]\s*(chica|mediana|grande|jumbo|familiar|personal|individual|doble|triple|litro|2 litros|500ml|1l|1 kg|1\/2 kg|medio kilo|kilo)$/i);
+  if (hyphen) {
+    return { baseName: hyphen[1].trim(), variantName: hyphen[2].trim() };
+  }
+
+  return { baseName: rawName, variantName: explicitVariant };
+}
+
+function buildVariantLabel(rowName, baseName, fallback) {
+  const fromRow = String(rowName || '').trim();
+  const fromBase = String(baseName || '').trim();
+  if (fromRow && fromBase) {
+    const rowNorm = normalizeLooseText(fromRow);
+    const baseNorm = normalizeLooseText(fromBase);
+    if (rowNorm.startsWith(baseNorm)) {
+      const rest = fromRow.slice(fromBase.length).replace(/^\s*[-:()\s]+/, '').trim();
+      if (rest) return rest;
+    }
+  }
+  return String(fallback || 'Presentacion').trim() || 'Presentacion';
+}
+
+function buildAiClient(apiKey, baseUrl) {
+  const cacheKey = `${apiKey}::${baseUrl || ''}`;
+  if (aiClientCache.has(cacheKey)) return aiClientCache.get(cacheKey);
+  const client = new OpenAI(baseUrl ? { apiKey, baseURL: baseUrl } : { apiKey });
+  aiClientCache.set(cacheKey, client);
+  return client;
+}
+
+function parseJsonFromModel(raw) {
+  const text = String(raw || '').trim();
+  if (!text) return null;
+  const cleanFence = text
+    .replace(/^```json\s*/i, '')
+    .replace(/^```\s*/i, '')
+    .replace(/\s*```$/i, '')
+    .trim();
+  try {
+    return JSON.parse(cleanFence);
+  } catch {}
+
+  const first = cleanFence.indexOf('{');
+  const last = cleanFence.lastIndexOf('}');
+  if (first >= 0 && last > first) {
+    try {
+      return JSON.parse(cleanFence.slice(first, last + 1));
+    } catch {}
+  }
+  return null;
+}
+
+async function getOpenAiRuntimeConfig() {
+  const [modelRaw, baseUrlRaw, keyEncRaw] = await Promise.all([
+    getSuperAdminSetting('openai_model', 'gpt-4o-mini'),
+    getSuperAdminSetting('openai_base_url', ''),
+    getSuperAdminSetting('openai_api_key_enc', ''),
+  ]);
+  const keyFromSuperAdmin = decrypt(keyEncRaw || '') || '';
+  const key = keyFromSuperAdmin || config.OPENAI_API_KEY || '';
+  const model = String(modelRaw || 'gpt-4o-mini').trim() || 'gpt-4o-mini';
+  const baseUrl = String(baseUrlRaw || '').trim();
+  return { key, model, baseUrl };
+}
 
 function normalizePublicMediaPath(raw) {
   const value = String(raw || '').trim();
@@ -78,6 +224,30 @@ async function getProductExtras(tdb, productIds = []) {
   return { variantsMap, groupsMap };
 }
 
+async function listSoldQtyByProduct(tdb) {
+  const rows = await tdb.all(
+    `SELECT product_id, SUM(qty)::int AS sold_qty
+     FROM (
+       SELECT
+         CASE
+           WHEN (it.item->>'productId') ~ '^[0-9]+$' THEN (it.item->>'productId')::int
+           WHEN (it.item->>'id') ~ '^[0-9]+$' THEN (it.item->>'id')::int
+           ELSE NULL
+         END AS product_id,
+         CASE
+           WHEN (it.item->>'qty') ~ '^[0-9]+$' THEN GREATEST((it.item->>'qty')::int, 1)
+           ELSE 1
+         END AS qty
+       FROM {s}.orders o
+       CROSS JOIN LATERAL jsonb_array_elements(COALESCE(o.items::jsonb, '[]'::jsonb)) AS it(item)
+       WHERE o.status <> 'cancelado' AND o.channel IN ('pos', 'chatbot')
+     ) sold
+     WHERE product_id IS NOT NULL
+     GROUP BY product_id`
+  );
+  return new Map(rows.map((row) => [Number(row.product_id), Number(row.sold_qty || 0)]));
+}
+
 // ---- Productos ----
 router.get('/', async (req, res, next) => {
   try {
@@ -89,10 +259,12 @@ router.get('/', async (req, res, next) => {
        ORDER BY p.created_at DESC`
     );
     const ids = rows.map((r) => r.id);
+    const soldQtyByProduct = await listSoldQtyByProduct(req.tdb);
     const { variantsMap, groupsMap } = await getProductExtras(req.tdb, ids);
     const result = rows.map((p) => ({
       ...p,
       image: normalizePublicMediaPath(p.image),
+      soldQty: Number(soldQtyByProduct.get(Number(p.id)) || 0),
       variants: (variantsMap.get(p.id) || []).map((v) => ({ ...v, price: Number(v.price) })),
       modifierGroups: (groupsMap.get(p.id) || []).map((g) => ({
         ...g,
@@ -103,6 +275,238 @@ router.get('/', async (req, res, next) => {
     }));
     res.json(result);
   } catch (e) { next(e); }
+});
+
+router.post('/ai/suggest', uploadAiMenu.single('menuImage'), async (req, res, next) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ error: 'Sube una imagen del menu para analizar.' });
+    }
+
+    const aiCfg = await getOpenAiRuntimeConfig();
+    if (!aiCfg.key) {
+      return res.status(400).json({
+        error: 'No hay API key de OpenAI configurada. Actívala en SuperAdmin o en OPENAI_API_KEY.',
+      });
+    }
+
+    const categories = await req.tdb.all('SELECT id, name FROM {s}.categories ORDER BY sort, name');
+    const categoryNames = categories.map((c) => c.name).filter(Boolean);
+
+    const content = [
+      {
+        type: 'text',
+        text: [
+          'Analiza este menu de restaurante y regresa SOLO JSON valido.',
+          'Genera productos listos para cargar en el sistema POS/chatbot.',
+          'Formato JSON requerido:',
+          '{"products":[{"name":"string","description":"string","price":123.45,"categoryName":"string","variantGroup":"string opcional","variantName":"string opcional"}],"notes":["string"]}',
+          'Reglas:',
+          '- Incluye solo productos vendibles, no encabezados ni subtotales.',
+          '- price debe ser numero mayor o igual a 0.',
+          '- categoryName debe ser breve (ej. Hamburguesas, Bebidas).',
+          '- Agrega description breve del platillo en cada producto (ingredientes o preparacion).',
+          '- Si un platillo tiene tamanos/presentaciones, usa variantGroup con el nombre base y variantName con el tamano (ej. Chica, Mediana).',
+          '- Si falta precio, usa 0 y agrega una nota.',
+          '- Maximo 60 productos.',
+          `Categorias existentes del tenant: ${categoryNames.join(', ') || 'Ninguna'}`,
+        ].join('\n'),
+      },
+    ];
+
+    if (req.file) {
+      const bytes = await fs.readFile(req.file.path);
+      const base64 = bytes.toString('base64');
+      const mime = req.file.mimetype || 'image/jpeg';
+      content.push({
+        type: 'image_url',
+        image_url: { url: `data:${mime};base64,${base64}` },
+      });
+    }
+
+    const client = buildAiClient(aiCfg.key, aiCfg.baseUrl);
+    const completion = await client.chat.completions.create({
+      model: aiCfg.model,
+      temperature: 0.15,
+      messages: [
+        {
+          role: 'system',
+          content:
+            'Eres un asistente experto en estructurar menus de comida para sistemas de catalogo. Responde estrictamente en JSON.',
+        },
+        { role: 'user', content },
+      ],
+    });
+
+    const raw = completion?.choices?.[0]?.message?.content || '';
+    const parsed = parseJsonFromModel(raw);
+    if (!parsed || !Array.isArray(parsed.products)) {
+      return res.status(422).json({ error: 'No se pudo interpretar una lista de productos valida desde IA.' });
+    }
+
+    const products = parsed.products
+      .slice(0, 60)
+      .map((row) => ({
+        name: String(row?.name || '').trim(),
+        description: String(row?.description || '').trim(),
+        price: Number(row?.price),
+        categoryName: String(row?.categoryName || '').trim(),
+        variantGroup: String(row?.variantGroup || '').trim(),
+        variantName: String(row?.variantName || '').trim(),
+      }))
+      .filter((row) => row.name)
+      .map((row) => ({
+        ...row,
+        price: Number.isFinite(row.price) && row.price >= 0 ? Number(row.price.toFixed(2)) : 0,
+      }));
+
+    const normalizedExisting = new Set(categoryNames.map(normalizeCategoryName).filter(Boolean));
+    const suggestedCategories = [...new Set(products.map((p) => p.categoryName).filter(Boolean))];
+    const variantGroupsDetected = [...new Set(products.map((p) => String(p.variantGroup || '').trim()).filter(Boolean))];
+
+    res.json({
+      products,
+      notes: Array.isArray(parsed.notes) ? parsed.notes.map((n) => String(n || '').trim()).filter(Boolean) : [],
+      categoryHints: suggestedCategories.map((name) => ({
+        name,
+        exists: normalizedExisting.has(normalizeCategoryName(name)),
+      })),
+      variantGroupsDetected,
+      model: aiCfg.model,
+    });
+  } catch (e) {
+    next(e);
+  } finally {
+    if (req.file?.path) {
+      try { await safeUnlink(req.file.path); } catch {}
+    }
+  }
+});
+
+router.post('/ai/import', async (req, res, next) => {
+  try {
+    const body = req.body || {};
+    const inputProducts = Array.isArray(body.products) ? body.products : [];
+    if (!inputProducts.length) {
+      return res.status(400).json({ error: 'No hay productos para importar.' });
+    }
+
+    const createMissingCategories = body.createMissingCategories !== false;
+    const defaultActive = body.defaultActive === false ? 0 : 1;
+
+    const categories = await req.tdb.all('SELECT id, name FROM {s}.categories ORDER BY sort, name');
+    const categoryMap = new Map(
+      categories.map((cat) => [categoryMatchKey(cat.name), { id: cat.id, name: cat.name }]).filter((entry) => entry[0])
+    );
+
+    const createdProducts = [];
+    const skipped = [];
+    let createdCategories = 0;
+
+    const normalizedRows = inputProducts.slice(0, 200).map((raw) => {
+      const name = String(raw?.name || '').trim();
+      const description = String(raw?.description || '').trim();
+      const priceVal = Number(raw?.price);
+      const price = Number.isFinite(priceVal) && priceVal >= 0 ? Number(priceVal.toFixed(2)) : 0;
+      const categoryName = String(raw?.categoryName || '').trim();
+      const detected = detectVariantMeta(raw);
+      return {
+        raw,
+        name,
+        description,
+        price,
+        categoryName,
+        baseName: detected.baseName || name,
+        variantName: detected.variantName || '',
+      };
+    });
+
+    const grouped = new Map();
+    for (const row of normalizedRows) {
+      if (!row.name) {
+        skipped.push({ reason: 'name_missing', item: row.raw });
+        continue;
+      }
+      const key = `${categoryMatchKey(row.categoryName)}::${normalizeLooseText(row.baseName)}`;
+      if (!grouped.has(key)) grouped.set(key, []);
+      grouped.get(key).push(row);
+    }
+
+    for (const rows of grouped.values()) {
+      if (!rows.length) continue;
+      const sample = rows[0];
+      const categoryCandidate = sample.categoryName;
+
+      let categoryId = null;
+      if (categoryCandidate) {
+        const existingCat = pickExistingCategory(categoryMap, categoryCandidate);
+        if (existingCat) {
+          categoryId = existingCat.id;
+        } else if (createMissingCategories) {
+          const createdCat = await req.tdb.get(
+            'INSERT INTO {s}.categories (name, sort) VALUES ($1, 0) RETURNING id, name',
+            [categoryCandidate]
+          );
+          categoryId = createdCat.id;
+          categoryMap.set(categoryMatchKey(createdCat.name), createdCat);
+          createdCategories += 1;
+        }
+      }
+
+      const hasVariantSignal = rows.some((r) => r.variantName) || rows.length > 1;
+      if (!hasVariantSignal) {
+        const only = rows[0];
+        const insertedSingle = await req.tdb.get(
+          'INSERT INTO {s}.products (name, description, price, category_id, image, active) VALUES ($1,$2,$3,$4,$5,$6) RETURNING id',
+          [only.name, only.description, only.price, categoryId, null, defaultActive]
+        );
+        createdProducts.push({ id: insertedSingle.id, name: only.name, price: only.price, categoryId, variants: 0 });
+        continue;
+      }
+
+      const baseName = sample.baseName || sample.name;
+      const mergedDescription = rows
+        .map((r) => String(r.description || '').trim())
+        .sort((a, b) => b.length - a.length)[0] || '';
+      const basePrice = Math.min(...rows.map((r) => Number(r.price) || 0));
+
+      const inserted = await req.tdb.get(
+        'INSERT INTO {s}.products (name, description, price, category_id, image, active) VALUES ($1,$2,$3,$4,$5,$6) RETURNING id',
+        [baseName, mergedDescription, basePrice, categoryId, null, defaultActive]
+      );
+
+      const usedLabels = new Set();
+      let variantSort = 0;
+      for (const row of rows) {
+        let label = row.variantName || buildVariantLabel(row.name, baseName, 'Presentacion');
+        if (!label) label = `Presentacion ${variantSort + 1}`;
+        let uniqueLabel = label;
+        let seq = 2;
+        while (usedLabels.has(normalizeLooseText(uniqueLabel))) {
+          uniqueLabel = `${label} ${seq++}`;
+        }
+        usedLabels.add(normalizeLooseText(uniqueLabel));
+
+        await req.tdb.run(
+          'INSERT INTO {s}.product_variants (product_id, name, price, sort, active) VALUES ($1,$2,$3,$4,1)',
+          [inserted.id, uniqueLabel, row.price, variantSort++]
+        );
+      }
+
+      createdProducts.push({ id: inserted.id, name: baseName, price: basePrice, categoryId, variants: rows.length });
+    }
+
+    res.json({
+      ok: true,
+      created: createdProducts.length,
+      createdCategories,
+      skippedCount: skipped.length,
+      skipped,
+      products: createdProducts,
+    });
+  } catch (e) {
+    next(e);
+  }
 });
 
 // ---- Variantes de precio ----

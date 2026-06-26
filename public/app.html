@@ -62,8 +62,17 @@
             <div class="sub" id="viewSub">Resumen de tu negocio</div>
           </div>
         </div>
-        <a class="btn btn-primary" id="openChatLink" href="#" target="_blank"><i class="ph-bold ph-chat-circle-dots"></i> Ver mi chatbot</a>
-        <span class="cashier-branch-banner" id="cashierBranchBanner"><i class="ph-bold ph-storefront"></i> <span id="cashierBranchLabel">—</span></span>
+        <div class="topbar-actions">
+          <a class="btn btn-primary" id="openChatLink" href="#" target="_blank"><i class="ph-bold ph-chat-circle-dots"></i> Ver mi chatbot</a>
+          <div class="pos-sort-wrap" id="posSortWrap" hidden>
+            <label for="posSortSelect"><i class="ph-bold ph-sort-ascending"></i> Orden catálogo</label>
+            <select id="posSortSelect">
+              <option value="top_sold">Más vendidos</option>
+              <option value="alphabetical">Abecedario (A-Z)</option>
+            </select>
+          </div>
+          <span class="cashier-branch-banner" id="cashierBranchBanner"><i class="ph-bold ph-storefront"></i> <span id="cashierBranchLabel">—</span></span>
+        </div>
       </div>
 
       <!-- ──────── Dashboard ──────── -->
@@ -208,6 +217,7 @@
               <button type="button" class="btn btn-ghost" data-prod-view="compact"><i class="ph-bold ph-grid-four"></i> Íconos</button>
             </div>
             <button class="btn btn-ghost" id="addCatBtn"><i class="ph-bold ph-folder-plus"></i> Categoría</button>
+            <button class="btn btn-ghost" id="aiImportBtn"><i class="ph-bold ph-magic-wand"></i> Cargar por IA</button>
             <button class="btn btn-primary" id="addProdBtn"><i class="ph-bold ph-plus-circle"></i> Nuevo producto</button>
           </div>
         </div>
@@ -745,6 +755,62 @@
           <button type="submit" class="btn btn-primary" id="prodSave"><i class="ph-bold ph-check"></i> Guardar producto</button>
         </div>
       </form>
+    </div>
+  </div>
+
+  <!-- ════════ Modal importación IA de menú ════════ -->
+  <div class="modal-bg" id="aiProductModal">
+    <div class="modal" style="max-width:860px">
+      <h3><i class="ph-bold ph-magic-wand"></i> Cargar productos con IA</h3>
+      <div class="hint" style="margin-bottom:12px">Sube una foto o captura de tu menú desde cualquier dispositivo y la IA convertirá ese menú en productos editables para importar en lote.</div>
+      <form id="aiProductForm">
+        <div class="ai-upload-shell">
+          <div class="ai-upload-card" id="aiMenuUploadArea" role="button" tabindex="0" aria-label="Seleccionar imagen del menú">
+            <div class="ai-upload-hero"><i class="ph-bold ph-image-square"></i></div>
+            <div class="ai-upload-copy">
+              <b>Selecciona el menú desde tu dispositivo</b>
+              <span>Compatible con fotos, capturas y archivos de imagen. Tamaño máximo 8 MB.</span>
+            </div>
+            <button type="button" class="btn btn-ghost" id="aiMenuPickBtn"><i class="ph-bold ph-upload-simple"></i> Elegir imagen</button>
+            <input type="file" id="aiMenuImage" accept="image/*" />
+          </div>
+
+          <div class="ai-upload-tips">
+            <span><i class="ph-bold ph-check-circle"></i> Asegúrate que el texto se vea claro</span>
+            <span><i class="ph-bold ph-check-circle"></i> Incluye nombre y precio en la foto</span>
+            <span><i class="ph-bold ph-check-circle"></i> Puedes editar resultados antes de importar</span>
+          </div>
+
+          <div class="hint" id="aiMenuImageHint" style="margin-top:2px">Aún no has seleccionado imagen.</div>
+          <div id="aiMenuImagePreview" class="ai-image-preview" hidden>
+            <img id="aiMenuImagePreviewImg" alt="Vista previa del menú" />
+          </div>
+        </div>
+        <div class="modal-actions" style="margin-top:8px">
+          <button type="submit" class="btn btn-primary" id="aiAnalyzeBtn"><i class="ph-bold ph-brain"></i> Analizar menú</button>
+        </div>
+      </form>
+      <div id="aiProductResult" hidden>
+        <div class="hint" id="aiProductNotes" style="margin:8px 0 10px"></div>
+        <div class="table-wrap ai-product-table-wrap">
+          <table class="ai-product-table">
+            <thead>
+              <tr>
+                <th>Producto</th>
+                <th>Descripción</th>
+                <th>Precio</th>
+                <th>Categoría</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody id="aiProductRows"></tbody>
+          </table>
+        </div>
+      </div>
+      <div class="modal-actions">
+        <button type="button" class="btn btn-ghost" id="aiProductCancel">Cerrar</button>
+        <button type="button" class="btn btn-primary" id="aiProductImport" disabled><i class="ph-bold ph-download-simple"></i> Importar productos</button>
+      </div>
     </div>
   </div>
 

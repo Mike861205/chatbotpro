@@ -375,6 +375,31 @@ async function listRecentMovements(t, sessionId) {
   );
 }
 
+async function listSoldQtyByProduct(t) {
+  const rows = await t.all(
+    `SELECT product_id, SUM(qty)::int AS sold_qty
+     FROM (
+       SELECT
+         CASE
+           WHEN (it.item->>'productId') ~ '^[0-9]+$' THEN (it.item->>'productId')::int
+           WHEN (it.item->>'id') ~ '^[0-9]+$' THEN (it.item->>'id')::int
+           ELSE NULL
+         END AS product_id,
+         CASE
+           WHEN (it.item->>'qty') ~ '^[0-9]+$' THEN GREATEST((it.item->>'qty')::int, 1)
+           ELSE 1
+         END AS qty
+       FROM {s}.orders o
+       CROSS JOIN LATERAL jsonb_array_elements(COALESCE(o.items::jsonb, '[]'::jsonb)) AS it(item)
+       WHERE o.status <> 'cancelado' AND o.channel IN ('pos', 'chatbot')
+     ) sold
+     WHERE product_id IS NOT NULL
+     GROUP BY product_id`,
+    []
+  );
+  return new Map(rows.map((row) => [Number(row.product_id), Number(row.sold_qty || 0)]));
+}
+
 function normalizePayment(method, paymentInput, total, cashReceivedInput) {
   const breakdown = {
     cash: 0,
@@ -442,9 +467,11 @@ router.get('/overview', async (req, res, next) => {
        ORDER BY COALESCE(c.sort, 0), c.name NULLS FIRST, p.name`
     );
     const { variantsMap, groupsMap } = await getProductExtrasMaps(req.tdb, products.map((p) => p.id));
+    const soldQtyByProduct = await listSoldQtyByProduct(req.tdb);
     const productsWithExtras = products.map((p) => ({
       ...p,
       image: normalizePublicMediaPath(p.image),
+      soldQty: Number(soldQtyByProduct.get(Number(p.id)) || 0),
       variants: variantsMap.get(p.id) || [],
       modifierGroups: groupsMap.get(p.id) || [],
     }));

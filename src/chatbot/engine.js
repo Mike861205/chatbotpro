@@ -9,6 +9,86 @@ const { encrypt, decrypt, lookupHash } = require('../utils/crypto');
 let aiConfigCache = { expiresAt: 0, value: null };
 const aiClientCache = new Map();
 const reverseGeoCache = new Map();
+let aiKeyDecryptWarningShown = false;
+
+const SPANISH_STOPWORDS = new Set([
+  'de', 'la', 'el', 'los', 'las', 'un', 'una', 'unos', 'unas', 'por', 'para', 'con', 'sin', 'que',
+  'quiero', 'quisiera', 'puedo', 'puedes', 'tienen', 'tienes', 'hay', 'me', 'mi', 'del', 'al',
+  'porfavor', 'favor', 'hola', 'buenas', 'gracias', 'menu', 'menú', 'ver', 'pedir', 'pedido',
+]);
+
+function normalizeSearchText(raw) {
+  return String(raw || '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function keywordTokens(raw) {
+  return normalizeSearchText(raw)
+    .split(' ')
+    .map((t) => t.trim())
+    .filter((t) => t.length >= 3 && !SPANISH_STOPWORDS.has(t));
+}
+
+function findProductByNaturalInput(products, userInput) {
+  const inputNorm = normalizeSearchText(userInput);
+  if (!inputNorm || inputNorm.length < 3) return null;
+
+  // Fast path: full product name appears in user text.
+  const direct = products.find((p) => {
+    const nameNorm = normalizeSearchText(p.name);
+    return nameNorm && inputNorm.includes(nameNorm);
+  });
+  if (direct) return direct;
+
+  const inputTokens = keywordTokens(userInput);
+  if (!inputTokens.length) return null;
+
+  let best = null;
+  let bestScore = 0;
+  for (const p of products) {
+    const haystack = `${normalizeSearchText(p.name)} ${normalizeSearchText(p.description)} ${normalizeSearchText(p.category)}`;
+    if (!haystack.trim()) continue;
+
+    let score = 0;
+    for (const token of inputTokens) {
+      if (haystack.includes(token)) score += 1;
+    }
+
+    if (score >= 2 && score > bestScore) {
+      bestScore = score;
+      best = p;
+    }
+  }
+
+  return best;
+}
+
+function pushAiHistory(state, role, content) {
+  if (!state || !role || !content) return;
+  if (!Array.isArray(state.aiHistory)) state.aiHistory = [];
+  state.aiHistory.push({ role, content: String(content).slice(0, 500) });
+  if (state.aiHistory.length > 8) {
+    state.aiHistory = state.aiHistory.slice(-8);
+  }
+}
+
+function buildAiMenuText(products, maxChars = 4200) {
+  if (!Array.isArray(products) || !products.length) return 'Sin productos cargados.';
+  const lines = [];
+  let used = 0;
+  for (const p of products) {
+    const line = `- ${p.name} (${p.category || 'General'}): ${money(p.price, 'MXN')}. ${String(p.description || '').trim()}`;
+    if (used + line.length > maxChars) break;
+    lines.push(line);
+    used += line.length + 1;
+  }
+  return lines.join('\n') || 'Sin productos cargados.';
+}
 
 function normalizeDeliveryToken(raw) {
   return String(raw || '')
@@ -232,6 +312,10 @@ async function getAiRuntimeConfig() {
   ]);
 
   const keyFromSuperAdmin = decrypt(keyEncRaw || '') || '';
+  if (!keyFromSuperAdmin && keyEncRaw && !aiKeyDecryptWarningShown) {
+    aiKeyDecryptWarningShown = true;
+    console.warn('[openai] Existe una API key cifrada en superadmin_settings, pero no se pudo descifrar. Verifica DATA_ENCRYPTION_KEY del entorno actual.');
+  }
   const key = keyFromSuperAdmin || config.OPENAI_API_KEY || '';
   const model = String(modelRaw || 'gpt-4o-mini').trim() || 'gpt-4o-mini';
   const baseUrl = String(baseUrlRaw || '').trim();
@@ -742,25 +826,33 @@ function buildOrderText(businessName, cart, customer, delivery, currency) {
   return lines.join('\n');
 }
 
-async function aiFallback(t, businessName, userText) {
+async function aiFallback(t, businessName, userText, state) {
   const aiCfg = await getAiRuntimeConfig();
   if (!aiCfg.enabled || !aiCfg.key) return null;
   try {
     const openaiClient = getOpenAiClient(aiCfg.key, aiCfg.baseUrl);
     const products = await activeProducts(t);
-    const menuText = products.map((p) => `- ${p.name} (${p.category || 'General'}): $${p.price}. ${p.description}`).join('\n');
+    const menuText = buildAiMenuText(products);
+    const history = Array.isArray(state?.aiHistory) ? state.aiHistory.slice(-6) : [];
     const completion = await openaiClient.chat.completions.create({
       model: aiCfg.model || 'gpt-4o-mini',
-      max_tokens: 200,
+      temperature: 0.2,
+      max_tokens: 280,
       messages: [
         {
           role: 'system',
-          content: `Eres el asistente de pedidos del restaurante "${businessName}". Responde en español, breve y amable. Solo hablas del menú y pedidos. Menú:\n${menuText}\nSi el cliente quiere ordenar, sugiérele tocar el botón "Ver menú".`,
+          content: `Eres el asistente de pedidos del restaurante "${businessName}".\n` +
+            'Responde SIEMPRE en español claro, breve y coherente con el mensaje del cliente.\n' +
+            'No inventes productos ni precios. Si no estás seguro, dilo y sugiere tocar "Ver menú".\n' +
+            'Si el cliente quiere comprar, guía a acciones concretas con frases cortas.\n' +
+            'No expliques políticas internas ni menciones que eres una IA.\n\n' +
+            `Menú disponible:\n${menuText}`,
         },
+        ...history,
         { role: 'user', content: userText },
       ],
     });
-    return completion.choices[0]?.message?.content || null;
+    return String(completion.choices[0]?.message?.content || '').trim() || null;
   } catch (e) {
     console.error('[openai]', e.message);
     return null;
@@ -820,7 +912,8 @@ async function handleMessage(t, slug, sessionId, rawInput) {
     })
     .filter(Boolean);
 
-  let state = (await getState(t, sessionId)) || { step: 'start', cart: [], customer: {}, currency };
+  let state = (await getState(t, sessionId)) || { step: 'start', cart: [], customer: {}, currency, aiHistory: [] };
+  if (!Array.isArray(state.aiHistory)) state.aiHistory = [];
   state.currency = currency;
 
   const reply = { messages: [], options: [], products: null, cart: null, order: null };
@@ -941,6 +1034,7 @@ async function handleMessage(t, slug, sessionId, rawInput) {
   if (!input || lower === 'start' || lower === 'hola' || lower === 'inicio') {
     state.step = 'start';
     state.returningProfile = null;
+    state.aiHistory = [];
     resetUpsellProgress();
     reply.messages = [await getSetting(t, 'welcome_message', `¡Hola! Bienvenido a ${businessName} 👋`)];
     reply.options = mainOptions(state.cart, chatbotInfoOptions);
@@ -2025,7 +2119,7 @@ async function handleMessage(t, slug, sessionId, rawInput) {
 
   // Texto libre: busca producto por nombre
   const products = await activeProducts(t);
-  const match = products.find((p) => p.name.toLowerCase().includes(lower) && lower.length >= 3);
+  const match = findProductByNaturalInput(products, input);
   if (match) {
     const existing = state.cart.find((it) => it.id === match.id);
     if (existing) existing.qty += 1;
@@ -2040,7 +2134,9 @@ async function handleMessage(t, slug, sessionId, rawInput) {
   }
 
   // IA opcional para preguntas libres
-  const ai = await aiFallback(t, businessName, input);
+  const ai = await aiFallback(t, businessName, input, state);
+  pushAiHistory(state, 'user', input);
+  if (ai) pushAiHistory(state, 'assistant', ai);
   reply.messages = [ai || 'No estoy seguro de haber entendido 🤔 ¿Te ayudo con alguna de estas opciones?'];
   reply.options = mainOptions(state.cart, chatbotInfoOptions);
   return finish();

@@ -96,8 +96,23 @@
       100% { transform: scale(1); }
     }
     .cart-bar button:active { transform: scale(0.95); }
+    .chat-stage {
+      position: relative;
+      flex: 1;
+      min-height: 0;
+    }
     /* ── Messages ── */
-    .messages { flex: 1; overflow-y: auto; padding: 20px 16px 14px; display: flex; flex-direction: column; gap: 10px; scroll-behavior: smooth; position: relative; z-index: 1; }
+    .messages {
+      height: 100%;
+      overflow-y: auto;
+      padding: 20px 16px 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      scroll-behavior: smooth;
+      position: relative;
+      z-index: 1;
+    }
     .floating-bg {
       position: absolute;
       inset: 0;
@@ -349,7 +364,7 @@
       <span class="ci"><i class="ph-fill ph-shopping-cart"></i><span id="cartInfo"></span></span>
       <button id="cartCheckout">Sería todo, gracias. <i class="ph-bold ph-arrow-right"></i></button>
     </div>
-    <div class="messages" id="messages">
+    <div class="chat-stage">
       <div class="floating-bg">
         <div class="floating-icon">🍕</div>
         <div class="floating-icon">💵</div>
@@ -360,6 +375,7 @@
         <div class="floating-icon">🥤</div>
         <div class="floating-icon">🍟</div>
       </div>
+      <div class="messages" id="messages"></div>
     </div>
     <div class="input-bar">
       <input type="text" id="input" placeholder="Escribe un mensaje…" maxlength="500" autocomplete="off" />

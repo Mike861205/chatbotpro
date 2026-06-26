@@ -270,6 +270,7 @@ router.get('/integrations', requireSuperAdmin, async (req, res, next) => {
     const model = await getSuperAdminSetting('openai_model', 'gpt-4o-mini');
     const baseUrl = await getSuperAdminSetting('openai_base_url', '');
     const enc = await getSuperAdminSetting('openai_api_key_enc', '');
+    const decryptedKey = decrypt(enc || '');
     const webhookUrl = await getSuperAdminSetting('chatbot_webhook_url', '');
     const superadminLogoUrl = await getSuperAdminSetting('superadmin_logo_url', '');
     res.json({
@@ -278,8 +279,10 @@ router.get('/integrations', requireSuperAdmin, async (req, res, next) => {
       openaiBaseUrl: baseUrl,
       webhookUrl,
       superadminLogoUrl,
-      hasOpenAiKey: Boolean(enc && decrypt(enc)),
-      openAiKeyMask: enc && decrypt(enc) ? '••••••••••••••••' : '',
+      hasEncryptedOpenAiKey: Boolean(enc),
+      openAiKeyReadable: Boolean(decryptedKey),
+      hasOpenAiKey: Boolean(decryptedKey),
+      openAiKeyMask: decryptedKey ? '••••••••••••••••' : '',
     });
   } catch (e) {
     next(e);

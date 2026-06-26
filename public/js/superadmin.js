@@ -487,13 +487,19 @@ async function loadIntegrations() {
   $('#saOpenAiBaseUrl').value = cfg.openaiBaseUrl || '';
   $('#saWebhookUrl').value = cfg.webhookUrl || '';
   $('#saOpenAiKey').value = '';
-  $('#saOpenAiKey').placeholder = cfg.hasOpenAiKey
+  const hasStoredKey = Boolean(cfg.hasEncryptedOpenAiKey || cfg.hasOpenAiKey);
+  const keyReadable = cfg.openAiKeyReadable !== false;
+  $('#saOpenAiKey').placeholder = hasStoredKey
     ? 'API key guardada (oculta por seguridad). Escribe una nueva solo si deseas reemplazarla.'
     : 'sk-... (deja vacío para no cambiar)';
   applySuperAdminLogo(cfg.superadminLogoUrl || '');
-  $('#saIntegrationHint').textContent = cfg.hasOpenAiKey
-    ? 'Hay una API key guardada y cifrada. El campo se muestra vacío por seguridad.'
-    : 'Aún no hay API key guardada.';
+  if (hasStoredKey && !keyReadable) {
+    $('#saIntegrationHint').textContent = 'Hay una API key cifrada en la base, pero no se puede leer con la llave actual (DATA_ENCRYPTION_KEY). Usa la misma llave del entorno original o captura de nuevo la API key y guarda.';
+  } else if (hasStoredKey) {
+    $('#saIntegrationHint').textContent = 'Hay una API key guardada y cifrada. El campo se muestra vacío por seguridad.';
+  } else {
+    $('#saIntegrationHint').textContent = 'Aún no hay API key guardada.';
+  }
 }
 
 async function saveIntegrations(e) {

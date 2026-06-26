@@ -20,6 +20,7 @@ let LAST_ORDERS = [];
 let POS_OVERVIEW = null;
 let POS_CART = [];
 let POS_CATEGORY_FILTER = 'all';
+let POS_PRODUCT_SORT = 'top_sold';
 let POS_PAYMENT_METHOD = 'cash';
 let POS_PAYMENT_FORM = { cashReceived: '', cash: '', card: '', transfer: '', notes: '' };
 let LAST_POS_SALE = null;
@@ -90,6 +91,51 @@ function setAuthScope(scope) {
 
 function isCashierUser() {
   return ME?.role === 'cashier';
+}
+
+function normalizePosSortMode(mode) {
+  const value = String(mode || '').trim();
+  return value === 'alphabetical' || value === 'top_sold' ? value : 'top_sold';
+}
+
+function posSortStorageKey() {
+  return `chatbotpro:pos:sort:${ME?.tenant?.slug || 'default'}`;
+}
+
+function readStoredPosSortMode() {
+  try {
+    return normalizePosSortMode(localStorage.getItem(posSortStorageKey()));
+  } catch {
+    return 'top_sold';
+  }
+}
+
+function saveStoredPosSortMode(mode) {
+  try {
+    localStorage.setItem(posSortStorageKey(), normalizePosSortMode(mode));
+  } catch {}
+}
+
+function syncPosSortControlVisibility() {
+  const wrap = $('#posSortWrap');
+  const select = $('#posSortSelect');
+  if (!wrap || !select) return;
+  const show = CURRENT_VIEW === 'pos' || CURRENT_VIEW === 'productos';
+  wrap.hidden = !show;
+  wrap.style.display = show ? 'inline-flex' : 'none';
+  select.value = normalizePosSortMode(POS_PRODUCT_SORT);
+}
+
+async function persistTenantPosSortMode(mode) {
+  if (!ME || ME.role !== 'owner') return;
+  try {
+    await api('/api/settings', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pos_catalog_sort_mode: normalizePosSortMode(mode) }),
+    });
+    if (SETTINGS) SETTINGS.pos_catalog_sort_mode = normalizePosSortMode(mode);
+  } catch {}
 }
 
 function toast(msg, isErr = false) {
@@ -387,11 +433,13 @@ function applyUserScopeUI() {
     $('#viewSub').textContent = ME?.branchName ? `Sucursal ${ME.branchName}` : 'Caja operativa';
     $('#brandName').textContent = ME?.branchName || ME?.tenant?.businessName || 'Caja';
   }
+  syncPosSortControlVisibility();
 }
 
 async function navigate(view) {
   const nextView = normalizeView(view);
   CURRENT_VIEW = nextView;
+  document.body.setAttribute('data-current-view', nextView);
 
   document.querySelectorAll('.sidebar nav a').forEach((a) => a.classList.toggle('active', a.dataset.view === nextView));
   document.querySelectorAll('.section').forEach((s) => {
@@ -411,6 +459,7 @@ async function navigate(view) {
   $('#viewSub').textContent = sub;
   resetMainScroll();
   closeSidebar();
+  syncPosSortControlVisibility();
 
   const loader = VIEW_LOADERS[nextView];
   if (!loader) return;
@@ -450,6 +499,14 @@ $('#logoutBtn').addEventListener('click', async () => {
   await api('/api/auth/logout', { method: 'POST' });
   setAuthScope('');
   location.href = '/login';
+});
+
+$('#posSortSelect')?.addEventListener('change', async (e) => {
+  POS_PRODUCT_SORT = normalizePosSortMode(e.target.value);
+  saveStoredPosSortMode(POS_PRODUCT_SORT);
+  if (CURRENT_VIEW === 'pos') renderPosCatalog();
+  if (CURRENT_VIEW === 'productos') renderProductsGrid();
+  await persistTenantPosSortMode(POS_PRODUCT_SORT);
 });
 
 /* ===== Dashboard ===== */
@@ -1116,8 +1173,22 @@ async function submitPosCancelSale() {
 
 function getVisiblePosProducts() {
   const products = POS_OVERVIEW?.products || [];
-  if (POS_CATEGORY_FILTER === 'all') return products;
-  return products.filter((product) => String(product.category_id || 'none') === POS_CATEGORY_FILTER);
+  const filtered = POS_CATEGORY_FILTER === 'all'
+    ? products
+    : products.filter((product) => String(product.category_id || 'none') === POS_CATEGORY_FILTER);
+
+  const sorted = [...filtered];
+  if (normalizePosSortMode(POS_PRODUCT_SORT) === 'alphabetical') {
+    sorted.sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''), 'es', { sensitivity: 'base' }));
+    return sorted;
+  }
+
+  sorted.sort((a, b) => {
+    const soldDiff = Number(b.soldQty || 0) - Number(a.soldQty || 0);
+    if (soldDiff !== 0) return soldDiff;
+    return String(a.name || '').localeCompare(String(b.name || ''), 'es', { sensitivity: 'base' });
+  });
+  return sorted;
 }
 
 function syncPosCartFromCatalog() {
@@ -1544,6 +1615,13 @@ function printPosCloseReport(closeResult) {
 
 async function loadPos() {
   POS_OVERVIEW = await api('/api/pos/overview');
+  if (!POS_PRODUCT_SORT || POS_PRODUCT_SORT === 'top_sold') {
+    const tenantMode = normalizePosSortMode(SETTINGS?.pos_catalog_sort_mode || '');
+    const localMode = readStoredPosSortMode();
+    POS_PRODUCT_SORT = tenantMode || localMode || 'top_sold';
+  }
+  const select = $('#posSortSelect');
+  if (select) select.value = normalizePosSortMode(POS_PRODUCT_SORT);
   syncPosCartFromCatalog();
   setPosPaymentDefaults();
   renderPos();
@@ -2702,6 +2780,7 @@ let PRODUCTS_CACHE = [];
 let PRODUCT_CAT_FILTER = 'all';
 let PRODUCT_VIEW_MODE = 'card';
 let PRODUCT_VIEW_SWITCH_BOUND = false;
+let AI_PRODUCTS_DRAFT = [];
 
 const PRODUCT_VIEW_MODES = new Set(['card', 'detail', 'compact']);
 
@@ -2805,12 +2884,31 @@ function renderCategoryChips() {
 function renderProductsGrid() {
   const grid = $('#prodGrid');
   if (!grid) return;
-  const visible = PRODUCT_CAT_FILTER === 'all'
+  const filtered = PRODUCT_CAT_FILTER === 'all'
     ? PRODUCTS_CACHE
     : PRODUCTS_CACHE.filter((p) => String(p.category_id || '') === String(PRODUCT_CAT_FILTER));
+  const visible = [...filtered];
+
+  if (normalizePosSortMode(POS_PRODUCT_SORT) === 'alphabetical') {
+    visible.sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''), 'es', { sensitivity: 'base' }));
+  } else {
+    visible.sort((a, b) => {
+      const soldDiff = Number(b.soldQty || 0) - Number(a.soldQty || 0);
+      if (soldDiff !== 0) return soldDiff;
+      return String(a.name || '').localeCompare(String(b.name || ''), 'es', { sensitivity: 'base' });
+    });
+  }
 
   grid.classList.remove('view-card', 'view-detail', 'view-compact');
   grid.classList.add(`view-${PRODUCT_VIEW_MODE}`);
+
+  const showTopBadge = normalizePosSortMode(POS_PRODUCT_SORT) === 'top_sold';
+  const topBadgeHTML = (product, index) => {
+    const soldQty = Number(product?.soldQty || 0);
+    if (!showTopBadge || soldQty <= 0) return '';
+    const rankLabel = index < 3 ? `TOP ${index + 1}` : 'TOP';
+    return `<span class="prod-badge prod-badge-top"><i class="ph-bold ph-fire"></i> ${rankLabel} · ${soldQty} vend.</span>`;
+  };
 
   if (!visible.length) {
     grid.innerHTML = `<div class="card" style="grid-column:1/-1">${emptyHTML('ph-hamburger', 'Sin productos para este filtro', 'Cambia de categoria o agrega productos nuevos al menu.')}</div>`;
@@ -2820,9 +2918,10 @@ function renderProductsGrid() {
   if (PRODUCT_VIEW_MODE === 'detail') {
     grid.innerHTML = visible
       .map(
-        (p) => {
+        (p, idx) => {
           const varBadge = (p.variants?.length > 1) ? `<span class="prod-badge prod-badge-variant"><i class="ph-bold ph-stack"></i> ${p.variants.length} variantes</span>` : '';
           const modBadge = (p.modifierGroups?.length > 0) ? `<span class="prod-badge prod-badge-mod"><i class="ph-bold ph-sliders"></i> ${p.modifierGroups.length} grupo${p.modifierGroups.length > 1 ? 's' : ''}</span>` : '';
+          const topBadge = topBadgeHTML(p, idx);
           return `<article class="prod-row ${p.active ? '' : 'inactive'}">
       <div class="thumb">
         ${p.image ? `<img src="${esc(p.image)}" alt="" loading="lazy" />` : '<i class="ph ph-fork-knife"></i>'}
@@ -2832,7 +2931,7 @@ function renderProductsGrid() {
           <div>
             <div class="name">${esc(p.name)}</div>
             ${p.category_name ? `<div class="cat">${esc(p.category_name)}</div>` : ''}
-            ${varBadge || modBadge ? `<div class="prod-badges-row">${varBadge}${modBadge}</div>` : ''}
+            ${topBadge || varBadge || modBadge ? `<div class="prod-badges-row">${topBadge}${varBadge}${modBadge}</div>` : ''}
           </div>
           <span class="price-tag">${fmtMoney(p.price)}</span>
         </div>
@@ -2850,8 +2949,10 @@ function renderProductsGrid() {
   } else if (PRODUCT_VIEW_MODE === 'compact') {
     grid.innerHTML = visible
       .map(
-        (p) => {
+        (p, idx) => {
           const extras = [];
+          const topBadge = topBadgeHTML(p, idx);
+          if (topBadge) extras.push(topBadge);
           if (p.variants?.length > 1) extras.push(`<span class="prod-badge prod-badge-variant"><i class="ph-bold ph-stack"></i>${p.variants.length}</span>`);
           if (p.modifierGroups?.length > 0) extras.push(`<span class="prod-badge prod-badge-mod"><i class="ph-bold ph-sliders"></i>${p.modifierGroups.length}</span>`);
           return `<article class="prod-mini ${p.active ? '' : 'inactive'}">
@@ -2869,9 +2970,10 @@ function renderProductsGrid() {
   } else {
     grid.innerHTML = visible
       .map(
-        (p) => {
+        (p, idx) => {
           const varBadge = (p.variants?.length > 1) ? `<span class="prod-badge prod-badge-variant"><i class="ph-bold ph-stack"></i> ${p.variants.length} var.</span>` : '';
           const modBadge = (p.modifierGroups?.length > 0) ? `<span class="prod-badge prod-badge-mod"><i class="ph-bold ph-sliders"></i> ${p.modifierGroups.length} opc.</span>` : '';
+          const topBadge = topBadgeHTML(p, idx);
           return `<div class="prod-card ${p.active ? '' : 'inactive'}">
       <div class="img">
         ${p.image ? `<img src="${esc(p.image)}" alt="" loading="lazy" />` : '<i class="ph ph-fork-knife"></i>'}
@@ -2882,7 +2984,7 @@ function renderProductsGrid() {
         ${p.category_name ? `<span class="cat">${esc(p.category_name)}</span>` : ''}
         <div class="name">${esc(p.name)}</div>
         <div class="desc">${esc(p.description || '')}</div>
-        ${varBadge || modBadge ? `<div class="prod-badges-row">${varBadge}${modBadge}</div>` : ''}
+        ${topBadge || varBadge || modBadge ? `<div class="prod-badges-row">${topBadge}${varBadge}${modBadge}</div>` : ''}
       </div>
       <div class="actions">
         <button class="btn btn-ghost" data-edit="${p.id}"><i class="ph-bold ph-pencil-simple"></i> Editar</button>
@@ -2910,6 +3012,7 @@ function renderProductsGrid() {
 async function loadProducts() {
   bindProductViewSwitch();
   PRODUCT_VIEW_MODE = readStoredProductViewMode();
+  POS_PRODUCT_SORT = normalizePosSortMode(SETTINGS?.pos_catalog_sort_mode || readStoredPosSortMode());
   CATS = await api('/api/products/categories');
   PRODUCTS_CACHE = await api('/api/products');
 
@@ -2921,6 +3024,80 @@ async function loadProducts() {
 
   renderCategoryChips();
   renderProductsGrid();
+  syncPosSortControlVisibility();
+}
+
+function resetAiImportState() {
+  AI_PRODUCTS_DRAFT = [];
+  const rows = $('#aiProductRows');
+  const notes = $('#aiProductNotes');
+  const result = $('#aiProductResult');
+  if (rows) rows.innerHTML = '';
+  if (notes) notes.textContent = '';
+  if (result) result.hidden = true;
+  if ($('#aiProductImport')) $('#aiProductImport').disabled = true;
+}
+
+function renderAiDraftRows() {
+  const rows = $('#aiProductRows');
+  if (!rows) return;
+  if (!AI_PRODUCTS_DRAFT.length) {
+    rows.innerHTML = '<tr><td colspan="5"><span class="hint">No hay productos detectados.</span></td></tr>';
+    $('#aiProductImport').disabled = true;
+    return;
+  }
+
+  rows.innerHTML = AI_PRODUCTS_DRAFT.map((item, idx) => `
+    <tr data-ai-row="${idx}">
+      <td><input type="text" class="ai-name" value="${esc(item.name || '')}" placeholder="Nombre" /></td>
+      <td><input type="text" class="ai-desc" value="${esc(item.description || '')}" placeholder="Descripción" /></td>
+      <td><input type="number" class="ai-price" value="${Number(item.price || 0)}" min="0" step="0.01" /></td>
+      <td><input type="text" class="ai-cat" value="${esc(item.categoryName || '')}" placeholder="Categoría" /></td>
+      <td><button type="button" class="btn btn-danger btn-icon ai-del" title="Quitar"><i class="ph-bold ph-trash"></i></button></td>
+    </tr>`).join('');
+
+  rows.querySelectorAll('.ai-name').forEach((input) => {
+    input.addEventListener('input', (e) => {
+      const i = Number(e.target.closest('[data-ai-row]').dataset.aiRow);
+      AI_PRODUCTS_DRAFT[i].name = e.target.value;
+    });
+  });
+  rows.querySelectorAll('.ai-desc').forEach((input) => {
+    input.addEventListener('input', (e) => {
+      const i = Number(e.target.closest('[data-ai-row]').dataset.aiRow);
+      AI_PRODUCTS_DRAFT[i].description = e.target.value;
+    });
+  });
+  rows.querySelectorAll('.ai-price').forEach((input) => {
+    input.addEventListener('input', (e) => {
+      const i = Number(e.target.closest('[data-ai-row]').dataset.aiRow);
+      AI_PRODUCTS_DRAFT[i].price = Number(e.target.value) || 0;
+    });
+  });
+  rows.querySelectorAll('.ai-cat').forEach((input) => {
+    input.addEventListener('input', (e) => {
+      const i = Number(e.target.closest('[data-ai-row]').dataset.aiRow);
+      AI_PRODUCTS_DRAFT[i].categoryName = e.target.value;
+    });
+  });
+  rows.querySelectorAll('.ai-del').forEach((btn) => {
+    btn.addEventListener('click', (e) => {
+      const i = Number(e.target.closest('[data-ai-row]').dataset.aiRow);
+      AI_PRODUCTS_DRAFT.splice(i, 1);
+      renderAiDraftRows();
+    });
+  });
+
+  $('#aiProductImport').disabled = false;
+}
+
+function openAiImportModal() {
+  $('#aiMenuImage').value = '';
+  $('#aiMenuImagePreview').hidden = true;
+  $('#aiMenuImagePreviewImg').src = '';
+  $('#aiMenuImageHint').textContent = 'Aún no has seleccionado imagen.';
+  resetAiImportState();
+  $('#aiProductModal').classList.add('show');
 }
 
 /* — Modal categoría — */
@@ -3295,8 +3472,141 @@ async function saveProductExtras(productId) {
 }
 
 $('#addProdBtn').addEventListener('click', () => openProdModal());
+$('#aiImportBtn')?.addEventListener('click', () => openAiImportModal());
 $('#prodCancel').addEventListener('click', () => $('#prodModal').classList.remove('show'));
-[$('#prodModal'), $('#catModal'), $('#confirmModal'), $('#branchModal'), $('#cashierModal'), $('#posMovementModal'), $('#posCloseModal'), $('#posSalesHistoryModal'), $('#posPaymentEditModal'), $('#orderCancelReasonModal'), $('#posProductConfigModal')].forEach((m) =>
+$('#aiProductCancel')?.addEventListener('click', () => $('#aiProductModal').classList.remove('show'));
+
+const aiUploadArea = $('#aiMenuUploadArea');
+const aiMenuInput = $('#aiMenuImage');
+const aiPickBtn = $('#aiMenuPickBtn');
+
+function openAiMenuPicker() {
+  aiMenuInput?.click();
+}
+
+aiPickBtn?.addEventListener('click', (e) => {
+  e.preventDefault();
+  e.stopPropagation();
+  openAiMenuPicker();
+});
+
+aiUploadArea?.addEventListener('click', () => openAiMenuPicker());
+aiUploadArea?.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' || e.key === ' ') {
+    e.preventDefault();
+    openAiMenuPicker();
+  }
+});
+
+['dragover', 'dragleave', 'drop'].forEach((ev) => {
+  aiUploadArea?.addEventListener(ev, (e) => {
+    e.preventDefault();
+    aiUploadArea.classList.toggle('drag', ev === 'dragover');
+    if (ev === 'drop' && e.dataTransfer?.files?.[0]) {
+      aiMenuInput.files = e.dataTransfer.files;
+      aiMenuInput.dispatchEvent(new Event('change'));
+    }
+  });
+});
+
+$('#aiMenuImage')?.addEventListener('change', () => {
+  const file = $('#aiMenuImage').files?.[0];
+  const preview = $('#aiMenuImagePreview');
+  const img = $('#aiMenuImagePreviewImg');
+  if (!file) {
+    preview.hidden = true;
+    img.src = '';
+    $('#aiMenuImageHint').textContent = 'Aún no has seleccionado imagen.';
+    return;
+  }
+  if (file.size > 8 * 1024 * 1024) {
+    toast('La imagen supera 8 MB, elige una más ligera', true);
+    $('#aiMenuImage').value = '';
+    preview.hidden = true;
+    img.src = '';
+    return;
+  }
+  img.src = URL.createObjectURL(file);
+  preview.hidden = false;
+  $('#aiMenuImageHint').textContent = `${file.name} (${Math.ceil(file.size / 1024)} KB)`;
+});
+
+$('#aiProductForm')?.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const file = $('#aiMenuImage').files?.[0] || null;
+  if (!file) {
+    toast('Selecciona una imagen del menú para analizar', true);
+    return;
+  }
+
+  const btn = $('#aiAnalyzeBtn');
+  btn.disabled = true;
+  try {
+    const fd = new FormData();
+    fd.append('menuImage', file);
+    const out = await api('/api/products/ai/suggest', { method: 'POST', body: fd });
+    AI_PRODUCTS_DRAFT = Array.isArray(out.products) ? out.products : [];
+    $('#aiProductResult').hidden = false;
+
+    const notes = [];
+    if (Array.isArray(out.notes) && out.notes.length) notes.push(`Notas IA: ${out.notes.join(' | ')}`);
+    if (Array.isArray(out.categoryHints) && out.categoryHints.length) {
+      const newCats = out.categoryHints.filter((c) => !c.exists).map((c) => c.name);
+      if (newCats.length) notes.push(`Se crearán categorías nuevas: ${newCats.join(', ')}`);
+    }
+    if (Array.isArray(out.variantGroupsDetected) && out.variantGroupsDetected.length) {
+      notes.push(`Se detectaron variantes para: ${out.variantGroupsDetected.join(', ')}`);
+    }
+    $('#aiProductNotes').textContent = notes.join(' · ') || `Se detectaron ${AI_PRODUCTS_DRAFT.length} productos. Puedes editar antes de importar.`;
+    renderAiDraftRows();
+    toast(`IA detectó ${AI_PRODUCTS_DRAFT.length} productos`);
+  } catch (err) {
+    toast(err.message, true);
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+$('#aiProductImport')?.addEventListener('click', async () => {
+  const cleanProducts = AI_PRODUCTS_DRAFT
+    .map((p) => ({
+      name: String(p.name || '').trim(),
+      description: String(p.description || '').trim(),
+      price: Number(p.price) || 0,
+      categoryName: String(p.categoryName || '').trim(),
+      variantGroup: String(p.variantGroup || '').trim(),
+      variantName: String(p.variantName || '').trim(),
+    }))
+    .filter((p) => p.name);
+
+  if (!cleanProducts.length) {
+    toast('No hay productos válidos para importar', true);
+    return;
+  }
+
+  const btn = $('#aiProductImport');
+  btn.disabled = true;
+  try {
+    const out = await api('/api/products/ai/import', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        products: cleanProducts,
+        createMissingCategories: true,
+        defaultActive: true,
+      }),
+    });
+    toast(`Importación completada: ${out.created} productos`);
+    $('#aiProductModal').classList.remove('show');
+    await loadProducts();
+  } catch (err) {
+    toast(err.message, true);
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+[$('#prodModal'), $('#aiProductModal'), $('#catModal'), $('#confirmModal'), $('#branchModal'), $('#cashierModal'), $('#posMovementModal'), $('#posCloseModal'), $('#posSalesHistoryModal'), $('#posPaymentEditModal'), $('#orderCancelReasonModal'), $('#posProductConfigModal')].forEach((m) =>
   m && m.addEventListener('click', (e) => {
     if (e.target === m) m.classList.remove('show');
   })
@@ -4608,6 +4918,8 @@ async function boot(navigateToHash = true) {
   if (ME?.role === 'cashier') setAuthScope('cashier');
   if (ME?.role === 'owner') setAuthScope('owner');
   SETTINGS = await api('/api/settings');
+  POS_PRODUCT_SORT = normalizePosSortMode(SETTINGS?.pos_catalog_sort_mode || readStoredPosSortMode());
+  saveStoredPosSortMode(POS_PRODUCT_SORT);
   applyUserScopeUI();
 
   document.documentElement.style.setProperty('--primary', ME.tenant.primaryColor || '#ff6b35');
@@ -4632,6 +4944,7 @@ async function boot(navigateToHash = true) {
     const fallbackView = cashier ? 'pos' : 'dashboard';
     const hashView = (location.hash || '').slice(1);
     const view = cashier ? 'pos' : (VIEW_META[hashView] ? hashView : fallbackView);
+    document.body.setAttribute('data-current-view', view);
     navigate(view);
   }
 }

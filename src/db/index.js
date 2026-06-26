@@ -335,6 +335,7 @@ async function ensureTenantDefaults(slug, businessName = slug) {
     ticket_font_size_px: '14',
     ticket_line_height: '1.45',
     ticket_show_logo: '1',
+    pos_catalog_sort_mode: 'top_sold',
   };
   for (const [k, v] of Object.entries(defaults)) {
     await t.run('INSERT INTO {s}.settings (key, value) VALUES ($1, $2) ON CONFLICT (key) DO NOTHING', [k, v]);

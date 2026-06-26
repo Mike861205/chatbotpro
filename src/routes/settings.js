@@ -40,6 +40,7 @@ const SETTING_KEYS = [
   'ticket_font_size_px',
   'ticket_line_height',
   'ticket_show_logo',
+  'pos_catalog_sort_mode',
 ];
 
 router.get('/', async (req, res, next) => {
