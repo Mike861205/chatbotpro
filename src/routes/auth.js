@@ -15,12 +15,21 @@ function supportWhatsappUrl() {
   return `https://wa.me/${SUPPORT_WHATSAPP}?text=${encodeURIComponent(SUPPORT_MESSAGE)}`;
 }
 
+function normalizePhone(raw) {
+  const digits = String(raw || '').replace(/\D/g, '');
+  return digits.length >= 10 && digits.length <= 15 ? digits : '';
+}
+
 // Registro de un nuevo negocio (tenant) + usuario dueño
 router.post('/register', async (req, res, next) => {
   try {
     const { ownerName, phone, businessName, slug, username, password } = req.body || {};
-    if (!ownerName || !businessName || !slug || !username || !password) {
+    if (!ownerName || !phone || !businessName || !slug || !username || !password) {
       return res.status(400).json({ error: 'Todos los campos marcados son obligatorios' });
+    }
+    const cleanPhone = normalizePhone(phone);
+    if (!cleanPhone) {
+      return res.status(400).json({ error: 'Ingresa un telefono valido de 10 a 15 digitos' });
     }
     const cleanSlug = String(slug).trim().toLowerCase();
     const cleanUser = String(username).trim().toLowerCase();
@@ -38,7 +47,7 @@ router.post('/register', async (req, res, next) => {
     const passwordHash = await bcrypt.hash(password, 12);
     const t = await q(
       'INSERT INTO tenants (slug, business_name, owner_name, phone_enc) VALUES ($1, $2, $3, $4) RETURNING *',
-      [cleanSlug, businessName.trim(), ownerName.trim(), encrypt(phone || '')]
+      [cleanSlug, businessName.trim(), ownerName.trim(), encrypt(cleanPhone)]
     );
     const tenant = t.rows[0];
     const u = await q(

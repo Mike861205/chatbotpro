@@ -16,6 +16,11 @@ const {
 
 const router = express.Router();
 
+function normalizePhone(raw) {
+  const digits = String(raw || '').replace(/\D/g, '');
+  return digits.length >= 10 && digits.length <= 15 ? digits : '';
+}
+
 const deployState = {
   running: false,
   startedAt: null,
@@ -488,7 +493,11 @@ router.patch('/tenants/:id', requireSuperAdmin, async (req, res, next) => {
 
     if (body.business_name !== undefined) push('business_name', String(body.business_name || '').trim());
     if (body.owner_name !== undefined) push('owner_name', String(body.owner_name || '').trim());
-    if (body.phone !== undefined) push('phone_enc', encrypt(String(body.phone || '').trim()));
+    if (body.phone !== undefined) {
+      const cleanPhone = normalizePhone(body.phone);
+      if (!cleanPhone) return res.status(400).json({ error: 'Telefono invalido: debe tener de 10 a 15 digitos' });
+      push('phone_enc', encrypt(cleanPhone));
+    }
     if (body.primary_color !== undefined && /^#[0-9a-fA-F]{6}$/.test(String(body.primary_color || ''))) {
       push('primary_color', String(body.primary_color));
     }

@@ -258,11 +258,12 @@ function renderTenantTable() {
   }
 
   table.innerHTML = `<div class="table-wrap"><table><thead><tr>
-    <th>Tenant</th><th>Dueño</th><th>Cuenta</th><th>Pago</th><th>Plan</th><th>Vence</th><th>Acciones</th>
+    <th>Tenant</th><th>Dueño</th><th>Registro</th><th>Cuenta</th><th>Pago</th><th>Plan</th><th>Vence</th><th>Acciones</th>
   </tr></thead><tbody>${filtered
     .map((t) => `<tr>
       <td><b>${esc(t.business_name)}</b><div class="meta">/${esc(t.slug)}</div></td>
       <td>${esc(t.owner_name)}<div class="meta">${esc(t.phone || '')}</div></td>
+      <td>${fmtDate(t.created_at)}</td>
       <td>${statusChip('account', t.account_status)}</td>
       <td>${statusChip('billing', t.billing_status)}</td>
       <td>${esc(t.plan_name || 'starter')}</td>

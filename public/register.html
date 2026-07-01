@@ -65,8 +65,8 @@
               <input type="text" id="ownerName" required />
             </div>
             <div class="field">
-              <label><i class="ph-bold ph-phone"></i> Teléfono</label>
-              <input type="tel" id="phone" placeholder="10 dígitos" />
+              <label><i class="ph-bold ph-phone"></i> Teléfono *</label>
+              <input type="tel" id="phone" placeholder="10 dígitos" inputmode="tel" autocomplete="tel" required minlength="10" maxlength="18" pattern="[0-9\s()+\-]{10,18}" title="Ingresa un teléfono válido de 10 a 15 dígitos" />
             </div>
           </div>
           <div class="field">
@@ -120,12 +120,16 @@
       const btn = document.getElementById('btn');
       btn.disabled = true;
       try {
+        const phoneDigits = document.getElementById('phone').value.replace(/\D/g, '');
+        if (phoneDigits.length < 10 || phoneDigits.length > 15) {
+          throw new Error('Ingresa un teléfono válido de 10 a 15 dígitos');
+        }
         const res = await fetch('/api/auth/register', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             ownerName: document.getElementById('ownerName').value,
-            phone: document.getElementById('phone').value,
+            phone: phoneDigits,
             businessName: bizInput.value,
             slug: slugInput.value,
             username: document.getElementById('username').value,
