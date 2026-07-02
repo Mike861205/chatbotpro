@@ -1,5 +1,6 @@
 const express = require('express');
 const bcrypt = require('bcryptjs');
+const config = require('../config');
 const { q, tdb, initTenantDefaults } = require('../db');
 const { encrypt, decrypt } = require('../utils/crypto');
 const { signToken, setAuthCookie, clearAuthCookie, requireAuth } = require('../middleware/auth');
@@ -18,6 +19,45 @@ function supportWhatsappUrl() {
 function normalizePhone(raw) {
   const digits = String(raw || '').replace(/\D/g, '');
   return digits.length >= 10 && digits.length <= 15 ? digits : '';
+}
+
+function getDemoCredentials() {
+  return {
+    username: String(config.DEMO_USERNAME || 'demo').trim().toLowerCase() || 'demo',
+    password: String(config.DEMO_PASSWORD || 'demo') || 'demo',
+    tenantSlug: String(config.DEMO_TENANT_SLUG || '').trim().toLowerCase(),
+  };
+}
+
+async function resolveDemoTenant(preferredSlug) {
+  const slug = String(preferredSlug || '').trim().toLowerCase();
+  if (slug) {
+    const bySlug = await q('SELECT * FROM tenants WHERE slug = $1 LIMIT 1', [slug]);
+    return bySlug.rows[0] || null;
+  }
+  const firstActive = await q(
+    `SELECT *
+     FROM tenants
+     WHERE account_status = 'active'
+       AND billing_status <> 'suspended'
+     ORDER BY id ASC
+     LIMIT 1`
+  );
+  return firstActive.rows[0] || null;
+}
+
+async function ensureDemoUser(username, password, tenant) {
+  const found = await q('SELECT * FROM users WHERE lower(username) = $1 LIMIT 1', [username]);
+  const existing = found.rows[0];
+  if (existing) return existing;
+  const hash = await bcrypt.hash(password, 12);
+  const created = await q(
+    `INSERT INTO users (tenant_id, username, password_hash, role, display_name, active)
+     VALUES ($1, $2, $3, 'owner', $4, 1)
+     RETURNING *`,
+    [tenant.id, username, hash, 'Demo']
+  );
+  return created.rows[0];
 }
 
 // Registro de un nuevo negocio (tenant) + usuario dueño
@@ -93,6 +133,72 @@ router.post('/login', async (req, res, next) => {
     }
     setAuthCookie(res, signToken(user, tenant), 'owner');
     res.json({ ok: true, slug: tenant.slug });
+  } catch (e) {
+    next(e);
+  }
+});
+
+router.post('/demo-login', async (req, res, next) => {
+  try {
+    if (!config.DEMO_LOGIN_ENABLED) {
+      return res.status(404).json({ error: 'Acceso demo no disponible' });
+    }
+
+    const { username: demoUsername, password: demoPassword, tenantSlug: demoTenantSlug } = getDemoCredentials();
+
+    const targetTenant = await resolveDemoTenant(demoTenantSlug);
+    if (!targetTenant) {
+      return res.status(503).json({ error: 'No hay un tenant activo disponible para demo' });
+    }
+    if (targetTenant.account_status !== 'active') {
+      return res.status(403).json({ error: 'La cuenta demo está inactiva. Contacta al administrador.' });
+    }
+    if (targetTenant.billing_status === 'suspended') {
+      return res.status(403).json({
+        error: 'Suspendido por falta de pago. Ponte en contacto con tu asesor.',
+        errorCode: 'BILLING_SUSPENDED',
+        supportPhone: SUPPORT_WHATSAPP,
+        whatsappUrl: supportWhatsappUrl(),
+      });
+    }
+
+    let user = await ensureDemoUser(
+      demoUsername,
+      demoPassword,
+      targetTenant
+    );
+
+    // Si el usuario demo ya existía con otra contraseña, la forzamos a demo para acceso rápido.
+    if (!(await bcrypt.compare(demoPassword, user.password_hash))) {
+      const newHash = await bcrypt.hash(demoPassword, 12);
+      const updated = await q('UPDATE users SET password_hash = $2, active = 1 WHERE id = $1 RETURNING *', [user.id, newHash]);
+      user = updated.rows[0] || user;
+    }
+
+    if (!Number(user.active)) {
+      return res.status(403).json({ error: 'La cuenta demo está inactiva' });
+    }
+
+    const t = await q('SELECT * FROM tenants WHERE id = $1', [user.tenant_id]);
+    const tenant = t.rows[0];
+    if (!tenant) return res.status(503).json({ error: 'Tenant demo no encontrado' });
+    if (demoTenantSlug && tenant.slug !== demoTenantSlug) {
+      return res.status(503).json({ error: 'El tenant demo configurado no coincide con el usuario demo' });
+    }
+    if (tenant.account_status !== 'active') {
+      return res.status(403).json({ error: 'La cuenta demo está inactiva. Contacta al administrador.' });
+    }
+    if (tenant.billing_status === 'suspended') {
+      return res.status(403).json({
+        error: 'Suspendido por falta de pago. Ponte en contacto con tu asesor.',
+        errorCode: 'BILLING_SUSPENDED',
+        supportPhone: SUPPORT_WHATSAPP,
+        whatsappUrl: supportWhatsappUrl(),
+      });
+    }
+
+    setAuthCookie(res, signToken(user, tenant), 'owner');
+    res.json({ ok: true, slug: tenant.slug, demo: true });
   } catch (e) {
     next(e);
   }

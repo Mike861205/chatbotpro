@@ -33,6 +33,20 @@ npm start
 
 Requiere `DATABASE_URL` (cadena de conexión de Neon) en `.env`. Los secretos (`JWT_SECRET`, `DATA_ENCRYPTION_KEY`) se generan automáticamente en el primer arranque. Para usar IA puedes dejar `OPENAI_API_KEY` como fallback en `.env` o configurarla desde SuperAdmin. También puedes definir `SUPERADMIN_USERNAME` y `SUPERADMIN_PASSWORD` para crear el usuario inicial de plataforma.
 
+### Acceso demo desde login
+
+Puedes habilitar el botón **Ver demo del panel** en `/login` configurando estas variables en `.env`:
+
+- `DEMO_LOGIN_ENABLED=true`
+- `DEMO_USERNAME=demo`
+- `DEMO_PASSWORD=demo`
+- `DEMO_TENANT_SLUG=slug-demo` (opcional, recomendado)
+
+Comportamiento por defecto:
+
+- Si no defines variables, el sistema usa `demo/demo`.
+- Si el usuario demo no existe, se crea automáticamente en un tenant activo la primera vez que se presiona el botón demo.
+
 ## 🧪 Separar test y producción
 
 El proyecto ya soporta archivos de entorno separados:

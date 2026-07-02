@@ -41,14 +41,47 @@
         <span class="fico" style="left:30%;top:40%;--g:rgba(255,120,60,.85);--d:13s;--r:5deg">🛵</span>
         <span class="fico" style="left:90%;top:38%;--g:rgba(255,140,200,.85);--d:10.5s;--r:-4deg">🍦</span>
       </div>
-      <div class="auth-card" style="text-align:center">
-        <div class="logo" style="justify-content:center"><span class="dot dot-logo"><img src="/static/chatbotpro100.png" alt="" /></span> ChatBotPro</div>
+      <div class="auth-card auth-card--center">
+        <div class="logo"><span class="dot dot-logo"><img src="/static/chatbotpro100.png" alt="" /></span> ChatBotPro</div>
         <h2>Bienvenido</h2>
         <p class="sub">El sistema de pedidos por chatbot para restaurantes.</p>
-        <a class="btn btn-primary btn-block" href="/register" style="margin-bottom:12px"><i class="ph-bold ph-rocket-launch"></i> Crear mi cuenta gratis</a>
-        <a class="btn btn-ghost btn-block" href="/login"><i class="ph-bold ph-sign-in"></i> Ya tengo cuenta</a>
+        <div class="error-box auth-landing-error" id="demoError" hidden>
+          <i class="ph-fill ph-warning-circle"></i><span id="demoErrorMsg"></span>
+        </div>
+        <div class="auth-landing-actions">
+          <a class="btn btn-primary btn-block" href="/register"><i class="ph-bold ph-rocket-launch"></i> Crear mi cuenta gratis</a>
+          <button class="btn btn-demo btn-block" type="button" id="demoBtn"><i class="ph-bold ph-rocket-launch"></i> Ver demo del panel</button>
+          <a class="btn btn-ghost btn-block" href="/login"><i class="ph-bold ph-sign-in"></i> Ya tengo cuenta</a>
+        </div>
       </div>
     </div>
   </div>
+  <script>
+    const demoBtn = document.getElementById('demoBtn');
+    const demoErr = document.getElementById('demoError');
+    const demoErrMsg = document.getElementById('demoErrorMsg');
+
+    demoBtn.addEventListener('click', async () => {
+      demoBtn.disabled = true;
+      demoErr.classList.remove('show');
+      demoErr.hidden = true;
+      try {
+        const res = await fetch('/api/auth/demo-login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: '{}',
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || 'No se pudo abrir la demo');
+        try { sessionStorage.setItem('cbp_auth_scope', 'owner'); } catch {}
+        location.href = '/app';
+      } catch (err) {
+        demoErrMsg.textContent = err.message;
+        demoErr.hidden = false;
+        demoErr.classList.add('show');
+        demoBtn.disabled = false;
+      }
+    });
+  </script>
 </body>
 </html>

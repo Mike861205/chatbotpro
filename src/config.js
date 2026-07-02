@@ -2,6 +2,12 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 
+function envEnabled(name, fallback = false) {
+  const raw = String(process.env[name] || '').trim().toLowerCase();
+  if (!raw) return Boolean(fallback);
+  return !['0', 'false', 'off', 'no'].includes(raw);
+}
+
 const ROOT = path.join(__dirname, '..');
 const defaultEnvByNodeEnv = {
   production: '.env.production',
@@ -37,6 +43,10 @@ module.exports = {
   PORT: process.env.PORT || 3000,
   JWT_SECRET: ensureSecret('JWT_SECRET'),
   ENCRYPTION_KEY: ensureSecret('DATA_ENCRYPTION_KEY'),
+  DEMO_LOGIN_ENABLED: envEnabled('DEMO_LOGIN_ENABLED', true),
+  DEMO_USERNAME: String(process.env.DEMO_USERNAME || 'demo').trim().toLowerCase(),
+  DEMO_PASSWORD: String(process.env.DEMO_PASSWORD || 'demo'),
+  DEMO_TENANT_SLUG: String(process.env.DEMO_TENANT_SLUG || '').trim().toLowerCase(),
   OPENAI_API_KEY: (process.env.OPENAI_API_KEY || '').trim(),
   DATABASE_URL: (() => {
     const url = (process.env.DATABASE_URL || '').trim();

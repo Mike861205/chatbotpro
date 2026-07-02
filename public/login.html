@@ -82,7 +82,8 @@
             <label><i class="ph-bold ph-lock-key"></i> Contraseña</label>
             <input type="password" id="password" autocomplete="current-password" required />
           </div>
-          <button class="btn btn-primary btn-block" type="submit" id="btn"><i class="ph-bold ph-sign-in"></i> Entrar</button>
+          <button class="btn btn-primary btn-block" type="submit" id="loginBtn"><i class="ph-bold ph-sign-in"></i> Entrar</button>
+          <button class="btn btn-demo btn-block" type="button" id="demoBtn"><i class="ph-bold ph-rocket-launch"></i> Ver demo del panel</button>
         </form>
         <p class="alt">¿No tienes cuenta? <a href="/register">Regístrate gratis</a></p>
       </div>
@@ -94,22 +95,21 @@
   </a>
   <script>
     const form = document.getElementById('loginForm');
-    form.addEventListener('submit', async (e) => {
-      e.preventDefault();
+    const loginBtn = document.getElementById('loginBtn');
+    const demoBtn = document.getElementById('demoBtn');
+
+    async function doLogin(endpoint, body) {
       const errBox = document.getElementById('error');
       const waBtn = document.getElementById('suspendedWaBtn');
       errBox.classList.remove('show');
       waBtn.style.display = 'none';
-      const btn = document.getElementById('btn');
-      btn.disabled = true;
+      loginBtn.disabled = true;
+      demoBtn.disabled = true;
       try {
-        const res = await fetch('/api/auth/login', {
+        const res = await fetch(endpoint, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            username: document.getElementById('username').value,
-            password: document.getElementById('password').value,
-          }),
+          body: JSON.stringify(body || {}),
         });
         const data = await res.json();
         if (!res.ok) {
@@ -124,8 +124,21 @@
       } catch (err) {
         document.getElementById('errorMsg').textContent = err.message;
         errBox.classList.add('show');
-        btn.disabled = false;
+        loginBtn.disabled = false;
+        demoBtn.disabled = false;
       }
+    }
+
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      await doLogin('/api/auth/login', {
+        username: document.getElementById('username').value,
+        password: document.getElementById('password').value,
+      });
+    });
+
+    demoBtn.addEventListener('click', async () => {
+      await doLogin('/api/auth/demo-login');
     });
   </script>
 </body>
