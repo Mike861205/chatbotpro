@@ -1,6 +1,7 @@
 const express = require('express');
 const fs = require('node:fs/promises');
 const OpenAI = require('openai');
+const sharp = require('sharp');
 const { requireAuth, requireOwner } = require('../middleware/auth');
 const config = require('../config');
 const { getSuperAdminSetting } = require('../db');
@@ -143,6 +144,75 @@ function parseJsonFromModel(raw) {
     } catch {}
   }
   return null;
+}
+
+async function buildAiImageDataUrl(file) {
+  const bytes = await fs.readFile(file.path);
+  const originalMime = String(file?.mimetype || '').trim().toLowerCase() || 'image/jpeg';
+  let outMime = originalMime;
+  let outBytes = bytes;
+
+  // Reducimos peso/dimensiones para evitar rechazos del proveedor IA por payloads grandes.
+  try {
+    outBytes = await sharp(bytes, { failOn: 'none' })
+      .rotate()
+      .resize({ width: 1600, height: 1600, fit: 'inside', withoutEnlargement: true })
+      .jpeg({ quality: 72, mozjpeg: true })
+      .toBuffer();
+    outMime = 'image/jpeg';
+  } catch {
+    outBytes = bytes;
+    outMime = originalMime;
+  }
+
+  return {
+    dataUrl: `data:${outMime};base64,${outBytes.toString('base64')}`,
+    bytes: outBytes.length,
+  };
+}
+
+function normalizeAiProviderError(err) {
+  const status = Number(err?.status || err?.statusCode || err?.response?.status || 0);
+  const code = String(err?.code || err?.error?.code || '').trim();
+  const message = String(
+    err?.error?.message ||
+    err?.response?.data?.error?.message ||
+    err?.message ||
+    ''
+  ).trim();
+  return { status, code, message };
+}
+
+function mapAiProviderErrorToClient(aiErr) {
+  const msg = String(aiErr?.message || '').toLowerCase();
+  if (aiErr.status === 401 || aiErr.status === 403) {
+    return {
+      status: 400,
+      error: 'La API key de OpenAI es inválida o no tiene permisos. Revísala en SuperAdmin.',
+    };
+  }
+  if (aiErr.status === 429) {
+    return {
+      status: 429,
+      error: 'El proveedor de IA alcanzó su límite de uso. Inténtalo de nuevo en unos segundos.',
+    };
+  }
+  if (msg.includes('model') && (msg.includes('vision') || msg.includes('image') || msg.includes('multimodal'))) {
+    return {
+      status: 400,
+      error: 'El modelo configurado no soporta análisis de imágenes. Usa uno multimodal (por ejemplo gpt-4o-mini).',
+    };
+  }
+  if (msg.includes('payload') || msg.includes('too large') || msg.includes('content length') || msg.includes('context length')) {
+    return {
+      status: 400,
+      error: 'La imagen del menú es demasiado pesada para analizarse. Prueba con una imagen más ligera.',
+    };
+  }
+  return {
+    status: aiErr.status >= 400 && aiErr.status < 500 ? 400 : 502,
+    error: 'No se pudo analizar el menú con IA en este momento. Inténtalo nuevamente.',
+  };
 }
 
 async function getOpenAiRuntimeConfig() {
@@ -314,31 +384,44 @@ router.post('/ai/suggest', uploadAiMenu.single('menuImage'), async (req, res, ne
       },
     ];
 
-    if (req.file) {
-      const bytes = await fs.readFile(req.file.path);
-      const base64 = bytes.toString('base64');
-      const mime = req.file.mimetype || 'image/jpeg';
-      content.push({
-        type: 'image_url',
-        image_url: { url: `data:${mime};base64,${base64}` },
-      });
-    }
-
-    const client = buildAiClient(aiCfg.key, aiCfg.baseUrl);
-    const completion = await client.chat.completions.create({
-      model: aiCfg.model,
-      temperature: 0.15,
-      messages: [
-        {
-          role: 'system',
-          content:
-            'Eres un asistente experto en estructurar menus de comida para sistemas de catalogo. Responde estrictamente en JSON.',
-        },
-        { role: 'user', content },
-      ],
+    const imagePayload = await buildAiImageDataUrl(req.file);
+    content.push({
+      type: 'image_url',
+      image_url: { url: imagePayload.dataUrl },
     });
 
-    const raw = completion?.choices?.[0]?.message?.content || '';
+    const client = buildAiClient(aiCfg.key, aiCfg.baseUrl);
+    let completion;
+    try {
+      completion = await client.chat.completions.create({
+        model: aiCfg.model,
+        temperature: 0.15,
+        messages: [
+          {
+            role: 'system',
+            content:
+              'Eres un asistente experto en estructurar menus de comida para sistemas de catalogo. Responde estrictamente en JSON.',
+          },
+          { role: 'user', content },
+        ],
+      });
+    } catch (aiError) {
+      const aiErr = normalizeAiProviderError(aiError);
+      const mapped = mapAiProviderErrorToClient(aiErr);
+      console.error('[ai/suggest] provider error', {
+        status: aiErr.status,
+        code: aiErr.code,
+        message: aiErr.message,
+        model: aiCfg.model,
+        imageBytes: imagePayload.bytes,
+      });
+      return res.status(mapped.status).json({ error: mapped.error });
+    }
+
+    const rawContent = completion?.choices?.[0]?.message?.content;
+    const raw = Array.isArray(rawContent)
+      ? rawContent.map((chunk) => (typeof chunk === 'string' ? chunk : String(chunk?.text || ''))).join('\n')
+      : String(rawContent || '');
     const parsed = parseJsonFromModel(raw);
     if (!parsed || !Array.isArray(parsed.products)) {
       return res.status(422).json({ error: 'No se pudo interpretar una lista de productos valida desde IA.' });

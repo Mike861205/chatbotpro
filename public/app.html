@@ -789,6 +789,16 @@
         <div class="modal-actions" style="margin-top:8px">
           <button type="submit" class="btn btn-primary" id="aiAnalyzeBtn"><i class="ph-bold ph-brain"></i> Analizar menú</button>
         </div>
+        <div class="ai-analyze-progress" id="aiAnalyzeProgress" hidden aria-live="polite">
+          <div class="ai-analyze-progress-head">
+            <span id="aiAnalyzeProgressText">Leyendo menú...</span>
+            <strong id="aiAnalyzeProgressPct">0%</strong>
+          </div>
+          <div class="ai-analyze-progress-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" aria-label="Progreso de análisis de menú">
+            <div class="ai-analyze-progress-bar" id="aiAnalyzeProgressBar"></div>
+          </div>
+          <div class="ai-analyze-progress-note" id="aiAnalyzeProgressDone" hidden></div>
+        </div>
       </form>
       <div id="aiProductResult" hidden>
         <div class="hint" id="aiProductNotes" style="margin:8px 0 10px"></div>

@@ -3036,6 +3036,117 @@ function resetAiImportState() {
   if (notes) notes.textContent = '';
   if (result) result.hidden = true;
   if ($('#aiProductImport')) $('#aiProductImport').disabled = true;
+  resetAiAnalyzeProgress();
+}
+
+let AI_ANALYZE_PROGRESS_TIMER = null;
+let AI_ANALYZE_SUCCESS_TIMER = null;
+const AI_ANALYZE_BTN_IDLE_HTML = $('#aiAnalyzeBtn')?.innerHTML || '<i class="ph-bold ph-brain"></i> Analizar menú';
+
+function setAiAnalyzeProgress(value, text) {
+  const progress = $('#aiAnalyzeProgress');
+  const bar = $('#aiAnalyzeProgressBar');
+  const pct = $('#aiAnalyzeProgressPct');
+  const label = $('#aiAnalyzeProgressText');
+  const track = progress?.querySelector('.ai-analyze-progress-track');
+  if (!progress || !bar || !pct || !label) return;
+  const safeVal = Math.max(0, Math.min(100, Math.round(Number(value) || 0)));
+  progress.hidden = false;
+  bar.style.width = `${safeVal}%`;
+  pct.textContent = `${safeVal}%`;
+  if (text) label.textContent = text;
+  track?.setAttribute('aria-valuenow', String(safeVal));
+}
+
+function startAiAnalyzeProgress() {
+  resetAiAnalyzeProgress();
+  const progress = $('#aiAnalyzeProgress');
+  progress?.classList.remove('done');
+  const phases = [
+    'Subiendo imagen...',
+    'Leyendo texto del menú...',
+    'Analizando productos y precios...',
+    'Estructurando resultados...',
+  ];
+  let step = 0;
+  let pct = 8;
+  setAiAnalyzeProgress(pct, phases[step]);
+  AI_ANALYZE_PROGRESS_TIMER = setInterval(() => {
+    pct = Math.min(92, pct + (Math.random() > 0.45 ? 4 : 3));
+    if (pct > 26 && step < 1) step = 1;
+    if (pct > 52 && step < 2) step = 2;
+    if (pct > 74 && step < 3) step = 3;
+    setAiAnalyzeProgress(pct, phases[step]);
+    if (pct >= 92 && AI_ANALYZE_PROGRESS_TIMER) {
+      clearInterval(AI_ANALYZE_PROGRESS_TIMER);
+      AI_ANALYZE_PROGRESS_TIMER = null;
+    }
+  }, 430);
+}
+
+function finishAiAnalyzeProgress(ok = true, text = '') {
+  if (AI_ANALYZE_PROGRESS_TIMER) {
+    clearInterval(AI_ANALYZE_PROGRESS_TIMER);
+    AI_ANALYZE_PROGRESS_TIMER = null;
+  }
+  if (AI_ANALYZE_SUCCESS_TIMER) {
+    clearTimeout(AI_ANALYZE_SUCCESS_TIMER);
+    AI_ANALYZE_SUCCESS_TIMER = null;
+  }
+  const progress = $('#aiAnalyzeProgress');
+  const doneNote = $('#aiAnalyzeProgressDone');
+  if (ok) {
+    progress?.classList.add('done');
+    setAiAnalyzeProgress(100, text || 'Análisis completado');
+    if (doneNote) {
+      doneNote.hidden = false;
+      doneNote.classList.remove('error');
+      doneNote.textContent = text || 'Éxito: menú analizado correctamente.';
+      AI_ANALYZE_SUCCESS_TIMER = setTimeout(() => {
+        doneNote.hidden = true;
+        AI_ANALYZE_SUCCESS_TIMER = null;
+      }, 2000);
+    }
+    return;
+  }
+  progress?.classList.remove('done');
+  const current = Number($('#aiAnalyzeProgressPct')?.textContent?.replace('%', '') || 0);
+  setAiAnalyzeProgress(Math.max(18, current), text || 'No se pudo completar el análisis');
+  if (doneNote) {
+    doneNote.hidden = false;
+    doneNote.classList.add('error');
+    doneNote.textContent = text || 'No se pudo completar el análisis';
+  }
+}
+
+function resetAiAnalyzeProgress() {
+  if (AI_ANALYZE_PROGRESS_TIMER) {
+    clearInterval(AI_ANALYZE_PROGRESS_TIMER);
+    AI_ANALYZE_PROGRESS_TIMER = null;
+  }
+  if (AI_ANALYZE_SUCCESS_TIMER) {
+    clearTimeout(AI_ANALYZE_SUCCESS_TIMER);
+    AI_ANALYZE_SUCCESS_TIMER = null;
+  }
+  const progress = $('#aiAnalyzeProgress');
+  const bar = $('#aiAnalyzeProgressBar');
+  const pct = $('#aiAnalyzeProgressPct');
+  const label = $('#aiAnalyzeProgressText');
+  const doneNote = $('#aiAnalyzeProgressDone');
+  const track = progress?.querySelector('.ai-analyze-progress-track');
+  if (progress) {
+    progress.hidden = true;
+    progress.classList.remove('done');
+  }
+  if (bar) bar.style.width = '0%';
+  if (pct) pct.textContent = '0%';
+  if (label) label.textContent = 'Leyendo menú...';
+  if (doneNote) {
+    doneNote.hidden = true;
+    doneNote.classList.remove('error');
+    doneNote.textContent = '';
+  }
+  track?.setAttribute('aria-valuenow', '0');
 }
 
 function renderAiDraftRows() {
@@ -3541,10 +3652,13 @@ $('#aiProductForm')?.addEventListener('submit', async (e) => {
 
   const btn = $('#aiAnalyzeBtn');
   btn.disabled = true;
+  btn.innerHTML = '<i class="ph-bold ph-spinner-gap" style="animation:spin 0.8s linear infinite"></i> Analizando...';
+  startAiAnalyzeProgress();
   try {
     const fd = new FormData();
     fd.append('menuImage', file);
     const out = await api('/api/products/ai/suggest', { method: 'POST', body: fd });
+    setAiAnalyzeProgress(96, 'Menú leído. Preparando tabla para editar...');
     AI_PRODUCTS_DRAFT = Array.isArray(out.products) ? out.products : [];
     $('#aiProductResult').hidden = false;
 
@@ -3559,10 +3673,13 @@ $('#aiProductForm')?.addEventListener('submit', async (e) => {
     }
     $('#aiProductNotes').textContent = notes.join(' · ') || `Se detectaron ${AI_PRODUCTS_DRAFT.length} productos. Puedes editar antes de importar.`;
     renderAiDraftRows();
+    finishAiAnalyzeProgress(true, `Éxito: ${AI_PRODUCTS_DRAFT.length} productos detectados`);
     toast(`IA detectó ${AI_PRODUCTS_DRAFT.length} productos`);
   } catch (err) {
+    finishAiAnalyzeProgress(false, 'Error al analizar menú. Intenta de nuevo');
     toast(err.message, true);
   } finally {
+    btn.innerHTML = AI_ANALYZE_BTN_IDLE_HTML;
     btn.disabled = false;
   }
 });

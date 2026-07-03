@@ -3262,6 +3262,77 @@ select.status-sel {
   gap: 10px;
 }
 
+.ai-analyze-progress {
+  margin-top: 10px;
+  border: 1px solid #dbe4f2;
+  border-radius: 12px;
+  background: linear-gradient(180deg, #f9fbff, #f2f6ff);
+  padding: 10px;
+  display: grid;
+  gap: 6px;
+}
+
+.ai-analyze-progress-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: #334155;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.ai-analyze-progress-head strong {
+  color: var(--primary);
+}
+
+.ai-analyze-progress-track {
+  width: 100%;
+  height: 9px;
+  border-radius: 999px;
+  overflow: hidden;
+  background: #dbe8ff;
+  border: 1px solid #c9dafb;
+}
+
+.ai-analyze-progress-bar {
+  width: 0;
+  height: 100%;
+  border-radius: 999px;
+  background:
+    linear-gradient(90deg, #2563eb, #60a5fa, #93c5fd),
+    repeating-linear-gradient(45deg, rgba(255,255,255,0.28) 0 8px, rgba(255,255,255,0.1) 8px 16px);
+  background-size: 100% 100%, 220px 100%;
+  transition: width 0.35s cubic-bezier(0.22, 1, 0.36, 1);
+  animation: ai-progress-shimmer 1.2s linear infinite;
+}
+
+.ai-analyze-progress.done .ai-analyze-progress-bar {
+  background:
+    linear-gradient(90deg, #0ea5e9, #22c55e),
+    repeating-linear-gradient(45deg, rgba(255,255,255,0.3) 0 8px, rgba(255,255,255,0.08) 8px 16px);
+}
+
+.ai-analyze-progress-note {
+  font-size: 12px;
+  font-weight: 700;
+  color: #0f766e;
+  background: #ecfeff;
+  border: 1px solid #99f6e4;
+  border-radius: 9px;
+  padding: 7px 9px;
+}
+
+.ai-analyze-progress-note.error {
+  color: #9f1239;
+  background: #fff1f2;
+  border-color: #fecdd3;
+}
+
+@keyframes ai-progress-shimmer {
+  to { background-position: 0 0, 220px 0; }
+}
+
 .ai-upload-card {
   border: 1.5px dashed color-mix(in srgb, var(--primary) 45%, #cbd5e1);
   border-radius: 16px;
