@@ -1343,6 +1343,14 @@ function openThermalPrintWindow(ticket) {
   const fontPx = Math.max(10, Math.min(24, Number(SETTINGS?.ticket_font_size_px || 14)));
   const lineHeight = Math.max(1.1, Math.min(2, Number(SETTINGS?.ticket_line_height || 1.45)));
   const showLogo = SETTINGS?.ticket_show_logo !== '0';
+  const printMode = SETTINGS?.ticket_print_mode === 'bluetooth' ? 'bluetooth' : 'thermal';
+  const mobileZoomPercent = Math.max(80, Math.min(120, Number(SETTINGS?.ticket_mobile_zoom_percent || 100)));
+  const mobileZoom = mobileZoomPercent / 100;
+  const printZoom = printMode === 'bluetooth' ? mobileZoom : 1;
+  const pageCss = printMode === 'bluetooth'
+    ? '@page { size: auto; margin: 6mm; }'
+    : `@page { size: ${widthMm}mm auto; margin: 3mm; }`;
+  const printWindowSize = printMode === 'bluetooth' ? 'width=430,height=760' : 'width=420,height=760';
   const logo = ME?.tenant?.logo
     ? `${location.origin}${ME.tenant.logo.startsWith('/') ? ME.tenant.logo : `/${ME.tenant.logo}`}`
     : '';
@@ -1372,9 +1380,13 @@ function openThermalPrintWindow(ticket) {
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>Ticket ${esc(ticketId)}</title>
   <style>
-    @page { size: ${widthMm}mm auto; margin: 3mm; }
+    ${pageCss}
     html, body { margin: 0; padding: 0; }
     body { width: 100%; max-width: ${Math.max(50, widthMm - 6)}mm; margin: 0 auto; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: ${fontPx}px; line-height: ${lineHeight}; color: #000; }
+    .ticket-wrap { width: 100%; margin: 0 auto; zoom: ${printZoom}; }
+    @supports not (zoom: 1) {
+      .ticket-wrap { transform: scale(${printZoom}); transform-origin: top center; width: ${printZoom === 1 ? 100 : (100 / printZoom).toFixed(4)}%; }
+    }
     .center { text-align: center; }
     .right { text-align: right; }
     .sep { border-top: 1px dashed #000; margin: 8px 0; }
@@ -1388,6 +1400,7 @@ function openThermalPrintWindow(ticket) {
   </style>
 </head>
 <body>
+  <div class="ticket-wrap">
   ${showLogo && logo ? `<div class="logo"><img src="${esc(logo)}" alt="Logo" /></div>` : ''}
   <div class="center"><b>${biz}</b></div>
   ${bizAddress ? `<div class="center meta">${bizAddress}</div>` : ''}
@@ -1412,6 +1425,7 @@ function openThermalPrintWindow(ticket) {
   ${ticket.notes ? `<div class="sep"></div><div class="meta">Nota: ${esc(ticket.notes)}</div>` : ''}
   <div class="sep"></div>
   <div class="center meta">Gracias por tu compra</div>
+  </div>
   <script>
     window.onload = () => {
       window.print();
@@ -1422,7 +1436,7 @@ function openThermalPrintWindow(ticket) {
 </html>`;
   const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
   const blobUrl = URL.createObjectURL(blob);
-  const w = window.open(blobUrl, '_blank', 'width=420,height=760');
+  const w = window.open(blobUrl, '_blank', printWindowSize);
   if (!w) return toast('Permite ventanas emergentes para imprimir', true);
   setTimeout(() => URL.revokeObjectURL(blobUrl), 10000);
 }
@@ -4939,6 +4953,8 @@ function fillConfigForm() {
   $('#cfgTicketFont').value = String(Number(SETTINGS.ticket_font_size_px || 14));
   $('#cfgTicketLineHeight').value = String(Number(SETTINGS.ticket_line_height || 1.45));
   $('#cfgTicketShowLogo').value = SETTINGS.ticket_show_logo === '0' ? '0' : '1';
+  $('#cfgTicketPrintMode').value = SETTINGS.ticket_print_mode === 'bluetooth' ? 'bluetooth' : 'thermal';
+  $('#cfgTicketMobileZoom').value = String(Math.max(80, Math.min(120, Number(SETTINGS.ticket_mobile_zoom_percent || 100))));
   $('#logoPreview').innerHTML = SETTINGS.logo ? `<img src="${esc(SETTINGS.logo)}" alt="" />` : '<i class="ph ph-image"></i>';
   renderSwatches();
   if (!isCashierUser()) loadCashiers().catch((err) => toast(err.message, true));
@@ -4998,6 +5014,8 @@ $('#ticketForm').addEventListener('submit', async (e) => {
   fd.append('ticket_font_size_px', $('#cfgTicketFont').value);
   fd.append('ticket_line_height', $('#cfgTicketLineHeight').value);
   fd.append('ticket_show_logo', $('#cfgTicketShowLogo').value);
+  fd.append('ticket_print_mode', $('#cfgTicketPrintMode').value);
+  fd.append('ticket_mobile_zoom_percent', $('#cfgTicketMobileZoom').value);
   await api('/api/settings', { method: 'PUT', body: fd });
   toast('Configuración de ticket guardada');
   SETTINGS = await api('/api/settings');

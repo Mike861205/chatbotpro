@@ -15,6 +15,7 @@
     :root {
       --brand:  #6c47ff;
       --brand2: #a78bfa;
+      --brand-soft: rgba(108,71,255,.14);
       --bg:     #111827;
       --hdr:    #1f2937;
       --card:   #1e1b4b;
@@ -37,7 +38,12 @@
       width: 40px; height: 40px; border-radius: 50%; flex-shrink: 0; position: relative;
       background: linear-gradient(135deg, var(--brand), var(--brand2));
       display: flex; align-items: center; justify-content: center; font-size: 20px;
+      overflow: hidden;
     }
+    .hdr-av img { width: 100%; height: 100%; object-fit: cover; display: none; }
+    .hdr-av.has-logo { background: #fff; }
+    .hdr-av.has-logo img { display: block; }
+    .hdr-av.has-logo .av-fallback { display: none; }
     .live-dot {
       position: absolute; bottom: 0; right: 0; width: 11px; height: 11px;
       border-radius: 50%; background: var(--green); border: 2px solid var(--hdr);
@@ -84,6 +90,52 @@
       font-weight: 700; cursor: pointer; white-space: nowrap;
     }
     .bclose { background: none; border: none; color: var(--muted); font-size: 18px; cursor: pointer; flex-shrink: 0; }
+
+    /* Install guide */
+    .install-guide {
+      margin: 12px 16px 4px; padding: 14px; border: 1px solid color-mix(in srgb, var(--brand) 38%, var(--border));
+      border-radius: 12px; background: linear-gradient(135deg, rgba(255,255,255,.055), var(--brand-soft));
+      display: grid; grid-template-columns: minmax(220px, 1fr) minmax(280px, 1.35fr); gap: 14px;
+      flex-shrink: 0; box-shadow: 0 14px 32px rgba(0,0,0,.18);
+    }
+    .install-guide.hidden { display: none; }
+    .install-main { display: flex; gap: 12px; align-items: flex-start; min-width: 0; }
+    .install-logo {
+      width: 44px; height: 44px; border-radius: 12px; background: linear-gradient(135deg, var(--brand), var(--brand2));
+      display: flex; align-items: center; justify-content: center; flex-shrink: 0; overflow: hidden; font-size: 22px;
+    }
+    .install-logo img { width: 100%; height: 100%; object-fit: cover; display: none; }
+    .install-logo.has-logo { background: #fff; }
+    .install-logo.has-logo img { display: block; }
+    .install-logo.has-logo span { display: none; }
+    .install-main h2 { font-size: 16px; line-height: 1.25; margin-bottom: 5px; }
+    .install-main p { font-size: 12px; color: var(--muted); line-height: 1.5; max-width: 62ch; }
+    .domain-box {
+      margin-top: 10px; display: flex; gap: 8px; align-items: center; min-width: 0;
+      background: rgba(0,0,0,.18); border: 1px solid rgba(255,255,255,.08); border-radius: 10px; padding: 8px;
+    }
+    .domain-box a {
+      color: var(--text); text-decoration: none; font-size: 12px; font-weight: 700;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 1; min-width: 0;
+    }
+    .copy-btn {
+      border: 1px solid rgba(255,255,255,.12); background: var(--brand); color: #fff;
+      border-radius: 8px; padding: 7px 10px; font-size: 11px; font-weight: 800; cursor: pointer;
+    }
+    .install-steps { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 10px; }
+    .install-card {
+      border: 1px solid rgba(255,255,255,.09); border-radius: 10px; padding: 11px;
+      background: rgba(15,23,42,.56); min-width: 0;
+    }
+    .install-card h3 { font-size: 12px; margin-bottom: 8px; display: flex; align-items: center; gap: 6px; }
+    .install-card ol { list-style: none; display: flex; flex-direction: column; gap: 6px; }
+    .install-card li { font-size: 11px; color: #dbe3ef; line-height: 1.35; display: flex; gap: 7px; }
+    .install-card li span {
+      width: 17px; height: 17px; border-radius: 999px; background: var(--brand);
+      color: #fff; font-size: 10px; font-weight: 800; display: inline-flex; align-items: center; justify-content: center;
+      flex: 0 0 auto;
+    }
+    .install-note { grid-column: 1 / -1; color: var(--muted); font-size: 10px; line-height: 1.45; }
 
     /* ── SECCIÓN CLIENTES ACTIVOS ── */
     .section-hdr {
@@ -199,13 +251,35 @@
     .ios-step  { font-size: 11px; color: #d4d0ca; display: flex; align-items: center; gap: 7px; }
     .ios-step .n { width: 18px; height: 18px; border-radius: 50%; background: #57534e; color: #fff; font-size: 9px; font-weight: 800; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
     .ios-note { font-size: 10px; color: #78716c; margin-top: 4px; }
+
+    @media (max-width: 860px) {
+      html, body { overflow: hidden; }
+      .install-guide { grid-template-columns: 1fr; margin: 10px 10px 2px; padding: 12px; gap: 11px; }
+      .install-steps { grid-template-columns: 1fr; }
+      .install-main h2 { font-size: 14px; }
+      .install-main p { font-size: 11px; }
+      .install-card { padding: 9px; }
+    }
+    @media (max-width: 560px) {
+      .hdr { padding: 9px 10px; }
+      .stats { padding: 7px 12px; justify-content: space-between; gap: 8px; }
+      .install-guide { max-height: 240px; overflow-y: auto; }
+      .install-note { display: none; }
+      .domain-box { flex-direction: column; align-items: stretch; }
+      .domain-box a { white-space: normal; overflow-wrap: anywhere; }
+      .copy-btn { width: 100%; }
+      .banner { padding: 9px 10px; }
+      #feed { padding: 10px; }
+      .order-bubble { max-width: 100%; }
+      .bottom { padding: 8px 10px; }
+    }
   </style>
 </head>
 <body>
 
 <!-- HEADER -->
 <div class="hdr">
-  <div class="hdr-av">🛒<span class="live-dot" id="liveDot"></span></div>
+  <div class="hdr-av"><span class="av-fallback">🛒</span><img id="tenantLogoImg" alt=""><span class="live-dot" id="liveDot"></span></div>
   <div class="hdr-info">
     <h1 id="bizName">Pedidos en vivo</h1>
     <div class="hdr-sub"><span class="sdot" id="sdot"></span><span id="stxt">Conectando…</span></div>
@@ -230,6 +304,40 @@
   <p>Instala esta app para recibir pedidos <b>como WhatsApp</b>, incluso con pantalla apagada.</p>
   <button class="bbtn" id="btnInstall">Instalar</button>
 </div>
+
+<!-- Installation guide for desktop and mobile -->
+<section id="installGuide" class="install-guide">
+  <div class="install-main">
+    <div class="install-logo" id="installLogo"><span>🛒</span><img id="installLogoImg" alt=""></div>
+    <div>
+      <h2 id="installTitle">Instala Pedidos en vivo en tus dispositivos</h2>
+      <p>Abre este enlace en cada celular o tablet del negocio para recibir pedidos en tiempo real y activar notificaciones en segundo plano.</p>
+      <div class="domain-box">
+        <a id="installDomain" href="/notificaciones" target="_blank" rel="noopener">/notificaciones</a>
+        <button class="copy-btn" type="button" onclick="copyInstallLink()">Copiar link</button>
+      </div>
+    </div>
+  </div>
+  <div class="install-steps">
+    <div class="install-card">
+      <h3>Android</h3>
+      <ol>
+        <li><span>1</span>Abre el link en Chrome o Edge desde el dispositivo.</li>
+        <li><span>2</span>Toca Instalar o Agregar a pantalla principal.</li>
+        <li><span>3</span>Abre la app instalada y activa las notificaciones.</li>
+      </ol>
+    </div>
+    <div class="install-card">
+      <h3>iPhone / iPad</h3>
+      <ol>
+        <li><span>1</span>Abre el link en Safari.</li>
+        <li><span>2</span>Toca Compartir y elige Agregar a pantalla de inicio.</li>
+        <li><span>3</span>Abre el icono instalado y activa notificaciones si tu iOS lo permite.</li>
+      </ol>
+    </div>
+    <div class="install-note">En PC esta pantalla sirve para compartir el dominio correcto con el equipo. En móviles, la app instalada queda como acceso directo del negocio.</div>
+  </div>
+</section>
 
 <!-- iOS install banner -->
 <div id="iosBanner" class="banner hidden" style="flex-direction:column;align-items:stretch;gap:8px;">
@@ -281,6 +389,7 @@
 'use strict';
 const $  = id => document.getElementById(id);
 const esc = s => String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+let installUrl = `${location.origin}/notificaciones`;
 
 // ── Labels de paso del chatbot ───────────────────────────────────────────
 const STEP_LABELS = {
@@ -351,6 +460,49 @@ function showToast(title, body) {
   $('tTitle').textContent=title; $('tBody').textContent=body;
   const t=$('toast'); t.classList.add('show');
   clearTimeout(toastTimer); toastTimer=setTimeout(()=>t.classList.remove('show'),5000);
+}
+
+function applyTenantBrand(cfg) {
+  const brand = String(cfg?.primary_color || '').trim();
+  if (/^#[0-9a-fA-F]{6}$/.test(brand)) {
+    document.documentElement.style.setProperty('--brand', brand);
+    document.documentElement.style.setProperty('--brand-soft', `${brand}24`);
+    document.querySelector('meta[name="theme-color"]')?.setAttribute('content', brand);
+  }
+  const logo = String(cfg?.logo || '').trim();
+  const logoUrl = logo ? (logo.startsWith('http') ? logo : `${location.origin}${logo.startsWith('/') ? logo : `/${logo}`}`) : '';
+  if (logoUrl) {
+    const av = document.querySelector('.hdr-av');
+    const avImg = $('tenantLogoImg');
+    const guideLogo = $('installLogo');
+    const guideImg = $('installLogoImg');
+    if (av && avImg) {
+      av.classList.add('has-logo');
+      avImg.src = logoUrl;
+    }
+    if (guideLogo && guideImg) {
+      guideLogo.classList.add('has-logo');
+      guideImg.src = logoUrl;
+    }
+  }
+  const biz = cfg?.business_name || 'tu negocio';
+  $('installTitle').textContent = `Instala Pedidos en vivo de ${biz}`;
+  document.title = `${biz} - Pedidos en vivo`;
+  installUrl = `${location.origin}/notificaciones`;
+  const domain = $('installDomain');
+  if (domain) {
+    domain.href = installUrl;
+    domain.textContent = installUrl;
+  }
+}
+
+async function copyInstallLink() {
+  try {
+    await navigator.clipboard.writeText(installUrl);
+    showToast('Link copiado', 'Compártelo por WhatsApp con quien instalará la app.');
+  } catch {
+    prompt('Copia este link para instalar:', installUrl);
+  }
 }
 
 // ── SESIONES ACTIVAS ──────────────────────────────────────────────────────
@@ -509,6 +661,11 @@ function connectSocket() {
 }
 
 // ── WEB PUSH ──────────────────────────────────────────────────────────────
+function markPushActive() {
+  try { localStorage.setItem('cbp_push_active','1'); } catch{}
+  const btn=$('pushBtn');
+  btn.textContent='✓ Notificaciones activadas'; btn.classList.add('active'); btn.onclick=null;
+}
 async function subscribePush() {
   if(!('PushManager' in window)) return alert('Usa Chrome/Edge en Android para notificaciones push.');
   const perm=await Notification.requestPermission();
@@ -517,7 +674,6 @@ async function subscribePush() {
     const reg=await navigator.serviceWorker.ready;
     const vapidRes=await fetch('/api/notifications/vapid-public-key');
     if(!vapidRes.ok) {
-      // VAPID no configurado en este servidor
       const btn=$('pushBtn');
       btn.textContent='⚠ Push no configurado en el servidor';
       btn.classList.add('active'); btn.onclick=null;
@@ -531,14 +687,15 @@ async function subscribePush() {
       method:'POST', headers:{'Content-Type':'application/json'},
       body:JSON.stringify({endpoint:j.endpoint, keys:j.keys})
     });
-    const btn=$('pushBtn');
-    btn.textContent='✓ Notificaciones activadas'; btn.classList.add('active'); btn.onclick=null;
+    markPushActive();
   } catch(e){ alert('Error: '+e.message); }
 }
 
 // ── PWA INSTALL ───────────────────────────────────────────────────────────
 const isIos = /iphone|ipad|ipod/i.test(navigator.userAgent) && !/crios|fxios/i.test(navigator.userAgent);
 const isStandalone = ('standalone' in navigator && navigator.standalone) || window.matchMedia('(display-mode: standalone)').matches;
+
+if (isStandalone) $('installGuide')?.classList.add('hidden');
 
 if (isIos && !isStandalone) {
   $('iosBanner').classList.remove('hidden');
@@ -556,7 +713,10 @@ $('btnInstall')?.addEventListener('click', async()=>{
   if(outcome==='accepted') $('androidBanner').classList.add('hidden');
   deferPrompt=null;
 });
-window.addEventListener('appinstalled',()=>$('androidBanner').classList.add('hidden'));
+window.addEventListener('appinstalled',()=>{
+  $('androidBanner').classList.add('hidden');
+  $('installGuide')?.classList.add('hidden');
+});
 
 // ── SERVICE WORKER ─────────────────────────────────────────────────────────
 if('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(()=>{});
@@ -599,6 +759,7 @@ async function init() {
     document.querySelector('.hdr').style.display='none';
     document.querySelector('.stats').style.display='none';
     document.querySelector('.bottom').style.display='none';
+    $('installGuide')?.classList.add('hidden');
     $('sessionsWrap').style.display='none';
     document.querySelectorAll('.section-hdr').forEach(e=>e.style.display='none');
     $('feed').innerHTML=`
@@ -618,6 +779,7 @@ async function init() {
 
   // Nombre del negocio (ya tenemos cfg del check de sesión)
   if (cfg?.business_name) $('bizName').textContent = cfg.business_name;
+  applyTenantBrand(cfg);
 
   // Stats iniciales del día
   try {
@@ -629,14 +791,23 @@ async function init() {
     }
   } catch{}
 
-  // ¿Push ya activo?
+  // ¿Push ya activo? — verificar tanto subscription real como localStorage
   if('serviceWorker' in navigator && 'PushManager' in window) {
     try {
       const reg=await navigator.serviceWorker.ready;
-      if(await reg.pushManager.getSubscription()) {
-        const btn=$('pushBtn');
-        btn.textContent='✓ Notificaciones activadas';
-        btn.classList.add('active'); btn.onclick=null;
+      const sub=await reg.pushManager.getSubscription();
+      if(sub) {
+        // Re-registrar en el servidor por si se perdió (ej. el servidor se reinició)
+        const j=sub.toJSON();
+        fetch('/api/notifications/subscribe',{
+          method:'POST', headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({endpoint:j.endpoint, keys:j.keys})
+        }).catch(()=>{});
+        markPushActive();
+      } else if(localStorage.getItem('cbp_push_active')) {
+        // La subscription se perdió (ej. reinstalación, keys VAPID cambiaron)
+        // Limpiar flag y dejar que el usuario vuelva a activar
+        localStorage.removeItem('cbp_push_active');
       }
     } catch{}
   }

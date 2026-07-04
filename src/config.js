@@ -34,6 +34,30 @@ function ensureSecret(name, bytes = 32) {
   return process.env[name];
 }
 
+// Auto-genera claves VAPID (Web Push) si no existen — se guardan en el .env del servidor
+function ensureVapidKeys() {
+  if (!process.env.VAPID_PUBLIC_KEY || !process.env.VAPID_PRIVATE_KEY) {
+    try {
+      const webpush = require('web-push');
+      const keys = webpush.generateVAPIDKeys();
+      const lines = [
+        `\nVAPID_PUBLIC_KEY=${keys.publicKey}`,
+        `\nVAPID_PRIVATE_KEY=${keys.privateKey}`,
+        `\nVAPID_SUBJECT=mailto:admin@chatbotpro.app`,
+      ].join('');
+      if (!fs.existsSync(envPath)) fs.writeFileSync(envPath, '', 'utf8');
+      fs.appendFileSync(envPath, lines);
+      process.env.VAPID_PUBLIC_KEY = keys.publicKey;
+      process.env.VAPID_PRIVATE_KEY = keys.privateKey;
+      process.env.VAPID_SUBJECT = 'mailto:admin@chatbotpro.app';
+      console.log(`[config] Claves VAPID generadas y guardadas en ${selectedEnvFile}`);
+    } catch (e) {
+      console.warn('[config] No se pudieron generar claves VAPID:', e.message);
+    }
+  }
+}
+ensureVapidKeys();
+
 const DATA_DIR = path.join(ROOT, 'data');
 const TENANTS_DIR = path.join(DATA_DIR, 'tenants');
 const UPLOADS_DIR = path.join(ROOT, 'uploads');
@@ -61,7 +85,8 @@ module.exports = {
   DATA_DIR,
   TENANTS_DIR,
   UPLOADS_DIR,
-  VAPID_PUBLIC_KEY: (process.env.VAPID_PUBLIC_KEY || '').trim(),
-  VAPID_PRIVATE_KEY: (process.env.VAPID_PRIVATE_KEY || '').trim(),
-  VAPID_SUBJECT: (process.env.VAPID_SUBJECT || 'mailto:admin@chatbotpro.app').trim(),
+  // Leídos después de ensureVapidKeys() — ya están garantizados
+  get VAPID_PUBLIC_KEY()  { return (process.env.VAPID_PUBLIC_KEY  || '').trim(); },
+  get VAPID_PRIVATE_KEY() { return (process.env.VAPID_PRIVATE_KEY || '').trim(); },
+  get VAPID_SUBJECT()     { return (process.env.VAPID_SUBJECT     || 'mailto:admin@chatbotpro.app').trim(); },
 };

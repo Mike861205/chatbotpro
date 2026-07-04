@@ -40,6 +40,8 @@ const SETTING_KEYS = [
   'ticket_font_size_px',
   'ticket_line_height',
   'ticket_show_logo',
+  'ticket_print_mode',
+  'ticket_mobile_zoom_percent',
   'pos_catalog_sort_mode',
 ];
 

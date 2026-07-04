@@ -516,8 +516,22 @@
               <button class="btn btn-primary" type="submit"><i class="ph-bold ph-floppy-disk"></i> Guardar</button>
             </form>
             <hr style="margin:18px 0;border:none;border-top:1px solid var(--line)" />
-            <h3 style="margin-bottom:14px"><i class="ph-bold ph-printer"></i> Ticket térmico</h3>
+            <h3 style="margin-bottom:14px"><i class="ph-bold ph-printer"></i> Impresión de tickets</h3>
             <form id="ticketForm">
+              <div class="row-2">
+                <div class="field">
+                  <label><i class="ph-bold ph-printer"></i> Tipo de impresión</label>
+                  <select id="cfgTicketPrintMode">
+                    <option value="thermal">Ticket térmico</option>
+                    <option value="bluetooth">Bluetooth / móvil</option>
+                  </select>
+                </div>
+                <div class="field">
+                  <label><i class="ph-bold ph-magnifying-glass-plus"></i> Zoom Bluetooth / móvil</label>
+                  <input type="number" id="cfgTicketMobileZoom" min="80" max="120" step="5" value="100" />
+                  <div class="hint">80% a 120%. 100% es el tamaño natural.</div>
+                </div>
+              </div>
               <div class="row-2">
                 <div class="field">
                   <label><i class="ph-bold ph-ruler"></i> Ancho del ticket</label>

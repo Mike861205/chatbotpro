@@ -343,6 +343,8 @@ async function ensureTenantDefaults(slug, businessName = slug) {
     ticket_font_size_px: '14',
     ticket_line_height: '1.45',
     ticket_show_logo: '1',
+    ticket_print_mode: 'thermal',
+    ticket_mobile_zoom_percent: '100',
     pos_catalog_sort_mode: 'top_sold',
   };
   for (const [k, v] of Object.entries(defaults)) {
