@@ -309,7 +309,12 @@ async function api(path, opts = {}) {
     showSuspensionModal(data.error, data.whatsappUrl);
     throw new Error(data.error || 'Servicio suspendido por falta de pago');
   }
-  if (!res.ok) throw new Error(data.error || 'Error de servidor');
+  if (!res.ok) {
+    const err = new Error(data.error || 'Error de servidor');
+    err.status = res.status;
+    err.data = data;
+    throw err;
+  }
   return data;
 }
 
@@ -473,6 +478,7 @@ globalThis.navigate = navigate;
 
 document.querySelectorAll('.sidebar nav a').forEach((a) =>
   a.addEventListener('click', (e) => {
+    if (!a.dataset.view) return; // enlaces externos (ej. /notificaciones) — dejar pasar
     e.preventDefault();
     navigate(a.dataset.view);
   })
@@ -3041,7 +3047,60 @@ function resetAiImportState() {
 
 let AI_ANALYZE_PROGRESS_TIMER = null;
 let AI_ANALYZE_SUCCESS_TIMER = null;
+let AI_ANALYZE_COOLDOWN_TIMER = null;
+let AI_ANALYZE_COOLDOWN_UNTIL = 0;
 const AI_ANALYZE_BTN_IDLE_HTML = $('#aiAnalyzeBtn')?.innerHTML || '<i class="ph-bold ph-brain"></i> Analizar menú';
+
+function isAiAnalyzeCooldownActive() {
+  return AI_ANALYZE_COOLDOWN_UNTIL > Date.now();
+}
+
+function applyAiAnalyzeButtonIdleState() {
+  const btn = $('#aiAnalyzeBtn');
+  if (!btn) return;
+  btn.innerHTML = AI_ANALYZE_BTN_IDLE_HTML;
+  btn.disabled = false;
+}
+
+function startAiAnalyzeCooldown(seconds) {
+  const btn = $('#aiAnalyzeBtn');
+  const doneNote = $('#aiAnalyzeProgressDone');
+  if (!btn) return;
+
+  if (AI_ANALYZE_COOLDOWN_TIMER) {
+    clearInterval(AI_ANALYZE_COOLDOWN_TIMER);
+    AI_ANALYZE_COOLDOWN_TIMER = null;
+  }
+
+  const safeSecs = Math.max(5, Math.min(180, Math.round(Number(seconds) || 30)));
+  AI_ANALYZE_COOLDOWN_UNTIL = Date.now() + safeSecs * 1000;
+
+  const tick = () => {
+    const remaining = Math.max(0, Math.ceil((AI_ANALYZE_COOLDOWN_UNTIL - Date.now()) / 1000));
+    if (remaining <= 0) {
+      AI_ANALYZE_COOLDOWN_UNTIL = 0;
+      if (AI_ANALYZE_COOLDOWN_TIMER) {
+        clearInterval(AI_ANALYZE_COOLDOWN_TIMER);
+        AI_ANALYZE_COOLDOWN_TIMER = null;
+      }
+      applyAiAnalyzeButtonIdleState();
+      if (doneNote && doneNote.classList.contains('error')) {
+        doneNote.hidden = true;
+      }
+      return;
+    }
+    btn.disabled = true;
+    btn.innerHTML = `<i class="ph-bold ph-timer"></i> Reintentar en ${remaining}s`;
+    if (doneNote) {
+      doneNote.hidden = false;
+      doneNote.classList.add('error');
+      doneNote.textContent = `Límite temporal de IA alcanzado. Reintenta en ${remaining}s.`;
+    }
+  };
+
+  tick();
+  AI_ANALYZE_COOLDOWN_TIMER = setInterval(tick, 1000);
+}
 
 function setAiAnalyzeProgress(value, text) {
   const progress = $('#aiAnalyzeProgress');
@@ -3644,6 +3703,11 @@ $('#aiMenuImage')?.addEventListener('change', () => {
 
 $('#aiProductForm')?.addEventListener('submit', async (e) => {
   e.preventDefault();
+  if (isAiAnalyzeCooldownActive()) {
+    const remaining = Math.max(1, Math.ceil((AI_ANALYZE_COOLDOWN_UNTIL - Date.now()) / 1000));
+    toast(`Espera ${remaining}s para volver a analizar`, true);
+    return;
+  }
   const file = $('#aiMenuImage').files?.[0] || null;
   if (!file) {
     toast('Selecciona una imagen del menú para analizar', true);
@@ -3676,11 +3740,20 @@ $('#aiProductForm')?.addEventListener('submit', async (e) => {
     finishAiAnalyzeProgress(true, `Éxito: ${AI_PRODUCTS_DRAFT.length} productos detectados`);
     toast(`IA detectó ${AI_PRODUCTS_DRAFT.length} productos`);
   } catch (err) {
-    finishAiAnalyzeProgress(false, 'Error al analizar menú. Intenta de nuevo');
-    toast(err.message, true);
+    const retryAfter = Number(err?.data?.retryAfterSec || 0);
+    if (Number(err?.status) === 429) {
+      const wait = retryAfter > 0 ? retryAfter : 30;
+      finishAiAnalyzeProgress(false, `Demasiadas solicitudes. Espera ${wait}s para reintentar`);
+      startAiAnalyzeCooldown(wait);
+      toast(`Límite temporal de IA. Reintenta en ${wait}s`, true);
+    } else {
+      finishAiAnalyzeProgress(false, err?.message || 'Error al analizar menú. Intenta de nuevo');
+      toast(err.message, true);
+    }
   } finally {
-    btn.innerHTML = AI_ANALYZE_BTN_IDLE_HTML;
-    btn.disabled = false;
+    if (!isAiAnalyzeCooldownActive()) {
+      applyAiAnalyzeButtonIdleState();
+    }
   }
 });
 

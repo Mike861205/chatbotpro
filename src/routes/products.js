@@ -1,5 +1,6 @@
 const express = require('express');
 const fs = require('node:fs/promises');
+const path = require('node:path');
 const OpenAI = require('openai');
 const sharp = require('sharp');
 const { requireAuth, requireOwner } = require('../middleware/auth');
@@ -174,13 +175,26 @@ async function buildAiImageDataUrl(file) {
 function normalizeAiProviderError(err) {
   const status = Number(err?.status || err?.statusCode || err?.response?.status || 0);
   const code = String(err?.code || err?.error?.code || '').trim();
+  const headers = err?.response?.headers || err?.headers || {};
+  const retryAfterRaw = typeof headers?.get === 'function'
+    ? headers.get('retry-after')
+    : (headers['retry-after'] || headers['Retry-After'] || '');
   const message = String(
     err?.error?.message ||
     err?.response?.data?.error?.message ||
     err?.message ||
     ''
   ).trim();
-  return { status, code, message };
+  const retryFromHeader = Number.parseInt(String(retryAfterRaw || '').trim(), 10);
+  let retryAfterSec = Number.isFinite(retryFromHeader) && retryFromHeader > 0 ? retryFromHeader : 0;
+  if (!retryAfterSec) {
+    const match = /try again in\s+(\d+(?:\.\d+)?)s/i.exec(message);
+    if (match) {
+      const parsed = Number(match[1]);
+      if (Number.isFinite(parsed) && parsed > 0) retryAfterSec = Math.ceil(parsed);
+    }
+  }
+  return { status, code, message, retryAfterSec };
 }
 
 function mapAiProviderErrorToClient(aiErr) {
@@ -192,9 +206,11 @@ function mapAiProviderErrorToClient(aiErr) {
     };
   }
   if (aiErr.status === 429) {
+    const retryAfterSec = aiErr.retryAfterSec > 0 ? aiErr.retryAfterSec : 30;
     return {
       status: 429,
       error: 'El proveedor de IA alcanzó su límite de uso. Inténtalo de nuevo en unos segundos.',
+      retryAfterSec,
     };
   }
   if (msg.includes('model') && (msg.includes('vision') || msg.includes('image') || msg.includes('multimodal'))) {
@@ -233,6 +249,102 @@ function normalizePublicMediaPath(raw) {
   if (!value) return '';
   if (/^(https?:)?\/\//i.test(value) || value.startsWith('data:') || value.startsWith('blob:')) return value;
   return value.startsWith('/') ? value : `/${value.replace(/^\/+/, '')}`;
+}
+
+async function resolveExistingPublicMediaPath(raw) {
+  const normalized = normalizePublicMediaPath(raw);
+  if (!normalized) return '';
+  if (!normalized.startsWith('/uploads/')) return normalized;
+
+  const rel = normalized.slice('/uploads/'.length);
+  if (!rel || rel.includes('..')) return '';
+  const diskPath = path.join(config.UPLOADS_DIR, rel.replaceAll('/', path.sep));
+  try {
+    await fs.access(diskPath);
+    return normalized;
+  } catch {
+    return '';
+  }
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function buildAiModelCandidates(primaryModel) {
+  const defaults = ['gpt-4o-mini', 'gpt-4.1-mini', 'gpt-4o'];
+  const configured = String(process.env.OPENAI_MENU_MODEL_FALLBACKS || '')
+    .split(',')
+    .map((m) => m.trim())
+    .filter(Boolean);
+  const all = [String(primaryModel || '').trim(), ...configured, ...defaults].filter(Boolean);
+  return [...new Set(all)];
+}
+
+function shouldTryNextModel(aiErr) {
+  const msg = String(aiErr?.message || '').toLowerCase();
+  return (
+    aiErr.status === 404 ||
+    msg.includes('model') ||
+    msg.includes('not found') ||
+    msg.includes('does not exist') ||
+    msg.includes('unsupported')
+  );
+}
+
+function shouldRetrySameModel(aiErr) {
+  return aiErr.status === 429 || aiErr.status >= 500;
+}
+
+async function createMenuSuggestionCompletion(client, content, model) {
+  let lastNormalizedError = null;
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    try {
+      const completion = await client.chat.completions.create({
+        model,
+        temperature: 0.15,
+        messages: [
+          {
+            role: 'system',
+            content:
+              'Eres un asistente experto en estructurar menus de comida para sistemas de catalogo. Responde estrictamente en JSON.',
+          },
+          { role: 'user', content },
+        ],
+      });
+      return { completion, model, attempts: attempt };
+    } catch (err) {
+      const aiErr = normalizeAiProviderError(err);
+      lastNormalizedError = aiErr;
+      if (!shouldRetrySameModel(aiErr) || attempt >= 3) break;
+      const waitSec = aiErr.retryAfterSec > 0 ? Math.min(aiErr.retryAfterSec, 12) : attempt * 2;
+      await sleep(waitSec * 1000);
+    }
+  }
+  const wrapped = new Error(lastNormalizedError?.message || 'AI provider error');
+  wrapped.normalized = lastNormalizedError || normalizeAiProviderError(wrapped);
+  throw wrapped;
+}
+
+async function requestAiMenuSuggestion(aiCfg, content) {
+  const client = buildAiClient(aiCfg.key, aiCfg.baseUrl);
+  const models = buildAiModelCandidates(aiCfg.model);
+  let lastErr = null;
+
+  for (const model of models) {
+    try {
+      return await createMenuSuggestionCompletion(client, content, model);
+    } catch (err) {
+      const aiErr = err?.normalized || normalizeAiProviderError(err);
+      lastErr = aiErr;
+      if (shouldTryNextModel(aiErr)) continue;
+      if (!shouldRetrySameModel(aiErr)) break;
+    }
+  }
+
+  const finalErr = new Error(lastErr?.message || 'AI provider error');
+  finalErr.normalized = lastErr || normalizeAiProviderError(finalErr);
+  throw finalErr;
 }
 
 // ---- Categorías ----
@@ -331,9 +443,9 @@ router.get('/', async (req, res, next) => {
     const ids = rows.map((r) => r.id);
     const soldQtyByProduct = await listSoldQtyByProduct(req.tdb);
     const { variantsMap, groupsMap } = await getProductExtras(req.tdb, ids);
-    const result = rows.map((p) => ({
+    const result = await Promise.all(rows.map(async (p) => ({
       ...p,
-      image: normalizePublicMediaPath(p.image),
+      image: await resolveExistingPublicMediaPath(p.image),
       soldQty: Number(soldQtyByProduct.get(Number(p.id)) || 0),
       variants: (variantsMap.get(p.id) || []).map((v) => ({ ...v, price: Number(v.price) })),
       modifierGroups: (groupsMap.get(p.id) || []).map((g) => ({
@@ -342,7 +454,7 @@ router.get('/', async (req, res, next) => {
         max_selections: Number(g.max_selections),
         options: (g.options || []).map((o) => ({ ...o, extra_price: Number(o.extra_price) })),
       })),
-    }));
+    })));
     res.json(result);
   } catch (e) { next(e); }
 });
@@ -390,32 +502,29 @@ router.post('/ai/suggest', uploadAiMenu.single('menuImage'), async (req, res, ne
       image_url: { url: imagePayload.dataUrl },
     });
 
-    const client = buildAiClient(aiCfg.key, aiCfg.baseUrl);
     let completion;
+    let usedModel;
+    let usedAttempts;
     try {
-      completion = await client.chat.completions.create({
-        model: aiCfg.model,
-        temperature: 0.15,
-        messages: [
-          {
-            role: 'system',
-            content:
-              'Eres un asistente experto en estructurar menus de comida para sistemas de catalogo. Responde estrictamente en JSON.',
-          },
-          { role: 'user', content },
-        ],
-      });
+      const aiResult = await requestAiMenuSuggestion(aiCfg, content);
+      completion = aiResult.completion;
+      usedModel = aiResult.model;
+      usedAttempts = aiResult.attempts;
     } catch (aiError) {
-      const aiErr = normalizeAiProviderError(aiError);
+      const aiErr = aiError?.normalized || normalizeAiProviderError(aiError);
       const mapped = mapAiProviderErrorToClient(aiErr);
       console.error('[ai/suggest] provider error', {
         status: aiErr.status,
         code: aiErr.code,
         message: aiErr.message,
+        retryAfterSec: aiErr.retryAfterSec,
         model: aiCfg.model,
         imageBytes: imagePayload.bytes,
       });
-      return res.status(mapped.status).json({ error: mapped.error });
+      if (mapped.status === 429 && mapped.retryAfterSec) {
+        res.setHeader('Retry-After', String(mapped.retryAfterSec));
+      }
+      return res.status(mapped.status).json({ error: mapped.error, retryAfterSec: mapped.retryAfterSec || 0 });
     }
 
     const rawContent = completion?.choices?.[0]?.message?.content;
@@ -455,7 +564,8 @@ router.post('/ai/suggest', uploadAiMenu.single('menuImage'), async (req, res, ne
         exists: normalizedExisting.has(normalizeCategoryName(name)),
       })),
       variantGroupsDetected,
-      model: aiCfg.model,
+      model: usedModel,
+      retries: Math.max(0, Number(usedAttempts || 1) - 1),
     });
   } catch (e) {
     next(e);

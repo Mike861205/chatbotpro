@@ -301,6 +301,14 @@ async function createTenantSchema(slug) {
       sort INTEGER DEFAULT 0,
       active INTEGER DEFAULT 1
     );
+    CREATE TABLE IF NOT EXISTS "${s}".push_subscriptions (
+      id SERIAL PRIMARY KEY,
+      endpoint TEXT UNIQUE NOT NULL,
+      p256dh TEXT NOT NULL,
+      auth TEXT NOT NULL,
+      user_agent TEXT,
+      created_at TIMESTAMPTZ DEFAULT now()
+    );
   `);
 }
 

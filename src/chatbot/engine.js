@@ -5,6 +5,7 @@ const config = require('../config');
 const OpenAI = require('openai');
 const { q, getSetting, getSuperAdminSetting } = require('../db');
 const { encrypt, decrypt, lookupHash } = require('../utils/crypto');
+const { emitNewOrder } = require('../notifications');
 
 let aiConfigCache = { expiresAt: 0, value: null };
 const aiClientCache = new Map();
@@ -2062,6 +2063,18 @@ async function handleMessage(t, slug, sessionId, rawInput) {
 
       const orderText = buildOrderText(businessName, state.cart, state.customer, state.delivery, currency);
       const waLink = whatsapp ? `https://wa.me/${whatsapp}?text=${encodeURIComponent(orderText)}` : null;
+
+      // Notificar al tenant (Socket.io + Web Push)
+      emitNewOrder(slug, {
+        id: orderRow.id,
+        total,
+        totalLabel: money(total, currency),
+        delivery: state.delivery || 'recoger',
+        customerName: state.customer.name || '',
+        items: state.cart.map(i => `${i.qty}x ${i.name}`).join(', '),
+        summary: orderText,
+        businessName,
+      }).catch(() => {});
 
       reply.messages = [
         `🎉 *¡Pedido #${orderRow.id} recibido!*\n\nEn breve lo confirmamos. ¡Gracias por tu preferencia! 🙏`,

@@ -1,9 +1,13 @@
 const path = require('path');
+const http = require('http');
 const express = require('express');
+const { Server: SocketIO } = require('socket.io');
 const cookieParser = require('cookie-parser');
 const multer = require('multer');
 const config = require('./src/config');
-const { initMaster, refreshTenantBillingStatuses } = require('./src/db');
+const { initMaster, refreshTenantBillingStatuses, q } = require('./src/db');
+const { setIo } = require('./src/notifications');
+const jwt = require('jsonwebtoken');
 
 const app = express();
 app.disable('x-powered-by');
@@ -53,6 +57,7 @@ app.use('/api/cashiers', require('./src/routes/cashiers'));
 app.use('/api/pos', require('./src/routes/pos'));
 app.use('/api/chat', rateLimit(120, 60 * 1000), require('./src/routes/chatbot'));
 app.use('/api/superadmin', rateLimit(80, 10 * 60 * 1000), require('./src/routes/superadmin'));
+app.use('/api/notifications', require('./src/routes/notifications'));
 
 // Páginas
 const page = (name) => (req, res) => res.sendFile(path.join(__dirname, 'public', name));
@@ -60,6 +65,7 @@ app.get('/', page('index.html'));
 app.get('/login', page('login.html'));
 app.get('/register', page('register.html'));
 app.get('/app', page('app.html'));
+app.get('/notificaciones', page('notify.html'));
 app.get('/caja/:slug([a-z0-9-]{3,40})', page('cashier-login.html'));
 app.get('/superadmin/login', page('superadmin-login.html'));
 app.get('/superadmin', page('superadmin.html'));
@@ -99,10 +105,48 @@ initMaster()
       }
     }, 60 * 60 * 1000);
 
-    app.listen(config.PORT, () => {
+    // HTTP server + Socket.io
+    const httpServer = http.createServer(app);
+    const io = new SocketIO(httpServer, {
+      cors: { origin: false },
+      path: '/socket.io',
+    });
+
+    // Auth de sockets: valida el JWT cookie o query param token
+    io.use(async (socket, next) => {
+      try {
+        const token =
+          socket.handshake.auth?.token ||
+          socket.handshake.query?.token ||
+          (socket.handshake.headers.cookie || '').split(';').map(c => c.trim()).find(c => c.startsWith('cbp_owner_token='))?.split('=')[1];
+        if (!token) return next(new Error('auth'));
+        const decoded = jwt.verify(token, config.JWT_SECRET);
+        if (!decoded?.tenantSlug || decoded?.role !== 'owner') return next(new Error('auth'));
+        // Verifica que el tenant exista y esté activo
+        const { rows } = await q('SELECT slug FROM tenants WHERE slug = $1 AND account_status = $2', [decoded.tenantSlug, 'active']);
+        if (!rows[0]) return next(new Error('auth'));
+        socket.tenantSlug = decoded.tenantSlug;
+        next();
+      } catch {
+        next(new Error('auth'));
+      }
+    });
+
+    io.on('connection', (socket) => {
+      socket.join(`tenant:${socket.tenantSlug}`);
+      console.log(`[ws] ${socket.tenantSlug} conectado (${socket.id})`);
+      socket.on('disconnect', () => {
+        console.log(`[ws] ${socket.tenantSlug} desconectado (${socket.id})`);
+      });
+    });
+
+    setIo(io);
+
+    httpServer.listen(config.PORT, () => {
       console.log(`\n🤖 ChatBotPro corriendo en http://localhost:${config.PORT}`);
       console.log(`   Panel:    http://localhost:${config.PORT}/login`);
-      console.log(`   Registro: http://localhost:${config.PORT}/register\n`);
+      console.log(`   Registro: http://localhost:${config.PORT}/register`);
+      console.log(`   Notifs:   http://localhost:${config.PORT}/notificaciones\n`);
     });
   })
   .catch((e) => {

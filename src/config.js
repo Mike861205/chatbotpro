@@ -61,4 +61,7 @@ module.exports = {
   DATA_DIR,
   TENANTS_DIR,
   UPLOADS_DIR,
+  VAPID_PUBLIC_KEY: (process.env.VAPID_PUBLIC_KEY || '').trim(),
+  VAPID_PRIVATE_KEY: (process.env.VAPID_PRIVATE_KEY || '').trim(),
+  VAPID_SUBJECT: (process.env.VAPID_SUBJECT || 'mailto:admin@chatbotpro.app').trim(),
 };

@@ -1,0 +1,608 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="theme-color" content="#111827">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Pedidos Live">
+  <link rel="manifest" href="/static/manifest.json">
+  <link rel="apple-touch-icon" href="/static/icons/icon-192.png">
+  <title>Pedidos en vivo — ChatBotPro</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --brand:   #6c47ff;
+      --brand2:  #a78bfa;
+      --bg:      #111827;
+      --header:  #1f2937;
+      --bubble:  #1e1b4b;
+      --border:  #374151;
+      --text:    #f9fafb;
+      --muted:   #9ca3af;
+      --green:   #22c55e;
+      --red:     #ef4444;
+      --yellow:  #f59e0b;
+    }
+
+    html, body { height: 100%; overflow: hidden; }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* ── HEADER tipo WhatsApp ── */
+    .wh-header {
+      background: var(--header);
+      padding: 12px 16px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+    .avatar-ring {
+      width: 44px; height: 44px; border-radius: 50%;
+      background: linear-gradient(135deg, var(--brand), var(--brand2));
+      display: flex; align-items: center; justify-content: center;
+      font-size: 22px; flex-shrink: 0; position: relative;
+    }
+    .online-dot {
+      position: absolute; bottom: 1px; right: 1px;
+      width: 12px; height: 12px; border-radius: 50%;
+      background: var(--green); border: 2px solid var(--header);
+      display: none;
+    }
+    .online-dot.visible { display: block; animation: pulse 2s infinite; }
+    @keyframes pulse { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:.6;transform:scale(1.15)} }
+
+    .header-meta { flex: 1; min-width: 0; }
+    .header-meta h1 { font-size: 15px; font-weight: 700; }
+    .header-meta .status-line {
+      font-size: 11px; color: var(--muted); margin-top: 1px;
+      display: flex; align-items: center; gap: 5px;
+    }
+    .status-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--yellow); }
+    .status-dot.on  { background: var(--green); }
+    .status-dot.off { background: var(--red); }
+
+    .header-actions { display: flex; gap: 6px; }
+    .icon-btn {
+      width: 36px; height: 36px; border-radius: 50%; border: none;
+      background: transparent; color: var(--muted);
+      display: flex; align-items: center; justify-content: center;
+      font-size: 18px; cursor: pointer; transition: background .18s;
+      text-decoration: none;
+    }
+    .icon-btn:hover { background: rgba(255,255,255,0.08); color: var(--text); }
+
+    /* ── STATS BAR ── */
+    .stats-bar {
+      background: rgba(108,71,255,0.08);
+      border-bottom: 1px solid rgba(108,71,255,0.2);
+      padding: 8px 20px;
+      display: flex; gap: 24px; flex-shrink: 0;
+    }
+    .stat { text-align: center; }
+    .stat-n { font-size: 18px; font-weight: 800; color: var(--brand2); }
+    .stat-l { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: .5px; }
+
+    /* ── INSTALL BANNER ── */
+    #installBanner {
+      background: linear-gradient(90deg, #312e81, #1e1b4b);
+      border-bottom: 1px solid var(--brand);
+      padding: 10px 16px;
+      display: flex; align-items: center; gap: 10px; flex-shrink: 0;
+    }
+    #installBanner.hidden { display: none; }
+    #installBanner p { font-size: 12px; flex: 1; line-height: 1.4; }
+    #installBanner p b { color: var(--brand2); }
+    .btn-install {
+      background: var(--brand); color: #fff; border: none;
+      border-radius: 8px; padding: 7px 14px; font-size: 12px;
+      font-weight: 700; cursor: pointer; white-space: nowrap;
+    }
+
+    /* ── iOS banner ── */
+    #iosBanner {
+      background: linear-gradient(90deg, #1c1917, #292524);
+      border-bottom: 1px solid #57534e;
+      padding: 12px 16px;
+      display: flex; flex-direction: column; gap: 8px; flex-shrink: 0;
+    }
+    #iosBanner.hidden { display: none; }
+    #iosBanner .ios-title { font-size: 13px; font-weight: 700; color: var(--text); }
+    #iosBanner .ios-steps {
+      display: flex; flex-direction: column; gap: 5px;
+    }
+    #iosBanner .ios-step {
+      font-size: 12px; color: #d4d0ca; line-height: 1.5;
+      display: flex; align-items: center; gap: 8px;
+    }
+    #iosBanner .ios-step .step-n {
+      width: 20px; height: 20px; border-radius: 50%;
+      background: #57534e; color: #fff;
+      font-size: 10px; font-weight: 800;
+      display: flex; align-items: center; justify-content: center; flex-shrink: 0;
+    }
+    #iosBanner .ios-note {
+      font-size: 10px; color: #78716c; margin-top: 2px;
+    }
+    #iosBanner .ios-close {
+      align-self: flex-end; margin-top: -4px;
+      background: none; border: none; color: #78716c;
+      font-size: 18px; cursor: pointer; line-height: 1; padding: 0;
+    }
+
+    /* ── FEED ── */
+    #feed {
+      flex: 1; overflow-y: auto; padding: 16px;
+      display: flex; flex-direction: column; gap: 10px;
+      scroll-behavior: smooth;
+    }
+    #feed::-webkit-scrollbar { width: 4px; }
+    #feed::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+
+    .empty {
+      flex: 1; display: flex; flex-direction: column;
+      align-items: center; justify-content: center;
+      text-align: center; color: var(--muted); padding: 40px; gap: 12px;
+    }
+    .empty .ico { font-size: 56px; opacity: .2; }
+    .empty h3 { font-size: 16px; font-weight: 600; color: var(--text); opacity:.5; }
+    .empty p  { font-size: 13px; line-height: 1.6; }
+
+    /* ── BURBUJA DE PEDIDO ── */
+    .order-bubble {
+      max-width: 90%; align-self: flex-start;
+      animation: popIn .3s cubic-bezier(.34,1.56,.64,1);
+    }
+    @keyframes popIn {
+      from { opacity:0; transform: scale(.88) translateY(10px); }
+      to   { opacity:1; transform: scale(1)   translateY(0); }
+    }
+
+    .bubble-meta {
+      display: flex; align-items: center; gap: 8px;
+      margin-bottom: 4px; padding-left: 2px;
+    }
+    .bubble-num { font-size: 11px; font-weight: 700; color: var(--brand2); }
+    .bubble-tag {
+      font-size: 9px; font-weight: 700; padding: 2px 7px;
+      border-radius: 10px; text-transform: uppercase; letter-spacing: .5px;
+    }
+    .tag-dom { background: rgba(34,197,94,.12); color: #4ade80;  border: 1px solid rgba(34,197,94,.25); }
+    .tag-rec { background: rgba(168,139,250,.12); color: var(--brand2); border: 1px solid rgba(168,139,250,.25); }
+    .bubble-time { font-size: 10px; color: var(--muted); margin-left: auto; }
+
+    .bubble-body {
+      background: var(--bubble);
+      border: 1px solid rgba(108,71,255,.25);
+      border-radius: 4px 16px 16px 16px;
+      padding: 12px 14px;
+    }
+    .bubble-body.glow {
+      border-color: var(--brand);
+      box-shadow: 0 0 18px rgba(108,71,255,.35);
+    }
+
+    .cust-name {
+      font-size: 12px; font-weight: 700; color: #c4b5fd;
+      margin-bottom: 7px;
+    }
+    .items-ul { list-style: none; display: flex; flex-direction: column; gap: 3px; }
+    .items-ul li {
+      font-size: 13px; color: var(--text); line-height: 1.5;
+      display: flex; align-items: baseline; gap: 7px;
+    }
+    .items-ul li::before { content: '▸'; color: var(--brand2); font-size: 9px; flex-shrink: 0; }
+
+    .note-pill {
+      margin-top: 8px; font-size: 11px; color: #fbbf24;
+      background: rgba(251,191,36,.07); border: 1px solid rgba(251,191,36,.2);
+      border-radius: 6px; padding: 5px 9px;
+    }
+
+    .bubble-footer {
+      display: flex; align-items: center; gap: 8px;
+      margin-top: 10px; padding-top: 8px;
+      border-top: 1px solid rgba(255,255,255,.07);
+      flex-wrap: wrap;
+    }
+    .total-lbl { font-size: 17px; font-weight: 800; color: #fff; flex: 1; }
+    .pay-tag {
+      font-size: 10px; color: var(--muted);
+      background: rgba(255,255,255,.05); border: 1px solid var(--border);
+      border-radius: 6px; padding: 2px 8px;
+    }
+    .act-btns { display: flex; gap: 6px; }
+    .btn-sm {
+      display: inline-flex; align-items: center; gap: 5px;
+      padding: 6px 12px; border-radius: 8px;
+      font-size: 11px; font-weight: 700; cursor: pointer;
+      border: none; text-decoration: none; transition: opacity .15s;
+    }
+    .btn-sm:hover { opacity: .8; }
+    .btn-ok { background: rgba(255,255,255,.07); color: var(--muted); }
+    .btn-wa { background: #25d366; color: #fff; }
+
+    /* ── BOTTOM BAR ── */
+    .bottom-bar {
+      background: var(--header); border-top: 1px solid var(--border);
+      padding: 10px 16px; display: flex; gap: 8px;
+      align-items: center; flex-shrink: 0;
+    }
+    #pushBtn {
+      flex: 1; background: var(--brand); color: #fff; border: none;
+      border-radius: 10px; padding: 11px 16px;
+      font-size: 13px; font-weight: 700; cursor: pointer;
+      transition: background .18s; display: flex; align-items: center;
+      justify-content: center; gap: 8px;
+    }
+    #pushBtn:hover { background: #5333e0; }
+    #pushBtn.active {
+      background: rgba(255,255,255,.06); color: var(--muted);
+      border: 1px solid var(--border); cursor: default;
+    }
+
+    /* ── TOAST ── */
+    #toast {
+      position: fixed; bottom: 80px; left: 50%;
+      transform: translateX(-50%) translateY(20px);
+      background: #1f2937; border: 1px solid var(--border);
+      border-radius: 14px; padding: 12px 18px;
+      display: flex; align-items: center; gap: 12px;
+      min-width: 260px; max-width: calc(100vw - 32px);
+      box-shadow: 0 8px 32px rgba(0,0,0,.6);
+      opacity: 0; pointer-events: none;
+      transition: opacity .25s, transform .25s; z-index: 200;
+    }
+    #toast.show { opacity: 1; transform: translateX(-50%) translateY(0); pointer-events: auto; }
+    #toast .ti { font-size: 26px; }
+    #toast .tc h3 { font-size: 14px; font-weight: 700; }
+    #toast .tc p  { font-size: 11px; color: var(--muted); margin-top: 2px; }
+  </style>
+</head>
+<body>
+
+<div class="wh-header">
+  <div class="avatar-ring">🛒<span class="online-dot" id="onlineDot"></span></div>
+  <div class="header-meta">
+    <h1 id="bizName">Pedidos en vivo</h1>
+    <div class="status-line">
+      <span class="status-dot" id="statusDot"></span>
+      <span id="statusTxt">Conectando…</span>
+    </div>
+  </div>
+  <div class="header-actions">
+    <button class="icon-btn" id="soundBtn" title="Sonido" onclick="toggleSound()">🔔</button>
+    <button class="icon-btn" title="Pedido de prueba" onclick="injectTest()">🧪</button>
+    <a class="icon-btn" href="/app" title="Ir al panel">↗</a>
+  </div>
+</div>
+
+<div class="stats-bar">
+  <div class="stat"><div class="stat-n" id="sTotal">0</div><div class="stat-l">Hoy</div></div>
+  <div class="stat"><div class="stat-n" id="sNew">0</div><div class="stat-l">Sin leer</div></div>
+  <div class="stat"><div class="stat-n" id="sAmt">$0</div><div class="stat-l">Acumulado</div></div>
+</div>
+
+<!-- Android install banner (beforeinstallprompt) -->
+<div id="installBanner" class="hidden">
+  <span style="font-size:24px;flex-shrink:0">📲</span>
+  <p>Instala esta pantalla en tu celular para recibir pedidos <b>como mensajes de WhatsApp</b>, incluso con la pantalla apagada.</p>
+  <button class="btn-install" id="btnInstall">Instalar</button>
+</div>
+
+<!-- iOS install banner (manual) -->
+<div id="iosBanner" class="hidden">
+  <div style="display:flex;align-items:center;justify-content:space-between">
+    <span class="ios-title">📲 Instalar en iPhone / iPad</span>
+    <button class="ios-close" onclick="document.getElementById('iosBanner').classList.add('hidden')">✕</button>
+  </div>
+  <div class="ios-steps">
+    <div class="ios-step"><span class="step-n">1</span> Abre esta página en <b>Safari</b> (no Chrome ni Firefox).</div>
+    <div class="ios-step"><span class="step-n">2</span> Toca el botón <b>Compartir</b> <span style="font-size:15px">⬆</span> en la barra inferior.</div>
+    <div class="ios-step"><span class="step-n">3</span> Selecciona <b>"Añadir a pantalla de inicio"</b>.</div>
+    <div class="ios-step"><span class="step-n">4</span> Toca <b>Añadir</b> — ya tienes el ícono en tu pantalla.</div>
+  </div>
+  <div class="ios-note">⚠ Las notificaciones push en segundo plano requieren iOS 16.4+ y que la app esté instalada en pantalla de inicio.</div>
+</div>
+
+<div id="feed">
+  <div class="empty" id="emptyMsg">
+    <div class="ico">🧾</div>
+    <h3>Esperando pedidos…</h3>
+    <p>Cuando un cliente complete su pedido<br>en el chatbot, aparecerá aquí al instante.</p>
+  </div>
+</div>
+
+<div class="bottom-bar">
+  <button id="pushBtn" onclick="subscribePush()">🔔 Activar notificaciones en segundo plano</button>
+</div>
+
+<div id="toast">
+  <span class="ti">🛒</span>
+  <div class="tc"><h3 id="toastTitle"></h3><p id="toastBody"></p></div>
+</div>
+
+<script src="/socket.io/socket.io.js"></script>
+<script>
+'use strict';
+const $  = id => document.getElementById(id);
+const esc = s => String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+
+let soundOn = true, audioCx = null, deferPrompt = null, toastTimer = null;
+let statTotal = 0, statNew = 0, statAmt = 0;
+
+// ── Cookie JWT ──────────────────────────────────────────────────────────
+function getToken() {
+  const p = document.cookie.split(';').map(c=>c.trim()).find(c=>c.startsWith('cbp_owner_token='));
+  return p ? decodeURIComponent(p.split('=')[1]) : null;
+}
+
+// ── Status ──────────────────────────────────────────────────────────────
+function setStatus(s) {
+  const dot = $('statusDot'), txt = $('statusTxt'), od = $('onlineDot');
+  const m = { on:['on','En línea',true], off:['off','Desconectado',false], wait:['','Conectando…',false] };
+  const [cls, lbl, live] = m[s]||m.wait;
+  dot.className = 'status-dot '+(cls?cls:'');
+  txt.textContent = lbl;
+  od.classList.toggle('visible', live);
+}
+
+// ── Stats ───────────────────────────────────────────────────────────────
+function refreshStats() {
+  $('sTotal').textContent = statTotal;
+  $('sNew').textContent   = statNew;
+  $('sAmt').textContent   = '$' + statAmt.toLocaleString('es-MX',{maximumFractionDigits:0});
+}
+
+// ── Sound ───────────────────────────────────────────────────────────────
+function toggleSound() { soundOn=!soundOn; $('soundBtn').textContent=soundOn?'🔔':'🔕'; }
+function chime() {
+  if (!soundOn) return;
+  try {
+    if (!audioCx) audioCx = new AudioContext();
+    [[880,0],[1100,.12],[1320,.24]].forEach(([f,t])=>{
+      const o=audioCx.createOscillator(), g=audioCx.createGain();
+      o.connect(g); g.connect(audioCx.destination);
+      o.frequency.value=f; o.type='sine';
+      const s=audioCx.currentTime+t;
+      g.gain.setValueAtTime(.25,s); g.gain.exponentialRampToValueAtTime(.001,s+.28);
+      o.start(s); o.stop(s+.28);
+    });
+  } catch{}
+}
+
+// ── Toast ───────────────────────────────────────────────────────────────
+function showToast(order) {
+  $('toastTitle').textContent = `Pedido #${order.id} — ${order.totalLabel||''}`;
+  const items = order.items ? order.items.split(',')[0]+(order.items.includes(',')? '…':'') : '';
+  $('toastBody').textContent  = (order.customerName||'Cliente') + (items?' · '+items:'');
+  const t=$('toast'); t.classList.add('show');
+  clearTimeout(toastTimer); toastTimer=setTimeout(()=>t.classList.remove('show'),5000);
+}
+
+// ── Burbuja de pedido ───────────────────────────────────────────────────
+function hhmm(ts) { return new Date(ts).toLocaleTimeString('es-MX',{hour:'2-digit',minute:'2-digit'}); }
+
+function renderOrder(order, isNew) {
+  $('emptyMsg')?.remove();
+
+  // Parsear items: pueden venir como string "2x Taco, 1x Agua" o array de objetos
+  let itemsHtml = '';
+  if (Array.isArray(order.cart) && order.cart.length) {
+    itemsHtml = order.cart.map(it=>`<li>${esc(it.qty||1)}x ${esc(it.name||'')}</li>`).join('');
+  } else {
+    const rawItems = (order.items||'').split(',').map(s=>s.trim()).filter(Boolean);
+    itemsHtml = rawItems.map(s=>`<li>${esc(s)}</li>`).join('') || '<li>—</li>';
+  }
+
+  const tag = order.delivery==='domicilio'
+    ? `<span class="bubble-tag tag-dom">🚚 Domicilio</span>`
+    : `<span class="bubble-tag tag-rec">🏪 Recoger</span>`;
+
+  const waBtn = order.whatsappLink
+    ? `<a class="btn-sm btn-wa" href="${esc(order.whatsappLink)}" target="_blank">💬 WhatsApp</a>`
+    : '';
+
+  const noteHtml = order.notes
+    ? `<div class="note-pill">📝 ${esc(order.notes)}</div>` : '';
+
+  const payHtml = order.paymentMethod
+    ? `<span class="pay-tag">${esc(order.paymentMethod)}</span>` : '';
+
+  const wrap = document.createElement('div');
+  wrap.className = 'order-bubble';
+  wrap.id = `b-${order.id}`;
+  wrap.innerHTML = `
+    <div class="bubble-meta">
+      <span class="bubble-num">Pedido #${order.id}</span>
+      ${tag}
+      <span class="bubble-time">${hhmm(order.ts||Date.now())}</span>
+    </div>
+    <div class="bubble-body${isNew?' glow':''}">
+      <div class="cust-name">👤 ${esc(order.customerName||'Cliente')}</div>
+      <ul class="items-ul">${itemsHtml}</ul>
+      ${noteHtml}
+      <div class="bubble-footer">
+        <span class="total-lbl">${esc(order.totalLabel||('$'+Number(order.total||0).toLocaleString('es-MX')))}</span>
+        ${payHtml}
+        <div class="act-btns">
+          ${waBtn}
+          <button class="btn-sm btn-ok" onclick="dismiss(${order.id})">✓ OK</button>
+        </div>
+      </div>
+    </div>`;
+
+  const feed = $('feed');
+  feed.appendChild(wrap);
+  feed.scrollTop = feed.scrollHeight;
+
+  if (isNew) setTimeout(()=>wrap.querySelector('.bubble-body')?.classList.remove('glow'), 10000);
+}
+
+function dismiss(id) {
+  const el = $(`b-${id}`);
+  if (!el) return;
+  el.style.cssText += 'opacity:0;transform:scale(.92);transition:all .2s';
+  setTimeout(()=>{ el.remove(); statNew=Math.max(0,statNew-1); refreshStats(); }, 200);
+}
+
+// ── Socket.io ───────────────────────────────────────────────────────────
+function connectSocket(token) {
+  const socket = io({ auth:{token}, reconnectionDelay:2000 });
+  socket.on('connect',       ()=>setStatus('on'));
+  socket.on('disconnect',    ()=>setStatus('off'));
+  socket.on('connect_error', ()=>setStatus('off'));
+  socket.on('new_order', order=>{
+    order.ts = Date.now();
+    renderOrder(order, true);
+    chime();
+    showToast(order);
+    statNew++; statTotal++; statAmt+=Number(order.total||0);
+    refreshStats();
+    navigator.vibrate?.([150,80,150]);
+  });
+}
+
+// ── Web Push ────────────────────────────────────────────────────────────
+async function subscribePush() {
+  if (!('PushManager' in window)) return alert('Usa Chrome/Edge en Android para activar notificaciones push.');
+  const perm = await Notification.requestPermission();
+  if (perm !== 'granted') return alert('Permiso denegado. Actívalo en la configuración del navegador.');
+  try {
+    const reg = await navigator.serviceWorker.ready;
+    const { publicKey } = await fetch('/api/notifications/vapid-public-key').then(r=>r.json());
+    const sub = await reg.pushManager.subscribe({ userVisibleOnly:true, applicationServerKey:b64u8(publicKey) });
+    const j = sub.toJSON();
+    await fetch('/api/notifications/subscribe',{
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({endpoint:j.endpoint, keys:j.keys})
+    });
+    const btn = $('pushBtn');
+    btn.textContent = '✓ Notificaciones activadas';
+    btn.classList.add('active'); btn.onclick = null;
+  } catch(e) { alert('Error: '+e.message); }
+}
+
+// ── PWA Install ─────────────────────────────────────────────────────────
+const isIos = /iphone|ipad|ipod/i.test(navigator.userAgent) && !/crios|fxios/i.test(navigator.userAgent);
+const isInStandalone = ('standalone' in navigator && navigator.standalone) || window.matchMedia('(display-mode: standalone)').matches;
+
+if (isIos && !isInStandalone) {
+  // iOS: mostrar instrucciones manuales (no hay beforeinstallprompt)
+  $('iosBanner').classList.remove('hidden');
+} else {
+  // Android / Desktop: banner automático
+  window.addEventListener('beforeinstallprompt', e=>{
+    e.preventDefault(); deferPrompt=e;
+    $('installBanner').classList.remove('hidden');
+  });
+}
+
+$('btnInstall')?.addEventListener('click', async()=>{
+  if (!deferPrompt) return;
+  deferPrompt.prompt();
+  const {outcome} = await deferPrompt.userChoice;
+  if (outcome==='accepted') $('installBanner').classList.add('hidden');
+  deferPrompt = null;
+});
+window.addEventListener('appinstalled',()=>$('installBanner').classList.add('hidden'));
+
+// ── Service Worker ───────────────────────────────────────────────────────
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('/static/sw.js').catch(()=>{});
+
+// ── Test ─────────────────────────────────────────────────────────────────
+function injectTest() {
+  const id = Math.floor(Math.random()*9000+1000);
+  const items = ['2x Taco al pastor', '1x Agua de Jamaica', '1x Orden de quesadillas'];
+  renderOrder({
+    id, total:285, totalLabel:'$285',
+    delivery: Math.random()>.5 ? 'domicilio' : 'recoger',
+    customerName: 'Prueba García',
+    items: items.join(', '),
+    paymentMethod: 'efectivo',
+    ts: Date.now()
+  }, true);
+  chime();
+  statNew++; statTotal++; statAmt+=285; refreshStats();
+  navigator.vibrate?.([150,80,150]);
+}
+
+// ── Utils ─────────────────────────────────────────────────────────────────
+function b64u8(b) {
+  const pad='='.repeat((4-b.length%4)%4);
+  return Uint8Array.from(atob((b+pad).replace(/-/g,'+').replace(/_/g,'/')), c=>c.charCodeAt(0));
+}
+
+// ── Init ───────────────────────────────────────────────────────────────
+async function init() {
+  setStatus('wait');
+  const token = getToken();
+
+  if (!token) {
+    document.querySelector('.wh-header').style.display='none';
+    document.querySelector('.stats-bar').style.display='none';
+    document.querySelector('.bottom-bar').style.display='none';
+    $('feed').innerHTML = `
+      <div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;padding:32px;text-align:center;">
+        <div style="font-size:64px;opacity:.25">🔒</div>
+        <h2 style="font-size:18px">Sesión requerida</h2>
+        <p style="font-size:13px;color:var(--muted);line-height:1.6">Inicia sesión en el panel primero.</p>
+        <a href="/login" style="background:var(--brand);color:#fff;text-decoration:none;padding:12px 28px;border-radius:12px;font-weight:700;font-size:14px;">Ir al login</a>
+      </div>`;
+    return;
+  }
+
+  // Nombre del negocio
+  try {
+    const cfg = await fetch('/api/settings').then(r=>r.ok?r.json():null);
+    if (cfg?.business_name) $('bizName').textContent = cfg.business_name;
+  } catch {}
+
+  // Stats iniciales del día
+  try {
+    const orders = await fetch('/api/orders?todayOnly=1').then(r=>r.ok?r.json():[]);
+    if (Array.isArray(orders)) {
+      statTotal = orders.length;
+      statAmt   = orders.reduce((s,o)=>s+Number(o.total||0), 0);
+      refreshStats();
+    }
+  } catch {}
+
+  // Push ya activo?
+  if ('serviceWorker' in navigator && 'PushManager' in window) {
+    try {
+      const reg = await navigator.serviceWorker.ready;
+      if (await reg.pushManager.getSubscription()) {
+        const btn=$('pushBtn');
+        btn.textContent='✓ Notificaciones activadas';
+        btn.classList.add('active'); btn.onclick=null;
+      }
+    } catch {}
+  }
+
+  // En iOS sin push support (< 16.4) ocultar el botón de push
+  if (isIos && !isInStandalone) {
+    $('pushBtn').style.display = 'none';
+  } else if (isIos && isInStandalone && !('PushManager' in window)) {
+    // iOS instalada pero sin push (< 16.4)
+    $('pushBtn').textContent = '⚠️ Notifs requieren iOS 16.4+';
+    $('pushBtn').classList.add('active'); $('pushBtn').onclick = null;
+  }
+
+  connectSocket(token);
+}
+
+init();
+</script>
+</body>
+</html>
