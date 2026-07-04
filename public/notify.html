@@ -515,7 +515,16 @@ async function subscribePush() {
   if(perm!=='granted') return alert('Permiso denegado. Actívalo en la configuración del navegador.');
   try {
     const reg=await navigator.serviceWorker.ready;
-    const {publicKey}=await fetch('/api/notifications/vapid-public-key').then(r=>r.json());
+    const vapidRes=await fetch('/api/notifications/vapid-public-key');
+    if(!vapidRes.ok) {
+      // VAPID no configurado en este servidor
+      const btn=$('pushBtn');
+      btn.textContent='⚠ Push no configurado en el servidor';
+      btn.classList.add('active'); btn.onclick=null;
+      return;
+    }
+    const {publicKey}=await vapidRes.json();
+    if(!publicKey) { alert('Falta VAPID_PUBLIC_KEY en el servidor.'); return; }
     const sub=await reg.pushManager.subscribe({userVisibleOnly:true, applicationServerKey:b64u8(publicKey)});
     const j=sub.toJSON();
     await fetch('/api/notifications/subscribe',{

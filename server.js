@@ -119,20 +119,32 @@ initMaster()
       path: '/socket.io',
     });
 
-    // Auth de sockets: valida el JWT cookie o query param token
+    // Auth de sockets: valida el JWT del cookie o del query param
     io.use(async (socket, next) => {
       try {
-        const token =
+        const rawToken =
           socket.handshake.auth?.token ||
           socket.handshake.query?.token ||
-          (socket.handshake.headers.cookie || '').split(';').map(c => c.trim()).find(c => c.startsWith('cbp_owner_token='))?.split('=')[1];
-        if (!token) return next(new Error('auth'));
-        const decoded = jwt.verify(token, config.JWT_SECRET);
-        if (!decoded?.tenantSlug || decoded?.role !== 'owner') return next(new Error('auth'));
-        // Verifica que el tenant exista y esté activo
-        const { rows } = await q('SELECT slug FROM tenants WHERE slug = $1 AND account_status = $2', [decoded.tenantSlug, 'active']);
-        if (!rows[0]) return next(new Error('auth'));
-        socket.tenantSlug = decoded.tenantSlug;
+          (socket.handshake.headers.cookie || '')
+            .split(';')
+            .map(c => c.trim())
+            .find(c => c.startsWith('cbp_owner_token='))
+            ?.split('=')
+            .slice(1)
+            .join('='); // reconstruye en caso de que el valor lleve '='
+        if (!rawToken) return next(new Error('auth'));
+        const decoded = jwt.verify(rawToken, config.JWT_SECRET);
+        // El JWT usa 'slug' (no 'tenantSlug') y no incluye 'role'
+        const tenantSlug = decoded?.slug;
+        if (!tenantSlug) return next(new Error('auth'));
+        // Verificar tenant activo y que el usuario sea owner
+        const [{ rows: tRows }, { rows: uRows }] = await Promise.all([
+          q('SELECT slug FROM tenants WHERE slug = $1 AND account_status = $2', [tenantSlug, 'active']),
+          q('SELECT role FROM users WHERE id = $1 AND active = 1', [decoded.uid]),
+        ]);
+        if (!tRows[0]) return next(new Error('auth'));
+        if (!uRows[0] || uRows[0].role !== 'owner') return next(new Error('auth'));
+        socket.tenantSlug = tenantSlug;
         next();
       } catch {
         next(new Error('auth'));
