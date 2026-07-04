@@ -309,10 +309,8 @@ const sessions = new Map(); // sessionId → { ts, step, ... }
 const SESSION_TTL = 10 * 60 * 1000; // 10 min sin actividad → remover
 
 // ── Cookie JWT ───────────────────────────────────────────────────────────
-function getToken() {
-  const p = document.cookie.split(';').map(c=>c.trim()).find(c=>c.startsWith('cbp_owner_token='));
-  return p ? decodeURIComponent(p.split('=')[1]) : null;
-}
+// La cookie cbp_owner_token es httpOnly — no se puede leer con JS.
+// La sesión se verifica haciendo una llamada a la API (el servidor sí la lee).
 
 // ── Status ───────────────────────────────────────────────────────────────
 function setStatus(s) {
@@ -469,8 +467,10 @@ function dismiss(id) {
 }
 
 // ── SOCKET.IO ─────────────────────────────────────────────────────────────
-function connectSocket(token) {
-  const socket=io({auth:{token}, reconnectionDelay:2000});
+function connectSocket() {
+  // No pasamos token explícito: el browser envía la cookie httpOnly
+  // automáticamente en la cabecera del WebSocket upgrade.
+  const socket=io({reconnectionDelay:2000});
   socket.on('connect',      ()=>setStatus('on'));
   socket.on('disconnect',   ()=>setStatus('off'));
   socket.on('connect_error',()=>setStatus('off'));
@@ -576,9 +576,16 @@ function b64u8(b) {
 // ── INIT ──────────────────────────────────────────────────────────────────
 async function init() {
   setStatus('wait');
-  const token=getToken();
 
-  if(!token) {
+  // Verificar sesión haciendo una llamada real a la API.
+  // La cookie httpOnly se envía automáticamente por el browser.
+  let cfg = null;
+  try {
+    const r = await fetch('/api/settings');
+    if (r.ok) cfg = await r.json();
+  } catch {}
+
+  if (!cfg) {
     // Sin sesión — mostrar pantalla de login con redirect de vuelta
     document.querySelector('.hdr').style.display='none';
     document.querySelector('.stats').style.display='none';
@@ -600,11 +607,8 @@ async function init() {
     return;
   }
 
-  // Nombre del negocio
-  try {
-    const cfg=await fetch('/api/settings').then(r=>r.ok?r.json():null);
-    if(cfg?.business_name) $('bizName').textContent=cfg.business_name;
-  } catch{}
+  // Nombre del negocio (ya tenemos cfg del check de sesión)
+  if (cfg?.business_name) $('bizName').textContent = cfg.business_name;
 
   // Stats iniciales del día
   try {
@@ -634,7 +638,7 @@ async function init() {
     $('pushBtn').classList.add('active'); $('pushBtn').onclick=null;
   }
 
-  connectSocket(token);
+  connectSocket();
 }
 
 init();
