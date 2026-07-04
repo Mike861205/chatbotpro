@@ -1,13 +1,39 @@
 // Service Worker — ChatBotPro Notificaciones
 // Maneja push notifications en segundo plano
 const CACHE_NAME = 'cbp-notify-v1';
+const PRECACHE = ['/notificaciones', '/sw.js'];
 
 self.addEventListener('install', (e) => {
+  e.waitUntil(
+    caches.open(CACHE_NAME).then(c => c.addAll(PRECACHE)).catch(() => {})
+  );
   self.skipWaiting();
 });
 
 self.addEventListener('activate', (e) => {
-  e.waitUntil(clients.claim());
+  e.waitUntil(
+    caches.keys().then(keys =>
+      Promise.all(keys.filter(k => k !== CACHE_NAME).map(k => caches.delete(k)))
+    ).then(() => clients.claim())
+  );
+});
+
+// FETCH: network-first, fallback a cache (requerido por Chrome para PWA installability)
+self.addEventListener('fetch', (e) => {
+  // Solo interceptar GETs del mismo origen
+  if (e.request.method !== 'GET' || !e.request.url.startsWith(self.location.origin)) return;
+  e.respondWith(
+    fetch(e.request)
+      .then(res => {
+        // Guardar en cache solo respuestas OK
+        if (res && res.status === 200 && res.type === 'basic') {
+          const clone = res.clone();
+          caches.open(CACHE_NAME).then(c => c.put(e.request, clone)).catch(() => {});
+        }
+        return res;
+      })
+      .catch(() => caches.match(e.request))
+  );
 });
 
 // Escucha eventos push del servidor

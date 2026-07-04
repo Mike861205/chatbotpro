@@ -45,6 +45,13 @@ function rateLimit(max, windowMs) {
 app.use('/static', express.static(path.join(__dirname, 'public')));
 app.use('/uploads', express.static(config.UPLOADS_DIR));
 
+// Service Worker en raíz para que el scope cubra toda la app (necesario para PWA)
+app.get('/sw.js', (req, res) => {
+  res.setHeader('Service-Worker-Allowed', '/');
+  res.setHeader('Content-Type', 'application/javascript');
+  res.sendFile(path.join(__dirname, 'public', 'sw.js'));
+});
+
 // APIs
 app.use('/api/auth', rateLimit(30, 10 * 60 * 1000), require('./src/routes/auth'));
 app.use('/api/products', require('./src/routes/products'));

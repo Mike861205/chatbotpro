@@ -24,6 +24,16 @@ function setIo(io) {
 }
 
 /**
+ * Emite el estado actual de una sesión de chatbot al tenant.
+ * Se llama en cada respuesta del bot para que el panel vea en vivo.
+ */
+function emitSessionUpdate(slug, sessionData) {
+  if (_io) {
+    _io.to(`tenant:${slug}`).emit('session_update', sessionData);
+  }
+}
+
+/**
  * Emite un nuevo pedido a todos los listeners del tenant:
  *  - Socket.io: sala 'tenant:<slug>'
  *  - Web Push: todas las subscripciones guardadas del tenant
@@ -71,4 +81,4 @@ async function emitNewOrder(slug, order) {
   }
 }
 
-module.exports = { emitter, setIo, emitNewOrder };
+module.exports = { emitter, setIo, emitNewOrder, emitSessionUpdate };

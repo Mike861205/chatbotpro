@@ -120,7 +120,9 @@
           throw new Error(data.error || 'Error');
         }
         try { sessionStorage.setItem('cbp_auth_scope', 'owner'); } catch {}
-        location.href = '/app';
+        // Si venimos de /notificaciones u otra ruta, regresar ahí
+        const redir = new URLSearchParams(location.search).get('redirect');
+        location.href = (redir && redir.startsWith('/') && !redir.includes('//')) ? redir : '/app';
       } catch (err) {
         document.getElementById('errorMsg').textContent = err.message;
         errBox.classList.add('show');

@@ -5,7 +5,7 @@ const config = require('../config');
 const OpenAI = require('openai');
 const { q, getSetting, getSuperAdminSetting } = require('../db');
 const { encrypt, decrypt, lookupHash } = require('../utils/crypto');
-const { emitNewOrder } = require('../notifications');
+const { emitNewOrder, emitSessionUpdate } = require('../notifications');
 
 let aiConfigCache = { expiresAt: 0, value: null };
 const aiClientCache = new Map();
@@ -923,6 +923,17 @@ async function handleMessage(t, slug, sessionId, rawInput) {
   const finish = async () => {
     await saveState(t, sessionId, state);
     reply.cart = { items: state.cart, total: cartTotal(state.cart), totalLabel: money(cartTotal(state.cart), currency) };
+    // Notificar al tenant el estado en vivo de esta sesión
+    emitSessionUpdate(slug, {
+      sessionId: sessionId.slice(0, 10),
+      step: state.step,
+      cart: state.cart.map(i => ({ name: i.name, qty: i.qty, price: i.price })),
+      cartTotal: cartTotal(state.cart),
+      cartTotalLabel: money(cartTotal(state.cart), currency),
+      customerName: state.customer?.name || '',
+      delivery: state.delivery || '',
+      ts: Date.now(),
+    });
     return reply;
   };
 
