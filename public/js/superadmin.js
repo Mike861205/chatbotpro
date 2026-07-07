@@ -1,6 +1,7 @@
 let SA_TENANTS = [];
 let SA_FILTER = 'all';
 let SA_SUMMARY = null;
+let SA_DEMO_LEADS = [];
 let SA_PAYMENT_TENANT_ID = null;
 let SA_SUSPEND_TENANT_ID = null;
 let SA_ACTIVATE_TENANT_ID = null;
@@ -294,6 +295,77 @@ function renderTenantTable() {
   document.querySelectorAll('[data-sa-suspend]').forEach((btn) => {
     btn.addEventListener('click', () => toggleTenantSuspend(Number(btn.dataset.saSuspend)).catch((err) => toast(err.message, true)));
   });
+}
+
+function getFilteredDemoLeads() {
+  const search = String($('#saDemoLeadSearch')?.value || '').trim().toLowerCase();
+  return SA_DEMO_LEADS.filter((lead) => {
+    if (!search) return true;
+    return [lead.contact_name, lead.phone, lead.business_giro, lead.source_label, lead.last_demo_tenant_slug].join(' ').toLowerCase().includes(search);
+  });
+}
+
+function renderDemoLeadSummary(summary) {
+  const el = $('#saDemoLeadSummary');
+  if (!el) return;
+  const s = summary || { total: 0, landing: 0, login: 0, today: 0, week: 0 };
+  const cards = [
+    { label: 'Total leads', value: Number(s.total || 0), tone: 'tone-total', icon: 'ph-chart-pie-slice' },
+    { label: 'Landing', value: Number(s.landing || 0), tone: 'tone-active', icon: 'ph-globe' },
+    { label: 'Login', value: Number(s.login || 0), tone: 'tone-current', icon: 'ph-door-open' },
+    { label: 'Hoy', value: Number(s.today || 0), tone: 'tone-soon', icon: 'ph-bell-ringing' },
+    { label: 'Últimos 7 días', value: Number(s.week || 0), tone: 'tone-due', icon: 'ph-calendar-check' },
+  ];
+
+  el.innerHTML = cards
+    .map((card) => `
+      <div class="pos-mini-stat sa-summary-card demo-summary-card ${card.tone}">
+        <span><i class="ph-bold ${card.icon}"></i> ${esc(card.label)}</span>
+        <b>${card.value}</b>
+      </div>
+    `)
+    .join('');
+}
+
+function renderDemoLeadsTable() {
+  const table = $('#saDemoLeadsTable');
+  const filtered = getFilteredDemoLeads();
+
+  if (!table) return;
+  if (!filtered.length) {
+    table.innerHTML = '<div class="empty"><i class="ph ph-rocket-launch"></i><b>Sin leads demo</b><p>No hay resultados con ese filtro.</p></div>';
+    return;
+  }
+
+  table.innerHTML = `<div class="table-wrap"><table><thead><tr>
+    <th>Nombre</th><th>Teléfono</th><th>Giro</th><th>Origen</th><th>Veces</th><th>Primera vez</th><th>Última vez</th><th>Contacto</th>
+  </tr></thead><tbody>${filtered
+    .map((lead) => {
+      const digits = String(lead.phone || '').replace(/\D/g, '');
+      const waUrl = digits ? `https://wa.me/${digits}` : '';
+      return `<tr>
+        <td><b>${esc(lead.contact_name)}</b><div class="meta">ID #${lead.id}</div></td>
+        <td>${digits ? esc(lead.phone) : '—'}</td>
+        <td>${esc(lead.business_giro)}</td>
+        <td><span class="tag">${esc(lead.source_label || 'Landing')}</span></td>
+        <td><b>${Number(lead.demo_count || 0)}</b></td>
+        <td>${fmtDate(lead.first_seen_at)}</td>
+        <td>${fmtDate(lead.last_seen_at)}</td>
+        <td>
+          <div style="display:flex;gap:6px;flex-wrap:wrap">
+            ${waUrl ? `<a class="btn btn-ghost" href="${waUrl}" target="_blank" rel="noopener noreferrer"><i class="ph-bold ph-whatsapp-logo"></i> WhatsApp</a>` : ''}
+          </div>
+        </td>
+      </tr>`;
+    })
+    .join('')}</tbody></table></div>`;
+}
+
+async function loadDemoLeads() {
+  const payload = await api('/api/superadmin/demo-leads');
+  SA_DEMO_LEADS = Array.isArray(payload?.demoLeads) ? payload.demoLeads : [];
+  renderDemoLeadSummary(payload?.summary || null);
+  renderDemoLeadsTable();
 }
 
 async function loadTenants() {
@@ -684,16 +756,24 @@ async function uploadSuperAdminLogo(fileParam, options = {}) {
 
 function setView(view) {
   const isTenants = view === 'tenants';
+  const isDemoLeads = view === 'demo-leads';
+  let title = '<i class="ph-bold ph-plugs-connected"></i> Integraciones';
+  let subtitle = 'Configuración central de OpenAI y APIs del chatbot.';
+  if (isTenants) {
+    title = '<i class="ph-bold ph-buildings"></i> Tenants';
+    subtitle = 'Administra tenants activos, por pagar y suspendidos.';
+  } else if (isDemoLeads) {
+    title = '<i class="ph-bold ph-rocket-launch"></i> Leads demo';
+    subtitle = 'Contactos que pidieron acceso al demo con sus datos de negocio.';
+  }
   $('#saViewTenants').hidden = !isTenants;
   $('#saViewTenants').classList.toggle('active', isTenants);
-  $('#saViewIntegrations').hidden = isTenants;
-  $('#saViewIntegrations').classList.toggle('active', !isTenants);
-  $('#saTitle').innerHTML = isTenants
-    ? '<i class="ph-bold ph-buildings"></i> Tenants'
-    : '<i class="ph-bold ph-plugs-connected"></i> Integraciones';
-  $('#saSub').textContent = isTenants
-    ? 'Administra tenants activos, por pagar y suspendidos.'
-    : 'Configuración central de OpenAI y APIs del chatbot.';
+  $('#saViewDemoLeads').hidden = !isDemoLeads;
+  $('#saViewDemoLeads').classList.toggle('active', isDemoLeads);
+  $('#saViewIntegrations').hidden = isTenants || isDemoLeads;
+  $('#saViewIntegrations').classList.toggle('active', !isTenants && !isDemoLeads);
+  $('#saTitle').innerHTML = title;
+  $('#saSub').textContent = subtitle;
   document.querySelectorAll('[data-sa-view]').forEach((a) => a.classList.toggle('active', a.dataset.saView === view));
 }
 
@@ -702,7 +782,7 @@ async function boot() {
     const me = await api('/api/superadmin/me');
     $('#saUserName').textContent = me.username || 'superadmin';
     startSuperAdminClock();
-    await Promise.all([loadTenants(), loadIntegrations(), loadDeployStatus(), loadGitDeployStatus()]);
+    await Promise.all([loadTenants(), loadDemoLeads(), loadIntegrations(), loadDeployStatus(), loadGitDeployStatus()]);
   } catch (err) {
     toast(err.message, true);
   }
@@ -717,6 +797,8 @@ $('#saUploadBrandLogo')?.addEventListener('click', () => uploadSuperAdminLogo().
 
 $('#saTenantSearch')?.addEventListener('input', renderTenantTable);
 $('#saReloadTenants')?.addEventListener('click', () => loadTenants().catch((e) => toast(e.message, true)));
+$('#saDemoLeadSearch')?.addEventListener('input', renderDemoLeadsTable);
+$('#saReloadDemoLeads')?.addEventListener('click', () => loadDemoLeads().catch((e) => toast(e.message, true)));
 $('#saBillingRefresh')?.addEventListener('click', () => refreshBilling().catch((e) => toast(e.message, true)));
 $('#saIntegrationForm')?.addEventListener('submit', (e) => saveIntegrations(e).catch((err) => toast(err.message, true)));
 $('#saDeployRun')?.addEventListener('click', () => runProductionDeploy().catch((err) => toast(err.message, true)));

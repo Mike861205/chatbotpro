@@ -78,15 +78,24 @@
 
       <!-- ──────── Dashboard ──────── -->
       <section class="section active" id="view-dashboard">
+        <div class="dashboard-toolbar">
+          <div class="segmented" id="dashboardPeriodFilter">
+            <button data-period="day" class="on">Día</button>
+            <button data-period="week">Semana</button>
+            <button data-period="month">Mes</button>
+            <button data-period="year">Año</button>
+          </div>
+          <div class="dashboard-toolbar-copy">Consulta tus reportes por día, semana, mes o año.</div>
+        </div>
         <div class="grid-stats">
-          <div class="card stat"><div class="ic g1"><i class="ph-bold ph-currency-dollar"></i></div><div><div class="val" id="stSalesToday">—</div><div class="lbl">Ventas de hoy</div></div></div>
-          <div class="card stat"><div class="ic g2"><i class="ph-bold ph-receipt"></i></div><div><div class="val" id="stOrdersToday">—</div><div class="lbl">Pedidos de hoy</div></div></div>
-          <div class="card stat"><div class="ic g3"><i class="ph-bold ph-hourglass-medium"></i></div><div><div class="val" id="stPending">—</div><div class="lbl">Pedidos pendientes</div></div></div>
+          <div class="card stat"><div class="ic g1"><i class="ph-bold ph-currency-dollar"></i></div><div><div class="val" id="stSalesToday">—</div><div class="lbl" id="stSalesLabel">Ventas de hoy</div></div></div>
+          <div class="card stat"><div class="ic g2"><i class="ph-bold ph-receipt"></i></div><div><div class="val" id="stOrdersToday">—</div><div class="lbl" id="stOrdersLabel">Pedidos de hoy</div></div></div>
+          <div class="card stat"><div class="ic g3"><i class="ph-bold ph-hourglass-medium"></i></div><div><div class="val" id="stPending">—</div><div class="lbl" id="stPendingLabel">Pedidos pendientes</div></div></div>
           <div class="card stat"><div class="ic g4"><i class="ph-bold ph-chart-line-up"></i></div><div><div class="val" id="stAvgTicket">—</div><div class="lbl">Ticket promedio</div></div></div>
         </div>
         <div class="grid-2">
-          <div class="card"><h3><i class="ph-bold ph-trend-up"></i> Ventas — últimos 7 días</h3><canvas id="salesChart" height="225"></canvas></div>
-          <div class="card"><h3><i class="ph-bold ph-trophy"></i> Más vendidos</h3><canvas id="topChart" height="225"></canvas></div>
+          <div class="card"><h3 id="dashboardSalesTitle"><i class="ph-bold ph-trend-up"></i> Ventas por hora</h3><canvas id="salesChart" height="225"></canvas></div>
+          <div class="card"><h3 id="dashboardTopTitle"><i class="ph-bold ph-trophy"></i> Más vendidos de hoy</h3><canvas id="topChart" height="225"></canvas></div>
         </div>
         <div class="card" style="margin-top:16px">
           <h3><i class="ph-bold ph-clock-counter-clockwise"></i> Pedidos recientes

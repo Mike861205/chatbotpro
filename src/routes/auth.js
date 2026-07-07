@@ -2,7 +2,7 @@ const express = require('express');
 const bcrypt = require('bcryptjs');
 const config = require('../config');
 const { q, tdb, initTenantDefaults } = require('../db');
-const { encrypt, decrypt } = require('../utils/crypto');
+const { encrypt, decrypt, lookupHash } = require('../utils/crypto');
 const { signToken, setAuthCookie, clearAuthCookie, requireAuth } = require('../middleware/auth');
 
 const router = express.Router();
@@ -19,6 +19,54 @@ function supportWhatsappUrl() {
 function normalizePhone(raw) {
   const digits = String(raw || '').replace(/\D/g, '');
   return digits.length >= 10 && digits.length <= 15 ? digits : '';
+}
+
+function normalizeLeadText(raw) {
+  return String(raw || '').trim().replace(/\s+/g, ' ');
+}
+
+async function saveDemoLead({ contactName, phone, businessGiro, sourcePage, tenantSlug }) {
+  const cleanName = normalizeLeadText(contactName);
+  const cleanPhone = normalizePhone(phone);
+  const cleanGiro = normalizeLeadText(businessGiro);
+  const cleanSource = ['landing', 'login'].includes(String(sourcePage || '').trim().toLowerCase())
+    ? String(sourcePage).trim().toLowerCase()
+    : 'landing';
+
+  if (!cleanName || !cleanPhone || !cleanGiro) {
+    const err = new Error('Nombre, telefono y giro del negocio son obligatorios');
+    err.status = 400;
+    throw err;
+  }
+
+  const phoneHash = lookupHash(cleanPhone);
+  const phoneEnc = encrypt(cleanPhone);
+  const existing = await q('SELECT id, demo_count, first_seen_at FROM demo_leads WHERE phone_hash = $1 LIMIT 1', [phoneHash]);
+  const row = existing.rows[0];
+
+  if (row) {
+    await q(
+      `UPDATE demo_leads
+       SET contact_name = $1,
+           phone_enc = $2,
+           business_giro = $3,
+           source_page = $4,
+           demo_count = COALESCE(demo_count, 0) + 1,
+           last_seen_at = now(),
+           last_demo_tenant_slug = $5
+       WHERE id = $6`,
+      [cleanName, phoneEnc, cleanGiro, cleanSource, tenantSlug || '', row.id]
+    );
+    return { id: row.id, demo_count: Number(row.demo_count || 1) + 1 };
+  }
+
+  const inserted = await q(
+    `INSERT INTO demo_leads (contact_name, phone_enc, phone_hash, business_giro, source_page, demo_count, first_seen_at, last_seen_at, last_demo_tenant_slug)
+     VALUES ($1, $2, $3, $4, $5, 1, now(), now(), $6)
+     RETURNING id, demo_count`,
+    [cleanName, phoneEnc, phoneHash, cleanGiro, cleanSource, tenantSlug || '']
+  );
+  return inserted.rows[0] || { id: null, demo_count: 1 };
 }
 
 function getDemoCredentials() {
@@ -140,6 +188,27 @@ router.post('/login', async (req, res, next) => {
 
 router.post('/demo-login', async (req, res, next) => {
   try {
+    const body = req.body || {};
+    const contactName = body.contactName ?? body.name ?? body.ownerName;
+    const phone = body.phone ?? body.contactPhone;
+    const businessGiro = body.businessGiro ?? body.giro ?? body.businessType;
+    const sourcePage = body.sourcePage ?? body.source ?? 'landing';
+
+    try {
+      await saveDemoLead({
+        contactName,
+        phone,
+        businessGiro,
+        sourcePage,
+        tenantSlug: String(config.DEMO_TENANT_SLUG || '').trim().toLowerCase(),
+      });
+    } catch (e) {
+      if (e?.status === 400) {
+        return res.status(400).json({ error: e.message });
+      }
+      throw e;
+    }
+
     if (!config.DEMO_LOGIN_ENABLED) {
       return res.status(404).json({ error: 'Acceso demo no disponible' });
     }

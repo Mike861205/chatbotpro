@@ -56,20 +56,87 @@
       </div>
     </div>
   </div>
+  <div class="modal-bg" id="demoLeadModal" hidden>
+    <div class="modal" style="max-width:520px">
+      <h3><i class="ph-bold ph-rocket-launch"></i> Acceso a la demo</h3>
+      <p class="hint" style="margin-top:-4px;margin-bottom:16px">Antes de abrir el demo, déjanos tus datos para poder contactarte después.</p>
+      <form id="demoLeadForm">
+        <div class="field">
+          <label for="demoLeadName"><i class="ph-bold ph-user"></i> Nombre *</label>
+          <input type="text" id="demoLeadName" autocomplete="name" required />
+        </div>
+        <div class="row-2">
+          <div class="field">
+            <label for="demoLeadPhone"><i class="ph-bold ph-phone"></i> Teléfono *</label>
+            <input type="tel" id="demoLeadPhone" autocomplete="tel" inputmode="tel" placeholder="10 dígitos" required />
+          </div>
+          <div class="field">
+            <label for="demoLeadGiro"><i class="ph-bold ph-storefront"></i> Giro del negocio *</label>
+            <input type="text" id="demoLeadGiro" placeholder="Pizzería, tacos, cafetería..." required />
+          </div>
+        </div>
+        <div class="modal-actions">
+          <button type="button" class="btn btn-ghost" id="demoLeadCancel">Cancelar</button>
+          <button class="btn btn-primary" type="submit"><i class="ph-bold ph-rocket-launch"></i> Entrar al demo</button>
+        </div>
+      </form>
+    </div>
+  </div>
   <script>
     const demoBtn = document.getElementById('demoBtn');
     const demoErr = document.getElementById('demoError');
     const demoErrMsg = document.getElementById('demoErrorMsg');
+    const demoLeadModal = document.getElementById('demoLeadModal');
+    const demoLeadForm = document.getElementById('demoLeadForm');
+    const demoLeadCancel = document.getElementById('demoLeadCancel');
 
-    demoBtn.addEventListener('click', async () => {
+    function openDemoLeadModal() {
+      demoLeadModal.hidden = false;
+      demoLeadModal.classList.add('show');
+      document.getElementById('demoLeadName').focus();
+    }
+
+    function closeDemoLeadModal() {
+      demoLeadModal.classList.remove('show');
+      demoLeadModal.hidden = true;
+    }
+
+    demoBtn.addEventListener('click', () => {
+      openDemoLeadModal();
+    });
+
+    demoLeadCancel.addEventListener('click', () => {
+      closeDemoLeadModal();
+    });
+
+    demoLeadModal.addEventListener('click', (e) => {
+      if (e.target?.id === 'demoLeadModal') closeDemoLeadModal();
+    });
+
+    demoLeadForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
       demoBtn.disabled = true;
       demoErr.classList.remove('show');
       demoErr.hidden = true;
+      const phoneDigits = document.getElementById('demoLeadPhone').value.replace(/\D/g, '');
+      if (phoneDigits.length < 10 || phoneDigits.length > 15) {
+        demoErrMsg.textContent = 'Ingresa un teléfono válido de 10 a 15 dígitos';
+        demoErr.hidden = false;
+        demoErr.classList.add('show');
+        demoBtn.disabled = false;
+        return;
+      }
+      closeDemoLeadModal();
       try {
         const res = await fetch('/api/auth/demo-login', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: '{}',
+          body: JSON.stringify({
+            contactName: document.getElementById('demoLeadName').value,
+            phone: phoneDigits,
+            businessGiro: document.getElementById('demoLeadGiro').value,
+            sourcePage: 'landing',
+          }),
         });
         const data = await res.json().catch(() => ({}));
         if (!res.ok) throw new Error(data.error || 'No se pudo abrir la demo');

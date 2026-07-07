@@ -77,6 +77,20 @@ async function initMaster() {
       notes TEXT DEFAULT '',
       created_at TIMESTAMPTZ DEFAULT now()
     );
+    CREATE TABLE IF NOT EXISTS demo_leads (
+      id SERIAL PRIMARY KEY,
+      contact_name TEXT NOT NULL,
+      phone_enc TEXT NOT NULL,
+      phone_hash TEXT UNIQUE NOT NULL,
+      business_giro TEXT NOT NULL,
+      source_page TEXT DEFAULT 'landing',
+      demo_count INTEGER DEFAULT 1,
+      first_seen_at TIMESTAMPTZ DEFAULT now(),
+      last_seen_at TIMESTAMPTZ DEFAULT now(),
+      last_demo_tenant_slug TEXT DEFAULT '',
+      notes TEXT DEFAULT '',
+      created_at TIMESTAMPTZ DEFAULT now()
+    );
     CREATE TABLE IF NOT EXISTS users (
       id SERIAL PRIMARY KEY,
       tenant_id INTEGER NOT NULL REFERENCES tenants(id),
@@ -117,6 +131,18 @@ async function initMaster() {
   await q(`ALTER TABLE tenants ADD COLUMN IF NOT EXISTS plan_name TEXT DEFAULT 'starter'`);
   await q(`ALTER TABLE tenants ADD COLUMN IF NOT EXISTS billing_due_date DATE`);
   await q(`ALTER TABLE tenants ADD COLUMN IF NOT EXISTS notes TEXT DEFAULT ''`);
+  await q(`ALTER TABLE demo_leads ADD COLUMN IF NOT EXISTS contact_name TEXT NOT NULL DEFAULT ''`);
+  await q(`ALTER TABLE demo_leads ADD COLUMN IF NOT EXISTS phone_enc TEXT NOT NULL DEFAULT ''`);
+  await q(`ALTER TABLE demo_leads ADD COLUMN IF NOT EXISTS phone_hash TEXT`);
+  await q(`ALTER TABLE demo_leads ADD COLUMN IF NOT EXISTS business_giro TEXT NOT NULL DEFAULT ''`);
+  await q(`ALTER TABLE demo_leads ADD COLUMN IF NOT EXISTS source_page TEXT DEFAULT 'landing'`);
+  await q(`ALTER TABLE demo_leads ADD COLUMN IF NOT EXISTS demo_count INTEGER DEFAULT 1`);
+  await q(`ALTER TABLE demo_leads ADD COLUMN IF NOT EXISTS first_seen_at TIMESTAMPTZ DEFAULT now()`);
+  await q(`ALTER TABLE demo_leads ADD COLUMN IF NOT EXISTS last_seen_at TIMESTAMPTZ DEFAULT now()`);
+  await q(`ALTER TABLE demo_leads ADD COLUMN IF NOT EXISTS last_demo_tenant_slug TEXT DEFAULT ''`);
+  await q(`ALTER TABLE demo_leads ADD COLUMN IF NOT EXISTS notes TEXT DEFAULT ''`);
+  await q(`ALTER TABLE demo_leads ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT now()`);
+  await q(`CREATE UNIQUE INDEX IF NOT EXISTS idx_demo_leads_phone_hash_unique ON demo_leads (phone_hash)`);
   await q(`ALTER TABLE tenant_payments ADD COLUMN IF NOT EXISTS amount NUMERIC(12,2) NOT NULL DEFAULT 0`);
   await q(`ALTER TABLE tenant_payments ADD COLUMN IF NOT EXISTS method TEXT DEFAULT 'manual'`);
   await q(`ALTER TABLE tenant_payments ADD COLUMN IF NOT EXISTS note TEXT DEFAULT ''`);

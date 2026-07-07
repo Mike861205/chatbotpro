@@ -75,11 +75,11 @@
         </a>
         <form id="loginForm">
           <div class="field">
-            <label><i class="ph-bold ph-user"></i> Usuario</label>
+            <label for="username"><i class="ph-bold ph-user"></i> Usuario</label>
             <input type="text" id="username" autocomplete="username" required />
           </div>
           <div class="field">
-            <label><i class="ph-bold ph-lock-key"></i> Contraseña</label>
+            <label for="password"><i class="ph-bold ph-lock-key"></i> Contraseña</label>
             <input type="password" id="password" autocomplete="current-password" required />
           </div>
           <button class="btn btn-primary btn-block" type="submit" id="loginBtn"><i class="ph-bold ph-sign-in"></i> Entrar</button>
@@ -87,6 +87,32 @@
         </form>
         <p class="alt">¿No tienes cuenta? <a href="/register">Regístrate gratis</a></p>
       </div>
+    </div>
+  </div>
+  <div class="modal-bg" id="demoLeadModal" hidden>
+    <div class="modal" style="max-width:520px">
+      <h3><i class="ph-bold ph-rocket-launch"></i> Acceso a la demo</h3>
+      <p class="hint" style="margin-top:-4px;margin-bottom:16px">Antes de abrir el demo, déjanos tus datos para poder contactarte después.</p>
+      <form id="demoLeadForm">
+        <div class="field">
+          <label for="demoLeadName"><i class="ph-bold ph-user"></i> Nombre *</label>
+          <input type="text" id="demoLeadName" autocomplete="name" required />
+        </div>
+        <div class="row-2">
+          <div class="field">
+            <label for="demoLeadPhone"><i class="ph-bold ph-phone"></i> Teléfono *</label>
+            <input type="tel" id="demoLeadPhone" autocomplete="tel" inputmode="tel" placeholder="10 dígitos" required />
+          </div>
+          <div class="field">
+            <label for="demoLeadGiro"><i class="ph-bold ph-storefront"></i> Giro del negocio *</label>
+            <input type="text" id="demoLeadGiro" placeholder="Pizzería, tacos, cafetería..." required />
+          </div>
+        </div>
+        <div class="modal-actions">
+          <button type="button" class="btn btn-ghost" id="demoLeadCancel">Cancelar</button>
+          <button class="btn btn-primary" type="submit"><i class="ph-bold ph-rocket-launch"></i> Entrar al demo</button>
+        </div>
+      </form>
     </div>
   </div>
   <a class="wa-fab" href="https://wa.me/526241370820?text=Me%20interesa%20el%20sistema%20de%20chatbot" target="_blank" rel="noopener noreferrer">
@@ -97,6 +123,20 @@
     const form = document.getElementById('loginForm');
     const loginBtn = document.getElementById('loginBtn');
     const demoBtn = document.getElementById('demoBtn');
+    const demoLeadModal = document.getElementById('demoLeadModal');
+    const demoLeadForm = document.getElementById('demoLeadForm');
+    const demoLeadCancel = document.getElementById('demoLeadCancel');
+
+    function openDemoLeadModal() {
+      demoLeadModal.hidden = false;
+      demoLeadModal.classList.add('show');
+      document.getElementById('demoLeadName').focus();
+    }
+
+    function closeDemoLeadModal() {
+      demoLeadModal.classList.remove('show');
+      demoLeadModal.hidden = true;
+    }
 
     async function doLogin(endpoint, body) {
       const errBox = document.getElementById('error');
@@ -139,8 +179,33 @@
       });
     });
 
-    demoBtn.addEventListener('click', async () => {
-      await doLogin('/api/auth/demo-login');
+    demoBtn.addEventListener('click', () => {
+      openDemoLeadModal();
+    });
+
+    demoLeadCancel.addEventListener('click', () => {
+      closeDemoLeadModal();
+    });
+
+    demoLeadModal.addEventListener('click', (e) => {
+      if (e.target?.id === 'demoLeadModal') closeDemoLeadModal();
+    });
+
+    demoLeadForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const phoneDigits = document.getElementById('demoLeadPhone').value.replace(/\D/g, '');
+      if (phoneDigits.length < 10 || phoneDigits.length > 15) {
+        document.getElementById('errorMsg').textContent = 'Ingresa un teléfono válido de 10 a 15 dígitos';
+        document.getElementById('error').classList.add('show');
+        return;
+      }
+      closeDemoLeadModal();
+      await doLogin('/api/auth/demo-login', {
+        contactName: document.getElementById('demoLeadName').value,
+        phone: phoneDigits,
+        businessGiro: document.getElementById('demoLeadGiro').value,
+        sourcePage: 'login',
+      });
     });
   </script>
 </body>

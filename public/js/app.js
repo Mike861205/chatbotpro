@@ -3,6 +3,7 @@ let ME = null;
 let SETTINGS = null;
 let salesChart = null;
 let topChart = null;
+let DASHBOARD_PERIOD = 'day';
 let orderStatusFilter = '';
 let orderPage = 1;
 const ORDER_PAGE_SIZE = 10;
@@ -22,6 +23,12 @@ let POS_CART = [];
 let POS_CATEGORY_FILTER = 'all';
 let POS_PRODUCT_SORT = 'top_sold';
 let POS_PAYMENT_METHOD = 'cash';
+const DASHBOARD_PERIOD_LABELS = {
+  day: 'de hoy',
+  week: 'de la semana',
+  month: 'del mes',
+  year: 'del año',
+};
 let POS_PAYMENT_FORM = { cashReceived: '', cash: '', card: '', transfer: '', notes: '' };
 let LAST_POS_SALE = null;
 let POS_SALES_PAGE = 1;
@@ -517,11 +524,22 @@ $('#posSortSelect')?.addEventListener('change', async (e) => {
 
 /* ===== Dashboard ===== */
 async function loadDashboard() {
-  const s = await api('/api/dashboard/stats');
+  const s = await api(`/api/dashboard/stats?period=${encodeURIComponent(DASHBOARD_PERIOD)}`);
+  const periodMeta = s.period || {};
+  const periodKey = periodMeta.key || DASHBOARD_PERIOD;
+  const periodSuffix = DASHBOARD_PERIOD_LABELS[periodKey] || 'de hoy';
   $('#stSalesToday').textContent = fmtMoney(s.today.sales);
   $('#stOrdersToday').textContent = s.today.count;
   $('#stPending').textContent = s.pending;
   $('#stAvgTicket').textContent = fmtMoney(s.avgTicket);
+  $('#stSalesLabel').textContent = periodMeta.salesLabel || `Ventas ${periodSuffix}`;
+  $('#stOrdersLabel').textContent = periodMeta.ordersLabel || `Pedidos ${periodSuffix}`;
+  $('#stPendingLabel').textContent = `Pendientes ${periodSuffix}`;
+  $('#dashboardSalesTitle').innerHTML = `<i class="ph-bold ph-trend-up"></i> ${periodMeta.chartTitle || 'Ventas'}`;
+  $('#dashboardTopTitle').innerHTML = `<i class="ph-bold ph-trophy"></i> ${periodMeta.topTitle || 'Más vendidos'}`;
+  document.querySelectorAll('#dashboardPeriodFilter button').forEach((button) => {
+    button.classList.toggle('on', button.dataset.period === periodKey);
+  });
   refreshPendingOrdersMonitor({ allowSound: false });
 
   const primary = ME.tenant.primaryColor || '#ff6b35';
@@ -536,7 +554,7 @@ async function loadDashboard() {
     data: {
       labels: s.last7.map((d) => d.day),
       datasets: [{
-        label: 'Ventas',
+        label: periodMeta.salesLabel || 'Ventas',
         data: s.last7.map((d) => d.sales),
         borderColor: primary,
         backgroundColor: grad,
@@ -969,6 +987,13 @@ $('#orderFilter').addEventListener('click', (e) => {
   orderStatusFilter = btn.dataset.st;
   orderPage = 1;
   loadOrders();
+});
+
+$('#dashboardPeriodFilter')?.addEventListener('click', (e) => {
+  const btn = e.target.closest('button');
+  if (!btn || btn.dataset.period === DASHBOARD_PERIOD) return;
+  DASHBOARD_PERIOD = btn.dataset.period;
+  loadDashboard();
 });
 
 $('#ordersTodayToggle')?.addEventListener('click', () => {

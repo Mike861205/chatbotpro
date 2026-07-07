@@ -228,6 +228,11 @@
     }
     #pushBtn:hover { background: #5333e0; }
     #pushBtn.active { background: rgba(255,255,255,.06); color: var(--muted); border: 1px solid var(--border); cursor: default; }
+    #testPushBtn {
+      background: rgba(255,255,255,.06); color: var(--text); border: 1px solid var(--border);
+      border-radius: 10px; padding: 10px 12px; font-size: 12px; font-weight: 700; cursor: pointer;
+    }
+    #testPushBtn:hover { border-color: var(--brand); color: var(--brand2); }
 
     /* ── TOAST ── */
     #toast {
@@ -376,6 +381,7 @@
 <!-- BOTTOM -->
 <div class="bottom">
   <button id="pushBtn" onclick="subscribePush()">🔔 Activar notificaciones en segundo plano</button>
+  <button id="testPushBtn" onclick="testPush()">Probar push</button>
 </div>
 
 <!-- TOAST -->
@@ -666,6 +672,17 @@ function markPushActive() {
   const btn=$('pushBtn');
   btn.textContent='✓ Notificaciones activadas'; btn.classList.add('active'); btn.onclick=null;
 }
+
+async function registerPushSubscription(sub) {
+  const j=sub.toJSON();
+  const res = await fetch('/api/notifications/subscribe',{
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({endpoint:j.endpoint, keys:j.keys})
+  });
+  if (!res.ok) throw new Error('No se pudo registrar el dispositivo en el servidor');
+  return res.json().catch(()=>({ok:true}));
+}
+
 async function subscribePush() {
   if(!('PushManager' in window)) return alert('Usa Chrome/Edge en Android para notificaciones push.');
   const perm=await Notification.requestPermission();
@@ -682,13 +699,24 @@ async function subscribePush() {
     const {publicKey}=await vapidRes.json();
     if(!publicKey) { alert('Falta VAPID_PUBLIC_KEY en el servidor.'); return; }
     const sub=await reg.pushManager.subscribe({userVisibleOnly:true, applicationServerKey:b64u8(publicKey)});
-    const j=sub.toJSON();
-    await fetch('/api/notifications/subscribe',{
-      method:'POST', headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({endpoint:j.endpoint, keys:j.keys})
-    });
+    await registerPushSubscription(sub);
     markPushActive();
   } catch(e){ alert('Error: '+e.message); }
+}
+
+async function testPush() {
+  try {
+    const res = await fetch('/api/notifications/test', { method:'POST' });
+    const data = await res.json().catch(()=>({}));
+    if (!res.ok) throw new Error(data.error || 'No se pudo enviar la prueba');
+    if (!Number(data.sent || 0)) {
+      showToast('Sin dispositivos registrados', 'Activa notificaciones otra vez en este dispositivo.');
+      return;
+    }
+    showToast('Push enviado', 'Cierra la app o bloquea el celular para probar el aviso del sistema.');
+  } catch(e) {
+    alert('Error: '+e.message);
+  }
 }
 
 // ── PWA INSTALL ───────────────────────────────────────────────────────────
@@ -798,11 +826,7 @@ async function init() {
       const sub=await reg.pushManager.getSubscription();
       if(sub) {
         // Re-registrar en el servidor por si se perdió (ej. el servidor se reinició)
-        const j=sub.toJSON();
-        fetch('/api/notifications/subscribe',{
-          method:'POST', headers:{'Content-Type':'application/json'},
-          body:JSON.stringify({endpoint:j.endpoint, keys:j.keys})
-        }).catch(()=>{});
+        await registerPushSubscription(sub);
         markPushActive();
       } else if(localStorage.getItem('cbp_push_active')) {
         // La subscription se perdió (ej. reinstalación, keys VAPID cambiaron)

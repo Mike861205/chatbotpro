@@ -24,6 +24,7 @@
       </div>
       <nav>
         <a href="#tenants" data-sa-view="tenants" data-color="cyan" class="active"><span class="nav-ic"><i class="ph-fill ph-buildings"></i></span><span>Tenants</span><span class="sa-module-icon"><i class="ph-bold ph-users-three"></i></span></a>
+        <a href="#demo-leads" data-sa-view="demo-leads" data-color="violet"><span class="nav-ic"><i class="ph-fill ph-rocket-launch"></i></span><span>Leads demo</span><span class="sa-module-icon"><i class="ph-bold ph-phone-call"></i></span></a>
         <a href="#integrations" data-sa-view="integrations" data-color="amber"><span class="nav-ic"><i class="ph-fill ph-plugs-connected"></i></span><span>Integraciones</span><span class="sa-module-icon"><i class="ph-bold ph-gear-six"></i></span></a>
       </nav>
       <div class="user-pill" style="margin-top:auto">
@@ -59,6 +60,7 @@
 
         <div class="card" style="padding:16px">
           <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:12px">
+            <label for="saTenantSearch" style="position:absolute;left:-9999px;width:1px;height:1px;overflow:hidden">Buscar tenants</label>
             <div class="segmented" id="saTenantFilters">
               <button type="button" class="active" data-status="all">Todos</button>
               <button type="button" data-status="active">Activos</button>
@@ -70,6 +72,34 @@
             <button type="button" class="btn btn-primary" id="saReloadTenants"><i class="ph-bold ph-arrows-clockwise"></i> Actualizar</button>
           </div>
           <div id="saTenantsTable"></div>
+        </div>
+      </section>
+
+      <section id="saViewDemoLeads" class="section" hidden>
+        <div class="card demo-hero-card" style="margin-bottom:14px">
+          <div class="demo-hero-copy">
+            <span class="demo-hero-kicker"><i class="ph-bold ph-rocket-launch"></i> Leads demo</span>
+            <h3>Contactos que quieren probar el sistema</h3>
+            <p>Visualiza nombres, teléfonos y giro de negocio para dar seguimiento comercial y convertir demos en ventas.</p>
+          </div>
+          <button type="button" class="btn btn-ghost demo-hero-refresh" id="saReloadDemoLeads"><i class="ph-bold ph-arrows-clockwise"></i> Actualizar</button>
+        </div>
+
+        <div class="card" style="padding:16px;margin-bottom:14px">
+          <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px">
+            <h3><i class="ph-bold ph-chart-pie-slice"></i> Resumen vivo</h3>
+            <span class="hint">Origen, actividad y ritmo de los leads demo</span>
+          </div>
+          <p class="hint" style="margin-top:-4px;margin-bottom:12px">Contactos que dejaron nombre, teléfono y giro del negocio al abrir el demo.</p>
+          <div id="saDemoLeadSummary" class="pos-close-grid"></div>
+        </div>
+
+        <div class="card" style="padding:16px">
+          <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:12px">
+            <label for="saDemoLeadSearch" style="position:absolute;left:-9999px;width:1px;height:1px;overflow:hidden">Buscar leads demo</label>
+            <input id="saDemoLeadSearch" type="search" placeholder="Buscar por nombre, teléfono, giro o origen" style="max-width:340px" />
+          </div>
+          <div id="saDemoLeadsTable"></div>
         </div>
       </section>
 

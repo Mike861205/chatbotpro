@@ -33,7 +33,7 @@ const deployState = {
 };
 
 function appendDeployLog(raw) {
-  const text = String(raw || '').replace(/\r/g, '');
+  const text = String(raw || '').replaceAll('\r', '');
   if (!text) return;
   const lines = text.split('\n').filter(Boolean);
   const ts = new Date().toISOString();
@@ -211,6 +211,32 @@ function buildTenantSummary(rows) {
     const moraDays = Number(row.mora_days || 0);
     if (Number.isFinite(daysToDue) && daysToDue >= 0 && daysToDue <= 5) summary.dueSoon5 += 1;
     if (Number.isFinite(moraDays) && moraDays > 0) summary.inMora += 1;
+  }
+
+  return summary;
+}
+
+function buildDemoLeadSummary(rows) {
+  const summary = {
+    total: rows.length,
+    landing: 0,
+    login: 0,
+    today: 0,
+    week: 0,
+  };
+  const now = new Date();
+  const todayKey = now.toISOString().slice(0, 10);
+  const weekAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
+
+  for (const row of rows) {
+    if (String(row.source_page || '').toLowerCase() === 'login') summary.login += 1;
+    else summary.landing += 1;
+
+    const lastSeen = new Date(row.last_seen_at || row.created_at || 0);
+    if (!Number.isNaN(lastSeen.getTime())) {
+      if (lastSeen.toISOString().slice(0, 10) === todayKey) summary.today += 1;
+      if (lastSeen.getTime() >= weekAgo) summary.week += 1;
+    }
   }
 
   return summary;
@@ -408,6 +434,55 @@ router.get('/tenants', requireSuperAdmin, async (req, res, next) => {
     res.json({
       tenants: mapped,
       summary: buildTenantSummary(mapped),
+    });
+  } catch (e) {
+    next(e);
+  }
+});
+
+router.get('/demo-leads', requireSuperAdmin, async (req, res, next) => {
+  try {
+    const qText = String(req.query.q || '').trim().toLowerCase();
+    const values = [];
+    const where = [];
+
+    if (qText) {
+      values.push(`%${qText}%`);
+      where.push(`(
+        lower(dl.contact_name) LIKE $${values.length}
+        OR lower(dl.business_giro) LIKE $${values.length}
+        OR lower(dl.source_page) LIKE $${values.length}
+        OR lower(dl.last_demo_tenant_slug) LIKE $${values.length}
+      )`);
+    }
+
+    const sql = `
+      SELECT
+        dl.id,
+        dl.contact_name,
+        dl.phone_enc,
+        dl.business_giro,
+        dl.source_page,
+        dl.demo_count,
+        dl.first_seen_at,
+        dl.last_seen_at,
+        dl.last_demo_tenant_slug,
+        dl.notes
+      FROM demo_leads dl
+      ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
+      ORDER BY dl.last_seen_at DESC, dl.id DESC
+    `;
+
+    const rows = await q(sql, values);
+    const mapped = rows.rows.map((row) => ({
+      ...row,
+      phone: decrypt(row.phone_enc) || '',
+      source_label: String(row.source_page || '').toLowerCase() === 'login' ? 'Login' : 'Landing',
+    }));
+
+    res.json({
+      demoLeads: mapped,
+      summary: buildDemoLeadSummary(mapped),
     });
   } catch (e) {
     next(e);
