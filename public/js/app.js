@@ -398,6 +398,7 @@ const VIEW_META = {
   clientes: ['Clientes', 'Fidelidad y valor de clientes del chatbot', 'ph-users-three'],
   pos: ['Punto de venta', 'Caja, cobro y cierre del día', 'ph-cash-register'],
   productos: ['Productos', 'Tu menú visible en el chatbot', 'ph-hamburger'],
+  inventarios: ['Inventarios', 'Control de stock, entradas, mermas y conteo físico', 'ph-package'],
   chatbot: ['Mi chatbot', 'Configura el flujo y comparte tu liga', 'ph-chat-circle-dots'],
   config: ['Mi negocio', 'Identidad, branding y contacto', 'ph-storefront'],
   suscripciones: ['Suscripciones', 'Planes, beneficios y pago seguro', 'ph-crown'],
@@ -409,6 +410,7 @@ const VIEW_LOADERS = {
   clientes: loadCustomers,
   pos: loadPos,
   productos: loadProducts,
+  inventarios: loadInventarios,
   chatbot: fillBotForm,
   config: fillConfigForm,
   suscripciones: () => {},
@@ -623,7 +625,125 @@ function orderPaymentLabel(method) {
   }[String(method || '')] || '—';
 }
 
+function buildOrderDeliveryLabel(order) {
+  if (order?.delivery === 'domicilio') return 'Domicilio';
+  const pickup = String(order?.pickup_branch_name || '').trim();
+  return pickup ? `Recoger · ${pickup}` : 'Recoger';
+}
+
+function buildOrderComandaItems(order) {
+  const rows = Array.isArray(order?.items) ? order.items : [];
+  return rows.map((item) => ({
+    qty: Number(item?.qty || 0),
+    name: String(item?.name || 'Producto'),
+  }));
+}
+
+function openOrderComandaPrintWindow(order) {
+  if (!order) return toast('No se encontró el pedido para imprimir', true);
+  const items = buildOrderComandaItems(order);
+  if (!items.length) return toast('El pedido no tiene productos para comanda', true);
+
+  const biz = esc(SETTINGS?.business_name || ME?.tenant?.businessName || 'Negocio');
+  const bizAddress = esc(SETTINGS?.address || '');
+  const bizWhatsapp = esc((SETTINGS?.whatsapp || '').trim());
+  const widthMm = Math.max(58, Math.min(80, Number(SETTINGS?.ticket_width_mm || 80)));
+  const fontPx = Math.max(10, Math.min(24, Number(SETTINGS?.ticket_font_size_px || 14)));
+  const lineHeight = Math.max(1.1, Math.min(2, Number(SETTINGS?.ticket_line_height || 1.45)));
+  const showLogo = SETTINGS?.ticket_show_logo !== '0';
+  const printMode = SETTINGS?.ticket_print_mode === 'bluetooth' ? 'bluetooth' : 'thermal';
+  const mobileZoomPercent = Math.max(80, Math.min(120, Number(SETTINGS?.ticket_mobile_zoom_percent || 100)));
+  const mobileZoom = mobileZoomPercent / 100;
+  const printZoom = printMode === 'bluetooth' ? mobileZoom : 1;
+  const pageCss = printMode === 'bluetooth'
+    ? '@page { size: auto; margin: 6mm; }'
+    : `@page { size: ${widthMm}mm auto; margin: 3mm; }`;
+  const printWindowSize = printMode === 'bluetooth' ? 'width=430,height=760' : 'width=420,height=760';
+  const logo = ME?.tenant?.logo
+    ? `${location.origin}${ME.tenant.logo.startsWith('/') ? ME.tenant.logo : `/${ME.tenant.logo}`}`
+    : '';
+
+  const itemRows = items.map((it) => {
+    const qty = Number.isFinite(it.qty) ? it.qty : 0;
+    return `<tr>
+      <td class="qty">${esc(String(qty))}</td>
+      <td>${esc(it.name)}</td>
+    </tr>`;
+  }).join('');
+
+  const customerName = esc(order?.customer?.name || 'Mostrador');
+  const customerPhone = esc(order?.customer?.phone || '');
+  const delivery = esc(buildOrderDeliveryLabel(order));
+  const branch = esc(order?.delivery === 'domicilio' ? (order?.service_branch_name || '—') : (order?.pickup_branch_name || '—'));
+  const createdAt = esc(order?.created_at || new Date().toLocaleString('es-MX'));
+  const notes = esc(String(order?.notes || '').trim());
+
+  const html = `<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Comanda #${esc(String(order.id || ''))}</title>
+  <style>
+    ${pageCss}
+    html, body { margin: 0; padding: 0; }
+    body { width: 100%; max-width: ${Math.max(50, widthMm - 6)}mm; margin: 0 auto; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: ${fontPx}px; line-height: ${lineHeight}; color: #000; }
+    .ticket-wrap { width: 100%; margin: 0 auto; zoom: ${printZoom}; }
+    @supports not (zoom: 1) {
+      .ticket-wrap { transform: scale(${printZoom}); transform-origin: top center; width: ${printZoom === 1 ? 100 : (100 / printZoom).toFixed(4)}%; }
+    }
+    .center { text-align: center; }
+    .meta { font-size: ${Math.max(fontPx - 1, 10)}px; }
+    .sep { border-top: 1px dashed #000; margin: 8px 0; }
+    .logo { text-align: center; margin-bottom: 6px; }
+    .logo img { max-width: 46mm; max-height: 22mm; object-fit: contain; }
+    table { width: 100%; border-collapse: collapse; }
+    td { padding: 4px 2px; vertical-align: top; }
+    td.qty { width: 22%; text-align: center; font-weight: 800; }
+    .headline { font-size: ${Math.max(fontPx + 2, 14)}px; font-weight: 800; letter-spacing: 0.5px; }
+  </style>
+</head>
+<body>
+  <div class="ticket-wrap">
+    ${showLogo && logo ? `<div class="logo"><img src="${esc(logo)}" alt="Logo" /></div>` : ''}
+    <div class="center"><b>${biz}</b></div>
+    ${bizAddress ? `<div class="center meta">${bizAddress}</div>` : ''}
+    ${bizWhatsapp ? `<div class="center meta">WhatsApp: ${bizWhatsapp}</div>` : ''}
+    <div class="sep"></div>
+    <div class="center headline">COMANDA #${esc(String(order.id || ''))}</div>
+    <div class="center meta">${createdAt}</div>
+    <div class="meta"><b>Cliente:</b> ${customerName}${customerPhone ? ` · ${customerPhone}` : ''}</div>
+    <div class="meta"><b>Entrega:</b> ${delivery}</div>
+    <div class="meta"><b>Sucursal:</b> ${branch}</div>
+    ${notes ? `<div class="meta"><b>Nota:</b> ${notes}</div>` : ''}
+    <div class="sep"></div>
+    <table>
+      <thead>
+        <tr><td class="qty"><b>Cant.</b></td><td><b>Producto</b></td></tr>
+      </thead>
+      <tbody>${itemRows}</tbody>
+    </table>
+    <div class="sep"></div>
+    <div class="center meta">Impresión de cocina</div>
+  </div>
+  <script>
+    window.onload = () => {
+      window.print();
+      setTimeout(() => window.close(), 120);
+    };
+  </script>
+</body>
+</html>`;
+
+  const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
+  const blobUrl = URL.createObjectURL(blob);
+  const w = window.open(blobUrl, '_blank', printWindowSize);
+  if (!w) return toast('Permite ventanas emergentes para imprimir', true);
+  setTimeout(() => URL.revokeObjectURL(blobUrl), 10000);
+}
+
 function ordersTableHTML(orders, editable = true) {
+  const actionHead = editable ? '<th>Comanda</th>' : '';
   const rows = orders
     .map((o) => {
       const items = o.items.map((it) => `${it.qty}× ${it.name}`).join(', ');
@@ -654,6 +774,9 @@ function ordersTableHTML(orders, editable = true) {
           ? `<div style="font-size:12px;color:#b42318;margin-top:4px"><i class="ph-bold ph-note-pencil"></i> Motivo: ${esc(o.cancel_note)}</div>`
           : '';
       const paymentText = `<span class="badge b-confirmado"><span style="display:none"></span>${esc(orderPaymentLabel(o.payment_method))}</span>`;
+      const comandaBtn = editable
+        ? `<button type="button" class="btn btn-ghost btn-sm order-print-comanda" data-order-print="${o.id}" title="Imprimir comanda"><i class="ph-bold ph-printer"></i> Comanda</button>`
+        : '';
       return `<tr>
         <td><b>#${o.id}</b></td>
         <td><div class="cust">${custAvatar(o.customer?.name)}<div class="cmeta"><b>${esc(o.customer?.name || '—')}</b><span>${esc(o.customer?.phone || '')}</span></div></div></td>
@@ -664,10 +787,11 @@ function ordersTableHTML(orders, editable = true) {
         <td>${paymentText}</td>
         <td>${statusCell}</td>
         <td style="white-space:nowrap;color:var(--ink-3);font-size:12.5px">${esc(o.created_at)}</td>
+        ${editable ? `<td style="white-space:nowrap">${comandaBtn}</td>` : ''}
       </tr>`;
     })
     .join('');
-  return `<table><thead><tr><th>Pedido</th><th>Cliente</th><th>Productos</th><th>Entrega</th><th>Sucursal</th><th>Total</th><th>Pago</th><th>Estatus</th><th>Fecha</th></tr></thead><tbody>${rows}</tbody></table>`;
+  return `<table><thead><tr><th>Pedido</th><th>Cliente</th><th>Productos</th><th>Entrega</th><th>Sucursal</th><th>Total</th><th>Pago</th><th>Estatus</th><th>Fecha</th>${actionHead}</tr></thead><tbody>${rows}</tbody></table>`;
 }
 
 function renderOrdersPagination(totalItems) {
@@ -775,6 +899,17 @@ async function loadOrders() {
         sel.className = `status-sel s-${previousStatus}`;
         toast(e.message, true);
       }
+    })
+  );
+
+  document.querySelectorAll('.order-print-comanda').forEach((btn) =>
+    btn.addEventListener('click', () => {
+      const order = LAST_ORDERS.find((o) => String(o.id) === String(btn.dataset.orderPrint));
+      if (!order) {
+        toast('No se encontró el pedido para imprimir', true);
+        return;
+      }
+      openOrderComandaPrintWindow(order);
     })
   );
 }
@@ -5189,3 +5324,896 @@ boot()
     l.classList.add('hide');
     setTimeout(() => l.remove(), 350);
   });
+
+/* ═══════════════════════════════════════════════════════════════
+   MÓDULO INVENTARIOS
+   ═══════════════════════════════════════════════════════════════ */
+let INV_DATA = [];          // filas actuales del resumen
+let INV_PRODUCTS = [];      // lista de productos activos para selects
+let INV_SEARCH = '';
+let INV_EXPORT_FMT = 'csv';
+const INV_PAGE_SIZE = 10;
+let INV_PAGE = 1;
+let INV_PERIOD = 'all';
+let INV_START_DATE = '';
+let INV_END_DATE = '';
+let INV_SORT_KEY = 'product_name';
+let INV_SORT_DIR = 'asc';
+
+const INV_PERIOD_HINTS = {
+  all: 'Mostrando acumulado desde el ultimo corte (fisico real a inicial).',
+  today: 'Mostrando datos historicos de hoy.',
+  week: 'Mostrando historico de la semana.',
+  month: 'Mostrando historico del mes.',
+  custom: 'Mostrando historico del rango personalizado.',
+};
+
+/* ── helpers numéricos ── */
+function invFmt(v) {
+  if (v === null || v === undefined || v === '') return '—';
+  const n = Number(v);
+  return Number.isFinite(n) ? n.toLocaleString('es-MX', { maximumFractionDigits: 2 }) : '—';
+}
+
+function invDiffClass(v) {
+  if (v === null || v === undefined || v === '') return '';
+  const n = Number(v);
+  if (n < 0) return 'inv-diff-neg';
+  if (n > 0) return 'inv-diff-pos';
+  return 'inv-diff-zero';
+}
+
+/* ── cargar y renderizar tabla ── */
+async function loadInventarios() {
+  try {
+    const params = new URLSearchParams();
+    if (INV_PERIOD !== 'all') params.set('period', INV_PERIOD);
+    if (INV_PERIOD === 'custom' && INV_START_DATE && INV_END_DATE) {
+      params.set('startDate', INV_START_DATE);
+      params.set('endDate', INV_END_DATE);
+    }
+    const path = params.toString() ? `/api/inventory?${params.toString()}` : '/api/inventory';
+    const payload = await api(path);
+    INV_DATA = Array.isArray(payload) ? payload : (payload.rows || []);
+    INV_PRODUCTS = INV_DATA.map((r) => ({ id: r.product_id, name: r.product_name }));
+    if (INV_PAGE < 1) INV_PAGE = 1;
+    renderInvTable();
+    bindInvSearchFilter();
+    bindInvPeriodControls();
+    bindInvPagerControls();
+    bindInvSortHeaders();
+    buildInvMovProductSelect();
+    buildInvMovHistFilter();
+    updateInvPeriodHint();
+  } catch (err) {
+    toast(err.message || 'Error al cargar inventarios', true);
+  }
+}
+
+function filteredInvData() {
+  const base = !INV_SEARCH
+    ? [...INV_DATA]
+    : INV_DATA.filter((r) => r.product_name.toLowerCase().includes(INV_SEARCH.toLowerCase()));
+  base.sort(compareInvRows);
+  return base;
+}
+
+function getInvSortValue(row, key) {
+  if (key === 'product_name') return String(row.product_name || '').toLowerCase();
+  const value = row[key];
+  if (value === null || value === undefined || value === '') return null;
+  const num = Number(value);
+  return Number.isFinite(num) ? num : String(value).toLowerCase();
+}
+
+function compareInvRows(a, b) {
+  const va = getInvSortValue(a, INV_SORT_KEY);
+  const vb = getInvSortValue(b, INV_SORT_KEY);
+
+  // Nulls at bottom for both directions
+  if (va === null && vb === null) return 0;
+  if (va === null) return 1;
+  if (vb === null) return -1;
+
+  let cmp = 0;
+  if (typeof va === 'number' && typeof vb === 'number') cmp = va - vb;
+  else cmp = String(va).localeCompare(String(vb), 'es', { sensitivity: 'base', numeric: true });
+  if (cmp === 0) {
+    // Stable fallback by product name
+    return String(a.product_name || '').localeCompare(String(b.product_name || ''), 'es', { sensitivity: 'base', numeric: true });
+  }
+  return INV_SORT_DIR === 'asc' ? cmp : -cmp;
+}
+
+function bindInvSortHeaders() {
+  const table = $('#invTable');
+  if (!table) return;
+  const heads = table.querySelectorAll('th.inv-sortable[data-inv-sort]');
+  heads.forEach((th) => {
+    if (!th._invSortBound) {
+      th._invSortBound = true;
+      th.addEventListener('click', () => {
+        const key = th.dataset.invSort;
+        if (!key) return;
+        if (INV_SORT_KEY === key) {
+          INV_SORT_DIR = INV_SORT_DIR === 'asc' ? 'desc' : 'asc';
+        } else {
+          INV_SORT_KEY = key;
+          INV_SORT_DIR = key === 'product_name' ? 'asc' : 'desc';
+        }
+        INV_PAGE = 1;
+        renderInvTable();
+      });
+    }
+
+    th.classList.remove('sort-asc', 'sort-desc');
+    if (th.dataset.invSort === INV_SORT_KEY) {
+      th.classList.add(INV_SORT_DIR === 'asc' ? 'sort-asc' : 'sort-desc');
+    }
+  });
+}
+
+function renderInvTable() {
+  const tbody = $('#invTbody');
+  if (!tbody) return;
+  bindInvSortHeaders();
+  const rows = filteredInvData();
+  const totalPages = Math.max(1, Math.ceil(rows.length / INV_PAGE_SIZE));
+  if (INV_PAGE > totalPages) INV_PAGE = totalPages;
+  const start = (INV_PAGE - 1) * INV_PAGE_SIZE;
+  const rowsPage = rows.slice(start, start + INV_PAGE_SIZE);
+  syncInvPager(totalPages);
+
+  if (!rows.length) {
+    tbody.innerHTML = `<tr><td colspan="9" class="empty-cell">Sin resultados</td></tr>`;
+    return;
+  }
+  tbody.innerHTML = rowsPage.map((r) => {
+    const diffClass = invDiffClass(r.diferencia);
+    return `<tr data-pid="${r.product_id}">
+      <td class="inv-prod-name">
+        <b>${esc(r.product_name)}</b>
+        <span class="inv-unit">${esc(r.unit || 'pcs')}</span>
+      </td>
+      <td class="num">
+        <button class="inv-init-btn btn-link-plain" data-pid="${r.product_id}" title="Editar inventario inicial">${invFmt(r.initial_stock)}</button>
+      </td>
+      <td class="num inv-col-entrada">${invFmt(r.entradas)}</td>
+      <td class="num inv-col-merma">${invFmt(r.mermas)}</td>
+      <td class="num inv-col-ventas">${invFmt(r.ventas)}</td>
+      <td class="num inv-col-sistema"><b>${invFmt(r.fisico_sistema)}</b></td>
+      <td class="num inv-col-real">
+        ${r.fisico_real !== null ? invFmt(r.fisico_real) : '<span class="inv-no-count">Sin conteo</span>'}
+      </td>
+      <td class="num inv-col-diff ${diffClass}">
+        ${r.diferencia !== null ? invFmt(r.diferencia) : '—'}
+      </td>
+      <td class="inv-row-actions">
+        <button class="btn btn-ghost btn-sm inv-btn-entrada-row" data-pid="${r.product_id}" title="Agregar entrada"><i class="ph-bold ph-arrow-fat-line-down"></i></button>
+        <button class="btn btn-ghost btn-sm inv-btn-merma-row" data-pid="${r.product_id}" title="Agregar merma"><i class="ph-bold ph-warning-diamond"></i></button>
+        <button class="btn btn-ghost btn-sm inv-btn-apply-real-row" data-pid="${r.product_id}" title="Pasar físico real a inicial" ${r.fisico_real === null ? 'disabled' : ''}><i class="ph-bold ph-arrows-counter-clockwise"></i></button>
+        <button class="btn btn-ghost btn-sm inv-btn-hist-row" data-pid="${r.product_id}" title="Ver movimientos"><i class="ph-bold ph-clock-clockwise"></i></button>
+      </td>
+    </tr>`;
+  }).join('');
+
+  /* delegación de eventos de la tabla */
+  tbody.querySelectorAll('.inv-init-btn').forEach((btn) =>
+    btn.addEventListener('click', () => openInvInitModal(Number(btn.dataset.pid)))
+  );
+  tbody.querySelectorAll('.inv-btn-entrada-row').forEach((btn) =>
+    btn.addEventListener('click', () => openInvMovModal('entrada', Number(btn.dataset.pid)))
+  );
+  tbody.querySelectorAll('.inv-btn-merma-row').forEach((btn) =>
+    btn.addEventListener('click', () => openInvMovModal('merma', Number(btn.dataset.pid)))
+  );
+  tbody.querySelectorAll('.inv-btn-apply-real-row').forEach((btn) =>
+    btn.addEventListener('click', () => applyRealToInitial(Number(btn.dataset.pid)))
+  );
+  tbody.querySelectorAll('.inv-btn-hist-row').forEach((btn) =>
+    btn.addEventListener('click', () => openInvMovHistModal(Number(btn.dataset.pid)))
+  );
+}
+
+function bindInvSearchFilter() {
+  const input = $('#invSearch');
+  if (!input || input._invBound) return;
+  input._invBound = true;
+  input.addEventListener('input', () => {
+    INV_SEARCH = input.value.trim();
+    INV_PAGE = 1;
+    renderInvTable();
+  });
+}
+
+function syncInvPager(totalPages) {
+  const info = $('#invPageInfo');
+  if (info) info.textContent = `${INV_PAGE} / ${totalPages}`;
+  const prev = $('#invPrevPage');
+  const next = $('#invNextPage');
+  if (prev) prev.disabled = INV_PAGE <= 1;
+  if (next) next.disabled = INV_PAGE >= totalPages;
+}
+
+function bindInvPagerControls() {
+  const prev = $('#invPrevPage');
+  const next = $('#invNextPage');
+  if (prev && !prev._invBound) {
+    prev._invBound = true;
+    prev.addEventListener('click', () => {
+      if (INV_PAGE <= 1) return;
+      INV_PAGE -= 1;
+      renderInvTable();
+    });
+  }
+  if (next && !next._invBound) {
+    next._invBound = true;
+    next.addEventListener('click', () => {
+      const total = Math.max(1, Math.ceil(filteredInvData().length / INV_PAGE_SIZE));
+      if (INV_PAGE >= total) return;
+      INV_PAGE += 1;
+      renderInvTable();
+    });
+  }
+}
+
+function bindInvPeriodControls() {
+  const wrap = $('#invPeriodFilters');
+  if (!wrap || wrap._invBound) return;
+  wrap._invBound = true;
+
+  const today = new Date().toISOString().slice(0, 10);
+  const startInput = $('#invStartDate');
+  const endInput = $('#invEndDate');
+  if (startInput && !startInput.value) startInput.value = today;
+  if (endInput && !endInput.value) endInput.value = today;
+  if (!INV_START_DATE) INV_START_DATE = startInput?.value || '';
+  if (!INV_END_DATE) INV_END_DATE = endInput?.value || '';
+
+  wrap.querySelectorAll('button[data-inv-period]').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const period = btn.dataset.invPeriod;
+      INV_PERIOD = period;
+      INV_PAGE = 1;
+      wrap.querySelectorAll('button[data-inv-period]').forEach((b) => b.classList.toggle('on', b === btn));
+      const customWrap = $('#invCustomRange');
+      if (customWrap) customWrap.hidden = period !== 'custom';
+      updateInvPeriodHint();
+      if (period !== 'custom') {
+        await loadInventarios();
+      }
+    });
+  });
+
+  const applyBtn = $('#invApplyRangeBtn');
+  if (applyBtn && !applyBtn._invBound) {
+    applyBtn._invBound = true;
+    applyBtn.addEventListener('click', async () => {
+      const start = $('#invStartDate')?.value || '';
+      const end = $('#invEndDate')?.value || '';
+      if (!start || !end) {
+        toast('Selecciona fecha inicial y final', true);
+        return;
+      }
+      if (start > end) {
+        toast('La fecha inicial no puede ser mayor que la final', true);
+        return;
+      }
+      INV_START_DATE = start;
+      INV_END_DATE = end;
+      INV_PAGE = 1;
+      await loadInventarios();
+    });
+  }
+}
+
+function updateInvPeriodHint() {
+  const hint = $('#invPeriodHint');
+  if (!hint) return;
+  if (INV_PERIOD === 'custom' && INV_START_DATE && INV_END_DATE) {
+    hint.textContent = `Mostrando del ${INV_START_DATE} al ${INV_END_DATE}.`;
+    return;
+  }
+  hint.textContent = INV_PERIOD_HINTS[INV_PERIOD] || INV_PERIOD_HINTS.all;
+}
+
+function buildInvPeriodPayload() {
+  const payload = {};
+  if (INV_PERIOD !== 'all') payload.period = INV_PERIOD;
+  if (INV_PERIOD === 'custom' && INV_START_DATE && INV_END_DATE) {
+    payload.startDate = INV_START_DATE;
+    payload.endDate = INV_END_DATE;
+  }
+  return payload;
+}
+
+async function applyRealToInitial(productId = null, options = {}) {
+  const logAdjustment = Boolean(options.logAdjustment);
+  const closureNote = String(options.closureNote || '').trim();
+  const isSingle = Number(productId) > 0;
+  const title = isSingle
+    ? 'Aplicar físico real a inventario inicial'
+    : (logAdjustment ? 'Cierre de periodo con ajuste auditable' : 'Aplicar físico real a inicial (global)');
+  const msg = isSingle
+    ? 'Se actualizará el inventario inicial del producto con su último físico real. ¿Continuar?'
+    : (logAdjustment
+      ? 'Se aplicará físico real a inventario inicial de todos los productos con conteo y se guardará una bitácora auditable del cierre. ¿Continuar?'
+      : 'Se actualizará el inventario inicial de todos los productos con su último físico real. ¿Continuar?');
+  const ok = await askConfirm(title, msg, { yesLabel: '<i class="ph-bold ph-check"></i> Sí, aplicar' });
+  if (!ok) return;
+  try {
+    const payload = {
+      ...(isSingle ? { product_id: Number(productId) } : {}),
+      ...buildInvPeriodPayload(),
+    };
+    if (logAdjustment) {
+      payload.logAdjustment = true;
+      payload.closure_note = closureNote || `Cierre de ${INV_PERIOD === 'all' ? 'acumulado general' : INV_PERIOD}`;
+    }
+    const res = await api('/api/inventory/apply-real-to-initial', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    await loadInventarios();
+    if (logAdjustment) {
+      toast(`Cierre aplicado: ${res.updated || 0} actualizados · ${res.logged || 0} en bitácora`);
+    } else {
+      toast(`Inventario inicial actualizado (${res.updated || 0})`);
+    }
+  } catch (err) {
+    toast(err.message || 'No se pudo aplicar físico real', true);
+  }
+}
+
+function askInvClosureNote() {
+  return new Promise((resolve) => {
+    const modal = $('#invClosureModal');
+    const input = $('#invClosureNote');
+    const auditToggle = $('#invClosureAuditToggle');
+    const error = $('#invClosureError');
+    const btnCancel = $('#invClosureCancel');
+    const btnConfirm = $('#invClosureConfirm');
+    if (!modal || !input || !btnCancel || !btnConfirm || !auditToggle) {
+      resolve({ note: '', logAdjustment: false });
+      return;
+    }
+
+    input.value = '';
+    auditToggle.checked = true;
+    if (error) error.textContent = '';
+    openModal('invClosureModal');
+    setTimeout(() => input.focus(), 70);
+
+    const done = (value, cancelled = false) => {
+      closeModal('invClosureModal');
+      modal.onclick = null;
+      btnCancel.onclick = null;
+      btnConfirm.onclick = null;
+      input.oninput = null;
+      auditToggle.onchange = null;
+      if (cancelled) resolve(null);
+      else resolve({
+        note: String(value || '').trim(),
+        logAdjustment: Boolean(auditToggle.checked),
+      });
+    };
+
+    modal.onclick = (e) => {
+      if (e.target === modal) done(null, true);
+    };
+
+    input.oninput = () => {
+      if (error) error.textContent = '';
+    };
+
+    auditToggle.onchange = () => {
+      if (auditToggle.checked) {
+        input.placeholder = 'Ej. Corte semanal de almacén, validado contra conteo físico de cocina y barra.';
+      } else {
+        input.placeholder = 'Nota opcional interna';
+      }
+    };
+
+    btnCancel.onclick = () => done(null, true);
+    btnConfirm.onclick = () => done(input.value || '', false);
+  });
+}
+
+function buildInvMovProductSelect() {
+  const sel = $('#invMovProduct');
+  if (!sel) return;
+  sel.innerHTML = '<option value="">Selecciona producto…</option>' +
+    INV_PRODUCTS.map((p) => `<option value="${p.id}">${esc(p.name)}</option>`).join('');
+}
+
+function buildInvMovHistFilter() {
+  const sel = $('#invMovHistFilter');
+  if (!sel) return;
+  sel.innerHTML = '<option value="">Todos los productos</option>' +
+    INV_PRODUCTS.map((p) => `<option value="${p.id}">${esc(p.name)}</option>`).join('');
+}
+
+/* ── Modal: inventario inicial ── */
+function openInvInitModal(productId) {
+  const row = INV_DATA.find((r) => r.product_id === productId);
+  if (!row) return;
+  $('#invInitProductId').value = productId;
+  $('#invInitProductName').value = row.product_name;
+  $('#invInitStock').value = row.initial_stock ?? 0;
+  $('#invInitUnit').value = row.unit || 'pcs';
+  $('#invInitNotes').value = '';
+  openModal('invInitModal');
+}
+
+$('#invInitForm')?.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  try {
+    await api('/api/inventory/items', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        product_id: Number($('#invInitProductId').value),
+        initial_stock: Number($('#invInitStock').value),
+        unit: $('#invInitUnit').value,
+        notes: $('#invInitNotes').value,
+      }),
+    });
+    closeModal('invInitModal');
+    await loadInventarios();
+    toast('Inventario inicial guardado');
+  } catch (err) {
+    toast(err.message || 'Error al guardar', true);
+  }
+});
+$('#invInitCancel')?.addEventListener('click', () => closeModal('invInitModal'));
+
+/* ── Modal: entrada / merma ── */
+function openInvMovModal(type, productId = null) {
+  const title = type === 'entrada' ? 'Nueva entrada de inventario' : 'Registrar merma';
+  const icon = type === 'entrada' ? 'ph-arrow-fat-line-down' : 'ph-warning-diamond';
+  $('#invMovModalTitle').innerHTML = `<i class="ph-bold ${icon}"></i> ${title}`;
+  $('#invMovType').value = type;
+  $('#invMovQty').value = '';
+  $('#invMovNotes').value = '';
+  const btn = $('#invMovSave');
+  if (btn) {
+    btn.className = `btn ${type === 'entrada' ? 'btn-primary' : 'btn-danger'}`;
+  }
+  if (productId) {
+    const sel = $('#invMovProduct');
+    if (sel) sel.value = String(productId);
+  } else {
+    const sel = $('#invMovProduct');
+    if (sel) sel.value = '';
+  }
+  openModal('invMovModal');
+  setTimeout(() => $('#invMovQty')?.focus(), 120);
+}
+
+$('#invMovForm')?.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const pid = Number($('#invMovProduct').value);
+  if (!pid) { toast('Selecciona un producto', true); return; }
+  const qty = Number($('#invMovQty').value);
+  if (!qty || qty <= 0) { toast('Cantidad debe ser mayor a 0', true); return; }
+  try {
+    await api('/api/inventory/movements', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        product_id: pid,
+        type: $('#invMovType').value,
+        quantity: qty,
+        notes: $('#invMovNotes').value,
+      }),
+    });
+    closeModal('invMovModal');
+    await loadInventarios();
+    toast('Movimiento registrado');
+  } catch (err) {
+    toast(err.message || 'Error al guardar', true);
+  }
+});
+$('#invMovCancel')?.addEventListener('click', () => closeModal('invMovModal'));
+
+/* ── Modal: conteo físico (con buscador + paginación 10/pág) ── */
+const INV_COUNT_PAGE_SIZE = 10;
+let INV_COUNT_PAGE = 1;
+let INV_COUNT_SEARCH = '';
+const INV_COUNT_VALUES = new Map(); // Map<product_id, number> — persiste entre páginas
+
+function invCountFilteredRows() {
+  if (!INV_COUNT_SEARCH) return INV_DATA;
+  const q2 = INV_COUNT_SEARCH.toLowerCase();
+  return INV_DATA.filter((r) => r.product_name.toLowerCase().includes(q2));
+}
+
+function invCountTotalPages(filtered) {
+  return Math.max(1, Math.ceil(filtered.length / INV_COUNT_PAGE_SIZE));
+}
+
+function renderInvCountPage() {
+  const filtered = invCountFilteredRows();
+  const totalPages = invCountTotalPages(filtered);
+  if (INV_COUNT_PAGE > totalPages) INV_COUNT_PAGE = totalPages;
+  const start = (INV_COUNT_PAGE - 1) * INV_COUNT_PAGE_SIZE;
+  const pageRows = filtered.slice(start, start + INV_COUNT_PAGE_SIZE);
+
+  /* página info */
+  const pageInfo = $('#invCountPageInfo');
+  if (pageInfo) pageInfo.textContent = `${INV_COUNT_PAGE} / ${totalPages}`;
+  const prevBtn = $('#invCountPrev');
+  const nextBtn = $('#invCountNext');
+  if (prevBtn) prevBtn.disabled = INV_COUNT_PAGE <= 1;
+  if (nextBtn) nextBtn.disabled = INV_COUNT_PAGE >= totalPages;
+
+  /* badge: cuántos productos tienen valor ingresado */
+  const badge = $('#invCountPendingBadge');
+  if (badge) {
+    const filled = INV_COUNT_VALUES.size;
+    badge.textContent = filled ? `${filled} ingresado${filled !== 1 ? 's' : ''}` : '';
+    badge.hidden = !filled;
+  }
+
+  const tbody = $('#invCountTbody');
+  if (!tbody) return;
+
+  tbody.innerHTML = pageRows.map((r) => {
+    const storedVal = INV_COUNT_VALUES.has(r.product_id) ? INV_COUNT_VALUES.get(r.product_id) : (r.fisico_real !== null ? r.fisico_real : '');
+    const storedNum = parseFloat(storedVal);
+    let diffText = '—', diffClass = '';
+    if (Number.isFinite(storedNum)) {
+      const d = storedNum - Number(r.fisico_sistema);
+      diffText = d >= 0 ? `+${invFmt(d)}` : invFmt(d);
+      diffClass = d < 0 ? 'inv-diff-neg' : d > 0 ? 'inv-diff-pos' : 'inv-diff-zero';
+    }
+    return `<tr data-pid="${r.product_id}">
+      <td class="inv-prod-name"><b>${esc(r.product_name)}</b><span class="inv-unit">${esc(r.unit || 'pcs')}</span></td>
+      <td class="num">${invFmt(r.fisico_sistema)}</td>
+      <td class="num inv-count-real-col">
+        <input type="number" class="inv-count-input" data-pid="${r.product_id}"
+          min="0" step="0.01" placeholder="—"
+          value="${storedVal !== '' ? storedVal : ''}" />
+      </td>
+      <td class="num inv-count-diff-cell ${diffClass}" id="invCD_${r.product_id}">${diffText}</td>
+    </tr>`;
+  }).join('');
+
+  /* bind inputs — guarda en Map + actualiza diff en tiempo real */
+  tbody.querySelectorAll('.inv-count-input').forEach((input) => {
+    const pid = Number(input.dataset.pid);
+    const row = INV_DATA.find((r) => r.product_id === pid);
+    input.addEventListener('input', () => {
+      const val = parseFloat(input.value);
+      if (Number.isFinite(val) && val >= 0) {
+        INV_COUNT_VALUES.set(pid, val);
+      } else {
+        INV_COUNT_VALUES.delete(pid);
+      }
+      /* actualizar badge */
+      const b = $('#invCountPendingBadge');
+      if (b) { const f = INV_COUNT_VALUES.size; b.textContent = f ? `${f} ingresado${f !== 1 ? 's' : ''}` : ''; b.hidden = !f; }
+      /* actualizar celda de diferencia */
+      const diffCell = $(`#invCD_${pid}`);
+      if (!row || !diffCell) return;
+      if (!Number.isFinite(val)) { diffCell.textContent = '—'; diffCell.className = 'num inv-count-diff-cell'; return; }
+      const diff = val - Number(row.fisico_sistema);
+      diffCell.textContent = diff >= 0 ? `+${invFmt(diff)}` : invFmt(diff);
+      diffCell.className = `num inv-count-diff-cell ${diff < 0 ? 'inv-diff-neg' : diff > 0 ? 'inv-diff-pos' : 'inv-diff-zero'}`;
+    });
+  });
+}
+
+function openInvCountModal() {
+  INV_COUNT_PAGE = 1;
+  INV_COUNT_SEARCH = '';
+  INV_COUNT_VALUES.clear();
+  /* pre-cargar valores ya guardados como base */
+  INV_DATA.forEach((r) => {
+    if (r.fisico_real !== null) INV_COUNT_VALUES.set(r.product_id, r.fisico_real);
+  });
+  const searchEl = $('#invCountSearch');
+  if (searchEl) searchEl.value = '';
+  $('#invCountNote').value = '';
+  openModal('invCountModal');
+  renderInvCountPage();
+  setTimeout(() => searchEl?.focus(), 80);
+}
+
+/* buscador */
+$('#invCountSearch')?.addEventListener('input', (e) => {
+  INV_COUNT_SEARCH = e.target.value.trim();
+  INV_COUNT_PAGE = 1;
+  renderInvCountPage();
+});
+
+/* paginación */
+$('#invCountPrev')?.addEventListener('click', () => {
+  if (INV_COUNT_PAGE > 1) { INV_COUNT_PAGE--; renderInvCountPage(); }
+});
+$('#invCountNext')?.addEventListener('click', () => {
+  const total = invCountTotalPages(invCountFilteredRows());
+  if (INV_COUNT_PAGE < total) { INV_COUNT_PAGE++; renderInvCountPage(); }
+});
+
+$('#invCountSave')?.addEventListener('click', async () => {
+  if (!INV_COUNT_VALUES.size) { toast('No hay cantidades ingresadas', true); return; }
+  const note = $('#invCountNote').value.trim();
+  const counts = [];
+  INV_COUNT_VALUES.forEach((qty, pid) => {
+    if (Number.isFinite(qty) && qty >= 0) counts.push({ product_id: pid, physical_qty: qty, notes: note });
+  });
+  if (!counts.length) { toast('No hay cantidades válidas', true); return; }
+  const saveBtn = $('#invCountSave');
+  if (saveBtn) saveBtn.disabled = true;
+  try {
+    await Promise.all(counts.map((c) => api('/api/inventory/count', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(c),
+    })));
+    closeModal('invCountModal');
+    await loadInventarios();
+    toast(`Conteo guardado — ${counts.length} producto${counts.length !== 1 ? 's' : ''}`);
+  } catch (err) {
+    toast(err.message || 'Error al guardar conteo', true);
+  } finally {
+    if (saveBtn) saveBtn.disabled = false;
+  }
+});
+$('#invCountCancel')?.addEventListener('click', () => closeModal('invCountModal'));
+
+/* ── Modal: historial de movimientos ── */
+async function openInvMovHistModal(productId = null) {
+  const sel = $('#invMovHistFilter');
+  if (sel && productId) sel.value = String(productId);
+  else if (sel) sel.value = '';
+  await loadInvMovHist();
+  openModal('invMovHistModal');
+}
+
+async function loadInvMovHist() {
+  const sel = $('#invMovHistFilter');
+  const pid = sel ? Number(sel.value) : 0;
+  const params = new URLSearchParams();
+  if (pid) params.set('product_id', String(pid));
+  if (INV_PERIOD !== 'all') params.set('period', INV_PERIOD);
+  if (INV_PERIOD === 'custom' && INV_START_DATE && INV_END_DATE) {
+    params.set('startDate', INV_START_DATE);
+    params.set('endDate', INV_END_DATE);
+  }
+  const url = params.toString() ? `/api/inventory/movements?${params.toString()}` : '/api/inventory/movements';
+  try {
+    const rows = await api(url);
+    const count = $('#invMovHistCount');
+    if (count) count.textContent = `${rows.length} movimiento${rows.length !== 1 ? 's' : ''}`;
+    const wrap = $('#invMovHistTable');
+    if (!wrap) return;
+    if (!rows.length) { wrap.innerHTML = '<p class="empty-cell" style="padding:16px">Sin movimientos registrados</p>'; return; }
+    wrap.innerHTML = `<table class="inv-table">
+      <thead><tr><th>Producto</th><th>Tipo</th><th class="num">Cantidad</th><th>Notas</th><th>Usuario</th><th>Fecha</th><th></th></tr></thead>
+      <tbody>${rows.map((m) => `<tr>
+        <td>${esc(m.product_name)}</td>
+        <td><span class="inv-type-badge inv-type-${m.type}">${m.type === 'entrada' ? '⬇ Entrada' : '⚠ Merma'}</span></td>
+        <td class="num">${invFmt(m.quantity)}</td>
+        <td>${esc(m.notes || '—')}</td>
+        <td>${esc(m.created_by || '—')}</td>
+        <td style="white-space:nowrap">${esc(m.created_at)}</td>
+        <td><button class="btn btn-ghost btn-sm inv-del-mov" data-id="${m.id}" title="Eliminar"><i class="ph-bold ph-trash"></i></button></td>
+      </tr>`).join('')}</tbody>
+    </table>`;
+    wrap.querySelectorAll('.inv-del-mov').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const ok = await askConfirm('Eliminar movimiento', '¿Deseas eliminar este movimiento? Esto afectará el cálculo de inventario.');
+        if (!ok) return;
+        try {
+          await api(`/api/inventory/movements/${btn.dataset.id}`, { method: 'DELETE' });
+          await loadInvMovHist();
+          await loadInventarios();
+          toast('Movimiento eliminado');
+        } catch (err) { toast(err.message || 'Error al eliminar', true); }
+      });
+    });
+  } catch (err) {
+    toast(err.message || 'Error al cargar movimientos', true);
+  }
+}
+
+$('#invMovHistFilter')?.addEventListener('change', loadInvMovHist);
+$('#invMovHistClose')?.addEventListener('click', () => closeModal('invMovHistModal'));
+
+/* ── Botones del toolbar ── */
+$('#invRefreshBtn')?.addEventListener('click', async () => {
+  await loadInventarios();
+  toast('Inventario actualizado');
+});
+$('#invEntradaBtn')?.addEventListener('click', () => openInvMovModal('entrada'));
+$('#invMermaBtn')?.addEventListener('click', () => openInvMovModal('merma'));
+$('#invCountBtn')?.addEventListener('click', openInvCountModal);
+$('#invMovHistoryBtn')?.addEventListener('click', () => openInvMovHistModal());
+$('#invUpdateInitialBtn')?.addEventListener('click', async () => {
+  const result = await askInvClosureNote();
+  if (result === null) return;
+  await applyRealToInitial(null, {
+    logAdjustment: Boolean(result?.logAdjustment),
+    closureNote: result?.note || '',
+  });
+});
+
+/* ── Modal: Exportar ── */
+$('#invExportBtn')?.addEventListener('click', () => openModal('invExportModal'));
+$('#invExportCancel')?.addEventListener('click', () => closeModal('invExportModal'));
+
+$('#invExportFormat')?.querySelectorAll('button').forEach((btn) => {
+  btn.addEventListener('click', () => {
+    INV_EXPORT_FMT = btn.dataset.fmt;
+    $('#invExportFormat').querySelectorAll('button').forEach((b) => b.classList.toggle('on', b === btn));
+  });
+});
+
+$('#invExpOnlyDiff')?.addEventListener('change', (e) => {
+  const summary = $('#invExpSummary');
+  if (!summary) return;
+  if (e.target.checked) summary.checked = true;
+});
+
+$('#invExportRun')?.addEventListener('click', async () => {
+  const includeOnlyDiff = Boolean($('#invExpOnlyDiff')?.checked);
+  const includeSummary = Boolean($('#invExpSummary')?.checked) || includeOnlyDiff;
+  const includeMovements = $('#invExpMovements').checked;
+  const onlyDiff = includeOnlyDiff;
+  if (!includeSummary && !includeMovements) { toast('Elige al menos una sección', true); return; }
+
+  try {
+    const params = new URLSearchParams();
+    if (INV_PERIOD !== 'all') params.set('period', INV_PERIOD);
+    if (INV_PERIOD === 'custom' && INV_START_DATE && INV_END_DATE) {
+      params.set('startDate', INV_START_DATE);
+      params.set('endDate', INV_END_DATE);
+    }
+    const exportPath = params.toString() ? `/api/inventory/export?${params.toString()}` : '/api/inventory/export';
+    const data = await api(exportPath);
+    let summary = data.summary || [];
+    const movements = data.movements || [];
+    if (onlyDiff) summary = summary.filter((r) => r.diferencia !== null && r.diferencia !== 0);
+
+    if (INV_EXPORT_FMT === 'csv') {
+      exportInvCSV(summary, movements, { includeSummary, includeMovements });
+    } else {
+      exportInvPDF(summary, movements, { includeSummary, includeMovements });
+    }
+    closeModal('invExportModal');
+  } catch (err) {
+    toast(err.message || 'Error al exportar', true);
+  }
+});
+
+function csvEscape(v) {
+  const s = String(v ?? '');
+  if (s.includes(',') || s.includes('"') || s.includes('\n')) return `"${s.replace(/"/g, '""')}"`;
+  return s;
+}
+
+function exportInvCSV(summary, movements, opts) {
+  const lines = [];
+  const now = new Date().toLocaleString('es-MX');
+
+  if (opts.includeSummary) {
+    lines.push(`Reporte de Inventario — ${now}`);
+    lines.push('');
+    lines.push(['Producto','Unidad','Inv. Inicial','Entradas','Mermas','Ventas','Físico Sistema','Físico Real','Diferencia'].map(csvEscape).join(','));
+    for (const r of summary) {
+      lines.push([
+        r.product_name, r.unit ?? 'pcs',
+        r.initial_stock, r.entradas, r.mermas, r.ventas,
+        r.fisico_sistema, r.fisico_real ?? '', r.diferencia ?? '',
+      ].map(csvEscape).join(','));
+    }
+    lines.push('');
+  }
+
+  if (opts.includeMovements) {
+    lines.push('Detalle de Movimientos');
+    lines.push(['Producto','Tipo','Cantidad','Notas','Usuario','Fecha'].map(csvEscape).join(','));
+    for (const m of movements) {
+      lines.push([
+        m.product_name, m.type, m.quantity, m.notes || '', m.created_by || '', m.created_at,
+      ].map(csvEscape).join(','));
+    }
+  }
+
+  const bom = '\uFEFF';
+  const blob = new Blob([bom + lines.join('\n')], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `inventario-${new Date().toISOString().slice(0,10)}.csv`;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 3000);
+}
+
+function exportInvPDF(summary, movements, opts) {
+  const now = new Date().toLocaleString('es-MX');
+  const biz = ME?.tenant?.business_name || 'ChatBotPro';
+
+  const summaryHTML = opts.includeSummary ? `
+    <h2>Resumen de Inventario</h2>
+    <table>
+      <thead><tr>
+        <th>Producto</th><th>Unidad</th><th>Ini.</th><th>Entradas</th>
+        <th>Mermas</th><th>Ventas</th><th>F. Sistema</th><th>F. Real</th><th>Diferencia</th>
+      </tr></thead>
+      <tbody>${summary.map((r) => {
+        const diffClass = r.diferencia < 0 ? 'neg' : r.diferencia > 0 ? 'pos' : '';
+        return `<tr>
+          <td>${r.product_name}</td>
+          <td>${r.unit ?? 'pcs'}</td>
+          <td>${r.initial_stock}</td>
+          <td>${r.entradas}</td>
+          <td>${r.mermas}</td>
+          <td>${r.ventas}</td>
+          <td><b>${r.fisico_sistema}</b></td>
+          <td>${r.fisico_real ?? '—'}</td>
+          <td class="${diffClass}">${r.diferencia !== null ? r.diferencia : '—'}</td>
+        </tr>`;
+      }).join('')}</tbody>
+    </table>` : '';
+
+  const movHTML = opts.includeMovements ? `
+    <h2 style="margin-top:28px">Detalle de Movimientos</h2>
+    <table>
+      <thead><tr><th>Producto</th><th>Tipo</th><th>Cantidad</th><th>Notas</th><th>Usuario</th><th>Fecha</th></tr></thead>
+      <tbody>${movements.map((m) => `<tr>
+        <td>${m.product_name}</td>
+        <td style="color:${m.type === 'entrada' ? '#16a34a' : '#dc2626'}">${m.type}</td>
+        <td>${m.quantity}</td>
+        <td>${m.notes || '—'}</td>
+        <td>${m.created_by || '—'}</td>
+        <td>${m.created_at}</td>
+      </tr>`).join('')}</tbody>
+    </table>` : '';
+
+  const win = window.open('', '_blank', 'width=1050,height=780');
+  win.document.write(`<!DOCTYPE html><html lang="es"><head><meta charset="UTF-8"/>
+    <title>Inventario — ${biz}</title>
+    <style>
+      body{font-family:Arial,sans-serif;font-size:12px;padding:20px;color:#111}
+      h1{font-size:16px;margin:0 0 4px}
+      .sub{font-size:11px;color:#666;margin-bottom:18px}
+      h2{font-size:13px;margin:0 0 8px;border-bottom:1px solid #ddd;padding-bottom:4px}
+      table{width:100%;border-collapse:collapse;margin-bottom:12px}
+      th{background:#f1f5f9;text-align:left;padding:5px 7px;font-size:11px;border-bottom:2px solid #cbd5e1}
+      td{padding:4px 7px;border-bottom:1px solid #e8ecf3;font-size:11px}
+      tr:nth-child(even) td{background:#f9fafb}
+      .neg{color:#dc2626;font-weight:bold}
+      .pos{color:#16a34a;font-weight:bold}
+      @media print{button{display:none}}
+    </style></head><body>
+    <h1>Inventario — ${biz}</h1>
+    <div class="sub">Generado: ${now}</div>
+    ${summaryHTML}${movHTML}
+    <script>window.onload=()=>{window.print();}<\/script>
+  </body></html>`);
+  win.document.close();
+}
+
+/* ── helpers para abrir/cerrar modales ── */
+function openModal(id) {
+  const m = $(`#${id}`);
+  if (!m) return;
+  m.hidden = false;
+  m.classList.add('show');
+}
+function closeModal(id) {
+  const m = $(`#${id}`);
+  if (!m) return;
+  m.classList.remove('show');
+  m.hidden = true;
+}
+
+/* cerrar modales de inventario al hacer clic en el fondo */
+['invInitModal','invMovModal','invCountModal','invMovHistModal','invExportModal','invClosureModal'].forEach((id) => {
+  const el = $(`#${id}`);
+  if (el) el.addEventListener('click', (e) => { if (e.target === el) closeModal(id); });
+});

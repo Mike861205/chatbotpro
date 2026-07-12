@@ -65,6 +65,7 @@ app.use('/api/pos', require('./src/routes/pos'));
 app.use('/api/chat', rateLimit(120, 60 * 1000), require('./src/routes/chatbot'));
 app.use('/api/superadmin', rateLimit(80, 10 * 60 * 1000), require('./src/routes/superadmin'));
 app.use('/api/notifications', require('./src/routes/notifications'));
+app.use('/api/inventory', require('./src/routes/inventory'));
 
 // Páginas
 const page = (name) => (req, res) => res.sendFile(path.join(__dirname, 'public', name));

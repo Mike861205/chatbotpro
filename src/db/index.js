@@ -335,6 +335,47 @@ async function createTenantSchema(slug) {
       user_agent TEXT,
       created_at TIMESTAMPTZ DEFAULT now()
     );
+    CREATE TABLE IF NOT EXISTS "${s}".inventory_items (
+      id SERIAL PRIMARY KEY,
+      product_id INTEGER NOT NULL UNIQUE,
+      initial_stock NUMERIC(12,2) DEFAULT 0,
+      unit TEXT DEFAULT 'pcs',
+      notes TEXT DEFAULT '',
+      baseline_started_at TIMESTAMPTZ DEFAULT now(),
+      created_at TIMESTAMPTZ DEFAULT now(),
+      updated_at TIMESTAMPTZ DEFAULT now()
+    );
+    CREATE TABLE IF NOT EXISTS "${s}".inventory_movements (
+      id SERIAL PRIMARY KEY,
+      product_id INTEGER NOT NULL,
+      type TEXT NOT NULL,
+      quantity NUMERIC(12,2) NOT NULL,
+      notes TEXT DEFAULT '',
+      created_by TEXT DEFAULT '',
+      created_at TIMESTAMPTZ DEFAULT now()
+    );
+    CREATE TABLE IF NOT EXISTS "${s}".inventory_counts (
+      id SERIAL PRIMARY KEY,
+      product_id INTEGER NOT NULL,
+      physical_qty NUMERIC(12,2) NOT NULL,
+      notes TEXT DEFAULT '',
+      counted_by TEXT DEFAULT '',
+      counted_at TIMESTAMPTZ DEFAULT now()
+    );
+    CREATE TABLE IF NOT EXISTS "${s}".inventory_closure_logs (
+      id SERIAL PRIMARY KEY,
+      product_id INTEGER NOT NULL,
+      previous_initial_stock NUMERIC(12,2) NOT NULL,
+      applied_physical_qty NUMERIC(12,2) NOT NULL,
+      delta_qty NUMERIC(12,2) NOT NULL,
+      period_key TEXT DEFAULT 'all',
+      period_start_date TEXT DEFAULT '',
+      period_end_date TEXT DEFAULT '',
+      closure_note TEXT DEFAULT '',
+      applied_by TEXT DEFAULT '',
+      created_at TIMESTAMPTZ DEFAULT now()
+    );
+    ALTER TABLE "${s}".inventory_items ADD COLUMN IF NOT EXISTS baseline_started_at TIMESTAMPTZ DEFAULT now();
   `);
 }
 

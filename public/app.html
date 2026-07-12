@@ -37,6 +37,7 @@
         <a href="#clientes" data-view="clientes" data-color="blue"><span class="nav-ic"><i class="ph-fill ph-users-three"></i></span><span>Clientes</span></a>
         <a href="#pos" data-view="pos" data-color="emerald"><span class="nav-ic"><i class="ph-fill ph-cash-register"></i></span><span>Punto de venta</span></a>
         <a href="#productos" data-view="productos" data-color="rose"><span class="nav-ic"><i class="ph-fill ph-bowl-food"></i></span><span>Productos</span></a>
+        <a href="#inventarios" data-view="inventarios" data-color="teal"><span class="nav-ic"><i class="ph-fill ph-package"></i></span><span>Inventarios</span></a>
         <div class="nav-label nav-label-chatbot"><i class="ph-fill ph-chat-circle-dots"></i> Chatbot</div>
         <a href="#chatbot" data-view="chatbot" data-color="cyan"><span class="nav-ic"><i class="ph-fill ph-chat-circle-dots"></i></span><span>Mi chatbot</span></a>
         <div class="nav-label nav-label-negocio"><i class="ph-fill ph-briefcase"></i> Negocio</div>
@@ -232,6 +233,63 @@
           </div>
         </div>
         <div class="prod-grid" id="prodGrid"></div>
+      </section>
+
+      <!-- ──────── Inventarios ──────── -->
+      <section class="section" id="view-inventarios">
+        <div class="inv-toolbar">
+          <div class="inv-search-wrap">
+            <i class="ph-bold ph-magnifying-glass"></i>
+            <input type="text" id="invSearch" placeholder="Buscar producto…" autocomplete="off" />
+          </div>
+          <div class="segmented inv-periods" id="invPeriodFilters" aria-label="Filtro por periodo">
+            <button type="button" class="on" data-inv-period="all">General</button>
+            <button type="button" data-inv-period="today">Hoy</button>
+            <button type="button" data-inv-period="week">Semana</button>
+            <button type="button" data-inv-period="month">Mes</button>
+            <button type="button" data-inv-period="custom">Rango</button>
+          </div>
+          <div class="inv-custom-range" id="invCustomRange" hidden>
+            <input type="date" id="invStartDate" />
+            <input type="date" id="invEndDate" />
+            <button class="btn btn-ghost btn-sm" id="invApplyRangeBtn" type="button"><i class="ph-bold ph-funnel"></i> Aplicar</button>
+          </div>
+          <div class="inv-toolbar-actions">
+            <button class="btn btn-ghost" id="invRefreshBtn"><i class="ph-bold ph-arrows-clockwise"></i> Actualizar</button>
+            <button class="btn btn-ghost" id="invMovHistoryBtn"><i class="ph-bold ph-clock-clockwise"></i> Movimientos</button>
+            <button class="btn btn-ghost inv-btn-entrada" id="invEntradaBtn"><i class="ph-bold ph-arrow-fat-line-down"></i> Entrada</button>
+            <button class="btn btn-ghost inv-btn-merma" id="invMermaBtn"><i class="ph-bold ph-warning-diamond"></i> Merma</button>
+            <button class="btn btn-ghost" id="invCountBtn"><i class="ph-bold ph-clipboard-text"></i> Conteo físico</button>
+            <button class="btn btn-ghost" id="invUpdateInitialBtn"><i class="ph-bold ph-arrows-counter-clockwise"></i> Actualizar inventario inicial</button>
+            <button class="btn btn-primary" id="invExportBtn"><i class="ph-bold ph-export"></i> Exportar</button>
+          </div>
+        </div>
+        <div class="inv-toolbar-foot">
+          <span class="hint" id="invPeriodHint">Mostrando acumulado general.</span>
+          <div class="inv-table-pager" id="invTablePager">
+            <button class="btn btn-ghost btn-sm" id="invPrevPage" type="button"><i class="ph-bold ph-caret-left"></i></button>
+            <span class="inv-pager-info" id="invPageInfo">1 / 1</span>
+            <button class="btn btn-ghost btn-sm" id="invNextPage" type="button"><i class="ph-bold ph-caret-right"></i></button>
+          </div>
+        </div>
+        <div class="table-wrap" id="invTableWrap">
+          <table class="inv-table" id="invTable">
+            <thead>
+              <tr>
+                <th class="inv-sortable" data-inv-sort="product_name">Producto</th>
+                <th class="num inv-sortable" data-inv-sort="initial_stock">Inv. Inicial</th>
+                <th class="num inv-col-entrada inv-sortable" data-inv-sort="entradas">Entradas</th>
+                <th class="num inv-col-merma inv-sortable" data-inv-sort="mermas">Mermas</th>
+                <th class="num inv-col-ventas inv-sortable" data-inv-sort="ventas">Ventas</th>
+                <th class="num inv-col-sistema inv-sortable" data-inv-sort="fisico_sistema">Físico Sistema</th>
+                <th class="num inv-col-real inv-sortable" data-inv-sort="fisico_real">Físico Real</th>
+                <th class="num inv-col-diff inv-sortable" data-inv-sort="diferencia">Diferencia</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody id="invTbody"></tbody>
+          </table>
+        </div>
       </section>
 
       <!-- ──────── Chatbot ──────── -->
@@ -724,8 +782,187 @@
     </main>
   </div>
 
-  <!-- ════════ Modal producto ════════ -->
-  <div class="modal-bg" id="prodModal">
+  <!-- ════════ Modales Inventario ════════ -->
+
+  <!-- Modal: Inventario inicial del producto -->
+  <div class="modal-bg" id="invInitModal">
+    <div class="modal" style="max-width:480px">
+      <h3 id="invInitModalTitle"><i class="ph-bold ph-package"></i> Inventario inicial</h3>
+      <form id="invInitForm">
+        <input type="hidden" id="invInitProductId" />
+        <div class="field">
+          <label><i class="ph-bold ph-tag"></i> Producto</label>
+          <input type="text" id="invInitProductName" readonly />
+        </div>
+        <div class="row-2">
+          <div class="field">
+            <label><i class="ph-bold ph-hash"></i> Stock inicial *</label>
+            <input type="number" id="invInitStock" min="0" step="0.01" required placeholder="0" />
+          </div>
+          <div class="field">
+            <label><i class="ph-bold ph-ruler"></i> Unidad</label>
+            <input type="text" id="invInitUnit" maxlength="30" placeholder="pcs, kg, lt, caja…" />
+          </div>
+        </div>
+        <div class="field">
+          <label><i class="ph-bold ph-note-pencil"></i> Notas</label>
+          <input type="text" id="invInitNotes" placeholder="Opcional" maxlength="200" />
+        </div>
+        <div class="modal-actions">
+          <button type="button" class="btn btn-ghost" id="invInitCancel">Cancelar</button>
+          <button type="submit" class="btn btn-primary"><i class="ph-bold ph-check"></i> Guardar</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Modal: Entrada / Merma -->
+  <div class="modal-bg" id="invMovModal">
+    <div class="modal" style="max-width:480px">
+      <h3 id="invMovModalTitle"><i class="ph-bold ph-arrow-fat-line-down"></i> Nuevo movimiento</h3>
+      <form id="invMovForm">
+        <input type="hidden" id="invMovType" value="entrada" />
+        <div class="field">
+          <label><i class="ph-bold ph-tag"></i> Producto *</label>
+          <select id="invMovProduct" required><option value="">Selecciona…</option></select>
+        </div>
+        <div class="row-2">
+          <div class="field">
+            <label><i class="ph-bold ph-hash"></i> Cantidad *</label>
+            <input type="number" id="invMovQty" min="0.01" step="0.01" required placeholder="0" />
+          </div>
+          <div class="field">
+            <label><i class="ph-bold ph-note-pencil"></i> Notas</label>
+            <input type="text" id="invMovNotes" placeholder="Opcional" maxlength="200" />
+          </div>
+        </div>
+        <div class="modal-actions">
+          <button type="button" class="btn btn-ghost" id="invMovCancel">Cancelar</button>
+          <button type="submit" class="btn btn-primary" id="invMovSave"><i class="ph-bold ph-check"></i> Guardar</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Modal: Conteo físico -->
+  <div class="modal-bg" id="invCountModal">
+    <div class="modal inv-count-modal">
+      <div class="inv-count-modal-head">
+        <h3><i class="ph-bold ph-clipboard-text"></i> Conteo físico</h3>
+        <p class="hint" style="margin:4px 0 0">Ingresa la cantidad real contada. Los valores se conservan al cambiar de página.</p>
+      </div>
+      <div class="inv-count-controls">
+        <div class="inv-search-wrap" style="flex:1;min-width:160px;max-width:100%">
+          <i class="ph-bold ph-magnifying-glass"></i>
+          <input type="text" id="invCountSearch" placeholder="Buscar producto…" autocomplete="off" />
+        </div>
+        <div class="inv-count-pager">
+          <button type="button" class="btn btn-ghost btn-sm" id="invCountPrev"><i class="ph-bold ph-caret-left"></i></button>
+          <span id="invCountPageInfo" class="inv-pager-info">1 / 1</span>
+          <button type="button" class="btn btn-ghost btn-sm" id="invCountNext"><i class="ph-bold ph-caret-right"></i></button>
+        </div>
+        <span id="invCountPendingBadge" class="inv-pending-badge" hidden></span>
+      </div>
+      <div class="inv-count-table-wrap">
+        <table class="inv-table">
+          <thead>
+            <tr>
+              <th>Producto</th>
+              <th class="num">F. Sistema</th>
+              <th class="num inv-count-real-col">F. Real</th>
+              <th class="num">Diferencia</th>
+            </tr>
+          </thead>
+          <tbody id="invCountTbody"></tbody>
+        </table>
+      </div>
+      <div class="inv-count-footer">
+        <div class="field" style="margin:0;flex:1">
+          <label><i class="ph-bold ph-note-pencil"></i> Nota del conteo</label>
+          <input type="text" id="invCountNote" placeholder="Ej. Conteo semanal lunes" maxlength="200" />
+        </div>
+        <div class="modal-actions" style="margin:0;padding-top:0">
+          <button type="button" class="btn btn-ghost" id="invCountCancel">Cancelar</button>
+          <button type="button" class="btn btn-primary" id="invCountSave"><i class="ph-bold ph-floppy-disk"></i> Guardar conteo</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal: Historial de movimientos -->
+  <div class="modal-bg" id="invMovHistModal">
+    <div class="modal" style="max-width:780px">
+      <h3><i class="ph-bold ph-clock-clockwise"></i> Historial de movimientos</h3>
+      <div style="display:flex;gap:10px;margin-bottom:12px;align-items:center;flex-wrap:wrap">
+        <select id="invMovHistFilter" style="max-width:260px">
+          <option value="">Todos los productos</option>
+        </select>
+        <span class="hint" style="margin:0" id="invMovHistCount"></span>
+      </div>
+      <div class="table-wrap" id="invMovHistTable"></div>
+      <div class="modal-actions">
+        <button type="button" class="btn btn-ghost" id="invMovHistClose">Cerrar</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal: Exportar inventario -->
+  <div class="modal-bg" id="invExportModal">
+    <div class="modal" style="max-width:520px">
+      <h3><i class="ph-bold ph-export"></i> Exportar inventario</h3>
+      <p class="hint" style="margin-bottom:14px">Elige qué incluir en el reporte y el formato de exportación.</p>
+      <div class="field">
+        <label><i class="ph-bold ph-list-checks"></i> Secciones a exportar</label>
+        <div class="inv-export-checks">
+          <label class="inv-check-row"><input type="checkbox" id="invExpSummary" checked /><span><b>Resumen de inventario</b> — inv. inicial, entradas, mermas, ventas, físico sistema, físico real, diferencia</span></label>
+          <label class="inv-check-row"><input type="checkbox" id="invExpMovements" /><span><b>Detalle de movimientos</b> — cada entrada y merma registrada con fecha y usuario</span></label>
+          <label class="inv-check-row"><input type="checkbox" id="invExpOnlyDiff" /><span><b>Solo productos con diferencia</b> — filtra solo productos donde físico real ≠ físico sistema</span></label>
+        </div>
+      </div>
+      <div class="field">
+        <label><i class="ph-bold ph-file-text"></i> Formato</label>
+        <div class="segmented" id="invExportFormat">
+          <button type="button" class="on" data-fmt="csv"><i class="ph-bold ph-file-csv"></i> CSV / Excel</button>
+          <button type="button" data-fmt="pdf"><i class="ph-bold ph-file-pdf"></i> PDF / Imprimir</button>
+        </div>
+      </div>
+      <div class="modal-actions">
+        <button type="button" class="btn btn-ghost" id="invExportCancel">Cancelar</button>
+        <button type="button" class="btn btn-primary" id="invExportRun"><i class="ph-bold ph-download-simple"></i> Descargar</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal: Actualizar inventario inicial -->
+  <div class="modal-bg" id="invClosureModal">
+    <div class="modal inv-closure-modal" style="max-width:560px">
+      <div class="inv-closure-hero">
+        <span class="inv-closure-ic"><i class="ph-bold ph-calendar-check"></i></span>
+        <div>
+          <h3><i class="ph-bold ph-calendar-check"></i> Actualizar inventario inicial</h3>
+          <p class="hint">Se aplicará el físico real como nuevo inventario inicial. Si lo deseas, también puedes guardarlo como cierre auditable.</p>
+        </div>
+      </div>
+      <div class="inv-closure-mode">
+        <label class="inv-check-row">
+          <input type="checkbox" id="invClosureAuditToggle" checked />
+          <span><b>Guardar como cierre auditable</b> — registra nota, usuario, fecha y diferencias aplicadas.</span>
+        </label>
+      </div>
+      <div class="field" style="margin-bottom:10px">
+        <label for="invClosureNote"><i class="ph-bold ph-note-pencil"></i> Nota de auditoría</label>
+        <textarea id="invClosureNote" rows="4" maxlength="220" placeholder="Ej. Corte semanal de almacén, validado contra conteo físico de cocina y barra."></textarea>
+      </div>
+      <div class="hint inv-closure-hint"><i class="ph-bold ph-shield-check"></i> Esta nota quedará registrada junto con fecha, usuario y diferencias aplicadas.</div>
+      <div id="invClosureError" class="order-cancel-error"></div>
+      <div class="modal-actions">
+        <button type="button" class="btn btn-ghost" id="invClosureCancel">Cancelar</button>
+        <button type="button" class="btn btn-primary" id="invClosureConfirm"><i class="ph-bold ph-check"></i> Aplicar cierre</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ════════ Modal producto ════════ -->  <div class="modal-bg" id="prodModal">
     <div class="modal" style="max-width:640px">
       <h3 id="prodModalTitle"><i class="ph-bold ph-plus-circle"></i> Nuevo producto</h3>
       <!-- Pestañas del modal -->
