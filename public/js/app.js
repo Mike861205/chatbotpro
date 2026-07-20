@@ -399,6 +399,7 @@ const VIEW_META = {
   pos: ['Punto de venta', 'Caja, cobro y cierre del día', 'ph-cash-register'],
   productos: ['Productos', 'Tu menú visible en el chatbot', 'ph-hamburger'],
   inventarios: ['Inventarios', 'Control de stock, entradas, mermas y conteo físico', 'ph-package'],
+  empleados: ['Productividad Empleados', 'Métricas, comisiones y desempeño del equipo', 'ph-identification-badge'],
   chatbot: ['Mi chatbot', 'Configura el flujo y comparte tu liga', 'ph-chat-circle-dots'],
   config: ['Mi negocio', 'Identidad, branding y contacto', 'ph-storefront'],
   suscripciones: ['Suscripciones', 'Planes, beneficios y pago seguro', 'ph-crown'],
@@ -411,6 +412,7 @@ const VIEW_LOADERS = {
   pos: loadPos,
   productos: loadProducts,
   inventarios: loadInventarios,
+  empleados: loadEmpleados,
   chatbot: fillBotForm,
   config: fillConfigForm,
   suscripciones: () => {},
@@ -5117,6 +5119,7 @@ function fillConfigForm() {
   $('#cfgTicketMobileZoom').value = String(Math.max(80, Math.min(120, Number(SETTINGS.ticket_mobile_zoom_percent || 100))));
   $('#logoPreview').innerHTML = SETTINGS.logo ? `<img src="${esc(SETTINGS.logo)}" alt="" />` : '<i class="ph ph-image"></i>';
   renderSwatches();
+  renderBusinessModelPicker();
   if (!isCashierUser()) loadCashiers().catch((err) => toast(err.message, true));
 }
 $('#cfgLogo').addEventListener('change', () => {
@@ -5179,6 +5182,113 @@ $('#ticketForm').addEventListener('submit', async (e) => {
   await api('/api/settings', { method: 'PUT', body: fd });
   toast('Configuración de ticket guardada');
   SETTINGS = await api('/api/settings');
+});
+
+/* ===== Modelo de negocio ===== */
+const BUSINESS_MODELS = [
+  {
+    id: 'restaurant',
+    icon: 'ph-fork-knife',
+    label: 'Restaurante / cafetería',
+    desc: 'Toma pedidos desde el menú, entrega a domicilio o recolección en sucursal (flujo original).',
+    tag: 'Por defecto',
+  },
+  {
+    id: 'furniture',
+    icon: 'ph-armchair',
+    label: 'Mueblería',
+    desc: 'Asesora sobre catálogo, medidas, materiales, tiempos y opciones de envío o recolección.',
+  },
+  {
+    id: 'travel_agency',
+    icon: 'ph-airplane-tilt',
+    label: 'Agencia de viajes',
+    desc: 'Presenta paquetes, destinos y tours; recopila datos del viajero para cotizar y reservar.',
+  },
+  {
+    id: 'office_services',
+    icon: 'ph-briefcase',
+    label: 'Oficina / servicios profesionales',
+    desc: 'Consultoría, contable, legal, arquitectura. Explica servicios, honorarios y agenda citas.',
+  },
+  {
+    id: 'screen_printing',
+    icon: 'ph-t-shirt',
+    label: 'Serigrafía / estampado',
+    desc: 'Cotiza playeras, técnicas (serigrafía, DTF, vinil, sublimación), tirajes y tiempos.',
+  },
+  {
+    id: 'carpentry',
+    icon: 'ph-hammer',
+    label: 'Carpintería',
+    desc: 'Muebles de línea y a la medida: maderas, acabados, tiempos y anticipos.',
+  },
+  {
+    id: 'health',
+    icon: 'ph-first-aid-kit',
+    label: 'Salud / clínica',
+    desc: 'Explica servicios y especialidades, requisitos previos y agenda citas (sin diagnóstico).',
+  },
+  {
+    id: 'dentist',
+    icon: 'ph-tooth',
+    label: 'Consultorio dental',
+    desc: 'Tratamientos (limpieza, resinas, endodoncia, ortodoncia, implantes) y agenda de citas.',
+  },
+];
+
+function currentBusinessType() {
+  const raw = String(SETTINGS?.business_type || 'restaurant').toLowerCase().trim();
+  return BUSINESS_MODELS.some((m) => m.id === raw) ? raw : 'restaurant';
+}
+
+function renderBusinessModelPicker() {
+  const grid = document.getElementById('bizModelGrid');
+  const hidden = document.getElementById('cfgBusinessType');
+  const label = document.getElementById('bizModelCurrentLabel');
+  if (!grid || !hidden) return;
+  const active = currentBusinessType();
+  hidden.value = active;
+  grid.innerHTML = BUSINESS_MODELS.map(
+    (m) => `
+      <button type="button" class="biz-model-card ${m.id === active ? 'on' : ''}" data-model="${m.id}">
+        <span class="biz-model-icon"><i class="ph-bold ${m.icon}"></i></span>
+        <span class="biz-model-body">
+          <span class="biz-model-title">${esc(m.label)}${m.tag ? ` <em class="biz-model-tag">${esc(m.tag)}</em>` : ''}</span>
+          <span class="biz-model-desc">${esc(m.desc)}</span>
+        </span>
+        <span class="biz-model-check"><i class="ph-bold ph-check-circle"></i></span>
+      </button>
+    `
+  ).join('');
+  const activeModel = BUSINESS_MODELS.find((m) => m.id === active);
+  if (label) label.textContent = activeModel ? `Actual: ${activeModel.label}` : '';
+  grid.querySelectorAll('.biz-model-card').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      grid.querySelectorAll('.biz-model-card').forEach((el) => el.classList.remove('on'));
+      btn.classList.add('on');
+      hidden.value = btn.dataset.model;
+      const chosen = BUSINESS_MODELS.find((m) => m.id === btn.dataset.model);
+      if (label && chosen) label.textContent = `Seleccionado: ${chosen.label}`;
+    });
+  });
+}
+
+document.addEventListener('submit', async (e) => {
+  if (!e.target || e.target.id !== 'businessTypeForm') return;
+  e.preventDefault();
+  const value = document.getElementById('cfgBusinessType')?.value || 'restaurant';
+  const fd = new FormData();
+  fd.append('business_type', value);
+  try {
+    await api('/api/settings', { method: 'PUT', body: fd });
+    const chosen = BUSINESS_MODELS.find((m) => m.id === value);
+    toast(`Modelo de negocio guardado: ${chosen ? chosen.label : value}`);
+    SETTINGS = await api('/api/settings');
+    renderBusinessModelPicker();
+  } catch (err) {
+    toast(err.message, true);
+  }
 });
 
 /* ===== Helpers ===== */
@@ -5766,6 +5876,1680 @@ $('#invInitForm')?.addEventListener('submit', async (e) => {
     toast(err.message || 'Error al guardar', true);
   }
 });
+
+/* ═══════════════════════════════════════════════════════════════
+   MÓDULO: PRODUCTIVIDAD EMPLEADOS
+═══════════════════════════════════════════════════════════════ */
+
+/* ── Cerrar modales de empleados al hacer clic en el fondo ── */
+['empEmployeeModal','empMetricModal','empSchemeModal','empAssignModal','empProfileModal'].forEach((id) => {
+  const el = $(`#${id}`);
+  if (el) el.addEventListener('click', (e) => { if (e.target === el) closeModal(id); });
+});
+
+/* ── Toggle de gráficas ── */
+function empToggleChart(bodyId, storageKey, iconId, labelId) {
+  const body = document.getElementById(bodyId);
+  if (!body) return;
+  const willCollapse = !body.classList.contains('emp-chart-body-hidden');
+  body.classList.toggle('emp-chart-body-hidden', willCollapse);
+  const icon = document.getElementById(iconId);
+  if (icon) icon.className = willCollapse ? 'ph-bold ph-caret-down' : 'ph-bold ph-caret-up';
+  const label = document.getElementById(labelId);
+  if (label) label.textContent = willCollapse ? 'Mostrar' : 'Ocultar';
+  try { localStorage.setItem(storageKey, willCollapse ? '1' : '0'); } catch {}
+}
+globalThis.empToggleChart = empToggleChart;
+
+function empInitChartToggle(bodyId, storageKey, iconId, labelId) {
+  try {
+    if (localStorage.getItem(storageKey) === '1') {
+      const body = document.getElementById(bodyId);
+      if (body) body.classList.add('emp-chart-body-hidden');
+      const icon = document.getElementById(iconId);
+      if (icon) icon.className = 'ph-bold ph-caret-down';
+      const label = document.getElementById(labelId);
+      if (label) label.textContent = 'Mostrar';
+    }
+  } catch {}
+}
+
+/* ── Estado ── */
+let EMP_EMPLOYEES = [];
+let EMP_METRICS = [];
+let EMP_SCHEMES = [];
+let EMP_ASSIGNMENTS = [];
+let EMP_RECORDS = [];
+let EMP_COMMISSION_RECORDS = [];
+let EMP_INSIGHTS = [];
+let EMP_INSIGHT_SUMMARY = [];
+let EMP_INSIGHT_MAP = new Map();
+let EMP_INSIGHT_SUMMARY_MAP = new Map();
+let EMP_HISTORY_CACHE = new Map();
+let EMP_HISTORY_FILTERS = new Map();
+let EMP_TAB = 'team';
+let EMP_TEAM_CHART = null;
+let EMP_EVOLUTION_CHART = null;
+let EMP_TIERS = [];
+
+const MONTHS_ES = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
+
+function empCurrentPeriod() {
+  const year = parseInt($('#empYearSel')?.value) || new Date().getFullYear();
+  const month = parseInt($('#empMonthSel')?.value) || (new Date().getMonth() + 1);
+  return { year, month };
+}
+
+function empFmt(n) {
+  return fmtMoney(n);
+}
+
+function empAvatar(emp) {
+  const initials = String(emp.name || '?').trim().split(/\s+/).map((w) => w[0]).join('').toUpperCase().slice(0, 2);
+  return `<span class="emp-avatar" style="background:${esc(emp.avatar_color || '#6c47ff')}">${esc(initials)}</span>`;
+}
+
+function empIndexBadge(val) {
+  if (val === null || val === undefined) return '<span class="emp-badge emp-badge-gray">Sin datos</span>';
+  const n = Math.round(Number(val));
+  let cls = 'emp-badge-red';
+  if (n >= 90) cls = 'emp-badge-green';
+  else if (n >= 70) cls = 'emp-badge-yellow';
+  else if (n >= 50) cls = 'emp-badge-orange';
+  return `<span class="emp-badge ${cls}">${n}%</span>`;
+}
+
+function empStatusBadge(status) {
+  const map = { pending: ['Pendiente','emp-badge-gray'], approved: ['Aprobada','emp-badge-yellow'], paid: ['Pagada','emp-badge-green'] };
+  const [label, cls] = map[status] || ['Desconocido','emp-badge-gray'];
+  return `<span class="emp-badge ${cls}">${label}</span>`;
+}
+
+function empInsightKey(employeeId, metricId) {
+  return `${Number(employeeId)}_${Number(metricId)}`;
+}
+
+function empGetInsight(employeeId, metricId) {
+  return EMP_INSIGHT_MAP.get(empInsightKey(employeeId, metricId)) || null;
+}
+
+function empGetEmployeeInsightSummary(employeeId) {
+  return EMP_INSIGHT_SUMMARY_MAP.get(Number(employeeId)) || { improved: 0, declined: 0, stable: 0 };
+}
+
+function empGetMetricMonthAggregate(employeeId, metric) {
+  const rows = EMP_RECORDS.filter((r) => Number(r.employee_id) === Number(employeeId) && Number(r.metric_id) === Number(metric.id));
+  if (!rows.length) return 0;
+  const values = rows.map((r) => Number(r.value || 0));
+  if ((metric.aggregation || 'sum') === 'avg') {
+    return values.reduce((s, v) => s + v, 0) / values.length;
+  }
+  return values.reduce((s, v) => s + v, 0);
+}
+
+function empComputeEmployeeIndex(employeeId) {
+  const activeMetrics = EMP_METRICS.filter((m) => m.active !== 0);
+  if (!activeMetrics.length) return null;
+
+  let totalWeight = 0;
+  let weightedScore = 0;
+  for (const metric of activeMetrics) {
+    const target = Number(metric.target || 0);
+    const weight = Number(metric.weight || 1);
+    if (!Number.isFinite(target) || target <= 0) continue;
+
+    const value = empGetMetricMonthAggregate(employeeId, metric);
+    const higher = metric.higher_is_better !== 0;
+    const score = higher
+      ? Math.min(100, (value / target) * 100)
+      : Math.max(0, 100 - (value / target) * 100);
+
+    totalWeight += weight;
+    weightedScore += score * weight;
+  }
+
+  if (!totalWeight) return null;
+  return weightedScore / totalWeight;
+}
+
+function empComputeRealtimeStats() {
+  const activeEmps = EMP_EMPLOYEES.filter((e) => e.active !== 0);
+  const rows = activeEmps.map((emp) => ({ emp, idx: empComputeEmployeeIndex(emp.id) }));
+  const valid = rows.filter((r) => r.idx !== null && Number.isFinite(r.idx));
+
+  const avgIdx = valid.length
+    ? valid.reduce((s, r) => s + r.idx, 0) / valid.length
+    : null;
+
+  let topPerformer = null;
+  for (const r of valid) {
+    if (!topPerformer || r.idx > topPerformer.idx) topPerformer = r;
+  }
+
+  return {
+    totalEmployees: activeEmps.length,
+    avgIndex: avgIdx,
+    topPerformer: topPerformer ? topPerformer.emp : null,
+  };
+}
+
+function empTrendVisual(insight) {
+  if (!insight || insight.improvement_state === 'none' || insight.trend === 'none') {
+    return { cls: 'emp-trend-none', icon: 'ph-minus', label: 'Sin tendencia', delta: '—' };
+  }
+  if (insight.improvement_state === 'stable') {
+    return { cls: 'emp-trend-stable', icon: 'ph-arrows-left-right', label: 'Equilibrado', delta: '0%' };
+  }
+  if (insight.improvement_state === 'improved') {
+    return {
+      cls: 'emp-trend-up',
+      icon: 'ph-trend-up',
+      label: 'Mejora',
+      delta: insight.delta_pct !== null && insight.delta_pct !== undefined ? `+${Math.abs(Math.round(insight.delta_pct))}%` : '↑',
+    };
+  }
+  return {
+    cls: 'emp-trend-down',
+    icon: 'ph-trend-down',
+    label: 'Oportunidad',
+    delta: insight.delta_pct !== null && insight.delta_pct !== undefined ? `-${Math.abs(Math.round(insight.delta_pct))}%` : '↓',
+  };
+}
+
+function empTrendBadge(insight) {
+  const t = empTrendVisual(insight);
+  return `<span class="emp-trend-badge ${t.cls}"><i class="ph-bold ${t.icon}"></i>${t.delta}</span>`;
+}
+
+function empTrendHint(insight, metric) {
+  if (!insight || insight.improvement_state === 'none') return 'Aún sin histórico suficiente';
+  const unit = metric?.unit ? ` ${metric.unit}` : '';
+  const prev = insight.previous_value !== null && insight.previous_value !== undefined
+    ? `${Math.round(insight.previous_value * 100) / 100}${unit}`
+    : '—';
+  const avg = insight.avg_recent !== null && insight.avg_recent !== undefined
+    ? `${Math.round(insight.avg_recent * 100) / 100}${unit}`
+    : '—';
+  const t = empTrendVisual(insight);
+  const baseLabel = insight.trend_scope === 'capture' ? 'Captura anterior' : 'Periodo anterior';
+  return `${t.label} · ${baseLabel}: ${prev} · Promedio: ${avg}`;
+}
+
+function empHistoryKey(employeeId, metricId, year, month) {
+  return `${Number(employeeId)}_${Number(metricId)}_${Number(year)}_${Number(month)}`;
+}
+
+function empHistorySourceLabel(source) {
+  const map = {
+    manual: 'Manual',
+    sync_sales: 'Sistema ventas',
+    pos_chatbot: 'POS/Chatbot',
+    system: 'Sistema',
+  };
+  return map[String(source || '').trim()] || 'Manual';
+}
+
+function empFormatEvidenceDate(row) {
+  const raw = row?.record_date || row?.created_at;
+  if (!raw) return '—';
+  const d = new Date(raw);
+  if (Number.isNaN(d.getTime())) return String(raw).slice(0, 19).replace('T', ' ');
+  return d.toLocaleString('es-MX', { dateStyle: 'short', timeStyle: 'short' });
+}
+
+function empHistoryCompletion(value, target, higherIsBetter) {
+  if (!Number.isFinite(value) || !Number.isFinite(target) || target <= 0) return null;
+  if (higherIsBetter) return (value / target) * 100;
+  return Math.max(0, 100 - (value / target) * 100);
+}
+
+function empEvidenceDateValue(row) {
+  const raw = row?.record_date || row?.created_at;
+  if (!raw) return null;
+  const d = new Date(raw);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
+function empFilterEvidenceRows(rows, mode) {
+  if (!Array.isArray(rows) || mode === 'all') return Array.isArray(rows) ? rows : [];
+  const now = new Date();
+  const startToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+
+  if (mode === 'today') {
+    return rows.filter((row) => {
+      const d = empEvidenceDateValue(row);
+      if (!d) return false;
+      return d >= startToday;
+    });
+  }
+
+  if (mode === 'week') {
+    const start = new Date(startToday);
+    start.setDate(start.getDate() - 6);
+    return rows.filter((row) => {
+      const d = empEvidenceDateValue(row);
+      if (!d) return false;
+      return d >= start;
+    });
+  }
+
+  return rows;
+}
+
+function empCsvCell(value) {
+  const txt = String(value ?? '');
+  return `"${txt.replace(/"/g, '""')}"`;
+}
+
+function empDownloadCsv(filename, rows) {
+  const bom = '\uFEFF';
+  const csv = bom + rows.map((r) => r.join(',')).join('\n');
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
+function empRenderEvidenceRows(rows, metric) {
+  if (!rows.length) {
+    return '<div class="emp-rec-evidence-empty">Sin capturas de evidencia en este periodo.</div>';
+  }
+  const target = Number(metric.target) || 0;
+  const unit = String(metric.unit || '').trim();
+  const higherIsBetter = metric.higher_is_better !== 0;
+
+  return rows.map((row) => {
+    const value = Number(row.value);
+    const completion = empHistoryCompletion(value, target, higherIsBetter);
+    const completionTxt = completion === null ? '—' : `${Math.round(completion)}%`;
+    const sourceLbl = empHistorySourceLabel(row.input_source);
+    const valueTxt = `${Math.round(value * 100) / 100}${unit ? ` ${unit}` : ''}`;
+    const targetTxt = `${Math.round(target * 100) / 100}${unit ? ` ${unit}` : ''}`;
+    const notesTxt = String(row.notes || '').trim();
+
+    return `<div class="emp-rec-evidence-row">
+      <div class="emp-rec-evidence-top">
+        <span class="emp-rec-evidence-date"><i class="ph-bold ph-calendar-blank"></i> ${esc(empFormatEvidenceDate(row))}</span>
+        <span class="emp-rec-evidence-source">${esc(sourceLbl)}</span>
+      </div>
+      <div class="emp-rec-evidence-meta">
+        <span>Captura: <b>${esc(valueTxt)}</b></span>
+        <span>Meta: <b>${esc(targetTxt || '—')}</b></span>
+        <span>Cumplimiento: <b>${esc(completionTxt)}</b></span>
+      </div>
+      ${notesTxt ? `<div class="emp-rec-evidence-notes">${esc(notesTxt)}</div>` : ''}
+    </div>`;
+  }).join('');
+}
+
+function empRenderEvidencePanel(rows, metric, ctx, mode) {
+  const filtered = empFilterEvidenceRows(rows, mode);
+  const countTxt = `${filtered.length}/${rows.length}`;
+  return `
+    <div class="emp-rec-evidence-wrap"
+      data-cache-key="${esc(ctx.cacheKey)}"
+      data-emp-name="${esc(ctx.employeeName || '')}"
+      data-metric-name="${esc(ctx.metricName || '')}"
+      data-year="${ctx.year}"
+      data-month="${ctx.month}"
+      data-target="${Number(metric.target) || 0}"
+      data-unit="${esc(metric.unit || '')}"
+      data-higher="${metric.higher_is_better !== 0 ? '1' : '0'}">
+      <div class="emp-rec-evidence-toolbar">
+        <div class="emp-rec-evidence-tools-left">
+          <select class="emp-rec-evidence-filter" onchange="empSetMetricEvidenceFilter(this)">
+            <option value="all" ${mode === 'all' ? 'selected' : ''}>Todo el periodo</option>
+            <option value="week" ${mode === 'week' ? 'selected' : ''}>Ultimos 7 dias</option>
+            <option value="today" ${mode === 'today' ? 'selected' : ''}>Hoy</option>
+          </select>
+          <span class="emp-rec-evidence-count">${countTxt}</span>
+        </div>
+        <button type="button" class="btn btn-ghost btn-xs" onclick="empExportMetricEvidence(this)">
+          <i class="ph-bold ph-file-xls"></i> Exportar CSV
+        </button>
+      </div>
+      <div class="emp-rec-evidence-list">${empRenderEvidenceRows(filtered, metric)}</div>
+    </div>`;
+}
+
+function empGetEvidenceCtxFromWrap(wrap) {
+  if (!wrap) return null;
+  const cacheKey = String(wrap.dataset.cacheKey || '');
+  if (!cacheKey) return null;
+  const metric = {
+    target: Number(wrap.dataset.target || 0),
+    unit: String(wrap.dataset.unit || ''),
+    higher_is_better: wrap.dataset.higher === '1' ? 1 : 0,
+  };
+  return {
+    cacheKey,
+    metric,
+    employeeName: String(wrap.dataset.empName || ''),
+    metricName: String(wrap.dataset.metricName || ''),
+    year: Number(wrap.dataset.year || 0),
+    month: Number(wrap.dataset.month || 0),
+  };
+}
+
+function empSetMetricEvidenceFilter(selectEl) {
+  const wrap = selectEl.closest('.emp-rec-evidence-wrap');
+  const ctx = empGetEvidenceCtxFromWrap(wrap);
+  if (!ctx) return;
+  const mode = String(selectEl.value || 'all');
+  EMP_HISTORY_FILTERS.set(ctx.cacheKey, mode);
+
+  const rows = EMP_HISTORY_CACHE.get(ctx.cacheKey) || [];
+  const filtered = empFilterEvidenceRows(rows, mode);
+  const list = wrap.querySelector('.emp-rec-evidence-list');
+  if (list) list.innerHTML = empRenderEvidenceRows(filtered, ctx.metric);
+  const count = wrap.querySelector('.emp-rec-evidence-count');
+  if (count) count.textContent = `${filtered.length}/${rows.length}`;
+}
+globalThis.empSetMetricEvidenceFilter = empSetMetricEvidenceFilter;
+
+function empExportMetricEvidence(buttonEl) {
+  const wrap = buttonEl.closest('.emp-rec-evidence-wrap');
+  const ctx = empGetEvidenceCtxFromWrap(wrap);
+  if (!ctx) return;
+
+  const mode = EMP_HISTORY_FILTERS.get(ctx.cacheKey) || 'all';
+  const rows = EMP_HISTORY_CACHE.get(ctx.cacheKey) || [];
+  const filtered = empFilterEvidenceRows(rows, mode);
+  if (!filtered.length) {
+    toast('No hay evidencia para exportar con ese filtro', true);
+    return;
+  }
+
+  const target = Number(ctx.metric.target) || 0;
+  const unit = String(ctx.metric.unit || '').trim();
+  const csvRows = [[
+    'Empleado', 'Metrica', 'Fecha', 'Fuente', 'Captura', 'Meta', 'Cumplimiento', 'Notas', 'Periodo',
+  ]];
+
+  filtered.forEach((row) => {
+    const value = Number(row.value || 0);
+    const completion = empHistoryCompletion(value, target, ctx.metric.higher_is_better !== 0);
+    const valueTxt = `${Math.round(value * 100) / 100}${unit ? ` ${unit}` : ''}`;
+    const targetTxt = `${Math.round(target * 100) / 100}${unit ? ` ${unit}` : ''}`;
+    const completionTxt = completion === null ? '—' : `${Math.round(completion)}%`;
+    csvRows.push([
+      empCsvCell(ctx.employeeName),
+      empCsvCell(ctx.metricName),
+      empCsvCell(empFormatEvidenceDate(row)),
+      empCsvCell(empHistorySourceLabel(row.input_source)),
+      empCsvCell(valueTxt),
+      empCsvCell(targetTxt),
+      empCsvCell(completionTxt),
+      empCsvCell(String(row.notes || '').trim()),
+      empCsvCell(`${MONTHS_ES[Math.max(0, ctx.month - 1)] || ''} ${ctx.year}`),
+    ]);
+  });
+
+  const safeEmp = String(ctx.employeeName || 'empleado').toLowerCase().replace(/[^a-z0-9]+/g, '-');
+  const safeMetric = String(ctx.metricName || 'metrica').toLowerCase().replace(/[^a-z0-9]+/g, '-');
+  const filename = `evidencia-${safeEmp}-${safeMetric}-${ctx.year}-${String(ctx.month).padStart(2, '0')}.csv`;
+  empDownloadCsv(filename, csvRows);
+  toast('Evidencia exportada (CSV)');
+}
+globalThis.empExportMetricEvidence = empExportMetricEvidence;
+
+async function empLoadMetricEvidence(head, body) {
+  const { year, month } = empCurrentPeriod();
+  const employeeId = Number(head.dataset.emp || 0);
+  const metricId = Number(head.dataset.metric || 0);
+  if (!employeeId || !metricId) return;
+
+  const metric = {
+    target: Number(head.dataset.target || 0),
+    unit: String(head.dataset.unit || ''),
+    higher_is_better: head.dataset.higher === '1' ? 1 : 0,
+  };
+
+  const cacheKey = empHistoryKey(employeeId, metricId, year, month);
+  const mode = EMP_HISTORY_FILTERS.get(cacheKey) || 'all';
+  const ctx = {
+    cacheKey,
+    employeeName: String(head.dataset.empName || ''),
+    metricName: String(head.dataset.metricName || ''),
+    year,
+    month,
+  };
+  const cached = EMP_HISTORY_CACHE.get(cacheKey);
+  if (cached) {
+    body.innerHTML = empRenderEvidencePanel(cached, metric, ctx, mode);
+    return;
+  }
+
+  body.innerHTML = '<div class="emp-rec-evidence-empty">Cargando evidencia...</div>';
+  try {
+    const rows = await api(`/api/employees/productivity/history?employee_id=${employeeId}&metric_id=${metricId}&year=${year}&month=${month}`);
+    const normalizedRows = Array.isArray(rows) ? rows : [];
+    EMP_HISTORY_CACHE.set(cacheKey, normalizedRows);
+    body.innerHTML = empRenderEvidencePanel(normalizedRows, metric, ctx, mode);
+
+    const countEl = head.querySelector('.emp-rec-hist-count');
+    if (countEl) countEl.textContent = String(normalizedRows.length);
+  } catch {
+    body.innerHTML = '<div class="emp-rec-evidence-empty">No se pudo cargar la evidencia.</div>';
+  }
+}
+
+async function empToggleMetricEvidence(head) {
+  const body = head.nextElementSibling;
+  if (!body) return;
+
+  const isHidden = body.hidden;
+  body.hidden = !body.hidden;
+
+  const arrow = head.querySelector('.emp-rec-hist-arrow');
+  if (arrow) arrow.className = `ph-bold ${body.hidden ? 'ph-caret-down' : 'ph-caret-up'} emp-rec-hist-arrow`;
+  if (!isHidden) return;
+
+  await empLoadMetricEvidence(head, body);
+}
+globalThis.empToggleMetricEvidence = empToggleMetricEvidence;
+
+async function empLoadInsights() {
+  const { year, month } = empCurrentPeriod();
+  const data = await api(`/api/employees/productivity/insights?year=${year}&month=${month}`);
+  EMP_INSIGHTS = Array.isArray(data?.insights) ? data.insights : [];
+  EMP_INSIGHT_SUMMARY = Array.isArray(data?.employee_summary) ? data.employee_summary : [];
+  EMP_INSIGHT_MAP = new Map(EMP_INSIGHTS.map((x) => [empInsightKey(x.employee_id, x.metric_id), x]));
+  EMP_INSIGHT_SUMMARY_MAP = new Map(EMP_INSIGHT_SUMMARY.map((x) => [Number(x.employee_id), x]));
+}
+
+/* ── Init del módulo ── */
+async function loadEmpleados() {
+  empInitPeriodSelectors();
+  empSwitchTab(EMP_TAB || 'team');
+  await empLoadAll();
+}
+
+function empInitPeriodSelectors() {
+  const now = new Date();
+  const ySel = $('#empYearSel');
+  const mSel = $('#empMonthSel');
+  if (!ySel || !mSel) return;
+
+  if (!ySel.children.length) {
+    const curYear = now.getFullYear();
+    for (let y = curYear - 2; y <= curYear + 1; y++) {
+      ySel.innerHTML += `<option value="${y}" ${y === curYear ? 'selected' : ''}>${y}</option>`;
+    }
+    MONTHS_ES.forEach((m, i) => {
+      mSel.innerHTML += `<option value="${i + 1}" ${i + 1 === now.getMonth() + 1 ? 'selected' : ''}>${m}</option>`;
+    });
+
+    ySel.addEventListener('change', () => empLoadAll());
+    mSel.addEventListener('change', () => empLoadAll());
+  }
+}
+
+async function empLoadAll() {
+  const { year, month } = empCurrentPeriod();
+  try {
+    [EMP_EMPLOYEES, EMP_METRICS, EMP_SCHEMES, EMP_ASSIGNMENTS] = await Promise.all([
+      api('/api/employees'),
+      api('/api/employees/metrics'),
+      api('/api/employees/commission-schemes'),
+      api('/api/employees/commission-assignments'),
+    ]);
+    [EMP_RECORDS, EMP_COMMISSION_RECORDS] = await Promise.all([
+      api(`/api/employees/productivity?year=${year}&month=${month}`),
+      api(`/api/employees/commission-records?year=${year}&month=${month}`),
+    ]);
+    try {
+      await empLoadInsights();
+    } catch {
+      EMP_INSIGHTS = [];
+      EMP_INSIGHT_SUMMARY = [];
+      EMP_INSIGHT_MAP = new Map();
+      EMP_INSIGHT_SUMMARY_MAP = new Map();
+    }
+    EMP_HISTORY_CACHE = new Map();
+    EMP_HISTORY_FILTERS = new Map();
+  } catch (err) {
+    toast(err.message || 'Error cargando empleados', true);
+    return;
+  }
+  await empLoadQuickStats();
+  empRenderCurrentTab();
+}
+
+async function empLoadQuickStats() {
+  const realtime = empComputeRealtimeStats();
+  const totalCommissions = EMP_COMMISSION_RECORDS.reduce((s, r) => s + Number(r.commission_amount || 0), 0);
+
+  $('#empKpiTotal').textContent = String(realtime.totalEmployees || 0);
+  $('#empKpiIndex').textContent = realtime.avgIndex !== null ? `${Math.round(realtime.avgIndex)}%` : '—';
+  $('#empKpiComm').textContent = totalCommissions ? empFmt(totalCommissions) : '$0.00';
+  $('#empKpiTop').textContent = realtime.topPerformer?.name || '—';
+}
+
+/* ── Tabs ── */
+function empSwitchTab(tab) {
+  EMP_TAB = tab;
+  document.querySelectorAll('#empTabs button').forEach((btn) => {
+    btn.classList.toggle('on', btn.dataset.empTab === tab);
+  });
+  document.querySelectorAll('.emp-panel').forEach((p) => { p.hidden = true; });
+  const panel = document.getElementById('empPanel' + tab.charAt(0).toUpperCase() + tab.slice(1));
+  if (panel) panel.hidden = false;
+  empRenderCurrentTab();
+}
+
+document.querySelectorAll('#empTabs button').forEach((btn) => {
+  btn.addEventListener('click', () => empSwitchTab(btn.dataset.empTab));
+});
+
+function empRenderCurrentTab() {
+  switch (EMP_TAB) {
+    case 'team': empRenderTeam(); break;
+    case 'records': empRenderRecords(); break;
+    case 'commissions': empRenderCommissions(); break;
+    case 'config': empRenderConfig(); break;
+  }
+}
+
+/* ══ Panel: Equipo ══ */
+function empRenderTeam() {
+  const { year, month } = empCurrentPeriod();
+  const periodLabel = `${MONTHS_ES[month - 1]} ${year}`;
+  if ($('#empChartPeriodLabel')) $('#empChartPeriodLabel').textContent = periodLabel;
+
+  const activeEmps = EMP_EMPLOYEES.filter((e) => e.active !== 0);
+  const activeMetrics = EMP_METRICS.filter((m) => m.active !== 0).slice(0, 4);
+
+  const empData = activeEmps.map((emp) => {
+    const commRec = EMP_COMMISSION_RECORDS.filter((c) => c.employee_id === emp.id);
+    const idx = empComputeEmployeeIndex(emp.id);
+    const totalComm = commRec.reduce((s, c) => s + (c.commission_amount || 0), 0);
+    const empRecs = EMP_RECORDS.filter((r) => r.employee_id === emp.id);
+    return { emp, idx, totalComm, empRecs };
+  });
+
+  // Chart barras
+  const canvas = $('#empTeamChart');
+  if (canvas) {
+    if (EMP_TEAM_CHART) { EMP_TEAM_CHART.destroy(); EMP_TEAM_CHART = null; }
+    const labels = empData.map((d) => d.emp.name.split(' ')[0]);
+    const values = empData.map((d) => d.idx !== null ? Math.round(d.idx) : 0);
+    const colors = empData.map((d) => d.emp.avatar_color || '#6c47ff');
+    EMP_TEAM_CHART = new Chart(canvas, {
+      type: 'bar',
+      data: {
+        labels,
+        datasets: [{
+          label: 'Índice de productividad (%)',
+          data: values,
+          backgroundColor: colors.map((c) => c + 'cc'),
+          borderColor: colors,
+          borderWidth: 2,
+          borderRadius: 8,
+        }],
+      },
+      options: {
+        responsive: true,
+        scales: { y: { min: 0, max: 100, ticks: { callback: (v) => v + '%' } } },
+        plugins: {
+          legend: { display: false },
+          tooltip: { callbacks: { label: (ctx) => `Productividad: ${ctx.raw}%` } },
+        },
+      },
+    });
+    empInitChartToggle('empTeamChartBody', 'emp_team_chart', 'empTeamChartToggleIcon', 'empTeamChartToggleLabel');
+  }
+
+  // Cards grid
+  const wrap = $('#empTeamTable');
+  if (!wrap) return;
+  if (!empData.length) {
+    wrap.innerHTML = `<div class="emp-empty-state"><i class="ph-fill ph-user-plus" style="color:#6c47ff"></i><p>No hay empleados activos.<br>Crea el primero con <b>+ Nuevo empleado</b>.</p></div>`;
+    return;
+  }
+
+  wrap.innerHTML = `<div class="emp-team-grid">
+    ${empData.map(({ emp, idx, totalComm, empRecs }) => {
+      const initials = emp.name.trim().split(/\s+/).map((w) => w[0]).join('').toUpperCase().slice(0, 2);
+      const color = emp.avatar_color || '#6c47ff';
+      const pct = idx !== null ? Math.round(idx) : null;
+      const idxColor = pct === null ? '#9aa1b5' : pct >= 90 ? '#16a34a' : pct >= 70 ? '#d97706' : pct >= 50 ? '#f97316' : '#dc2626';
+
+      const metricsHtml = activeMetrics.length
+        ? activeMetrics.map((m) => {
+            const insight = empGetInsight(emp.id, m.id);
+            const rec = empRecs.find((r) => r.metric_id === m.id);
+            const val = insight && insight.current_value !== null && insight.current_value !== undefined
+              ? Number(insight.current_value)
+              : (rec ? Number(rec.value) : 0);
+            const target = Number(m.target) || 1;
+            const barPct = m.higher_is_better !== 0
+              ? Math.min(100, Math.round((val / target) * 100))
+              : Math.max(0, 100 - Math.round((val / target) * 100));
+            return `<div class="emp-metric-progress">
+              <div class="emp-metric-progress-head">
+                <span>${esc(m.name)}</span>
+                <span class="emp-metric-progress-val">${val !== 0 || rec ? val + (m.unit ? '\u00a0' + esc(m.unit) : '') : '—'} ${empTrendBadge(insight)}</span>
+              </div>
+              <div class="emp-progress-track">
+                <div class="emp-progress-fill" style="width:${barPct}%;background:${color}80"></div>
+              </div>
+              <div class="emp-metric-trend-hint">${esc(empTrendHint(insight, m))}</div>
+            </div>`;
+          }).join('')
+        : `<div style="font-size:12px;color:var(--ink-3);padding:4px 0">Configura métricas en <b>Configurar</b></div>`;
+
+      const summary = empGetEmployeeInsightSummary(emp.id);
+      const summaryHtml = `<div class="emp-scoreline">
+        <span class="emp-score-up"><i class="ph-bold ph-trend-up"></i> ${summary.improved || 0} mejora${(summary.improved || 0) === 1 ? '' : 's'}</span>
+        <span class="emp-score-stable"><i class="ph-bold ph-arrows-left-right"></i> ${summary.stable || 0} estable${(summary.stable || 0) === 1 ? '' : 's'}</span>
+        <span class="emp-score-down"><i class="ph-bold ph-trend-down"></i> ${summary.declined || 0} oportunidad${(summary.declined || 0) === 1 ? '' : 'es'}</span>
+      </div>`;
+
+      return `<div class="emp-emp-card">
+        <div class="emp-emp-card-top" style="background:linear-gradient(135deg,${color}18,${color}06);border-top:3px solid ${color}">
+          <div style="display:flex;align-items:center;gap:14px">
+            <div class="emp-emp-card-avatar-wrap">
+              <span class="emp-avatar emp-avatar-xl" style="background:${color}">${esc(initials)}</span>
+              ${pct !== null ? `<span class="emp-idx-pill" style="background:${idxColor}">${pct}%</span>` : ''}
+            </div>
+            <div class="emp-emp-card-info">
+              <div class="emp-emp-card-name">${esc(emp.name)}</div>
+              <div class="emp-emp-card-meta">${esc(emp.position || '—')}</div>
+              ${emp.department ? `<div class="emp-emp-card-dept">${esc(emp.department)}</div>` : ''}
+            </div>
+          </div>
+        </div>
+        <div class="emp-emp-card-metrics">${metricsHtml}</div>
+        <div class="emp-emp-card-footer">
+          <div>
+            <div class="emp-comm-total" style="color:${color}">${empFmt(totalComm)}</div>
+            <div class="emp-comm-label">Comisión del mes</div>
+            ${summaryHtml}
+          </div>
+          <div class="emp-emp-card-actions">
+            <button class="btn btn-ghost btn-sm" onclick="empOpenProfile(${emp.id})" title="Ver perfil"><i class="ph-bold ph-chart-line-up"></i></button>
+            <button class="btn btn-ghost btn-sm" onclick="empOpenEmployeeModal(${emp.id})" title="Editar"><i class="ph-bold ph-pencil"></i></button>
+          </div>
+        </div>
+      </div>`;
+    }).join('')}
+  </div>`;
+}
+
+$('#empAddBtn')?.addEventListener('click', () => empOpenEmployeeModal());
+$('#empRefreshBtn')?.addEventListener('click', () => empLoadAll());
+$('#empPrintTeamBtn')?.addEventListener('click', () => empPrintTeam());
+
+/* ══ Panel: Registrar Métricas ══ */
+const EMP_PERIOD_LABELS = {
+  monthly: 'Mensual', biweekly: 'Quincenal', weekly: 'Semanal', daily: 'Diaria',
+};
+const EMP_PERIOD_HINTS = {
+  monthly: 'Ingresa el valor total del mes.',
+  biweekly: 'Ingresa un valor por quincena (se acumula en el mes).',
+  weekly: 'Ingresa un valor por semana (se acumula en el mes).',
+  daily: 'Ingresa el valor del día seleccionado (se acumula en el mes).',
+};
+
+function empRecordDate(periodType) {
+  const today = new Date();
+  const y = today.getFullYear();
+  const m = String(today.getMonth() + 1).padStart(2, '0');
+  const d = String(today.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+}
+
+function empRenderRecords() {
+  const { year, month } = empCurrentPeriod();
+  const wrap = $('#empRecordsWrap');
+  if (!wrap) return;
+
+  const activeEmps = EMP_EMPLOYEES.filter((e) => e.active !== 0);
+  const activeMetrics = EMP_METRICS.filter((m) => m.active !== 0);
+
+  if (!activeMetrics.length) {
+    wrap.innerHTML = `<div class="emp-empty-state"><i class="ph-fill ph-sliders" style="color:#6c47ff"></i><p>Configura primero las métricas en la pestaña <b>Configurar</b>.</p></div>`;
+    return;
+  }
+  if (!activeEmps.length) {
+    wrap.innerHTML = `<div class="emp-empty-state"><i class="ph-fill ph-user-plus" style="color:#6c47ff"></i><p>Aún no hay empleados activos. Crea uno en la pestaña <b>Equipo</b>.</p></div>`;
+    return;
+  }
+
+  wrap.innerHTML = `
+    <div class="emp-records-header-bar">
+      <div class="emp-records-header-info">
+        <i class="ph-bold ph-clipboard-text"></i>
+        <div>
+          <b>Registro de métricas — ${MONTHS_ES[month - 1]} ${year}</b>
+          <div style="font-size:12px;color:var(--ink-3);margin-top:2px">Escribe el valor y presiona <kbd>Enter</kbd> o el botón <i class="ph-bold ph-check"></i></div>
+        </div>
+      </div>
+    </div>
+    <div class="emp-record-emps">
+      ${activeEmps.map((emp) => {
+        const empRecs = EMP_RECORDS.filter((r) => r.employee_id === emp.id);
+        const initials = emp.name.trim().split(/\s+/).map((w) => w[0]).join('').toUpperCase().slice(0, 2);
+        const color = emp.avatar_color || '#6c47ff';
+        return `<div class="emp-record-emp-section">
+          <div class="emp-record-emp-header" style="border-left:4px solid ${color}">
+            <span class="emp-avatar emp-avatar-md" style="background:${color}">${esc(initials)}</span>
+            <div>
+              <b>${esc(emp.name)}</b>
+              ${emp.position ? `<span class="emp-record-emp-pos">${esc(emp.position)}</span>` : ''}
+            </div>
+          </div>
+          <div class="emp-record-metrics-grid">
+            ${activeMetrics.map((m) => {
+              const insight = empGetInsight(emp.id, m.id);
+              const isMonthly = !m.period_type || m.period_type === 'monthly';
+              const canType = m.source !== 'system_sales';
+              const periodLabel = EMP_PERIOD_LABELS[m.period_type] || 'Mensual';
+              const aggLabel = m.aggregation === 'avg' ? 'Promedio' : 'Suma';
+              const aggHint = isMonthly ? '' : ` · ${aggLabel} del mes`;
+
+              // Para métricas mensuales: mostrar valor acumulado
+              const allRecs = empRecs.filter((r) => r.metric_id === m.id);
+
+              // Calcular valor acumulado del mes según aggregation
+              let currentVal = null;
+              if (allRecs.length > 0) {
+                const vals = allRecs.map((r) => Number(r.value));
+                currentVal = m.aggregation === 'avg'
+                  ? vals.reduce((s, v) => s + v, 0) / vals.length
+                  : vals.reduce((s, v) => s + v, 0);
+              }
+
+              const barPct = currentVal !== null && m.target
+                ? Math.min(100, Math.round((currentVal / Number(m.target)) * 100))
+                : null;
+
+              const defaultDate = empRecordDate(m.period_type);
+              const inputId = `empRec_${emp.id}_${m.id}`;
+              const dateId = `empRecDate_${emp.id}_${m.id}`;
+
+              return `<div class="emp-record-metric-card${canType ? '' : ' emp-record-metric-auto'}">
+                <div class="emp-record-metric-card-top">
+                  <span class="emp-record-metric-name">${esc(m.name)}</span>
+                  <span class="emp-badge ${m.source === 'manual' ? 'emp-badge-gray' : 'emp-badge-indigo'}">${m.source === 'manual' ? 'Manual' : m.source === 'system_sales' ? 'Sistema' : 'Mixta'}</span>
+                </div>
+                <div class="emp-record-metric-meta">
+                  Meta: <b>${m.target}${m.unit ? '\u00a0' + esc(m.unit) : ''}</b>
+                  <span class="emp-period-chip">${periodLabel}${aggHint}</span>
+                </div>
+                ${!isMonthly ? `<div class="field" style="margin:0 0 6px">
+                  <input type="date" id="${dateId}" class="emp-date-input"
+                    data-emp="${emp.id}" data-metric="${m.id}"
+                    value="${defaultDate}" max="${defaultDate}" />
+                </div>` : ''}
+                <div class="emp-record-input-group">
+                  <input
+                    type="number" min="0" step="0.01"
+                    class="emp-record-input" id="${inputId}"
+                    data-emp="${emp.id}" data-metric="${m.id}"
+                    data-monthly="${isMonthly ? '1' : '0'}"
+                    value="${isMonthly && currentVal !== null ? currentVal : ''}"
+                    placeholder="${canType ? '0' : 'automático'}"
+                    ${canType ? '' : 'readonly'}
+                    onkeydown="if(event.key==='Enter'){event.preventDefault();empSaveRecord(this)}"
+                  />
+                  <div class="emp-record-input-actions">
+                    ${canType ? `<button class="btn btn-primary btn-xs emp-save-rec-btn" onclick="empSaveRecord(document.getElementById('${inputId}'))" title="Guardar"><i class="ph-bold ph-check"></i></button>` : ''}
+                    ${m.source !== 'manual' ? `<button class="btn btn-ghost btn-xs" onclick="empSyncSales(${m.id},${emp.id})" title="Importar del sistema"><i class="ph-bold ph-arrows-clockwise"></i></button>` : ''}
+                  </div>
+                </div>
+                ${barPct !== null ? `
+                  <div class="emp-record-metric-prog">
+                    <div class="emp-progress-track emp-progress-sm"><div class="emp-progress-fill" style="width:${barPct}%;background:${color}"></div></div>
+                    <span class="emp-record-metric-pct">${barPct}%${currentVal !== null ? ` (${Math.round(currentVal * 100) / 100}${m.unit ? '\u00a0' + esc(m.unit) : ''})` : ''}</span>
+                  </div>` : ''}
+                <div class="emp-record-trend-row">
+                  ${empTrendBadge(insight)}
+                  <span>${esc(empTrendHint(insight, m))}</span>
+                </div>
+                <div class="emp-rec-history">
+                  <div class="emp-rec-history-head"
+                    data-emp="${emp.id}"
+                    data-metric="${m.id}"
+                    data-emp-name="${esc(emp.name)}"
+                    data-metric-name="${esc(m.name)}"
+                    data-target="${Number(m.target) || 0}"
+                    data-unit="${esc(m.unit || '')}"
+                    data-higher="${m.higher_is_better !== 0 ? '1' : '0'}"
+                    onclick="empToggleMetricEvidence(this)">
+                    <i class="ph-bold ph-clock-clockwise"></i> Evidencia del periodo (<span class="emp-rec-hist-count">${allRecs.length}</span>)
+                    <i class="ph-bold ph-caret-down emp-rec-hist-arrow"></i>
+                  </div>
+                  <div class="emp-rec-history-body" hidden></div>
+                </div>
+              </div>`;
+            }).join('')}
+          </div>
+        </div>`;
+      }).join('')}
+    </div>`;
+}
+
+async function empSaveRecord(input, source = 'manual') {
+  const empId = input.dataset.emp;
+  const metricId = input.dataset.metric;
+  const isMonthly = input.dataset.monthly === '1';
+  const { year, month } = empCurrentPeriod();
+  const value = parseFloat(input.value);
+  if (!isFinite(value)) { toast('Ingresa un valor numérico válido', true); return; }
+
+  let body = { employee_id: empId, metric_id: metricId, year, month, value, input_source: source };
+
+  if (!isMonthly) {
+    const dateInput = document.getElementById(`empRecDate_${empId}_${metricId}`);
+    const record_date = dateInput?.value;
+    if (!record_date) { toast('Selecciona la fecha del registro', true); return; }
+    body.record_date = record_date;
+  }
+
+  try {
+    input.classList.add('emp-saving');
+    await api('/api/employees/productivity', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    input.classList.remove('emp-saving');
+    input.classList.add('emp-saved');
+    setTimeout(() => input.classList.remove('emp-saved'), 1400);
+
+    // Actualizar cache local
+    if (isMonthly) {
+      const idx = EMP_RECORDS.findIndex((r) => r.employee_id == empId && r.metric_id == metricId && !r.record_date);
+      if (idx >= 0) EMP_RECORDS[idx].value = value;
+      else EMP_RECORDS.push({ employee_id: Number(empId), metric_id: Number(metricId), value, record_date: null });
+    } else {
+      const rd = body.record_date;
+      const idx = EMP_RECORDS.findIndex((r) => r.employee_id == empId && r.metric_id == metricId && r.record_date === rd);
+      if (idx >= 0) EMP_RECORDS[idx].value = value;
+      else EMP_RECORDS.push({ employee_id: Number(empId), metric_id: Number(metricId), value, record_date: rd });
+    }
+
+    // Recalcular barra de progreso en la tarjeta
+    const m = EMP_METRICS.find((x) => x.id == metricId);
+    const emp = EMP_EMPLOYEES.find((e) => e.id == empId);
+    const color = emp?.avatar_color || '#6c47ff';
+    const card = input.closest('.emp-record-metric-card');
+    if (m && m.target && card) {
+      const allRecs = EMP_RECORDS.filter((r) => r.employee_id == empId && r.metric_id == metricId);
+      const vals = allRecs.map((r) => Number(r.value));
+      const agg = m.aggregation === 'avg' ? vals.reduce((s, v) => s + v, 0) / vals.length : vals.reduce((s, v) => s + v, 0);
+      const barPct = Math.min(100, Math.round((agg / Number(m.target)) * 100));
+      let progEl = card.querySelector('.emp-record-metric-prog');
+      if (!progEl) {
+        card.insertAdjacentHTML('beforeend', `<div class="emp-record-metric-prog"><div class="emp-progress-track emp-progress-sm"><div class="emp-progress-fill" style="width:0%;background:${color}"></div></div><span class="emp-record-metric-pct">0%</span></div>`);
+        progEl = card.querySelector('.emp-record-metric-prog');
+      }
+      progEl.querySelector('.emp-progress-fill').style.width = barPct + '%';
+      progEl.querySelector('.emp-record-metric-pct').textContent = `${barPct}% (${Math.round(agg * 100) / 100}${m.unit ? '\u00a0' + m.unit : ''})`;
+    }
+
+    const historyKey = empHistoryKey(empId, metricId, year, month);
+    EMP_HISTORY_CACHE.delete(historyKey);
+    EMP_HISTORY_FILTERS.delete(historyKey);
+    const headEl = card?.querySelector('.emp-rec-history-head');
+    const histBody = card?.querySelector('.emp-rec-history-body');
+    if (headEl && histBody && !histBody.hidden) {
+      await empLoadMetricEvidence(headEl, histBody);
+    }
+
+    try {
+      await empLoadInsights();
+      if (EMP_TAB === 'team' || EMP_TAB === 'records') empRenderCurrentTab();
+    } catch {}
+
+    await empLoadQuickStats();
+
+    toast('Registro guardado');
+  } catch (err) {
+    input.classList.remove('emp-saving');
+    toast(err.message || 'Error al guardar', true);
+  }
+}
+
+async function empSyncSales(metricId, empId) {
+  const { year, month } = empCurrentPeriod();
+  try {
+    const data = await api('/api/employees/productivity/sync-sales', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ metric_id: metricId, year, month }),
+    });
+    const input = document.querySelector(`input.emp-record-input[data-emp="${empId}"][data-metric="${metricId}"]`);
+    if (input) {
+      input.value = data.total_sales;
+      await empSaveRecord(input, 'sync_sales');
+    }
+    toast(`Ventas del sistema importadas: ${empFmt(data.total_sales)} (${data.order_count} pedido${data.order_count !== 1 ? 's' : ''})`);
+  } catch (err) {
+    toast(err.message || 'Error al sincronizar ventas', true);
+  }
+}
+
+/* ══ Panel: Comisiones ══ */
+function empRenderCommissions() {
+  const { year, month } = empCurrentPeriod();
+  if ($('#empCommYearLabel')) $('#empCommYearLabel').textContent = String(year);
+
+  empRenderEvolutionChart(year);
+
+  const wrap = $('#empCommTable');
+  if (!wrap) return;
+
+  if (!EMP_COMMISSION_RECORDS.length) {
+    wrap.innerHTML = `<div class="emp-empty-state"><i class="ph-fill ph-calculator" style="color:#6c47ff"></i><p>No hay comisiones calculadas para <b>${MONTHS_ES[month - 1]} ${year}</b>.<br>Registra métricas y usa <b>Calcular comisiones</b>.</p></div>`;
+    return;
+  }
+
+  const statusMap = {
+    pending: ['Pendiente', '#9aa1b5', '#f3f4f6'],
+    approved: ['Aprobada', '#d97706', '#fdf3e0'],
+    paid: ['Pagada', '#16a34a', '#e8f8ee'],
+  };
+
+  wrap.innerHTML = `<div class="emp-comm-cards">
+    ${EMP_COMMISSION_RECORDS.map((cr) => {
+      const emp = EMP_EMPLOYEES.find((e) => e.id === cr.employee_id);
+      const color = emp?.avatar_color || '#6c47ff';
+      const initials = emp ? emp.name.trim().split(/\s+/).map((w) => w[0]).join('').toUpperCase().slice(0, 2) : '?';
+      const pct = cr.productivity_index !== null ? Math.round(cr.productivity_index) : 0;
+      const idxColor = pct >= 90 ? '#16a34a' : pct >= 70 ? '#d97706' : pct >= 50 ? '#f97316' : '#dc2626';
+      const [statusLabel, statusTxt, statusBg] = statusMap[cr.status] || ['Desconocido', '#9aa1b5', '#f3f4f6'];
+      return `<div class="emp-comm-card" style="border-top:3px solid ${color}">
+        <div class="emp-comm-card-header">
+          <span class="emp-avatar emp-avatar-md" style="background:${color}">${esc(initials)}</span>
+          <div class="emp-comm-card-name">
+            <b>${esc(cr.employee_name)}</b>
+            ${emp?.position ? `<span>${esc(emp.position)}</span>` : ''}
+          </div>
+          <span class="emp-comm-card-status-pill" style="background:${statusBg};color:${statusTxt}">${statusLabel}</span>
+        </div>
+        <div class="emp-comm-card-body">
+          <div class="emp-comm-card-idx">
+            <div class="emp-comm-idx-label">Índice de productividad</div>
+            <div class="emp-progress-track emp-progress-lg" style="margin:6px 0">
+              <div class="emp-progress-fill" style="width:${pct}%;background:linear-gradient(90deg,${idxColor}aa,${idxColor})"></div>
+            </div>
+            <div class="emp-comm-idx-val" style="color:${idxColor}">${pct}%</div>
+          </div>
+          <div class="emp-comm-card-amounts">
+            <div class="emp-comm-card-amount-row">
+              <span>Base de cálculo</span><span>${empFmt(cr.base_value)}</span>
+            </div>
+            <div class="emp-comm-card-amount-main">
+              <span>Comisión</span>
+              <span style="color:${color};font-size:18px;font-weight:800">${empFmt(cr.commission_amount)}</span>
+            </div>
+            ${cr.scheme_name ? `<div class="emp-comm-card-scheme">${esc(cr.scheme_name)}</div>` : ''}
+          </div>
+        </div>
+        <div class="emp-comm-card-actions">
+          ${cr.status === 'pending' ? `<button class="btn btn-primary btn-sm" onclick="empUpdateCommStatus(${cr.id},'approved')"><i class="ph-bold ph-check"></i> Aprobar</button>` : ''}
+          ${cr.status === 'approved' ? `<button class="btn btn-primary btn-sm" onclick="empUpdateCommStatus(${cr.id},'paid')"><i class="ph-bold ph-money"></i> Marcar pagada</button>` : ''}
+          ${cr.status === 'paid' ? `<span style="color:var(--green);font-size:13px;font-weight:700"><i class="ph-fill ph-check-circle"></i> Pagada</span>` : ''}
+        </div>
+      </div>`;
+    }).join('')}
+  </div>`;
+}
+
+async function empRenderEvolutionChart(year) {
+  try {
+    const data = await api(`/api/employees/reports/team?year=${year}&month=1`);
+    const teamHistory = data.team_history || [];
+    const canvas = $('#empEvolutionChart');
+    if (!canvas) return;
+
+    if (EMP_EVOLUTION_CHART) { EMP_EVOLUTION_CHART.destroy(); EMP_EVOLUTION_CHART = null; }
+
+    const series = MONTHS_ES.map((_, i) => {
+      const rec = teamHistory.find((h) => h.period_month === i + 1);
+      return rec ? Math.round(rec.avg_index) : null;
+    });
+
+    EMP_EVOLUTION_CHART = new Chart(canvas, {
+      type: 'line',
+      data: {
+        labels: MONTHS_ES.map((m) => m.slice(0, 3)),
+        datasets: [{
+          label: 'Productividad promedio equipo (%)',
+          data: series,
+          borderColor: '#6c47ff',
+          backgroundColor: 'rgba(108,71,255,0.12)',
+          tension: 0.4,
+          pointRadius: 5,
+          pointHoverRadius: 7,
+          fill: true,
+          spanGaps: true,
+        }],
+      },
+      options: {
+        responsive: true,
+        scales: { y: { min: 0, max: 100, ticks: { callback: (v) => v + '%' } } },
+        plugins: {
+          legend: { display: false },
+          tooltip: { callbacks: { label: (ctx) => `Productividad: ${ctx.raw !== null ? ctx.raw + '%' : 'Sin datos'}` } },
+        },
+      },
+    });
+    empInitChartToggle('empEvoChartBody', 'emp_evo_chart', 'empEvoChartToggleIcon', 'empEvoChartToggleLabel');
+  } catch {}
+}
+
+$('#empCalcBtn')?.addEventListener('click', async () => {
+  const { year, month } = empCurrentPeriod();
+  const ok = await askConfirm(
+    'Calcular comisiones',
+    `¿Calcular comisiones para ${MONTHS_ES[month - 1]} ${year}? Los registros existentes se actualizarán.`,
+    { yesLabel: '<i class="ph-bold ph-calculator"></i> Calcular', noLabel: 'Cancelar' }
+  );
+  if (!ok) return;
+  try {
+    const result = await api('/api/employees/commission-records/calculate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ year, month }),
+    });
+    toast(`Comisiones calculadas para ${result.results.length} empleado(s)`);
+    await empLoadAll();
+  } catch (err) {
+    toast(err.message || 'Error al calcular comisiones', true);
+  }
+});
+
+async function empUpdateCommStatus(id, status) {
+  try {
+    await api(`/api/employees/commission-records/${id}/status`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status }),
+    });
+    toast(status === 'approved' ? 'Comisión aprobada' : 'Comisión marcada como pagada');
+    await empLoadAll();
+  } catch (err) {
+    toast(err.message || 'Error', true);
+  }
+}
+globalThis.empUpdateCommStatus = empUpdateCommStatus;
+
+/* ══ Panel: Configurar ══ */
+function empRenderConfig() {
+  empRenderMetricsList();
+  empRenderSchemesList();
+  empRenderAssignTable();
+}
+
+function empRenderMetricsList() {
+  const wrap = $('#empMetricsList');
+  if (!wrap) return;
+  if (!EMP_METRICS.length) {
+    wrap.innerHTML = '<div class="hint">Sin métricas configuradas. Crea una nueva.</div>';
+    return;
+  }
+  wrap.innerHTML = EMP_METRICS.map((m) => `
+    <div class="emp-metric-row ${m.active === 0 ? 'emp-inactive' : ''}">
+      <div class="emp-metric-info">
+        <b>${esc(m.name)}</b>
+        <span class="emp-metric-meta">
+          Meta: ${m.target}${esc(m.unit)} · Peso: ${m.weight} · ${m.source === 'manual' ? 'Manual' : m.source === 'system_sales' ? 'Sistema' : 'Sistema+Manual'}
+          · ${m.higher_is_better ? 'Mayor=Mejor' : 'Menor=Mejor'}
+          ${m.active === 0 ? ' · <em>Inactiva</em>' : ''}
+        </span>
+      </div>
+      <div style="display:flex;gap:6px">
+        <button class="btn btn-ghost btn-sm" onclick="empOpenMetricModal(${m.id})"><i class="ph-bold ph-pencil"></i></button>
+        <button class="btn btn-ghost btn-sm" onclick="empToggleMetric(${m.id},${m.active === 0 ? 1 : 0})">
+          <i class="ph-bold ${m.active === 0 ? 'ph-eye' : 'ph-eye-slash'}"></i>
+        </button>
+      </div>
+    </div>`).join('');
+}
+
+function empRenderSchemesList() {
+  const wrap = $('#empSchemesList');
+  if (!wrap) return;
+  const TYPE_LABELS = {
+    percentage: 'Porcentaje',
+    fixed: 'Monto fijo',
+    tiered: 'Escalonado',
+    productivity_bonus: 'Bono productividad',
+  };
+  if (!EMP_SCHEMES.length) {
+    wrap.innerHTML = '<div class="hint">Sin esquemas configurados. Crea uno nuevo.</div>';
+    return;
+  }
+  wrap.innerHTML = EMP_SCHEMES.map((s) => `
+    <div class="emp-metric-row ${s.active === 0 ? 'emp-inactive' : ''}">
+      <div class="emp-metric-info">
+        <b>${esc(s.name)}</b>
+        <span class="emp-metric-meta">${TYPE_LABELS[s.type] || s.type}${s.description ? ' · ' + esc(s.description) : ''}${s.active === 0 ? ' · <em>Inactivo</em>' : ''}</span>
+      </div>
+      <div style="display:flex;gap:6px">
+        <button class="btn btn-ghost btn-sm" onclick="empOpenSchemeModal(${s.id})"><i class="ph-bold ph-pencil"></i></button>
+      </div>
+    </div>`).join('');
+}
+
+function empRenderAssignTable() {
+  const wrap = $('#empAssignTable');
+  if (!wrap) return;
+  if (!EMP_ASSIGNMENTS.length) {
+    wrap.innerHTML = '<div class="hint" style="padding:16px">Sin asignaciones. Asigna un esquema de comisión a cada empleado.</div>';
+    return;
+  }
+  wrap.innerHTML = `
+    <table class="emp-table">
+      <thead><tr><th>Empleado</th><th>Esquema</th><th>Métrica vinculada</th><th></th></tr></thead>
+      <tbody>
+        ${EMP_ASSIGNMENTS.map((a) => `<tr>
+          <td>${esc(a.employee_name)}</td>
+          <td>${esc(a.scheme_name)}</td>
+          <td>${esc(a.metric_name || 'Índice global')}</td>
+          <td><button class="btn btn-ghost btn-sm" onclick="empDeleteAssign(${a.id})"><i class="ph-bold ph-trash"></i></button></td>
+        </tr>`).join('')}
+      </tbody>
+    </table>`;
+}
+
+/* ── Modales: Empleado ── */
+function empOpenEmployeeModal(id) {
+  const emp = id ? EMP_EMPLOYEES.find((e) => e.id === id) : null;
+  $('#empEmpId').value = emp ? emp.id : '';
+  $('#empEmployeeModalTitle').innerHTML = emp
+    ? '<i class="ph-bold ph-user-gear"></i> Editar empleado'
+    : '<i class="ph-bold ph-user-plus"></i> Nuevo empleado';
+  $('#empEmpName').value = emp?.name || '';
+  $('#empEmpPosition').value = emp?.position || '';
+  $('#empEmpDepartment').value = emp?.department || '';
+  $('#empEmpHireDate').value = emp?.hire_date ? String(emp.hire_date).slice(0, 10) : '';
+  $('#empEmpSalary').value = emp?.salary_base || '';
+  $('#empEmpPhone').value = emp?.phone || '';
+  $('#empEmpEmail').value = emp?.email || '';
+  $('#empEmpNotes').value = emp?.notes || '';
+  const color = emp?.avatar_color || '#6c47ff';
+  $('#empEmpColor').value = color;
+  document.querySelectorAll('.emp-color-dot').forEach((d) => d.classList.toggle('selected', d.dataset.color === color));
+  openModal('empEmployeeModal');
+}
+globalThis.empOpenEmployeeModal = empOpenEmployeeModal;
+
+document.querySelectorAll('.emp-color-dot').forEach((dot) => {
+  dot.addEventListener('click', () => {
+    document.querySelectorAll('.emp-color-dot').forEach((d) => d.classList.remove('selected'));
+    dot.classList.add('selected');
+    $('#empEmpColor').value = dot.dataset.color;
+  });
+});
+
+$('#empEmployeeForm')?.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const id = $('#empEmpId').value;
+  const body = {
+    name: $('#empEmpName').value,
+    position: $('#empEmpPosition').value,
+    department: $('#empEmpDepartment').value,
+    hire_date: $('#empEmpHireDate').value || null,
+    salary_base: $('#empEmpSalary').value || 0,
+    phone: $('#empEmpPhone').value,
+    email: $('#empEmpEmail').value,
+    notes: $('#empEmpNotes').value,
+    avatar_color: $('#empEmpColor').value || '#6c47ff',
+  };
+  try {
+    if (id) {
+      await api(`/api/employees/${id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    } else {
+      await api('/api/employees', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    }
+    closeModal('empEmployeeModal');
+    toast(id ? 'Empleado actualizado' : 'Empleado creado');
+    await empLoadAll();
+  } catch (err) {
+    toast(err.message || 'Error al guardar', true);
+  }
+});
+
+/* ── Modales: Métrica ── */
+const EMP_METRIC_PRESETS = {
+  sales: {
+    name: 'Ventas', unit: '$', target: 10000, weight: 3,
+    source: 'both', higher_is_better: '1', period_type: 'monthly', aggregation: 'sum',
+  },
+  attendance: {
+    name: 'Asistencia', unit: 'días', target: 26, weight: 2,
+    source: 'manual', higher_is_better: '1', period_type: 'monthly', aggregation: 'sum',
+  },
+  punctuality: {
+    name: 'Puntualidad', unit: '%', target: 100, weight: 1,
+    source: 'manual', higher_is_better: '1', period_type: 'daily', aggregation: 'avg',
+  },
+  quality: {
+    name: 'Calidad de servicio', unit: 'puntos', target: 10, weight: 2,
+    source: 'manual', higher_is_better: '1', period_type: 'weekly', aggregation: 'avg',
+  },
+  objectives: {
+    name: 'Objetivos cumplidos', unit: '%', target: 100, weight: 2,
+    source: 'manual', higher_is_better: '1', period_type: 'monthly', aggregation: 'sum',
+  },
+};
+
+function empFillMetricForm(preset) {
+  if (!preset) return;
+  if (preset.name) $('#empMetricName').value = preset.name;
+  if (preset.unit) $('#empMetricUnit').value = preset.unit;
+  if (preset.target !== undefined) $('#empMetricTarget').value = preset.target;
+  if (preset.weight !== undefined) $('#empMetricWeight').value = preset.weight;
+  if (preset.source) $('#empMetricSource').value = preset.source;
+  if (preset.higher_is_better !== undefined) $('#empMetricHigher').value = preset.higher_is_better;
+  if (preset.period_type) $('#empMetricPeriodType').value = preset.period_type;
+  if (preset.aggregation) $('#empMetricAggregation').value = preset.aggregation;
+  empUpdateAggWrap();
+}
+
+function empUpdateAggWrap() {
+  const pt = $('#empMetricPeriodType')?.value;
+  const wrap = $('#empMetricAggWrap');
+  if (wrap) wrap.style.opacity = pt === 'monthly' ? '0.45' : '1';
+}
+
+document.querySelectorAll('.emp-preset-btn').forEach((btn) => {
+  btn.addEventListener('click', () => {
+    const preset = EMP_METRIC_PRESETS[btn.dataset.preset];
+    if (preset) empFillMetricForm(preset);
+    document.querySelectorAll('.emp-preset-btn').forEach((b) => b.classList.remove('active'));
+    btn.classList.add('active');
+  });
+});
+
+$('#empMetricPeriodType')?.addEventListener('change', empUpdateAggWrap);
+
+function empOpenMetricModal(id) {
+  const m = id ? EMP_METRICS.find((x) => x.id === id) : null;
+  $('#empMetricId').value = m ? m.id : '';
+  $('#empMetricModalTitle').innerHTML = m
+    ? '<i class="ph-bold ph-pencil"></i> Editar métrica'
+    : '<i class="ph-bold ph-sliders"></i> Nueva métrica';
+  document.querySelectorAll('.emp-preset-btn').forEach((b) => b.classList.remove('active'));
+  empFillMetricForm({
+    name: m?.name || '',
+    unit: m?.unit || '',
+    target: m?.target ?? 100,
+    weight: m?.weight ?? 1,
+    source: m?.source || 'manual',
+    higher_is_better: m?.higher_is_better !== 0 ? '1' : '0',
+    period_type: m?.period_type || 'monthly',
+    aggregation: m?.aggregation || 'sum',
+  });
+  openModal('empMetricModal');
+}
+globalThis.empOpenMetricModal = empOpenMetricModal;
+
+$('#empAddMetricBtn')?.addEventListener('click', () => empOpenMetricModal());
+
+$('#empMetricForm')?.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const id = $('#empMetricId').value;
+  const body = {
+    name: $('#empMetricName').value,
+    unit: $('#empMetricUnit').value,
+    target: parseFloat($('#empMetricTarget').value) || 100,
+    weight: parseFloat($('#empMetricWeight').value) || 1,
+    source: $('#empMetricSource').value,
+    higher_is_better: $('#empMetricHigher').value === '1' ? 1 : 0,
+    period_type: $('#empMetricPeriodType').value || 'monthly',
+    aggregation: $('#empMetricAggregation').value || 'sum',
+  };
+  try {
+    if (id) {
+      await api(`/api/employees/metrics/${id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    } else {
+      await api('/api/employees/metrics', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    }
+    closeModal('empMetricModal');
+    toast(id ? 'Métrica actualizada' : 'Métrica creada');
+    await empLoadAll();
+  } catch (err) {
+    toast(err.message || 'Error al guardar', true);
+  }
+});
+
+async function empToggleMetric(id, newActive) {
+  try {
+    const metric = EMP_METRICS.find((m) => m.id === id);
+    if (!metric) return;
+    await api(`/api/employees/metrics/${id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...metric, active: newActive }),
+    });
+    await empLoadAll();
+  } catch (err) {
+    toast(err.message || 'Error', true);
+  }
+}
+globalThis.empToggleMetric = empToggleMetric;
+
+/* ── Modales: Esquema ── */
+function empOpenSchemeModal(id) {
+  const s = id ? EMP_SCHEMES.find((x) => x.id === id) : null;
+  EMP_TIERS = (s?.config?.tiers ? JSON.parse(JSON.stringify(s.config.tiers)) : []);
+  $('#empSchemeId').value = s ? s.id : '';
+  $('#empSchemeModalTitle').innerHTML = s
+    ? '<i class="ph-bold ph-pencil"></i> Editar esquema'
+    : '<i class="ph-bold ph-percent"></i> Nuevo esquema';
+  $('#empSchemeName').value = s?.name || '';
+  $('#empSchemeType').value = s?.type || 'percentage';
+  $('#empSchemeDesc').value = s?.description || '';
+  const cfg = s?.config || {};
+  $('#empSchemePct').value = cfg.percentage ?? 5;
+  $('#empSchemeFixed').value = cfg.fixed_amount ?? 0;
+  $('#empSchemeFixedMinIdx').value = cfg.min_productivity ?? 70;
+  $('#empSchemeBonusAmount').value = cfg.bonus_amount ?? 0;
+  $('#empSchemeBonusMinIdx').value = cfg.min_index ?? 80;
+  empSchemeTypeChanged($('#empSchemeType').value);
+  empRenderTiers();
+  openModal('empSchemeModal');
+}
+globalThis.empOpenSchemeModal = empOpenSchemeModal;
+
+function empSchemeTypeChanged(type) {
+  document.querySelectorAll('.emp-scheme-config').forEach((el) => el.hidden = true);
+  const map = { percentage: 'empSchemeConfigPercentage', fixed: 'empSchemeConfigFixed', tiered: 'empSchemeConfigTiered', productivity_bonus: 'empSchemeConfigBonus' };
+  const el = document.getElementById(map[type]);
+  if (el) el.hidden = false;
+}
+
+$('#empSchemeType')?.addEventListener('change', (e) => empSchemeTypeChanged(e.target.value));
+
+$('#empAddSchemeBtn')?.addEventListener('click', () => empOpenSchemeModal());
+
+$('#empAddTierBtn')?.addEventListener('click', () => {
+  EMP_TIERS.push({ min: 0, max: 9999999, percentage: 5 });
+  empRenderTiers();
+});
+
+function empRenderTiers() {
+  const wrap = $('#empTiersWrap');
+  if (!wrap) return;
+  if (!EMP_TIERS.length) { wrap.innerHTML = '<div class="hint">Sin rangos. Agrega al menos uno.</div>'; return; }
+  wrap.innerHTML = EMP_TIERS.map((tier, i) => `
+    <div class="emp-tier-row">
+      <div class="field" style="margin:0"><label>Mín</label><input type="number" min="0" step="0.01" class="emp-tier-min" data-idx="${i}" value="${tier.min ?? 0}" /></div>
+      <div class="field" style="margin:0"><label>Máx</label><input type="number" min="0" step="0.01" class="emp-tier-max" data-idx="${i}" value="${tier.max === Infinity ? '' : (tier.max ?? '')}" placeholder="Sin límite" /></div>
+      <div class="field" style="margin:0"><label>% Comisión</label><input type="number" min="0" step="0.01" class="emp-tier-pct" data-idx="${i}" value="${tier.percentage ?? 0}" /></div>
+      <button type="button" class="btn btn-ghost btn-sm" onclick="empRemoveTier(${i})"><i class="ph-bold ph-trash"></i></button>
+    </div>`).join('');
+
+  document.querySelectorAll('.emp-tier-min').forEach((el) => el.addEventListener('input', (e) => { EMP_TIERS[Number(e.target.dataset.idx)].min = Number(e.target.value); }));
+  document.querySelectorAll('.emp-tier-max').forEach((el) => el.addEventListener('input', (e) => { EMP_TIERS[Number(e.target.dataset.idx)].max = e.target.value === '' ? Infinity : Number(e.target.value); }));
+  document.querySelectorAll('.emp-tier-pct').forEach((el) => el.addEventListener('input', (e) => { EMP_TIERS[Number(e.target.dataset.idx)].percentage = Number(e.target.value); }));
+}
+
+function empRemoveTier(idx) {
+  EMP_TIERS.splice(idx, 1);
+  empRenderTiers();
+}
+globalThis.empRemoveTier = empRemoveTier;
+
+$('#empSchemeForm')?.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const id = $('#empSchemeId').value;
+  const type = $('#empSchemeType').value;
+  let config = {};
+  if (type === 'percentage') config = { percentage: parseFloat($('#empSchemePct').value) || 0 };
+  else if (type === 'fixed') config = { fixed_amount: parseFloat($('#empSchemeFixed').value) || 0, min_productivity: parseFloat($('#empSchemeFixedMinIdx').value) || 0 };
+  else if (type === 'tiered') config = { tiers: EMP_TIERS };
+  else if (type === 'productivity_bonus') config = { bonus_amount: parseFloat($('#empSchemeBonusAmount').value) || 0, min_index: parseFloat($('#empSchemeBonusMinIdx').value) || 0 };
+
+  const body = { name: $('#empSchemeName').value, type, config, description: $('#empSchemeDesc').value };
+  try {
+    if (id) {
+      await api(`/api/employees/commission-schemes/${id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    } else {
+      await api('/api/employees/commission-schemes', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    }
+    closeModal('empSchemeModal');
+    toast(id ? 'Esquema actualizado' : 'Esquema creado');
+    await empLoadAll();
+  } catch (err) {
+    toast(err.message || 'Error al guardar', true);
+  }
+});
+
+/* ── Modales: Asignación ── */
+$('#empAddAssignBtn')?.addEventListener('click', () => {
+  const empSel = $('#empAssignEmployee');
+  const schemeSel = $('#empAssignScheme');
+  const metricSel = $('#empAssignMetric');
+  if (!empSel || !schemeSel || !metricSel) return;
+
+  empSel.innerHTML = EMP_EMPLOYEES.filter((e) => e.active !== 0).map((e) => `<option value="${e.id}">${esc(e.name)}</option>`).join('');
+  schemeSel.innerHTML = EMP_SCHEMES.filter((s) => s.active !== 0).map((s) => `<option value="${s.id}">${esc(s.name)}</option>`).join('');
+  metricSel.innerHTML = '<option value="">Sin métrica específica (usa índice global)</option>' +
+    EMP_METRICS.filter((m) => m.active !== 0).map((m) => `<option value="${m.id}">${esc(m.name)}</option>`).join('');
+  openModal('empAssignModal');
+});
+
+$('#empAssignForm')?.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const body = {
+    employee_id: parseInt($('#empAssignEmployee').value),
+    scheme_id: parseInt($('#empAssignScheme').value),
+    metric_id: $('#empAssignMetric').value ? parseInt($('#empAssignMetric').value) : null,
+  };
+  try {
+    await api('/api/employees/commission-assignments', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    closeModal('empAssignModal');
+    toast('Asignación creada');
+    await empLoadAll();
+  } catch (err) {
+    toast(err.message || 'Error al asignar', true);
+  }
+});
+
+async function empDeleteAssign(id) {
+  const ok = await askConfirm('Eliminar asignación', '¿Eliminar esta asignación de comisión?', { yesLabel: '<i class="ph-bold ph-trash"></i> Eliminar' });
+  if (!ok) return;
+  try {
+    await api(`/api/employees/commission-assignments/${id}`, { method: 'DELETE' });
+    toast('Asignación eliminada');
+    await empLoadAll();
+  } catch (err) {
+    toast(err.message || 'Error', true);
+  }
+}
+globalThis.empDeleteAssign = empDeleteAssign;
+globalThis.empSyncSales = empSyncSales;
+globalThis.empSaveRecord = empSaveRecord;
+
+/* ── Perfil individual ── */
+async function empOpenProfile(empId) {
+  const { year } = empCurrentPeriod();
+  try {
+    const data = await api(`/api/employees/reports/individual/${empId}?year=${year}`);
+    const emp = data.employee;
+    const monthlySeries = data.monthly_series || [];
+    const totalComm = data.commissions.reduce((s, c) => s + (c.commission_amount || 0), 0);
+
+    const avgIdx = (() => {
+      const valid = monthlySeries.filter((m) => m.productivity_index !== null);
+      return valid.length ? Math.round(valid.reduce((s, m) => s + m.productivity_index, 0) / valid.length) : null;
+    })();
+
+    const initials = emp.name.trim().split(/\s+/).map((w) => w[0]).join('').toUpperCase().slice(0, 2);
+    const empObj = EMP_EMPLOYEES.find((e) => e.id === empId) || emp;
+
+    const profileHtml = `
+      <div class="emp-profile-header">
+        <span class="emp-avatar emp-avatar-lg" style="background:${esc(empObj.avatar_color || '#6c47ff')}">${esc(initials)}</span>
+        <div>
+          <h3 style="margin:0">${esc(emp.name)}</h3>
+          <div style="color:var(--ink-2);font-size:14px">${esc(emp.position || '')} ${emp.department ? '· ' + esc(emp.department) : ''}</div>
+        </div>
+      </div>
+      <div class="emp-profile-kpis">
+        <div class="emp-kpi-card"><div class="emp-kpi-icon" style="background:linear-gradient(135deg,#6c47ff,#8b5cf6)"><i class="ph-fill ph-trend-up"></i></div><div><div class="emp-kpi-val">${avgIdx !== null ? avgIdx + '%' : '—'}</div><div class="emp-kpi-lbl">Productividad promedio ${year}</div></div></div>
+        <div class="emp-kpi-card"><div class="emp-kpi-icon" style="background:linear-gradient(135deg,#f59e0b,#d97706)"><i class="ph-fill ph-coins"></i></div><div><div class="emp-kpi-val">${empFmt(totalComm)}</div><div class="emp-kpi-lbl">Total comisiones ${year}</div></div></div>
+        <div class="emp-kpi-card"><div class="emp-kpi-icon" style="background:linear-gradient(135deg,#10b981,#059669)"><i class="ph-fill ph-currency-dollar"></i></div><div><div class="emp-kpi-val">${empFmt(emp.salary_base)}</div><div class="emp-kpi-lbl">Sueldo base</div></div></div>
+      </div>
+      <canvas id="empProfileChart" height="140" style="margin:16px 0"></canvas>
+      <h4 style="margin:16px 0 8px"><i class="ph-bold ph-calendar"></i> Detalle mensual ${year}</h4>
+      <div style="overflow-x:auto">
+      <table class="emp-table">
+        <thead><tr><th>Mes</th><th class="num">Índice</th><th class="num">Comisión</th><th>Estado</th></tr></thead>
+        <tbody>
+          ${monthlySeries.map((m) => `<tr>
+            <td>${MONTHS_ES[m.month - 1]}</td>
+            <td class="num">${empIndexBadge(m.productivity_index)}</td>
+            <td class="num">${m.commission_amount ? empFmt(m.commission_amount) : '—'}</td>
+            <td>${m.status ? empStatusBadge(m.status) : '<span style="color:var(--ink-3)">—</span>'}</td>
+          </tr>`).join('')}
+        </tbody>
+      </table>
+      </div>`;
+
+    $('#empProfileContent').innerHTML = profileHtml;
+    openModal('empProfileModal');
+
+    // Renderizar gráfica dentro del modal
+    setTimeout(() => {
+      const canvas = document.getElementById('empProfileChart');
+      if (!canvas) return;
+      new Chart(canvas, {
+        type: 'bar',
+        data: {
+          labels: MONTHS_ES.map((m) => m.slice(0, 3)),
+          datasets: [{
+            label: 'Índice de productividad (%)',
+            data: monthlySeries.map((m) => m.productivity_index !== null ? Math.round(m.productivity_index) : null),
+            backgroundColor: 'rgba(108,71,255,0.7)',
+            borderColor: '#6c47ff',
+            borderWidth: 2,
+            borderRadius: 6,
+          }],
+        },
+        options: {
+          responsive: true,
+          scales: { y: { min: 0, max: 100, ticks: { callback: (v) => v + '%' } } },
+          plugins: { legend: { display: false } },
+        },
+      });
+    }, 80);
+  } catch (err) {
+    toast(err.message || 'Error cargando perfil', true);
+  }
+}
+globalThis.empOpenProfile = empOpenProfile;
+
+$('#empPrintProfileBtn')?.addEventListener('click', () => {
+  const content = $('#empProfileContent')?.innerHTML || '';
+  const w = window.open('', '_blank');
+  w.document.write(`<!DOCTYPE html><html><head><title>Perfil Empleado</title><style>
+    body{font-family:sans-serif;padding:24px;color:#222}
+    table{width:100%;border-collapse:collapse;margin-bottom:16px}
+    th,td{border:1px solid #ddd;padding:6px 10px;text-align:left}
+    th{background:#f3f4f6}
+    .emp-avatar{display:inline-flex;align-items:center;justify-content:center;width:48px;height:48px;border-radius:50%;color:#fff;font-weight:700;font-size:18px}
+    .emp-profile-header{display:flex;align-items:center;gap:16px;margin-bottom:20px}
+    .emp-profile-kpis{display:flex;gap:16px;flex-wrap:wrap;margin-bottom:20px}
+    .emp-kpi-card{background:#f8f9fb;border-radius:12px;padding:14px 20px;min-width:140px;display:flex;align-items:center;gap:12px}
+    .emp-kpi-val{font-size:20px;font-weight:800}
+    .emp-kpi-lbl{font-size:12px;color:#6b7280}
+    .emp-kpi-icon{width:40px;height:40px;border-radius:10px;display:flex;align-items:center;justify-content:center;color:#fff;font-size:20px}
+    canvas{display:none}
+    @media print{canvas{display:block!important}}
+  </style></head><body>${content}<script>window.onload=()=>window.print()<\/script></body></html>`);
+  w.document.close();
+});
+
+/* ── Impresión equipo ── */
+function empPrintTeam() {
+  const { year, month } = empCurrentPeriod();
+  const periodLabel = `${MONTHS_ES[month - 1]} ${year}`;
+  const activeEmps = EMP_EMPLOYEES.filter((e) => e.active !== 0);
+  const activeMetrics = EMP_METRICS.filter((m) => m.active !== 0);
+
+  const rows = activeEmps.map((emp) => {
+    const empRecs = EMP_RECORDS.filter((r) => r.employee_id === emp.id);
+    const commRec = EMP_COMMISSION_RECORDS.filter((c) => c.employee_id === emp.id);
+    const idx = commRec.length ? Math.round(commRec[0].productivity_index) : null;
+    const totalComm = commRec.reduce((s, c) => s + (c.commission_amount || 0), 0);
+    return `<tr>
+      <td>${esc(emp.name)}</td>
+      <td>${esc(emp.position || '—')}</td>
+      ${activeMetrics.map((m) => {
+        const rec = empRecs.find((r) => r.metric_id === m.id);
+        return `<td>${rec ? rec.value + (m.unit ? ' ' + m.unit : '') : '—'}</td>`;
+      }).join('')}
+      <td>${idx !== null ? idx + '%' : '—'}</td>
+      <td>${empFmt(totalComm)}</td>
+    </tr>`;
+  }).join('');
+
+  const w = window.open('', '_blank');
+  w.document.write(`<!DOCTYPE html><html><head><title>Reporte Equipo ${periodLabel}</title><style>
+    body{font-family:sans-serif;padding:24px;color:#222}
+    h1{font-size:20px;margin-bottom:4px}
+    p{margin:0 0 16px;color:#6b7280}
+    table{width:100%;border-collapse:collapse}
+    th,td{border:1px solid #ddd;padding:6px 10px;text-align:left;font-size:13px}
+    th{background:#f3f4f6;font-weight:700}
+    @media print{body{padding:10px}}
+  </style></head><body>
+    <h1>Reporte Productividad Equipo</h1>
+    <p>Período: ${periodLabel} · Generado: ${new Date().toLocaleDateString('es-MX')}</p>
+    <table>
+      <thead><tr><th>Empleado</th><th>Puesto</th>${activeMetrics.map((m) => `<th>${esc(m.name)}</th>`).join('')}<th>Índice</th><th>Comisión</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>
+    <script>window.onload=()=>window.print()<\/script>
+  </body></html>`);
+  w.document.close();
+}
+
+$('#empPrintCommBtn')?.addEventListener('click', () => {
+  const { year, month } = empCurrentPeriod();
+  const periodLabel = `${MONTHS_ES[month - 1]} ${year}`;
+  const rows = EMP_COMMISSION_RECORDS.map((cr) => `<tr>
+    <td>${esc(cr.employee_name)}</td>
+    <td>${cr.productivity_index !== null ? Math.round(cr.productivity_index) + '%' : '—'}</td>
+    <td>${empFmt(cr.base_value)}</td>
+    <td><b>${empFmt(cr.commission_amount)}</b></td>
+    <td>${esc(cr.scheme_name || 'Sin esquema')}</td>
+    <td>${cr.status === 'paid' ? 'Pagada' : cr.status === 'approved' ? 'Aprobada' : 'Pendiente'}</td>
+  </tr>`).join('');
+  const w = window.open('', '_blank');
+  w.document.write(`<!DOCTYPE html><html><head><title>Comisiones ${periodLabel}</title><style>
+    body{font-family:sans-serif;padding:24px;color:#222}
+    h1{font-size:20px;margin-bottom:4px}
+    p{margin:0 0 16px;color:#6b7280}
+    table{width:100%;border-collapse:collapse}
+    th,td{border:1px solid #ddd;padding:6px 10px;text-align:left;font-size:13px}
+    th{background:#f3f4f6;font-weight:700}
+    @media print{body{padding:10px}}
+  </style></head><body>
+    <h1>Reporte de Comisiones</h1>
+    <p>Período: ${periodLabel} · Generado: ${new Date().toLocaleDateString('es-MX')}</p>
+    <table>
+      <thead><tr><th>Empleado</th><th>Índice</th><th>Base</th><th>Comisión</th><th>Esquema</th><th>Estado</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>
+    <script>window.onload=()=>window.print()<\/script>
+  </body></html>`);
+  w.document.close();
+});
+/* ═══════════ FIN: Módulo Productividad Empleados ═══════════ */
 $('#invInitCancel')?.addEventListener('click', () => closeModal('invInitModal'));
 
 /* ── Modal: entrada / merma ── */

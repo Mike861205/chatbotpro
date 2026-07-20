@@ -10,7 +10,7 @@
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/bold/style.css" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/fill/style.css" />
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-  <link rel="stylesheet" href="/static/css/styles.css?v=20260622f" />
+  <link rel="stylesheet" href="/static/css/styles.css?v=20260717b" />
   <link rel="icon" type="image/svg+xml" href="/static/favicon.svg" />
   <link rel="icon" type="image/png" href="/static/chatbotpro100.png" />
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
@@ -38,6 +38,8 @@
         <a href="#pos" data-view="pos" data-color="emerald"><span class="nav-ic"><i class="ph-fill ph-cash-register"></i></span><span>Punto de venta</span></a>
         <a href="#productos" data-view="productos" data-color="rose"><span class="nav-ic"><i class="ph-fill ph-bowl-food"></i></span><span>Productos</span></a>
         <a href="#inventarios" data-view="inventarios" data-color="teal"><span class="nav-ic"><i class="ph-fill ph-package"></i></span><span>Inventarios</span></a>
+        <div class="nav-label nav-label-empleados"><i class="ph-fill ph-users"></i> Empleados</div>
+        <a href="#empleados" data-view="empleados" data-color="fuchsia"><span class="nav-ic"><i class="ph-fill ph-identification-badge"></i></span><span>Productividad</span></a>
         <div class="nav-label nav-label-chatbot"><i class="ph-fill ph-chat-circle-dots"></i> Chatbot</div>
         <a href="#chatbot" data-view="chatbot" data-color="cyan"><span class="nav-ic"><i class="ph-fill ph-chat-circle-dots"></i></span><span>Mi chatbot</span></a>
         <div class="nav-label nav-label-negocio"><i class="ph-fill ph-briefcase"></i> Negocio</div>
@@ -292,6 +294,122 @@
         </div>
       </section>
 
+      <!-- ──────── Productividad Empleados ──────── -->
+      <section class="section" id="view-empleados">
+
+        <!-- KPI strip -->
+        <div class="emp-kpi-strip" id="empKpiStrip">
+          <div class="emp-kpi-card"><div class="emp-kpi-icon" style="background:linear-gradient(135deg,#6c47ff,#8b5cf6)"><i class="ph-fill ph-users"></i></div><div><div class="emp-kpi-val" id="empKpiTotal">—</div><div class="emp-kpi-lbl">Empleados activos</div></div></div>
+          <div class="emp-kpi-card"><div class="emp-kpi-icon" style="background:linear-gradient(135deg,#10b981,#059669)"><i class="ph-fill ph-chart-line-up"></i></div><div><div class="emp-kpi-val" id="empKpiIndex">—</div><div class="emp-kpi-lbl">Productividad promedio</div></div></div>
+          <div class="emp-kpi-card"><div class="emp-kpi-icon" style="background:linear-gradient(135deg,#f59e0b,#d97706)"><i class="ph-fill ph-coins"></i></div><div><div class="emp-kpi-val" id="empKpiComm">—</div><div class="emp-kpi-lbl">Comisiones del mes</div></div></div>
+          <div class="emp-kpi-card"><div class="emp-kpi-icon" style="background:linear-gradient(135deg,#ec4899,#db2777)"><i class="ph-fill ph-trophy"></i></div><div><div class="emp-kpi-val" id="empKpiTop">—</div><div class="emp-kpi-lbl">Mejor desempeño</div></div></div>
+        </div>
+
+        <!-- Toolbar / tabs -->
+        <div class="emp-toolbar">
+          <div class="segmented" id="empTabs">
+            <button type="button" class="on" data-emp-tab="team"><i class="ph-bold ph-users-three"></i> Equipo</button>
+            <button type="button" data-emp-tab="records"><i class="ph-bold ph-chart-bar"></i> Registrar Métricas</button>
+            <button type="button" data-emp-tab="commissions"><i class="ph-bold ph-coins"></i> Comisiones</button>
+            <button type="button" data-emp-tab="config"><i class="ph-bold ph-sliders"></i> Configurar</button>
+          </div>
+          <div class="emp-period-wrap">
+            <select id="empMonthSel" class="emp-sel"></select>
+            <select id="empYearSel" class="emp-sel"></select>
+          </div>
+        </div>
+
+        <!-- ── Panel: Equipo ── -->
+        <div id="empPanelTeam" class="emp-panel">
+          <div class="emp-panel-actions">
+            <button class="btn btn-primary" id="empAddBtn"><i class="ph-bold ph-user-plus"></i> Nuevo empleado</button>
+            <button class="btn btn-ghost" id="empRefreshBtn"><i class="ph-bold ph-arrows-clockwise"></i> Actualizar</button>
+            <button class="btn btn-ghost" id="empPrintTeamBtn"><i class="ph-bold ph-printer"></i> Imprimir reporte equipo</button>
+          </div>
+          <!-- Gráfica de barras: índice de productividad por empleado -->
+          <div class="card emp-chart-card" id="empTeamChartCard">
+            <div class="emp-chart-head">
+              <h3><i class="ph-bold ph-chart-bar"></i> Productividad del equipo — <span id="empChartPeriodLabel">mes actual</span></h3>
+              <button class="emp-chart-toggle-btn" onclick="empToggleChart('empTeamChartBody','emp_team_chart','empTeamChartToggleIcon','empTeamChartToggleLabel')" title="Mostrar / ocultar gráfica">
+                <i class="ph-bold ph-caret-up" id="empTeamChartToggleIcon"></i>
+                <span id="empTeamChartToggleLabel">Ocultar</span>
+              </button>
+            </div>
+            <div id="empTeamChartBody">
+              <canvas id="empTeamChart" height="180"></canvas>
+            </div>
+          </div>
+          <!-- Cards de empleados -->
+          <div id="empTeamTable" style="margin-top:16px"></div>
+        </div>
+
+        <!-- ── Panel: Registrar Métricas ── -->
+        <div id="empPanelRecords" class="emp-panel" hidden>
+          <div id="empRecordsWrap"></div>
+        </div>
+
+        <!-- ── Panel: Comisiones ── -->
+        <div id="empPanelCommissions" class="emp-panel" hidden>
+          <div class="emp-panel-actions">
+            <button class="btn btn-primary" id="empCalcBtn"><i class="ph-bold ph-calculator"></i> Calcular comisiones</button>
+            <button class="btn btn-ghost" id="empPrintCommBtn"><i class="ph-bold ph-printer"></i> Imprimir</button>
+          </div>
+          <!-- Gráfica línea: evolución de productividad del año -->
+          <div class="card emp-chart-card" id="empEvoChartCard">
+            <div class="emp-chart-head">
+              <h3><i class="ph-bold ph-trend-up"></i> Evolución de productividad — <span id="empCommYearLabel">año actual</span></h3>
+              <button class="emp-chart-toggle-btn" onclick="empToggleChart('empEvoChartBody','emp_evo_chart','empEvoChartToggleIcon','empEvoChartToggleLabel')" title="Mostrar / ocultar gráfica">
+                <i class="ph-bold ph-caret-up" id="empEvoChartToggleIcon"></i>
+                <span id="empEvoChartToggleLabel">Ocultar</span>
+              </button>
+            </div>
+            <div id="empEvoChartBody">
+              <canvas id="empEvolutionChart" height="160"></canvas>
+            </div>
+          </div>
+          <!-- Cards de comisiones -->
+          <div id="empCommTable" style="margin-top:16px"></div>
+        </div>
+
+        <!-- ── Panel: Configurar ── -->
+        <div id="empPanelConfig" class="emp-panel" hidden>
+          <div class="emp-config-grid">
+
+            <!-- Métricas -->
+            <div class="card">
+              <div class="emp-config-head">
+                <h3><i class="ph-bold ph-sliders"></i> Métricas de productividad</h3>
+                <button class="btn btn-primary btn-sm" id="empAddMetricBtn"><i class="ph-bold ph-plus"></i> Nueva métrica</button>
+              </div>
+              <div class="hint" style="margin-bottom:12px">Define qué medir (asistencia, ventas, puntualidad, etc.), su peso y la meta mensual.</div>
+              <div id="empMetricsList"></div>
+            </div>
+
+            <!-- Esquemas de comisión -->
+            <div class="card">
+              <div class="emp-config-head">
+                <h3><i class="ph-bold ph-percent"></i> Esquemas de comisión</h3>
+                <button class="btn btn-primary btn-sm" id="empAddSchemeBtn"><i class="ph-bold ph-plus"></i> Nuevo esquema</button>
+              </div>
+              <div class="hint" style="margin-bottom:12px">Crea esquemas de comisión: porcentaje, fijo, escalonado o bono por productividad.</div>
+              <div id="empSchemesList"></div>
+            </div>
+
+            <!-- Asignaciones -->
+            <div class="card" style="grid-column:1/-1">
+              <div class="emp-config-head">
+                <h3><i class="ph-bold ph-link-simple"></i> Asignaciones de comisión</h3>
+                <button class="btn btn-primary btn-sm" id="empAddAssignBtn"><i class="ph-bold ph-plus"></i> Nueva asignación</button>
+              </div>
+              <div class="hint" style="margin-bottom:12px">Asigna un esquema de comisión a cada empleado, opcionalmente vinculado a una métrica específica.</div>
+              <div class="table-wrap" id="empAssignTable"></div>
+            </div>
+
+          </div>
+        </div>
+
+      </section>
+
       <!-- ──────── Chatbot ──────── -->
       <section class="section" id="view-chatbot">
         <div class="card share-hero" style="margin-bottom:16px">
@@ -532,6 +650,22 @@
             </div>
             <div class="hint" style="margin-top:8px">Crea un cajero por sucursal y comparte su liga directa de caja para abrir el POS en esa sucursal.</div>
             <div class="table-wrap" id="cashiersTable" style="margin-top:14px"></div>
+            <hr style="margin:18px 0;border:none;border-top:1px solid var(--line)" />
+            <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
+              <h3><i class="ph-bold ph-storefront"></i> Modelo de negocio</h3>
+              <span class="hint" id="bizModelCurrentLabel" style="font-weight:700"></span>
+            </div>
+            <div class="hint" style="margin-top:8px">
+              Elige el giro que mejor describe tu negocio. Tu chatbot usará este contexto para atender a tus clientes de forma coherente
+              (respuestas, sugerencias y guía de compra/cotización). El resto del panel — productos, punto de venta, clientes y pagos — funciona igual.
+            </div>
+            <form id="businessTypeForm">
+              <div class="biz-model-grid" id="bizModelGrid"></div>
+              <input type="hidden" id="cfgBusinessType" value="restaurant" />
+              <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:14px">
+                <button class="btn btn-primary" type="submit"><i class="ph-bold ph-floppy-disk"></i> Guardar modelo de negocio</button>
+              </div>
+            </form>
           </div>
           <div class="card">
             <h3><i class="ph-bold ph-map-pin"></i> Horarios y Medios de pagos</h3>
@@ -1438,6 +1572,216 @@
   </div>
 
   <div id="toast"><i class="ph-fill ph-check-circle"></i><span id="toastMsg"></span></div>
-  <script src="/static/js/app.js?v=20260619c"></script>
+
+  <!-- ════════ Modal: Empleado ════════ -->
+  <div class="modal-bg" id="empEmployeeModal">
+    <div class="modal" style="max-width:540px">
+      <h3 id="empEmployeeModalTitle"><i class="ph-bold ph-user-plus"></i> Nuevo empleado</h3>
+      <form id="empEmployeeForm">
+        <input type="hidden" id="empEmpId" />
+        <div class="row-2">
+          <div class="field"><label>Nombre completo *</label><input type="text" id="empEmpName" required maxlength="120" /></div>
+          <div class="field"><label>Puesto / Cargo</label><input type="text" id="empEmpPosition" maxlength="100" /></div>
+        </div>
+        <div class="row-2">
+          <div class="field"><label>Departamento</label><input type="text" id="empEmpDepartment" maxlength="100" /></div>
+          <div class="field"><label>Fecha de ingreso</label><input type="date" id="empEmpHireDate" /></div>
+        </div>
+        <div class="row-2">
+          <div class="field"><label>Sueldo base</label><input type="number" id="empEmpSalary" min="0" step="0.01" placeholder="0.00" /></div>
+          <div class="field"><label>Teléfono</label><input type="tel" id="empEmpPhone" maxlength="30" /></div>
+        </div>
+        <div class="field"><label>Correo electrónico</label><input type="email" id="empEmpEmail" maxlength="100" /></div>
+        <div class="field"><label>Color de avatar</label>
+          <div class="emp-color-picker" id="empColorPicker">
+            <span class="emp-color-dot" data-color="#6c47ff" style="background:#6c47ff"></span>
+            <span class="emp-color-dot" data-color="#f59e0b" style="background:#f59e0b"></span>
+            <span class="emp-color-dot" data-color="#10b981" style="background:#10b981"></span>
+            <span class="emp-color-dot" data-color="#3b82f6" style="background:#3b82f6"></span>
+            <span class="emp-color-dot" data-color="#ef4444" style="background:#ef4444"></span>
+            <span class="emp-color-dot" data-color="#8b5cf6" style="background:#8b5cf6"></span>
+            <span class="emp-color-dot" data-color="#ec4899" style="background:#ec4899"></span>
+            <span class="emp-color-dot" data-color="#06b6d4" style="background:#06b6d4"></span>
+            <span class="emp-color-dot" data-color="#84cc16" style="background:#84cc16"></span>
+            <span class="emp-color-dot" data-color="#f97316" style="background:#f97316"></span>
+          </div>
+          <input type="hidden" id="empEmpColor" value="#6c47ff" />
+        </div>
+        <div class="field"><label>Notas internas</label><textarea id="empEmpNotes" rows="2" maxlength="500"></textarea></div>
+        <div class="modal-actions">
+          <button type="button" class="btn btn-ghost" onclick="closeModal('empEmployeeModal')">Cancelar</button>
+          <button class="btn btn-primary" type="submit"><i class="ph-bold ph-floppy-disk"></i> Guardar</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- ════════ Modal: Métrica ════════ -->
+  <div class="modal-bg" id="empMetricModal">
+    <div class="modal" style="max-width:560px">
+      <h3 id="empMetricModalTitle"><i class="ph-bold ph-sliders"></i> Nueva métrica</h3>
+
+      <!-- Presets rápidos -->
+      <div class="emp-preset-strip" id="empMetricPresets">
+        <span class="emp-preset-label">Plantillas rápidas:</span>
+        <button type="button" class="emp-preset-btn" data-preset="sales"><i class="ph-fill ph-money"></i> Ventas</button>
+        <button type="button" class="emp-preset-btn" data-preset="attendance"><i class="ph-fill ph-calendar-check"></i> Asistencia</button>
+        <button type="button" class="emp-preset-btn" data-preset="punctuality"><i class="ph-fill ph-clock"></i> Puntualidad</button>
+        <button type="button" class="emp-preset-btn" data-preset="quality"><i class="ph-fill ph-star"></i> Calidad</button>
+        <button type="button" class="emp-preset-btn" data-preset="objectives"><i class="ph-fill ph-flag"></i> Objetivos</button>
+      </div>
+
+      <form id="empMetricForm">
+        <input type="hidden" id="empMetricId" />
+        <div class="row-2">
+          <div class="field">
+            <label>Nombre de la métrica *</label>
+            <input type="text" id="empMetricName" required maxlength="100" placeholder="Ej. Ventas, Asistencia, Puntualidad" />
+          </div>
+          <div class="field">
+            <label>Unidad de medida</label>
+            <input type="text" id="empMetricUnit" maxlength="20" placeholder="Ej. $, %, días, puntos" />
+            <div class="hint">Cómo se mide el valor registrado.</div>
+          </div>
+        </div>
+        <div class="row-2">
+          <div class="field">
+            <label>Meta por período <span class="emp-field-tip" title="El valor ideal que el empleado debe alcanzar para obtener 100% de productividad en esta métrica. Si quieres que venda $10,000/mes pon 10000. Si quieres 26 días de asistencia pon 26.">(?)</span></label>
+            <input type="number" id="empMetricTarget" min="0" step="0.01" value="100" />
+            <div class="hint">Valor = 100% de productividad en esta métrica.</div>
+          </div>
+          <div class="field">
+            <label>Peso / Importancia <span class="emp-field-tip" title="Cuánto influye esta métrica en el índice total. Si Ventas tiene peso 3 y Asistencia peso 1, Ventas pesa el 75% del índice. El sistema calcula la proporción automáticamente.">(?)</span></label>
+            <input type="number" id="empMetricWeight" min="0.1" step="0.1" value="1" />
+            <div class="hint">Mayor peso = más importancia en el índice total.</div>
+          </div>
+        </div>
+
+        <div class="emp-metric-form-section">
+          <div class="field">
+            <label>Frecuencia de registro</label>
+            <select id="empMetricPeriodType">
+              <option value="monthly">Mensual — un valor al mes (ej. total de ventas del mes)</option>
+              <option value="biweekly">Quincenal — dos registros por mes, se consolida al mes</option>
+              <option value="weekly">Semanal — un registro por semana, se consolida al mes</option>
+              <option value="daily">Diaria — un registro por día, se consolida al mes</option>
+            </select>
+            <div class="hint">Con qué frecuencia se captura el valor para este empleado.</div>
+          </div>
+          <div class="field" id="empMetricAggWrap">
+            <label>¿Cómo consolidar los registros del mes?</label>
+            <select id="empMetricAggregation">
+              <option value="sum">Sumar todos (ej. ventas diarias → total del mes)</option>
+              <option value="avg">Promediar todos (ej. % puntualidad diario → promedio del mes)</option>
+            </select>
+            <div class="hint">Solo aplica cuando la frecuencia no es mensual.</div>
+          </div>
+        </div>
+
+        <div class="row-2">
+          <div class="field">
+            <label>Fuente de datos</label>
+            <select id="empMetricSource">
+              <option value="manual">Manual — el admin captura el valor</option>
+              <option value="system_sales">Sistema — se importa de las ventas del sistema</option>
+              <option value="both">Mixta — sistema + ajuste manual</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>Dirección del indicador</label>
+            <select id="empMetricHigher">
+              <option value="1">Mayor es mejor (ventas, asistencia, puntos)</option>
+              <option value="0">Menor es mejor (tardanzas, errores, devoluciones)</option>
+            </select>
+          </div>
+        </div>
+        <div class="modal-actions">
+          <button type="button" class="btn btn-ghost" onclick="closeModal('empMetricModal')">Cancelar</button>
+          <button class="btn btn-primary" type="submit"><i class="ph-bold ph-floppy-disk"></i> Guardar</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- ════════ Modal: Esquema de comisión ════════ -->
+  <div class="modal-bg" id="empSchemeModal">
+    <div class="modal" style="max-width:560px">
+      <h3 id="empSchemeModalTitle"><i class="ph-bold ph-percent"></i> Nuevo esquema</h3>
+      <form id="empSchemeForm">
+        <input type="hidden" id="empSchemeId" />
+        <div class="field"><label>Nombre del esquema *</label><input type="text" id="empSchemeName" required maxlength="120" /></div>
+        <div class="field">
+          <label>Tipo de comisión</label>
+          <select id="empSchemeType">
+            <option value="percentage">Porcentaje sobre métrica</option>
+            <option value="fixed">Monto fijo por meta alcanzada</option>
+            <option value="tiered">Escalonado (rangos con %)</option>
+            <option value="productivity_bonus">Bono por índice de productividad</option>
+          </select>
+        </div>
+        <!-- config dinámica según tipo -->
+        <div id="empSchemeConfigPercentage" class="emp-scheme-config">
+          <div class="field"><label>Porcentaje (%)</label><input type="number" id="empSchemePct" min="0" step="0.01" value="5" placeholder="Ej. 5 = 5%"/></div>
+        </div>
+        <div id="empSchemeConfigFixed" class="emp-scheme-config" hidden>
+          <div class="row-2">
+            <div class="field"><label>Monto fijo ($)</label><input type="number" id="empSchemeFixed" min="0" step="0.01" value="0" /></div>
+            <div class="field"><label>Productividad mínima requerida (%)</label><input type="number" id="empSchemeFixedMinIdx" min="0" max="100" step="1" value="70" /></div>
+          </div>
+        </div>
+        <div id="empSchemeConfigTiered" class="emp-scheme-config" hidden>
+          <div class="hint">Define rangos: valor mínimo, máximo y porcentaje de comisión.</div>
+          <div id="empTiersWrap"></div>
+          <button type="button" class="btn btn-ghost btn-sm" id="empAddTierBtn" style="margin-top:8px"><i class="ph-bold ph-plus"></i> Agregar rango</button>
+        </div>
+        <div id="empSchemeConfigBonus" class="emp-scheme-config" hidden>
+          <div class="row-2">
+            <div class="field"><label>Monto del bono ($)</label><input type="number" id="empSchemeBonusAmount" min="0" step="0.01" value="0" /></div>
+            <div class="field"><label>Índice mínimo requerido (%)</label><input type="number" id="empSchemeBonusMinIdx" min="0" max="100" step="1" value="80" /></div>
+          </div>
+          <div class="hint">El bono se multiplica por (índice/100). Con índice 100%, se otorga el monto completo.</div>
+        </div>
+        <div class="field"><label>Descripción / notas</label><textarea id="empSchemeDesc" rows="2" maxlength="300"></textarea></div>
+        <div class="modal-actions">
+          <button type="button" class="btn btn-ghost" onclick="closeModal('empSchemeModal')">Cancelar</button>
+          <button class="btn btn-primary" type="submit"><i class="ph-bold ph-floppy-disk"></i> Guardar</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- ════════ Modal: Asignación ════════ -->
+  <div class="modal-bg" id="empAssignModal">
+    <div class="modal" style="max-width:480px">
+      <h3><i class="ph-bold ph-link-simple"></i> Nueva asignación de comisión</h3>
+      <form id="empAssignForm">
+        <div class="field"><label>Empleado *</label><select id="empAssignEmployee" required></select></div>
+        <div class="field"><label>Esquema de comisión *</label><select id="empAssignScheme" required></select></div>
+        <div class="field"><label>Vincular a métrica (opcional)</label>
+          <select id="empAssignMetric">
+            <option value="">Sin métrica específica (usa índice global)</option>
+          </select>
+        </div>
+        <div class="hint">Si se vincula a una métrica, el cálculo usará el valor de esa métrica como base. Si no, usará el índice de productividad global.</div>
+        <div class="modal-actions">
+          <button type="button" class="btn btn-ghost" onclick="closeModal('empAssignModal')">Cancelar</button>
+          <button class="btn btn-primary" type="submit"><i class="ph-bold ph-floppy-disk"></i> Asignar</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- ════════ Modal: Perfil individual empleado ════════ -->
+  <div class="modal-bg" id="empProfileModal">
+    <div class="modal" style="max-width:680px">
+      <div id="empProfileContent"></div>
+      <div class="modal-actions" style="margin-top:16px">
+        <button type="button" class="btn btn-ghost" onclick="closeModal('empProfileModal')">Cerrar</button>
+        <button type="button" class="btn btn-ghost" id="empPrintProfileBtn"><i class="ph-bold ph-printer"></i> Imprimir</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="/static/js/app.js?v=20260717b"></script>
 </body>
 </html>

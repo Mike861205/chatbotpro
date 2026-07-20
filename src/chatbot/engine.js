@@ -827,7 +827,125 @@ function buildOrderText(businessName, cart, customer, delivery, currency) {
   return lines.join('\n');
 }
 
-async function aiFallback(t, businessName, userText, state) {
+// Modelos de negocio soportados. `restaurant` es el flujo por defecto y NO se altera.
+// Cada modelo aporta contexto de dominio al system prompt para que el chatbot
+// atienda al cliente de forma coherente con el giro seleccionado por el tenant.
+const BUSINESS_MODELS = {
+  restaurant: {
+    label: 'Restaurante / cafetería',
+    catalogWord: 'menú',
+    catalogButton: 'Ver menú',
+    domainInstructions:
+      'Actúas como asistente de pedidos de un restaurante o cafetería. ' +
+      'Ayudas a elegir platillos, bebidas, combos y a tomar el pedido para domicilio o recoger en sucursal.',
+  },
+  furniture: {
+    label: 'Mueblería',
+    catalogWord: 'catálogo',
+    catalogButton: 'Ver catálogo',
+    domainInstructions:
+      'Actúas como asesor de una mueblería. Orientas sobre modelos, medidas, materiales, ' +
+      'colores, disponibilidad, tiempos de entrega y opciones de envío o recolección. ' +
+      'Puedes sugerir combinaciones (sala + mesa, recámara completa). ' +
+      'No inventes garantías, promociones ni tiempos que no estén confirmados.',
+  },
+  travel_agency: {
+    label: 'Agencia de viajes',
+    catalogWord: 'catálogo de paquetes',
+    catalogButton: 'Ver paquetes',
+    domainInstructions:
+      'Actúas como asesor de una agencia de viajes. Presentas paquetes, destinos, hoteles, ' +
+      'tours y traslados con sus precios. Recopilas datos del cliente (fechas tentativas, ' +
+      'número de viajeros, presupuesto) para cotizar y confirmar reservas. ' +
+      'No inventes disponibilidad, itinerarios ni vuelos que no estén en el catálogo.',
+  },
+  office_services: {
+    label: 'Oficina / servicios profesionales',
+    catalogWord: 'catálogo de servicios',
+    catalogButton: 'Ver servicios',
+    domainInstructions:
+      'Actúas como asistente de una oficina de servicios profesionales (consultoría, contabilidad, legal, arquitectura, etc.). ' +
+      'Explicas cada servicio, tarifas o rangos de honorarios, tiempos de respuesta y ' +
+      'ayudas a agendar una cita o reunión. Solicitas datos básicos del cliente y el motivo de consulta. ' +
+      'No brindes asesoría profesional específica ni prometas resultados; siempre canaliza con un especialista.',
+  },
+  screen_printing: {
+    label: 'Serigrafía / estampado',
+    catalogWord: 'catálogo de estampados',
+    catalogButton: 'Ver catálogo',
+    domainInstructions:
+      'Actúas como asistente de una serigrafía o taller de estampado. ' +
+      'Orientas sobre técnicas (serigrafía, DTF, vinil, sublimación), prendas disponibles, ' +
+      'tallas, colores, tirajes mínimos, número de tintas y tiempos de entrega. ' +
+      'Recopilas: cantidad de piezas, tipo de prenda, medidas del diseño, número de tintas y fecha requerida. ' +
+      'No cierres cotizaciones que requieran arte gráfico sin confirmar con el equipo.',
+  },
+  carpentry: {
+    label: 'Carpintería',
+    catalogWord: 'catálogo de muebles',
+    catalogButton: 'Ver catálogo',
+    domainInstructions:
+      'Actúas como asistente de una carpintería. Orientas sobre muebles de línea y a la medida, ' +
+      'maderas (pino, cedro, encino, MDF, aglomerado), acabados (barniz, laca, tinta), ' +
+      'tiempos de fabricación y anticipos requeridos. ' +
+      'Recopilas medidas, uso, estilo y presupuesto para cotizar. ' +
+      'No prometas fechas de entrega en trabajos a medida sin confirmación del taller.',
+  },
+  health: {
+    label: 'Salud / clínica',
+    catalogWord: 'catálogo de servicios médicos',
+    catalogButton: 'Ver servicios',
+    domainInstructions:
+      'Actúas como asistente de una clínica u organización de salud. ' +
+      'Explicas servicios y especialidades disponibles, requisitos previos (ayuno, estudios), ' +
+      'costos y horarios, y ayudas a agendar citas. ' +
+      'IMPORTANTE: nunca ofrezcas diagnósticos, tratamientos ni recomendaciones médicas específicas; ' +
+      'siempre indica que un profesional debe valorar al paciente. En urgencias, sugiere acudir al servicio de emergencias.',
+  },
+  dentist: {
+    label: 'Consultorio dental',
+    catalogWord: 'catálogo de tratamientos',
+    catalogButton: 'Ver tratamientos',
+    domainInstructions:
+      'Actúas como asistente de un consultorio dental. Explicas tratamientos ' +
+      '(limpieza, resinas, endodoncia, ortodoncia, blanqueamiento, implantes, prótesis), ' +
+      'costos aproximados si están en el catálogo, sesiones estimadas y ayudas a agendar cita. ' +
+      'IMPORTANTE: no ofrezcas diagnósticos ni planes de tratamiento; siempre indica que el odontólogo debe valorar al paciente. ' +
+      'Ante dolor intenso, trauma o sangrado, sugiere acudir cuanto antes al consultorio o urgencias.',
+  },
+};
+
+function getBusinessModel(businessType) {
+  const key = String(businessType || 'restaurant').toLowerCase().trim();
+  return BUSINESS_MODELS[key] || BUSINESS_MODELS.restaurant;
+}
+
+function buildBusinessSystemPrompt(businessType, businessName, menuText) {
+  const model = getBusinessModel(businessType);
+  if (!businessType || businessType === 'restaurant') {
+    // Prompt original — se preserva TAL CUAL para el flujo de restaurantes.
+    return (
+      `Eres el asistente de pedidos del restaurante "${businessName}".\n` +
+      'Responde SIEMPRE en español claro, breve y coherente con el mensaje del cliente.\n' +
+      'No inventes productos ni precios. Si no estás seguro, dilo y sugiere tocar "Ver menú".\n' +
+      'Si el cliente quiere comprar, guía a acciones concretas con frases cortas.\n' +
+      'No expliques políticas internas ni menciones que eres una IA.\n\n' +
+      `Menú disponible:\n${menuText}`
+    );
+  }
+  return (
+    `Eres el asistente virtual de "${businessName}" (giro: ${model.label}).\n` +
+    `${model.domainInstructions}\n` +
+    'Responde SIEMPRE en español claro, breve y coherente con el mensaje del cliente.\n' +
+    'No inventes productos, precios, servicios ni promociones. Usa SOLO la información del catálogo cargado; ' +
+    `si algo no está listado, dilo y sugiere tocar "${model.catalogButton}" o hablar con una persona.\n` +
+    'Si el cliente quiere comprar, cotizar o agendar, guía a acciones concretas con frases cortas.\n' +
+    'No expliques políticas internas ni menciones que eres una IA.\n\n' +
+    `${model.catalogWord.charAt(0).toUpperCase() + model.catalogWord.slice(1)} disponible:\n${menuText}`
+  );
+}
+
+async function aiFallback(t, businessName, userText, state, businessType) {
   const aiCfg = await getAiRuntimeConfig();
   if (!aiCfg.enabled || !aiCfg.key) return null;
   try {
@@ -842,12 +960,7 @@ async function aiFallback(t, businessName, userText, state) {
       messages: [
         {
           role: 'system',
-          content: `Eres el asistente de pedidos del restaurante "${businessName}".\n` +
-            'Responde SIEMPRE en español claro, breve y coherente con el mensaje del cliente.\n' +
-            'No inventes productos ni precios. Si no estás seguro, dilo y sugiere tocar "Ver menú".\n' +
-            'Si el cliente quiere comprar, guía a acciones concretas con frases cortas.\n' +
-            'No expliques políticas internas ni menciones que eres una IA.\n\n' +
-            `Menú disponible:\n${menuText}`,
+          content: buildBusinessSystemPrompt(businessType, businessName, menuText),
         },
         ...history,
         { role: 'user', content: userText },
@@ -863,6 +976,7 @@ async function aiFallback(t, businessName, userText, state) {
 async function handleMessage(t, slug, sessionId, rawInput) {
   const input = String(rawInput || '').trim();
   const businessName = await getSetting(t, 'business_name', slug);
+  const businessType = await getSetting(t, 'business_type', 'restaurant');
   const currency = await getSetting(t, 'currency', 'MXN');
   const deliveryFeeRules = parseDeliveryFeeRules(await getSetting(t, 'delivery_fee_rules', ''));
   const deliveryZones = parseDeliveryZones(await getSetting(t, 'delivery_zones_geojson', '[]'));
@@ -2158,7 +2272,7 @@ async function handleMessage(t, slug, sessionId, rawInput) {
   }
 
   // IA opcional para preguntas libres
-  const ai = await aiFallback(t, businessName, input, state);
+  const ai = await aiFallback(t, businessName, input, state, businessType);
   pushAiHistory(state, 'user', input);
   if (ai) pushAiHistory(state, 'assistant', ai);
   reply.messages = [ai || 'No estoy seguro de haber entendido 🤔 ¿Te ayudo con alguna de estas opciones?'];

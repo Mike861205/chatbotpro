@@ -376,6 +376,101 @@ async function createTenantSchema(slug) {
       created_at TIMESTAMPTZ DEFAULT now()
     );
     ALTER TABLE "${s}".inventory_items ADD COLUMN IF NOT EXISTS baseline_started_at TIMESTAMPTZ DEFAULT now();
+
+    -- ═══════ Módulo: Productividad Empleados ═══════
+    CREATE TABLE IF NOT EXISTS "${s}".employees (
+      id SERIAL PRIMARY KEY,
+      name TEXT NOT NULL,
+      position TEXT DEFAULT '',
+      department TEXT DEFAULT '',
+      hire_date DATE,
+      salary_base NUMERIC(12,2) DEFAULT 0,
+      phone TEXT DEFAULT '',
+      email TEXT DEFAULT '',
+      avatar_color TEXT DEFAULT '#6c47ff',
+      notes TEXT DEFAULT '',
+      active INTEGER DEFAULT 1,
+      created_at TIMESTAMPTZ DEFAULT now()
+    );
+    CREATE TABLE IF NOT EXISTS "${s}".emp_metric_types (
+      id SERIAL PRIMARY KEY,
+      name TEXT NOT NULL,
+      key TEXT NOT NULL,
+      source TEXT DEFAULT 'manual',
+      unit TEXT DEFAULT '',
+      target NUMERIC(12,2) DEFAULT 100,
+      weight NUMERIC(5,2) DEFAULT 1,
+      higher_is_better INTEGER DEFAULT 1,
+      active INTEGER DEFAULT 1,
+      sort INTEGER DEFAULT 0,
+      created_at TIMESTAMPTZ DEFAULT now()
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_${s}_emp_metric_key ON "${s}".emp_metric_types(key);
+    CREATE TABLE IF NOT EXISTS "${s}".emp_productivity_records (
+      id SERIAL PRIMARY KEY,
+      employee_id INTEGER NOT NULL,
+      metric_id INTEGER NOT NULL,
+      period_year INTEGER NOT NULL,
+      period_month INTEGER NOT NULL,
+      record_date DATE,
+      value NUMERIC(12,2) DEFAULT 0,
+      notes TEXT DEFAULT '',
+      recorded_by TEXT DEFAULT '',
+      created_at TIMESTAMPTZ DEFAULT now(),
+      updated_at TIMESTAMPTZ DEFAULT now()
+    );
+    ALTER TABLE "${s}".emp_productivity_records ADD COLUMN IF NOT EXISTS record_date DATE;
+    ALTER TABLE "${s}".emp_metric_types ADD COLUMN IF NOT EXISTS period_type TEXT DEFAULT 'monthly';
+    ALTER TABLE "${s}".emp_metric_types ADD COLUMN IF NOT EXISTS aggregation TEXT DEFAULT 'sum';
+    DROP INDEX IF EXISTS "${s}".idx_${s}_emp_prod_uq;
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_${s}_emp_prod_monthly ON "${s}".emp_productivity_records(employee_id, metric_id, period_year, period_month) WHERE record_date IS NULL;
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_${s}_emp_prod_date ON "${s}".emp_productivity_records(employee_id, metric_id, record_date) WHERE record_date IS NOT NULL;
+    CREATE TABLE IF NOT EXISTS "${s}".emp_productivity_history (
+      id SERIAL PRIMARY KEY,
+      employee_id INTEGER NOT NULL,
+      metric_id INTEGER NOT NULL,
+      period_year INTEGER NOT NULL,
+      period_month INTEGER NOT NULL,
+      record_date DATE,
+      value NUMERIC(12,2) DEFAULT 0,
+      notes TEXT DEFAULT '',
+      recorded_by TEXT DEFAULT '',
+      input_source TEXT DEFAULT 'manual',
+      created_at TIMESTAMPTZ DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS idx_${s}_emp_prod_hist_lookup ON "${s}".emp_productivity_history(employee_id, metric_id, period_year, period_month, created_at DESC);
+    CREATE TABLE IF NOT EXISTS "${s}".emp_commission_schemes (
+      id SERIAL PRIMARY KEY,
+      name TEXT NOT NULL,
+      type TEXT DEFAULT 'percentage',
+      config_json TEXT DEFAULT '{}',
+      description TEXT DEFAULT '',
+      active INTEGER DEFAULT 1,
+      created_at TIMESTAMPTZ DEFAULT now()
+    );
+    CREATE TABLE IF NOT EXISTS "${s}".emp_commission_assignments (
+      id SERIAL PRIMARY KEY,
+      employee_id INTEGER NOT NULL,
+      scheme_id INTEGER NOT NULL,
+      metric_id INTEGER,
+      active INTEGER DEFAULT 1,
+      created_at TIMESTAMPTZ DEFAULT now()
+    );
+    CREATE TABLE IF NOT EXISTS "${s}".emp_commission_records (
+      id SERIAL PRIMARY KEY,
+      employee_id INTEGER NOT NULL,
+      scheme_id INTEGER,
+      period_year INTEGER NOT NULL,
+      period_month INTEGER NOT NULL,
+      base_value NUMERIC(12,2) DEFAULT 0,
+      commission_amount NUMERIC(12,2) DEFAULT 0,
+      productivity_index NUMERIC(5,2) DEFAULT 0,
+      status TEXT DEFAULT 'pending',
+      notes TEXT DEFAULT '',
+      calculated_by TEXT DEFAULT '',
+      calculated_at TIMESTAMPTZ DEFAULT now()
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_${s}_emp_comm_rec_uq ON "${s}".emp_commission_records(employee_id, COALESCE(scheme_id,-1), period_year, period_month);
   `);
 }
 
