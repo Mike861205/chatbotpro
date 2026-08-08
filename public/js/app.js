@@ -19,6 +19,8 @@ let BRANCHES = [];
 let CASHIERS = [];
 let LAST_ORDERS = [];
 let POS_OVERVIEW = null;
+let KDS_CONFIG = { areas: [], categories: [], products: [], branches: [] };
+let KDS_PRODUCT_SELECTED = new Set();
 let POS_CART = [];
 let POS_CATEGORY_FILTER = 'all';
 let POS_PRODUCT_SORT = 'top_sold';
@@ -397,6 +399,7 @@ const VIEW_META = {
   pedidos: ['Pedidos', 'Administra y actualiza tus pedidos', 'ph-receipt'],
   clientes: ['Clientes', 'Fidelidad y valor de clientes del chatbot', 'ph-users-three'],
   pos: ['Punto de venta', 'Caja, cobro y cierre del día', 'ph-cash-register'],
+  kds: ['Pantallas KDS', 'Comandas automáticas por área de preparación', 'ph-monitor-play'],
   productos: ['Productos', 'Tu menú visible en el chatbot', 'ph-hamburger'],
   inventarios: ['Inventarios', 'Control de stock, entradas, mermas y conteo físico', 'ph-package'],
   empleados: ['Productividad Empleados', 'Métricas, comisiones y desempeño del equipo', 'ph-identification-badge'],
@@ -410,6 +413,7 @@ const VIEW_LOADERS = {
   pedidos: loadOrders,
   clientes: loadCustomers,
   pos: loadPos,
+  kds: loadKds,
   productos: loadProducts,
   inventarios: loadInventarios,
   empleados: loadEmpleados,
@@ -5289,6 +5293,179 @@ document.addEventListener('submit', async (e) => {
   } catch (err) {
     toast(err.message, true);
   }
+});
+
+/* ===== Pantallas KDS ===== */
+function kdsAreaIcon(name) {
+  const value = String(name || '').toLowerCase();
+  if (value.includes('barra') || value.includes('bebida')) return 'ph-wine';
+  if (value.includes('postre') || value.includes('dulce')) return 'ph-cake';
+  if (value.includes('cafe') || value.includes('café')) return 'ph-coffee';
+  return 'ph-cooking-pot';
+}
+
+function kdsAbsoluteLink(area) {
+  return `${location.origin}${area.link}`;
+}
+
+function kdsCategoryNames(area) {
+  const selected = new Set((area.categoryIds || []).map(Number));
+  return KDS_CONFIG.categories.filter((category) => selected.has(Number(category.id))).map((category) => category.name);
+}
+
+function renderKdsAreas() {
+  const grid = $('#kdsAreaGrid');
+  if (!grid) return;
+  const areas = Array.isArray(KDS_CONFIG.areas) ? KDS_CONFIG.areas : [];
+  const active = areas.filter((area) => area.active).length;
+  $('#kdsAdminSummary').textContent = areas.length
+    ? `${areas.length} área${areas.length === 1 ? '' : 's'} configurada${areas.length === 1 ? '' : 's'} · ${active} activa${active === 1 ? '' : 's'}`
+    : 'Aún no hay áreas configuradas';
+  $('#kdsQuickSetupBtn').hidden = areas.length > 0;
+
+  if (!areas.length) {
+    grid.innerHTML = `<div class="kds-admin-empty">
+      <i class="ph-bold ph-monitor-play"></i>
+      <h3>Conecta tu primera pantalla de preparación</h3>
+      <p>Crea Cocina y Barra automáticamente o configura tus propias estaciones y decide qué productos recibe cada una.</p>
+      <button class="btn btn-primary" type="button" data-kds-empty-add><i class="ph-bold ph-plus-circle"></i> Crear área KDS</button>
+    </div>`;
+    grid.querySelector('[data-kds-empty-add]')?.addEventListener('click', () => openKdsAreaModal());
+    return;
+  }
+
+  grid.innerHTML = areas.map((area) => {
+    const categoryNames = kdsCategoryNames(area);
+    const productCount = (area.productIds || []).length;
+    const chips = categoryNames.map((name) => `<span class="kds-route-chip">${esc(name)}</span>`).join('');
+    return `<article class="kds-area-card ${area.active ? '' : 'off'}" style="--kds-color:${esc(area.color || '#f97316')}">
+      <div class="kds-area-card-head">
+        <span class="kds-area-card-icon"><i class="ph-bold ${kdsAreaIcon(area.name)}"></i></span>
+        <div class="kds-area-card-title"><h4>${esc(area.name)}</h4><p>${area.branchName ? `<i class="ph-bold ph-storefront"></i> ${esc(area.branchName)}` : 'Todas las sucursales / general'}</p></div>
+        <span class="kds-area-status">${area.active ? 'Activa' : 'Pausada'}</span>
+      </div>
+      <div class="kds-area-routes"><span>Recibe</span><div class="kds-route-chips">${chips || '<span class="kds-route-chip">Productos individuales</span>'}${productCount ? `<span class="kds-route-chip">+ ${productCount} producto${productCount === 1 ? '' : 's'}</span>` : ''}</div></div>
+      <div class="kds-area-link"><code>${esc(kdsAbsoluteLink(area))}</code><button class="btn btn-ghost btn-icon" type="button" data-kds-copy="${area.id}" title="Copiar enlace"><i class="ph-bold ph-copy"></i></button></div>
+      <div class="kds-area-card-actions">
+        <a class="btn btn-primary btn-sm" href="${esc(area.link)}" target="_blank" rel="noopener"><i class="ph-bold ph-arrow-square-out"></i> Abrir pantalla</a>
+        <button class="btn btn-ghost btn-sm" type="button" data-kds-edit="${area.id}"><i class="ph-bold ph-pencil-simple"></i> Configurar</button>
+        <button class="btn btn-ghost btn-sm" type="button" data-kds-rotate="${area.id}" title="Invalidar el enlace anterior"><i class="ph-bold ph-arrows-clockwise"></i> Renovar link</button>
+        <button class="btn btn-danger btn-icon btn-sm" type="button" data-kds-delete="${area.id}" title="Eliminar área"><i class="ph-bold ph-trash"></i></button>
+      </div>
+    </article>`;
+  }).join('');
+
+  grid.querySelectorAll('[data-kds-copy]').forEach((button) => button.addEventListener('click', async () => {
+    const area = areas.find((item) => Number(item.id) === Number(button.dataset.kdsCopy));
+    try {
+      await navigator.clipboard.writeText(kdsAbsoluteLink(area));
+      toast(`Enlace de ${area.name} copiado`);
+    } catch { toast('No se pudo copiar el enlace', true); }
+  }));
+  grid.querySelectorAll('[data-kds-edit]').forEach((button) => button.addEventListener('click', () => {
+    openKdsAreaModal(areas.find((item) => Number(item.id) === Number(button.dataset.kdsEdit)));
+  }));
+  grid.querySelectorAll('[data-kds-rotate]').forEach((button) => button.addEventListener('click', async () => {
+    const area = areas.find((item) => Number(item.id) === Number(button.dataset.kdsRotate));
+    const ok = await askConfirm('¿Renovar enlace KDS?', `El enlace anterior de ${area.name} dejará de funcionar.`, { yesLabel: '<i class="ph-bold ph-arrows-clockwise"></i> Sí, renovar' });
+    if (!ok) return;
+    await api(`/api/kds/${area.id}/rotate-token`, { method: 'POST' });
+    toast('Enlace renovado');
+    await loadKds();
+  }));
+  grid.querySelectorAll('[data-kds-delete]').forEach((button) => button.addEventListener('click', async () => {
+    const area = areas.find((item) => Number(item.id) === Number(button.dataset.kdsDelete));
+    const ok = await askConfirm('¿Eliminar área KDS?', `Se eliminará ${area.name} y su historial de preparación.`, { yesLabel: '<i class="ph-bold ph-trash"></i> Sí, eliminar' });
+    if (!ok) return;
+    await api(`/api/kds/${area.id}`, { method: 'DELETE' });
+    toast('Área KDS eliminada');
+    await loadKds();
+  }));
+}
+
+function renderKdsProductPicker(filter = '') {
+  const picker = $('#kdsProductPicker');
+  if (!picker) return;
+  const query = String(filter || '').trim().toLowerCase();
+  const products = KDS_CONFIG.products.filter((product) => !query || String(product.name || '').toLowerCase().includes(query));
+  picker.innerHTML = products.length
+    ? products.map((product) => `<label class="kds-check-option"><input type="checkbox" value="${product.id}" ${KDS_PRODUCT_SELECTED.has(Number(product.id)) ? 'checked' : ''} /><span>${esc(product.name)}</span></label>`).join('')
+    : '<span class="hint">No se encontraron productos.</span>';
+}
+
+function openKdsAreaModal(area = null) {
+  $('#kdsAreaModalTitle').innerHTML = area
+    ? '<i class="ph-bold ph-pencil-simple"></i> Configurar área KDS'
+    : '<i class="ph-bold ph-monitor-play"></i> Nueva área KDS';
+  $('#kdsAreaId').value = area?.id || '';
+  $('#kdsAreaName').value = area?.name || '';
+  $('#kdsAreaColor').value = area?.color || '#f97316';
+  $('#kdsAreaActive').checked = area ? Boolean(area.active) : true;
+  $('#kdsAreaBranch').innerHTML = ['<option value="">Todas / sin sucursal</option>']
+    .concat(KDS_CONFIG.branches.map((branch) => `<option value="${branch.id}">${esc(branch.name)}</option>`)).join('');
+  $('#kdsAreaBranch').value = area?.branchId ? String(area.branchId) : '';
+  const selectedCategories = new Set((area?.categoryIds || []).map(Number));
+  $('#kdsCategoryPicker').innerHTML = KDS_CONFIG.categories.length
+    ? KDS_CONFIG.categories.map((category) => `<label class="kds-check-option"><input type="checkbox" value="${category.id}" ${selectedCategories.has(Number(category.id)) ? 'checked' : ''} /><span>${esc(category.name)}</span></label>`).join('')
+    : '<span class="hint">Primero crea categorías en Productos.</span>';
+  $('#kdsProductSearch').value = '';
+  KDS_PRODUCT_SELECTED = new Set((area?.productIds || []).map(Number));
+  $('#kdsProductPicker').innerHTML = '';
+  renderKdsProductPicker();
+  $('#kdsAreaModal').classList.add('show');
+  setTimeout(() => $('#kdsAreaName')?.focus(), 50);
+}
+
+async function loadKds() {
+  KDS_CONFIG = await api('/api/kds');
+  renderKdsAreas();
+}
+
+$('#kdsAddAreaBtn')?.addEventListener('click', () => openKdsAreaModal());
+$('#kdsRefreshBtn')?.addEventListener('click', () => loadKds().catch((error) => toast(error.message, true)));
+$('#kdsAreaCancel')?.addEventListener('click', () => $('#kdsAreaModal').classList.remove('show'));
+$('#kdsProductSearch')?.addEventListener('input', (event) => renderKdsProductPicker(event.target.value));
+$('#kdsProductPicker')?.addEventListener('change', (event) => {
+  const input = event.target.closest('input[type="checkbox"]');
+  if (!input) return;
+  const id = Number(input.value);
+  if (input.checked) KDS_PRODUCT_SELECTED.add(id);
+  else KDS_PRODUCT_SELECTED.delete(id);
+});
+$('#kdsSelectAllCategories')?.addEventListener('click', () => {
+  const inputs = [...document.querySelectorAll('#kdsCategoryPicker input[type="checkbox"]')];
+  const shouldSelect = inputs.some((input) => !input.checked);
+  inputs.forEach((input) => { input.checked = shouldSelect; });
+});
+$('#kdsQuickSetupBtn')?.addEventListener('click', async () => {
+  try {
+    await api('/api/kds/setup/defaults', { method: 'POST' });
+    toast('Áreas Cocina y Barra configuradas');
+    await loadKds();
+  } catch (error) { toast(error.message, true); }
+});
+$('#kdsAreaForm')?.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const id = Number($('#kdsAreaId').value || 0);
+  const categoryIds = [...document.querySelectorAll('#kdsCategoryPicker input:checked')].map((input) => Number(input.value));
+  const productIds = [...KDS_PRODUCT_SELECTED];
+  try {
+    await api(id ? `/api/kds/${id}` : '/api/kds', {
+      method: id ? 'PUT' : 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: $('#kdsAreaName').value,
+        branchId: $('#kdsAreaBranch').value || null,
+        color: $('#kdsAreaColor').value,
+        active: $('#kdsAreaActive').checked,
+        categoryIds,
+        productIds,
+      }),
+    });
+    $('#kdsAreaModal').classList.remove('show');
+    toast(id ? 'Área KDS actualizada' : 'Área KDS creada');
+    await loadKds();
+  } catch (error) { toast(error.message, true); }
 });
 
 /* ===== Helpers ===== */

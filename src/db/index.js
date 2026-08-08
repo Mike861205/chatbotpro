@@ -279,6 +279,38 @@ async function createTenantSchema(slug) {
       active INTEGER DEFAULT 1,
       created_at TIMESTAMPTZ DEFAULT now()
     );
+    CREATE TABLE IF NOT EXISTS "${s}".kds_areas (
+      id SERIAL PRIMARY KEY,
+      name TEXT NOT NULL,
+      branch_id INTEGER,
+      color TEXT DEFAULT '#ff6b35',
+      access_token TEXT UNIQUE NOT NULL,
+      active INTEGER DEFAULT 1,
+      created_at TIMESTAMPTZ DEFAULT now(),
+      updated_at TIMESTAMPTZ DEFAULT now()
+    );
+    CREATE TABLE IF NOT EXISTS "${s}".kds_area_categories (
+      area_id INTEGER NOT NULL,
+      category_id INTEGER NOT NULL,
+      PRIMARY KEY (area_id, category_id)
+    );
+    CREATE TABLE IF NOT EXISTS "${s}".kds_area_products (
+      area_id INTEGER NOT NULL,
+      product_id INTEGER NOT NULL,
+      PRIMARY KEY (area_id, product_id)
+    );
+    CREATE TABLE IF NOT EXISTS "${s}".kds_ticket_states (
+      area_id INTEGER NOT NULL,
+      order_id INTEGER NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending',
+      started_at TIMESTAMPTZ,
+      ready_at TIMESTAMPTZ,
+      completed_at TIMESTAMPTZ,
+      updated_at TIMESTAMPTZ DEFAULT now(),
+      PRIMARY KEY (area_id, order_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_${s}_kds_areas_token ON "${s}".kds_areas(access_token);
+    CREATE INDEX IF NOT EXISTS idx_${s}_kds_ticket_status ON "${s}".kds_ticket_states(area_id, status, updated_at DESC);
     CREATE TABLE IF NOT EXISTS "${s}".chat_sessions (
       id TEXT PRIMARY KEY,
       state TEXT,

@@ -47,6 +47,17 @@ Comportamiento por defecto:
 - Si no defines variables, el sistema usa `demo/demo`.
 - Si el usuario demo no existe, se crea automáticamente en un tenant activo la primera vez que se presiona el botón demo.
 
+## 🍳 Pantallas KDS por área de preparación
+
+El panel incluye el módulo **Pantallas KDS** para enviar automáticamente las comandas del POS y del chatbot a Cocina, Barra u otras estaciones.
+
+1. Entra a `/app#kds` como propietario.
+2. Crea un área y asigna sus categorías o productos individuales.
+3. Copia el enlace privado del área y ábrelo en una TV, tableta o celular.
+4. Cada estación administra su avance: Nuevo → Preparando → Listo → Entregado.
+
+Los pedidos mixtos aparecen en todas las áreas correspondientes, pero cada pantalla resalta únicamente las partidas que debe preparar. Los enlaces contienen un token privado y pueden renovarse desde el panel.
+
 ## 🧪 Separar test y producción
 
 El proyecto ya soporta archivos de entorno separados:

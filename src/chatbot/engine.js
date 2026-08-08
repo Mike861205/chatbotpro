@@ -391,13 +391,14 @@ function cartTotal(cart) {
   return cart.reduce((s, it) => s + it.price * it.qty, 0);
 }
 
-function cartSummary(cart, currency) {
-  if (!cart.length) return 'Tu carrito está vacío 🛒';
+function cartSummary(cart, currency, labels = RESTAURANT_LABELS) {
+  if (!cart.length) return labels.emptyCart || 'Tu carrito está vacío 🛒';
   const lines = cart.map((it) => {
     const modNote = it.modifiersLabel ? `\n  _${it.modifiersLabel}_` : '';
     return `• ${it.qty}x ${it.name}${it.variantName ? ` (${it.variantName})` : ''}${modNote} — ${money(it.price * it.qty, currency)}`;
   });
-  return `🛒 *Tu pedido:*\n${lines.join('\n')}\n\n*Total: ${money(cartTotal(cart), currency)}*`;
+  const title = labels.cartTitle || '🛒 *Tu pedido:*';
+  return `${title}\n${lines.join('\n')}\n\n*Total: ${money(cartTotal(cart), currency)}*`;
 }
 
 function parseGeoInput(input) {
@@ -498,7 +499,7 @@ function locationSummary(customer) {
   return lines.join('\n');
 }
 
-function pricingSummary(state, currency) {
+function pricingSummary(state, currency, labels = RESTAURANT_LABELS) {
   const subtotal = cartTotal(state.cart);
   const deliveryFee = Number(state.customer?.deliveryFee || 0);
   const deliveryLabel = deliveryZoneServiceLabel(state.customer);
@@ -512,7 +513,7 @@ function pricingSummary(state, currency) {
     return `• ${it.qty}x ${it.name}${variantLabel}${modifiersText} — ${money(it.price * it.qty, currency)}`;
   });
   return [
-    '🛒 *Tu pedido:*',
+    labels.cartTitle || '🛒 *Tu pedido:*',
     ...lines,
     '',
     `*Subtotal: ${money(subtotal, currency)}*`,
@@ -543,15 +544,15 @@ function normalizeWhatsappNumber(raw) {
   return digits;
 }
 
-function mainOptions(cart, infoOptions = []) {
-  const opts = [{ label: '📋 Ver menú', value: 'menu' }];
+function mainOptions(cart, infoOptions = [], labels = RESTAURANT_LABELS) {
+  const opts = [{ label: labels.browseButton || '📋 Ver menú', value: 'menu' }];
   (infoOptions || []).forEach((item) => {
     if (!item?.label || !item?.id) return;
     opts.push({ label: item.label, value: `info_${item.id}` });
   });
   if (cart.length) {
-    opts.push({ label: '🛒 Ver carrito', value: 'cart' });
-    opts.push({ label: '✅ Sería todo, gracias.', value: 'checkout' });
+    opts.push({ label: labels.cartButton || '🛒 Ver carrito', value: 'cart' });
+    opts.push({ label: labels.checkoutButton || '✅ Sería todo, gracias.', value: 'checkout' });
   }
   return opts;
 }
@@ -618,24 +619,24 @@ async function findReturningCustomerByPhone(t, phoneRaw) {
   };
 }
 
-async function showMenu(t, state) {
+async function showMenu(t, state, labels = RESTAURANT_LABELS) {
   const cats = await t.all('SELECT * FROM {s}.categories ORDER BY sort, name');
   const products = await activeProducts(t);
   if (!products.length) {
-    return { messages: ['Por ahora no tenemos productos en el menú. ¡Vuelve pronto! 🙏'], options: [] };
+    return { messages: [labels.emptyCatalog || 'Por ahora no tenemos productos en el menú. ¡Vuelve pronto! 🙏'], options: [] };
   }
   const catsWithProducts = cats.filter((c) => products.some((p) => p.category === c.name));
   if (catsWithProducts.length > 1) {
     state.step = 'choosing_category';
     return {
-      messages: ['¿Qué categoría te gustaría ver? 😋'],
+      messages: [labels.chooseCategory || '¿Qué categoría te gustaría ver? 😋'],
       options: catsWithProducts.map((c) => ({ label: c.name, value: `cat_${c.id}` })),
     };
   }
-  return showProducts(t, state, null);
+  return showProducts(t, state, null, labels);
 }
 
-async function showProducts(t, state, categoryId) {
+async function showProducts(t, state, categoryId, labels = RESTAURANT_LABELS) {
   let products = await activeProducts(t);
   state.currentCategoryId = Number.isFinite(Number(categoryId)) ? Number(categoryId) : null;
   if (categoryId) {
@@ -646,7 +647,7 @@ async function showProducts(t, state, categoryId) {
   const currency = state.currency;
   const qtyById = new Map((state.cart || []).map((it) => [Number(it.id), Number(it.qty || 0)]));
   return {
-    messages: ['Elige un producto para agregarlo a tu pedido:'],
+    messages: [labels.browseTitle || 'Elige un producto para agregarlo a tu pedido:'],
     products: products.map((p) => ({
       id: p.id,
       name: p.name,
@@ -656,7 +657,7 @@ async function showProducts(t, state, categoryId) {
       image: p.image,
       qty: qtyById.get(Number(p.id)) || 0,
     })),
-    options: [{ label: '⬅️ Volver', value: 'start' }, ...(state.cart.length ? mainOptions(state.cart).slice(1) : [])],
+    options: [{ label: '⬅️ Volver', value: 'start' }, ...(state.cart.length ? mainOptions(state.cart, [], labels).slice(1) : [])],
   };
 }
 
@@ -738,7 +739,7 @@ async function loadProductConfig(t, productId) {
   };
 }
 
-async function replyNextModifierGroup(state, reply, currency, t, finish, keepMessages = false) {
+async function replyNextModifierGroup(state, reply, currency, t, finish, keepMessages = false, labels = RESTAURANT_LABELS) {
   const prod = state.pendingProduct;
   if (!prod) { state.step = 'start'; return finish(); }
   const groups = prod.groups || [];
@@ -747,7 +748,7 @@ async function replyNextModifierGroup(state, reply, currency, t, finish, keepMes
 
   if (!group) {
     addPendingProductToCart(state);
-    const summary = cartSummary(state.cart, currency);
+    const summary = cartSummary(state.cart, currency, labels);
     state.step = 'start';
     reply.messages = (keepMessages ? reply.messages : []).concat([
       `✅ Agregado con tus opciones.\n\n${summary}`,
@@ -756,8 +757,8 @@ async function replyNextModifierGroup(state, reply, currency, t, finish, keepMes
     reply.products = null;
     reply.options = [
       { label: '➕ Agregar más productos', value: 'menu' },
-      { label: '✅ Sería todo, gracias.', value: 'checkout' },
-      { label: '🛒 Ver carrito', value: 'cart' },
+      { label: labels.checkoutButton, value: 'checkout' },
+      { label: labels.cartButton, value: 'cart' },
     ];
     return finish();
   }
@@ -794,13 +795,16 @@ async function replyNextModifierGroup(state, reply, currency, t, finish, keepMes
   return finish();
 }
 
-function buildOrderText(businessName, cart, customer, delivery, currency) {
+function buildOrderText(businessName, cart, customer, delivery, currency, labels = RESTAURANT_LABELS) {
   const subtotal = cartTotal(cart);
   const deliveryFee = Number(customer?.deliveryFee || 0);
   const deliveryLabel = deliveryZoneServiceLabel(customer);
   const orderNote = String(customer?.orderNote || '').trim();
+  const headerTitle = labels.newOrderHeader || 'Nuevo pedido';
+  const addressLbl = labels.addressLabel || '📍 Entrega a domicilio';
+  const pickupLbl = labels.pickupLabel || '🏪 Recoger en sucursal';
   const lines = [
-    `🧾 *Nuevo pedido — ${businessName}*`,
+    `🧾 *${headerTitle} — ${businessName}*`,
     '',
     ...cart.map((it) => {
       const varLine = it.variantName ? ` (${it.variantName})` : '';
@@ -817,8 +821,8 @@ function buildOrderText(businessName, cart, customer, delivery, currency) {
     `📞 ${customer.phone}`,
     `💳 Pago: ${paymentMethodLabel(customer.paymentMethod)}`,
     delivery === 'domicilio'
-      ? `📍 Entrega a domicilio: ${customer.address}`
-      : `🏪 Recoger en sucursal${customer.branchName ? `: ${customer.branchName}` : ''}`,
+      ? `${addressLbl}: ${customer.address}`
+      : `${pickupLbl}${customer.branchName ? `: ${customer.branchName}` : ''}`,
     ...(delivery === 'domicilio' && customer?.deliveryBranchName ? [`🏪 Atiende: Sucursal ${customer.deliveryBranchName}`] : []),
     ...(delivery === 'domicilio' && customer?.reference ? [`📝 Referencia cliente: ${customer.reference}`] : []),
   ];
@@ -828,8 +832,29 @@ function buildOrderText(businessName, cart, customer, delivery, currency) {
 }
 
 // Modelos de negocio soportados. `restaurant` es el flujo por defecto y NO se altera.
-// Cada modelo aporta contexto de dominio al system prompt para que el chatbot
-// atienda al cliente de forma coherente con el giro seleccionado por el tenant.
+// Cada modelo aporta contexto de dominio al system prompt y etiquetas visibles del flujo guiado
+// para que el chatbot atienda al cliente de forma coherente con el giro seleccionado por el tenant.
+const RESTAURANT_LABELS = {
+  browseButton: '📋 Ver menú',
+  cartButton: '🛒 Ver carrito',
+  checkoutButton: '✅ Sería todo, gracias.',
+  browseTitle: 'Elige un producto para agregarlo a tu pedido:',
+  chooseCategory: '¿Qué categoría te gustaría ver? 😋',
+  emptyCatalog: 'Por ahora no tenemos productos en el menú. ¡Vuelve pronto! 🙏',
+  cartTitle: '🛒 *Tu pedido:*',
+  emptyCart: 'Tu carrito está vacío 🛒',
+  askDeliveryMode: '¿Cómo quieres recibir tu pedido?',
+  deliveryButton: '🛵 A domicilio',
+  pickupButton: '🏪 Recoger en sucursal',
+  askAddress: '¿Cuál es tu *dirección* de entrega? 📍',
+  askBranch: '¿En qué sucursal pasarás a recoger tu pedido?',
+  askPayment: '¿Cómo pagarás tu pedido?',
+  addressLabel: '📍 Entrega a domicilio',
+  pickupLabel: '🏪 Recoger en sucursal',
+  newOrderHeader: 'Nuevo pedido',
+  welcomeDefault: (biz) => `¡Hola! Bienvenido a ${biz} 👋`,
+};
+
 const BUSINESS_MODELS = {
   restaurant: {
     label: 'Restaurante / cafetería',
@@ -838,6 +863,7 @@ const BUSINESS_MODELS = {
     domainInstructions:
       'Actúas como asistente de pedidos de un restaurante o cafetería. ' +
       'Ayudas a elegir platillos, bebidas, combos y a tomar el pedido para domicilio o recoger en sucursal.',
+    labels: {}, // usa restaurant defaults
   },
   furniture: {
     label: 'Mueblería',
@@ -848,6 +874,26 @@ const BUSINESS_MODELS = {
       'colores, disponibilidad, tiempos de entrega y opciones de envío o recolección. ' +
       'Puedes sugerir combinaciones (sala + mesa, recámara completa). ' +
       'No inventes garantías, promociones ni tiempos que no estén confirmados.',
+    labels: {
+      browseButton: '🛋️ Ver catálogo',
+      cartButton: '🧾 Ver mi selección',
+      checkoutButton: '✅ Finalizar cotización',
+      browseTitle: 'Elige un mueble para agregarlo a tu cotización:',
+      chooseCategory: '¿Qué categoría de muebles te gustaría ver? 🛋️',
+      emptyCatalog: 'Por ahora no tenemos muebles publicados. ¡Vuelve pronto! 🙏',
+      cartTitle: '🧾 *Tu selección:*',
+      emptyCart: 'Aún no has agregado muebles a tu selección 🛋️',
+      askDeliveryMode: '¿Cómo prefieres recibir tus muebles?',
+      deliveryButton: '🚚 Envío a domicilio',
+      pickupButton: '🏪 Recoger en tienda',
+      askAddress: '¿Cuál es la *dirección de entrega*? 📍',
+      askBranch: '¿En qué tienda pasarás a recoger?',
+      askPayment: '¿Cómo pagarás tu compra?',
+      addressLabel: '📍 Envío a domicilio',
+      pickupLabel: '🏪 Recoger en tienda',
+      newOrderHeader: 'Nueva solicitud de cotización',
+      welcomeDefault: (biz) => `¡Hola! Bienvenido a ${biz} 🛋️ Estoy aquí para ayudarte a elegir tus muebles.`,
+    },
   },
   travel_agency: {
     label: 'Agencia de viajes',
@@ -858,6 +904,26 @@ const BUSINESS_MODELS = {
       'tours y traslados con sus precios. Recopilas datos del cliente (fechas tentativas, ' +
       'número de viajeros, presupuesto) para cotizar y confirmar reservas. ' +
       'No inventes disponibilidad, itinerarios ni vuelos que no estén en el catálogo.',
+    labels: {
+      browseButton: '✈️ Ver paquetes',
+      cartButton: '🧳 Ver mi reservación',
+      checkoutButton: '✅ Continuar con la reserva',
+      browseTitle: 'Elige un paquete o servicio de viaje:',
+      chooseCategory: '¿Qué tipo de viaje te interesa? ✈️',
+      emptyCatalog: 'Aún no tenemos paquetes publicados. ¡Escríbenos para armar uno a la medida! 🙏',
+      cartTitle: '🧳 *Tu reservación:*',
+      emptyCart: 'Aún no has agregado paquetes 🧳',
+      askDeliveryMode: '¿Cómo prefieres recibir tus documentos de viaje?',
+      deliveryButton: '📧 Envío digital / a domicilio',
+      pickupButton: '🏢 Recoger en la agencia',
+      askAddress: '¿A qué *dirección* enviamos tus documentos? 📍',
+      askBranch: '¿En qué sucursal de la agencia pasarás a recoger?',
+      askPayment: '¿Cómo pagarás tu reservación?',
+      addressLabel: '📧 Envío a domicilio',
+      pickupLabel: '🏢 Recoger en la agencia',
+      newOrderHeader: 'Nueva solicitud de reservación',
+      welcomeDefault: (biz) => `¡Hola! Bienvenido a ${biz} ✈️ ¿A dónde te gustaría viajar?`,
+    },
   },
   office_services: {
     label: 'Oficina / servicios profesionales',
@@ -868,6 +934,26 @@ const BUSINESS_MODELS = {
       'Explicas cada servicio, tarifas o rangos de honorarios, tiempos de respuesta y ' +
       'ayudas a agendar una cita o reunión. Solicitas datos básicos del cliente y el motivo de consulta. ' +
       'No brindes asesoría profesional específica ni prometas resultados; siempre canaliza con un especialista.',
+    labels: {
+      browseButton: '💼 Ver servicios',
+      cartButton: '🧾 Ver mi solicitud',
+      checkoutButton: '✅ Enviar solicitud',
+      browseTitle: 'Elige un servicio para agregarlo a tu solicitud:',
+      chooseCategory: '¿Qué área de servicio te interesa? 💼',
+      emptyCatalog: 'Aún no tenemos servicios publicados. ¡Escríbenos para más información! 🙏',
+      cartTitle: '🧾 *Tu solicitud de servicios:*',
+      emptyCart: 'Aún no has agregado servicios 💼',
+      askDeliveryMode: '¿Cómo prefieres recibir el servicio?',
+      deliveryButton: '🏠 Servicio a domicilio',
+      pickupButton: '🏢 En la oficina',
+      askAddress: '¿En qué *dirección* brindaremos el servicio? 📍',
+      askBranch: '¿A qué oficina te presentarás?',
+      askPayment: '¿Cómo pagarás el servicio?',
+      addressLabel: '📍 Servicio a domicilio',
+      pickupLabel: '🏢 En la oficina',
+      newOrderHeader: 'Nueva solicitud de servicio',
+      welcomeDefault: (biz) => `¡Hola! Bienvenido a ${biz} 💼 ¿En qué puedo ayudarte?`,
+    },
   },
   screen_printing: {
     label: 'Serigrafía / estampado',
@@ -879,6 +965,26 @@ const BUSINESS_MODELS = {
       'tallas, colores, tirajes mínimos, número de tintas y tiempos de entrega. ' +
       'Recopilas: cantidad de piezas, tipo de prenda, medidas del diseño, número de tintas y fecha requerida. ' +
       'No cierres cotizaciones que requieran arte gráfico sin confirmar con el equipo.',
+    labels: {
+      browseButton: '👕 Ver catálogo',
+      cartButton: '🧾 Ver mi pedido',
+      checkoutButton: '✅ Enviar pedido',
+      browseTitle: 'Elige la prenda o estampado para agregarlo a tu pedido:',
+      chooseCategory: '¿Qué categoría de estampado te interesa? 👕',
+      emptyCatalog: 'Aún no tenemos productos publicados. ¡Escríbenos para cotizar! 🙏',
+      cartTitle: '🧾 *Tu pedido de estampado:*',
+      emptyCart: 'Aún no has agregado prendas 👕',
+      askDeliveryMode: '¿Cómo prefieres recibir tu pedido?',
+      deliveryButton: '🚚 Envío a domicilio',
+      pickupButton: '🏪 Recoger en el taller',
+      askAddress: '¿Cuál es tu *dirección* de entrega? 📍',
+      askBranch: '¿En qué taller pasarás a recoger?',
+      askPayment: '¿Cómo pagarás tu pedido?',
+      addressLabel: '📍 Envío a domicilio',
+      pickupLabel: '🏪 Recoger en el taller',
+      newOrderHeader: 'Nuevo pedido de estampado',
+      welcomeDefault: (biz) => `¡Hola! Bienvenido a ${biz} 👕 Cotizamos tu diseño en minutos.`,
+    },
   },
   carpentry: {
     label: 'Carpintería',
@@ -890,6 +996,26 @@ const BUSINESS_MODELS = {
       'tiempos de fabricación y anticipos requeridos. ' +
       'Recopilas medidas, uso, estilo y presupuesto para cotizar. ' +
       'No prometas fechas de entrega en trabajos a medida sin confirmación del taller.',
+    labels: {
+      browseButton: '🪚 Ver catálogo',
+      cartButton: '🧾 Ver mi cotización',
+      checkoutButton: '✅ Enviar cotización',
+      browseTitle: 'Elige un mueble o trabajo para agregarlo a tu cotización:',
+      chooseCategory: '¿Qué tipo de mueble te interesa? 🪚',
+      emptyCatalog: 'Aún no tenemos trabajos publicados. ¡Escríbenos para cotizar a la medida! 🙏',
+      cartTitle: '🧾 *Tu cotización:*',
+      emptyCart: 'Aún no has agregado muebles a tu cotización 🪚',
+      askDeliveryMode: '¿Cómo prefieres recibir tu mueble?',
+      deliveryButton: '🚚 Envío a domicilio',
+      pickupButton: '🏪 Recoger en el taller',
+      askAddress: '¿Cuál es la *dirección* de entrega? 📍',
+      askBranch: '¿En qué taller pasarás a recoger?',
+      askPayment: '¿Cómo pagarás tu compra?',
+      addressLabel: '📍 Envío a domicilio',
+      pickupLabel: '🏪 Recoger en el taller',
+      newOrderHeader: 'Nueva solicitud de cotización',
+      welcomeDefault: (biz) => `¡Hola! Bienvenido a ${biz} 🪚 Cotizamos tu mueble a la medida.`,
+    },
   },
   health: {
     label: 'Salud / clínica',
@@ -901,6 +1027,26 @@ const BUSINESS_MODELS = {
       'costos y horarios, y ayudas a agendar citas. ' +
       'IMPORTANTE: nunca ofrezcas diagnósticos, tratamientos ni recomendaciones médicas específicas; ' +
       'siempre indica que un profesional debe valorar al paciente. En urgencias, sugiere acudir al servicio de emergencias.',
+    labels: {
+      browseButton: '🏥 Ver servicios',
+      cartButton: '🧾 Ver mi solicitud',
+      checkoutButton: '✅ Agendar / enviar solicitud',
+      browseTitle: 'Elige un servicio o estudio para agregarlo a tu solicitud:',
+      chooseCategory: '¿Qué especialidad te interesa? 🏥',
+      emptyCatalog: 'Aún no tenemos servicios publicados. ¡Escríbenos para más información! 🙏',
+      cartTitle: '🧾 *Tu solicitud de servicios médicos:*',
+      emptyCart: 'Aún no has agregado servicios 🏥',
+      askDeliveryMode: '¿Cómo prefieres tu atención?',
+      deliveryButton: '🏠 Visita a domicilio',
+      pickupButton: '🏥 Acudir a la clínica',
+      askAddress: '¿En qué *dirección* haremos la visita? 📍',
+      askBranch: '¿A qué sucursal / clínica te presentarás?',
+      askPayment: '¿Cómo pagarás la consulta?',
+      addressLabel: '📍 Visita a domicilio',
+      pickupLabel: '🏥 Acudir a la clínica',
+      newOrderHeader: 'Nueva solicitud de cita',
+      welcomeDefault: (biz) => `¡Hola! Bienvenido a ${biz} 🏥 ¿En qué podemos ayudarte hoy?`,
+    },
   },
   dentist: {
     label: 'Consultorio dental',
@@ -912,12 +1058,37 @@ const BUSINESS_MODELS = {
       'costos aproximados si están en el catálogo, sesiones estimadas y ayudas a agendar cita. ' +
       'IMPORTANTE: no ofrezcas diagnósticos ni planes de tratamiento; siempre indica que el odontólogo debe valorar al paciente. ' +
       'Ante dolor intenso, trauma o sangrado, sugiere acudir cuanto antes al consultorio o urgencias.',
+    labels: {
+      browseButton: '🦷 Ver tratamientos',
+      cartButton: '🧾 Ver mi solicitud',
+      checkoutButton: '✅ Agendar cita',
+      browseTitle: 'Elige un tratamiento para agregarlo a tu solicitud:',
+      chooseCategory: '¿Qué tipo de tratamiento te interesa? 🦷',
+      emptyCatalog: 'Aún no tenemos tratamientos publicados. ¡Escríbenos para más información! 🙏',
+      cartTitle: '🧾 *Tratamientos seleccionados:*',
+      emptyCart: 'Aún no has agregado tratamientos 🦷',
+      askDeliveryMode: '¿Cómo prefieres tu atención?',
+      deliveryButton: '🏠 Visita a domicilio',
+      pickupButton: '🦷 Acudir al consultorio',
+      askAddress: '¿En qué *dirección* haremos la visita? 📍',
+      askBranch: '¿A qué consultorio te presentarás?',
+      askPayment: '¿Cómo pagarás tu tratamiento?',
+      addressLabel: '📍 Visita a domicilio',
+      pickupLabel: '🦷 Acudir al consultorio',
+      newOrderHeader: 'Nueva solicitud de cita dental',
+      welcomeDefault: (biz) => `¡Hola! Bienvenido a ${biz} 🦷 Con gusto te ayudamos a agendar tu cita.`,
+    },
   },
 };
 
 function getBusinessModel(businessType) {
   const key = String(businessType || 'restaurant').toLowerCase().trim();
   return BUSINESS_MODELS[key] || BUSINESS_MODELS.restaurant;
+}
+
+function getLabels(businessType) {
+  const model = getBusinessModel(businessType);
+  return { ...RESTAURANT_LABELS, ...(model.labels || {}) };
 }
 
 function buildBusinessSystemPrompt(businessType, businessName, menuText) {
@@ -989,6 +1160,7 @@ async function handleMessage(t, slug, sessionId, rawInput) {
   const deliveryEnabled = (await getSetting(t, 'delivery_enabled', '1')) === '1';
   const pickupEnabled = (await getSetting(t, 'pickup_enabled', '1')) === '1';
   const locationEnabled = (await getSetting(t, 'location_enabled', '1')) === '1';
+  const labels = getLabels(businessType);
   const chatPaymentDeliverySettings = {
     cash: (await getSetting(t, 'chatbot_payment_delivery_cash', '1')) === '1',
     transfer: (await getSetting(t, 'chatbot_payment_delivery_transfer', '0')) === '1',
@@ -1063,12 +1235,12 @@ async function handleMessage(t, slug, sessionId, rawInput) {
     if (!chatPaymentOptions.length) {
       state.customer.paymentMethod = 'cash';
       state.step = 'confirm';
-      reply.messages.push(confirmText(state, businessName, currency));
+      reply.messages.push(confirmText(state, businessName, currency, labels));
       reply.options = confirmOptions();
       return;
     }
     state.step = 'ask_payment_method';
-    reply.messages.push('¿Cómo pagarás tu pedido?');
+    reply.messages.push(labels.askPayment);
     reply.options = chatPaymentOptions.map((opt) => ({ label: opt.label, value: opt.value }));
   };
 
@@ -1142,8 +1314,8 @@ async function handleMessage(t, slug, sessionId, rawInput) {
   const showPostSendOptions = () => {
     reply.options = [
       { label: '➕ Agregar más', value: 'menu' },
-      { label: '✅ Sería todo, gracias.', value: 'checkout' },
-      { label: '🛒 Ver carrito', value: 'cart' },
+      { label: labels.checkoutButton, value: 'checkout' },
+      { label: labels.cartButton, value: 'cart' },
     ];
   };
 
@@ -1162,8 +1334,11 @@ async function handleMessage(t, slug, sessionId, rawInput) {
     state.returningProfile = null;
     state.aiHistory = [];
     resetUpsellProgress();
-    reply.messages = [await getSetting(t, 'welcome_message', `¡Hola! Bienvenido a ${businessName} 👋`)];
-    reply.options = mainOptions(state.cart, chatbotInfoOptions);
+    const defaultWelcome = typeof labels.welcomeDefault === 'function'
+      ? labels.welcomeDefault(businessName)
+      : `¡Hola! Bienvenido a ${businessName} 👋`;
+    reply.messages = [await getSetting(t, 'welcome_message', defaultWelcome)];
+    reply.options = mainOptions(state.cart, chatbotInfoOptions, labels);
     return finish();
   }
   if (lower.startsWith('info_')) {
@@ -1171,18 +1346,18 @@ async function handleMessage(t, slug, sessionId, rawInput) {
     const selected = chatbotInfoOptions.find((item) => String(item.id) === selectedId);
     if (!selected) {
       reply.messages = ['Esa opción ya no está disponible.'];
-      reply.options = mainOptions(state.cart, chatbotInfoOptions);
+      reply.options = mainOptions(state.cart, chatbotInfoOptions, labels);
       return finish();
     }
     if (selected.message) reply.messages.push(selected.message);
     if (selected.url) reply.messages.push(`🔗 ${selected.url}`);
-    reply.options = mainOptions(state.cart, chatbotInfoOptions);
+    reply.options = mainOptions(state.cart, chatbotInfoOptions, labels);
     return finish();
   }
   if (lower === 'returning_customer') {
     if (!deliveryEnabled) {
       reply.messages = ['En este momento el negocio no tiene entregas a domicilio activas, así que no puedo recuperar dirección automática. Puedes pedir normalmente desde el menú.'];
-      reply.options = mainOptions(state.cart, chatbotInfoOptions);
+      reply.options = mainOptions(state.cart, chatbotInfoOptions, labels);
       return finish();
     }
     state.step = 'ask_returning_phone';
@@ -1190,18 +1365,18 @@ async function handleMessage(t, slug, sessionId, rawInput) {
     return finish();
   }
   if (lower === 'menu' || lower === 'menú') {
-    Object.assign(reply, await showMenu(t, state));
+    Object.assign(reply, await showMenu(t, state, labels));
     return finish();
   }
   if (lower === 'cart' || lower === 'carrito') {
-    reply.messages = [cartSummary(state.cart, currency)];
+    reply.messages = [cartSummary(state.cart, currency, labels)];
     reply.options = state.cart.length
       ? [
-          { label: '✅ Sería todo, gracias.', value: 'checkout' },
+          { label: labels.checkoutButton, value: 'checkout' },
           { label: '➕ Agregar más', value: 'menu' },
           { label: '🗑️ Vaciar carrito', value: 'clear_cart' },
         ]
-      : [{ label: '📋 Ver menú', value: 'menu' }];
+      : [{ label: labels.browseButton, value: 'menu' }];
     return finish();
   }
   if (lower === 'clear_cart') {
@@ -1209,13 +1384,13 @@ async function handleMessage(t, slug, sessionId, rawInput) {
     state.step = 'start';
     resetUpsellProgress();
     reply.messages = ['Listo, vacié tu carrito. ¿Empezamos de nuevo? 😊'];
-    reply.options = mainOptions(state.cart, chatbotInfoOptions);
+    reply.options = mainOptions(state.cart, chatbotInfoOptions, labels);
     return finish();
   }
 
   // Selección de categoría
   if (lower.startsWith('cat_')) {
-    Object.assign(reply, await showProducts(t, state, Number(lower.slice(4))));
+    Object.assign(reply, await showProducts(t, state, Number(lower.slice(4)), labels));
     return finish();
   }
 
@@ -1293,7 +1468,7 @@ async function handleMessage(t, slug, sessionId, rawInput) {
       resetUpsellProgress();
 
       state.step = 'start';
-      const summary = cartSummary(state.cart, currency);
+      const summary = cartSummary(state.cart, currency, labels);
       reply.messages = [
         lines.length
           ? `✅ Cantidades confirmadas al checkout:\n${lines.join('\n')}`
@@ -1344,10 +1519,10 @@ async function handleMessage(t, slug, sessionId, rawInput) {
         state.step = 'start';
         const lineTotal = money(finalQty * Number(prod.price || 0), currency);
         if (finalQty <= 0) {
-          reply.messages = [`🗑️ Quité *${prod.name}* de tu pedido.`, cartSummary(state.cart, currency)];
+          reply.messages = [`🗑️ Quité *${prod.name}* de tu pedido.`, cartSummary(state.cart, currency, labels)];
           showPostSendOptions();
         } else {
-          reply.messages = [`✅ Agregado al checkout: *${finalQty}x ${prod.name}* = *${lineTotal}*.`, cartSummary(state.cart, currency)];
+          reply.messages = [`✅ Agregado al checkout: *${finalQty}x ${prod.name}* = *${lineTotal}*.`, cartSummary(state.cart, currency, labels)];
           askOrderNoteAfterSend();
         }
         return finish();
@@ -1393,7 +1568,7 @@ async function handleMessage(t, slug, sessionId, rawInput) {
 
     state.customer.orderNote = note.slice(0, 220);
     state.step = 'start';
-    reply.messages = [`✅ Nota agregada: ${state.customer.orderNote}`, cartSummary(state.cart, currency)];
+    reply.messages = [`✅ Nota agregada: ${state.customer.orderNote}`, cartSummary(state.cart, currency, labels)];
     showPostSendOptions();
     return finish();
   }
@@ -1410,7 +1585,7 @@ async function handleMessage(t, slug, sessionId, rawInput) {
       }
       resetUpsellProgress();
       state.step = 'choosing_product';
-      Object.assign(reply, await showProducts(t, state, state.currentCategoryId));
+      Object.assign(reply, await showProducts(t, state, state.currentCategoryId, labels));
       return finish();
     }
   }
@@ -1446,7 +1621,7 @@ async function handleMessage(t, slug, sessionId, rawInput) {
       resetUpsellProgress();
 
       state.step = 'choosing_product';
-      const menuReply = await showProducts(t, state, state.currentCategoryId);
+      const menuReply = await showProducts(t, state, state.currentCategoryId, labels);
       const currentQty = state.cart.find((it) => it.id === prod.id && !it._cartKey)?.qty || 0;
       reply.messages = [`✅ Llevas *${currentQty}x ${prod.name}* en tu pedido.`, ...menuReply.messages];
       reply.products = menuReply.products;
@@ -1472,7 +1647,7 @@ async function handleMessage(t, slug, sessionId, rawInput) {
         }
         // No modifiers — add to cart
         addPendingProductToCart(state);
-        const summary = cartSummary(state.cart, currency);
+        const summary = cartSummary(state.cart, currency, labels);
         state.step = 'start';
         reply.messages = [
           `✅ Agregado: *${state.cart[state.cart.length - 1]?.name || prod.name}*.\n\n${summary}`,
@@ -1481,8 +1656,8 @@ async function handleMessage(t, slug, sessionId, rawInput) {
         reply.products = null;
         reply.options = [
           { label: '➕ Agregar más productos', value: 'menu' },
-          { label: '✅ Sería todo, gracias.', value: 'checkout' },
-          { label: '🛒 Ver carrito', value: 'cart' },
+          { label: labels.checkoutButton, value: 'checkout' },
+          { label: labels.cartButton, value: 'cart' },
         ];
         return finish();
       }
@@ -1504,7 +1679,7 @@ async function handleMessage(t, slug, sessionId, rawInput) {
     if (!group) {
       // All groups done, add to cart
       addPendingProductToCart(state);
-      const summary = cartSummary(state.cart, currency);
+      const summary = cartSummary(state.cart, currency, labels);
       state.step = 'start';
       reply.messages = [
         `✅ Agregado con tus opciones.\n\n${summary}`,
@@ -1513,8 +1688,8 @@ async function handleMessage(t, slug, sessionId, rawInput) {
       reply.products = null;
       reply.options = [
         { label: '➕ Agregar más productos', value: 'menu' },
-        { label: '✅ Sería todo, gracias.', value: 'checkout' },
-        { label: '🛒 Ver carrito', value: 'cart' },
+        { label: labels.checkoutButton, value: 'checkout' },
+        { label: labels.cartButton, value: 'cart' },
       ];
       return finish();
     }
@@ -1575,17 +1750,17 @@ async function handleMessage(t, slug, sessionId, rawInput) {
       const name = state.pendingProduct.name;
       state.pendingProduct = null;
       state.step = 'start';
-      reply.messages = [`¡Agregado! ${qty}x *${name}* 🎉\n\n${cartSummary(state.cart, currency)}`];
+      reply.messages = [`¡Agregado! ${qty}x *${name}* 🎉\n\n${cartSummary(state.cart, currency, labels)}`];
       reply.options = [
         { label: '➕ Agregar más', value: 'menu' },
-        { label: '✅ Sería todo, gracias.', value: 'checkout' },
+        { label: labels.checkoutButton, value: 'checkout' },
       ];
       return finish();
     }
     reply.messages = ['Puedes tocar el botón + del producto para agregar más unidades, o elegir "➕ Agregar más".'];
     reply.options = [
       { label: '➕ Agregar más', value: 'menu' },
-      { label: '✅ Sería todo, gracias.', value: 'checkout' },
+      { label: labels.checkoutButton, value: 'checkout' },
     ];
     return finish();
   }
@@ -1638,7 +1813,7 @@ async function handleMessage(t, slug, sessionId, rawInput) {
       } else {
         state.step = 'start';
         const quickMessages = ['¡Perfecto! Ya usaré tus mismos datos de ubicación para este pedido 🚀', 'Ahora solo elige del menú y será más rápido.'];
-        const menuReply = await showMenu(t, state);
+        const menuReply = await showMenu(t, state, labels);
         Object.assign(reply, menuReply);
         reply.messages = [...quickMessages, ...(menuReply.messages || [])];
       }
@@ -1805,7 +1980,7 @@ async function handleMessage(t, slug, sessionId, rawInput) {
       markUpsellOfferDone(offerId);
       reply.messages = [
         `✅ Excelente elección: agregué *${product.name}* a tu pedido.`,
-        cartSummary(state.cart, currency),
+        cartSummary(state.cart, currency, labels),
       ];
       const nextOffer = availableUpsellOffer();
       if (nextOffer) {
@@ -2128,7 +2303,7 @@ async function handleMessage(t, slug, sessionId, rawInput) {
     }
     state.customer.paymentMethod = selected;
     state.step = 'confirm';
-    reply.messages = [confirmText(state, businessName, currency)];
+    reply.messages = [confirmText(state, businessName, currency, labels)];
     reply.options = confirmOptions();
     return finish();
   }
@@ -2186,7 +2361,7 @@ async function handleMessage(t, slug, sessionId, rawInput) {
       );
       await t.run('UPDATE {s}.orders SET payment_method = $1 WHERE id = $2', [state.customer.paymentMethod || '', orderRow.id]);
 
-      const orderText = buildOrderText(businessName, state.cart, state.customer, state.delivery, currency);
+      const orderText = buildOrderText(businessName, state.cart, state.customer, state.delivery, currency, labels);
       const waLink = whatsapp ? `https://wa.me/${whatsapp}?text=${encodeURIComponent(orderText)}` : null;
 
       // Notificar al tenant (Socket.io + Web Push)
@@ -2220,14 +2395,14 @@ async function handleMessage(t, slug, sessionId, rawInput) {
     if (lower === 'confirm_remove_note') {
       state.customer.orderNote = '';
       state.step = 'confirm';
-      reply.messages = ['✅ Nota eliminada.', confirmText(state, businessName, currency)];
+      reply.messages = ['✅ Nota eliminada.', confirmText(state, businessName, currency, labels)];
       reply.options = confirmOptions();
       return finish();
     }
     if (lower === 'confirm_no') {
       state.step = 'start';
       reply.messages = ['Sin problema, tu carrito sigue guardado. ¿Qué deseas hacer?'];
-      reply.options = mainOptions(state.cart, chatbotInfoOptions);
+      reply.options = mainOptions(state.cart, chatbotInfoOptions, labels);
       return finish();
     }
   }
@@ -2236,7 +2411,7 @@ async function handleMessage(t, slug, sessionId, rawInput) {
     if (lower === 'confirm_remove_note') {
       state.customer.orderNote = '';
       state.step = 'confirm';
-      reply.messages = ['✅ Nota eliminada.', confirmText(state, businessName, currency)];
+      reply.messages = ['✅ Nota eliminada.', confirmText(state, businessName, currency, labels)];
       reply.options = confirmOptions();
       return finish();
     }
@@ -2250,7 +2425,7 @@ async function handleMessage(t, slug, sessionId, rawInput) {
 
     state.customer.orderNote = note.slice(0, 220);
     state.step = 'confirm';
-    reply.messages = ['✅ Nota actualizada.', confirmText(state, businessName, currency)];
+    reply.messages = ['✅ Nota actualizada.', confirmText(state, businessName, currency, labels)];
     reply.options = confirmOptions();
     return finish();
   }
@@ -2263,10 +2438,10 @@ async function handleMessage(t, slug, sessionId, rawInput) {
     if (existing) existing.qty += 1;
     else state.cart.push({ id: match.id, name: match.name, price: match.price, qty: 1 });
     resetUpsellProgress();
-    reply.messages = [`¡Agregado! 1x *${match.name}* 🎉\n\n${cartSummary(state.cart, currency)}`];
+    reply.messages = [`¡Agregado! 1x *${match.name}* 🎉\n\n${cartSummary(state.cart, currency, labels)}`];
     reply.options = [
       { label: '➕ Agregar más', value: 'menu' },
-      { label: '✅ Sería todo, gracias.', value: 'checkout' },
+      { label: labels.checkoutButton, value: 'checkout' },
     ];
     return finish();
   }
@@ -2276,20 +2451,21 @@ async function handleMessage(t, slug, sessionId, rawInput) {
   pushAiHistory(state, 'user', input);
   if (ai) pushAiHistory(state, 'assistant', ai);
   reply.messages = [ai || 'No estoy seguro de haber entendido 🤔 ¿Te ayudo con alguna de estas opciones?'];
-  reply.options = mainOptions(state.cart, chatbotInfoOptions);
+  reply.options = mainOptions(state.cart, chatbotInfoOptions, labels);
   return finish();
 }
 
-function confirmText(state, businessName, currency) {
+function confirmText(state, businessName, currency, labels = RESTAURANT_LABELS) {
   const c = state.customer;
   const locationDetails = locationSummary(c);
+  const pickupLbl = labels.pickupLabel || '🏪 Recoger en sucursal';
   return (
-    `${pricingSummary(state, currency)}\n\n` +
+    `${pricingSummary(state, currency, labels)}\n\n` +
     `👤 ${c.name}\n📞 ${c.phone}\n` +
     `💳 Pago: ${paymentMethodLabel(c.paymentMethod)}\n` +
     (state.delivery === 'domicilio'
       ? `📍 ${c.address}`
-      : `🏪 Recoger en sucursal${c.branchName ? `: ${c.branchName}` : ''}`) +
+      : `${pickupLbl}${c.branchName ? `: ${c.branchName}` : ''}`) +
     (state.delivery === 'domicilio' && c.deliveryBranchName ? `\n🏪 Atiende: Sucursal ${c.deliveryBranchName}` : '') +
     (state.delivery === 'domicilio' && c.reference ? `\n📝 Referencia: ${c.reference}` : '') +
     (locationDetails ? `\n${locationDetails}` : '') +

@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#111827" />
+  <title>KDS — ChatBotPro</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@500;600;700;800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/bold/style.css" />
+  <link rel="stylesheet" href="/static/css/kds.css" />
+  <link rel="icon" type="image/png" href="/static/chatbotpro100.png" />
+</head>
+<body>
+  <div class="kds-loader" id="kdsLoader">
+    <div class="kds-loader-mark"><img src="/static/chatbotpro100.png" alt="" /></div>
+    <strong>Conectando pantalla de preparación…</strong>
+  </div>
+
+  <header class="kds-header">
+    <div class="kds-brand">
+      <span class="kds-logo"><img id="tenantLogo" src="/static/chatbotpro100.png" alt="" /></span>
+      <div>
+        <span class="kds-eyebrow" id="tenantName">ChatBotPro</span>
+        <h1 id="areaName">Pantalla KDS</h1>
+      </div>
+    </div>
+    <div class="kds-header-center">
+      <span class="kds-branch" id="branchName" hidden><i class="ph-bold ph-storefront"></i><span></span></span>
+      <span class="kds-connection" id="connectionState"><i></i><span>Conectando</span></span>
+    </div>
+    <div class="kds-tools">
+      <button type="button" id="soundBtn" class="kds-tool active" aria-pressed="true" title="Activar o silenciar alertas">
+        <i class="ph-bold ph-speaker-high"></i><span>Sonido</span>
+      </button>
+      <button type="button" id="fullscreenBtn" class="kds-tool" title="Pantalla completa">
+        <i class="ph-bold ph-corners-out"></i><span>Ampliar</span>
+      </button>
+      <time id="clock">--:--</time>
+    </div>
+  </header>
+
+  <main>
+    <section class="kds-summary" aria-label="Resumen de comandas">
+      <div><span class="summary-dot pending"></span><b id="pendingCount">0</b><small>Nuevos</small></div>
+      <div><span class="summary-dot preparing"></span><b id="preparingCount">0</b><small>Preparando</small></div>
+      <div><span class="summary-dot ready"></span><b id="readyCount">0</b><small>Listos</small></div>
+      <p id="lastUpdate"><i class="ph-bold ph-arrows-clockwise"></i> Esperando actualización</p>
+    </section>
+
+    <section class="kds-board" id="kdsBoard">
+      <div class="kds-column column-pending" data-column="pending">
+        <header><span><i class="ph-bold ph-bell-ringing"></i> Nuevos</span><b data-count="pending">0</b></header>
+        <div class="kds-ticket-list" data-list="pending"></div>
+      </div>
+      <div class="kds-column column-preparing" data-column="preparing">
+        <header><span><i class="ph-bold ph-cooking-pot"></i> Preparando</span><b data-count="preparing">0</b></header>
+        <div class="kds-ticket-list" data-list="preparing"></div>
+      </div>
+      <div class="kds-column column-ready" data-column="ready">
+        <header><span><i class="ph-bold ph-check-circle"></i> Listos</span><b data-count="ready">0</b></header>
+        <div class="kds-ticket-list" data-list="ready"></div>
+      </div>
+    </section>
+  </main>
+
+  <div class="kds-toast" id="kdsToast" role="status"><i class="ph-bold ph-check-circle"></i><span></span></div>
+  <div class="kds-fatal" id="kdsFatal" hidden>
+    <i class="ph-bold ph-monitor-x"></i>
+    <h2>No se pudo abrir esta pantalla KDS</h2>
+    <p id="kdsFatalMessage">Verifica que el enlace siga activo.</p>
+    <button type="button" onclick="location.reload()"><i class="ph-bold ph-arrows-clockwise"></i> Reintentar</button>
+  </div>
+
+  <script src="/static/js/kds.js"></script>
+</body>
+</html>

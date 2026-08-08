@@ -10,7 +10,7 @@
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/bold/style.css" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/fill/style.css" />
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-  <link rel="stylesheet" href="/static/css/styles.css?v=20260717b" />
+  <link rel="stylesheet" href="/static/css/styles.css?v=20260808kds" />
   <link rel="icon" type="image/svg+xml" href="/static/favicon.svg" />
   <link rel="icon" type="image/png" href="/static/chatbotpro100.png" />
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
@@ -36,6 +36,7 @@
         <a href="#pedidos" data-view="pedidos" data-color="orange"><span class="nav-ic"><i class="ph-fill ph-receipt"></i></span><span>Pedidos</span> <span id="pendingBadge" class="count" style="display:none"></span></a>
         <a href="#clientes" data-view="clientes" data-color="blue"><span class="nav-ic"><i class="ph-fill ph-users-three"></i></span><span>Clientes</span></a>
         <a href="#pos" data-view="pos" data-color="emerald"><span class="nav-ic"><i class="ph-fill ph-cash-register"></i></span><span>Punto de venta</span></a>
+        <a href="#kds" data-view="kds" data-color="orange"><span class="nav-ic"><i class="ph-fill ph-monitor-play"></i></span><span>Pantallas KDS</span></a>
         <a href="#productos" data-view="productos" data-color="rose"><span class="nav-ic"><i class="ph-fill ph-bowl-food"></i></span><span>Productos</span></a>
         <a href="#inventarios" data-view="inventarios" data-color="teal"><span class="nav-ic"><i class="ph-fill ph-package"></i></span><span>Inventarios</span></a>
         <div class="nav-label nav-label-empleados"><i class="ph-fill ph-users"></i> Empleados</div>
@@ -220,6 +221,42 @@
       </section>
 
       <!-- ──────── Productos ──────── -->
+      <section class="section" id="view-kds">
+        <div class="kds-admin-hero">
+          <div class="kds-admin-hero-copy">
+            <span class="kds-admin-kicker"><i class="ph-bold ph-broadcast"></i> Preparación conectada al POS</span>
+            <h2>Cada producto llega al área correcta</h2>
+            <p>Configura Cocina, Barra, Postres u otras estaciones. Los pedidos mixtos se dividen automáticamente y cada pantalla controla su propio avance.</p>
+            <div class="kds-admin-actions">
+              <button class="btn btn-primary" type="button" id="kdsAddAreaBtn"><i class="ph-bold ph-plus-circle"></i> Nueva área</button>
+              <button class="btn btn-ghost" type="button" id="kdsQuickSetupBtn"><i class="ph-bold ph-magic-wand"></i> Crear Cocina y Barra</button>
+            </div>
+          </div>
+          <div class="kds-admin-flow" aria-hidden="true">
+            <span><i class="ph-bold ph-cash-register"></i><b>POS</b></span>
+            <i class="ph-bold ph-arrow-right"></i>
+            <div>
+              <span class="food"><i class="ph-bold ph-cooking-pot"></i><b>Cocina</b></span>
+              <span class="drink"><i class="ph-bold ph-wine"></i><b>Barra</b></span>
+            </div>
+          </div>
+        </div>
+
+        <div class="kds-admin-guide">
+          <div><b>1</b><span><strong>Crea un área</strong><small>Cocina, Barra, Postres…</small></span></div>
+          <i class="ph-bold ph-caret-right"></i>
+          <div><b>2</b><span><strong>Asigna categorías</strong><small>Bebidas a Barra, alimentos a Cocina</small></span></div>
+          <i class="ph-bold ph-caret-right"></i>
+          <div><b>3</b><span><strong>Abre su enlace</strong><small>En TV, tableta o celular</small></span></div>
+        </div>
+
+        <div class="kds-admin-toolbar">
+          <div><h3>Áreas de preparación</h3><p id="kdsAdminSummary">Cargando configuración…</p></div>
+          <button class="btn btn-ghost" type="button" id="kdsRefreshBtn"><i class="ph-bold ph-arrows-clockwise"></i> Actualizar</button>
+        </div>
+        <div class="kds-area-grid" id="kdsAreaGrid"></div>
+      </section>
+
       <section class="section" id="view-productos">
         <div class="prod-toolbar">
           <div class="chips" id="catChips"></div>
@@ -1249,6 +1286,53 @@
   </div>
 
   <!-- ════════ Modal sucursal ════════ -->
+  <div class="modal-bg" id="kdsAreaModal">
+    <div class="modal kds-area-modal">
+      <h3 id="kdsAreaModalTitle"><i class="ph-bold ph-monitor-play"></i> Nueva área KDS</h3>
+      <form id="kdsAreaForm">
+        <input type="hidden" id="kdsAreaId" />
+        <div class="row-2">
+          <div class="field">
+            <label><i class="ph-bold ph-text-aa"></i> Nombre del área *</label>
+            <input type="text" id="kdsAreaName" maxlength="60" required placeholder="Cocina, Barra, Postres…" />
+          </div>
+          <div class="field">
+            <label><i class="ph-bold ph-storefront"></i> Sucursal</label>
+            <select id="kdsAreaBranch"><option value="">Todas / sin sucursal</option></select>
+          </div>
+        </div>
+        <div class="row-2 kds-area-appearance">
+          <div class="field">
+            <label><i class="ph-bold ph-palette"></i> Color de identificación</label>
+            <input type="color" id="kdsAreaColor" value="#f97316" />
+          </div>
+          <div class="toggle-row">
+            <div class="t-info"><i class="ph-bold ph-eye"></i><div><b>Pantalla activa</b><span>El enlace recibe comandas</span></div></div>
+            <label class="switch"><input type="checkbox" id="kdsAreaActive" checked /><span class="track"></span></label>
+          </div>
+        </div>
+        <div class="kds-assignment-block">
+          <div class="kds-assignment-head">
+            <div><h4>Categorías enviadas a esta área *</h4><p>Todo producto de una categoría seleccionada aparecerá aquí automáticamente.</p></div>
+            <button type="button" class="btn btn-ghost btn-sm" id="kdsSelectAllCategories">Seleccionar todas</button>
+          </div>
+          <div class="kds-check-grid" id="kdsCategoryPicker"></div>
+        </div>
+        <div class="kds-assignment-block">
+          <div class="kds-assignment-head">
+            <div><h4>Productos individuales adicionales</h4><p>Úsalo como excepción cuando un producto de otra categoría también deba llegar a esta área.</p></div>
+          </div>
+          <input class="kds-product-search" type="search" id="kdsProductSearch" placeholder="Buscar producto…" autocomplete="off" />
+          <div class="kds-check-grid products" id="kdsProductPicker"></div>
+        </div>
+        <div class="modal-actions">
+          <button type="button" class="btn btn-ghost" id="kdsAreaCancel">Cancelar</button>
+          <button type="submit" class="btn btn-primary"><i class="ph-bold ph-floppy-disk"></i> Guardar área</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
   <div class="modal-bg" id="branchModal">
     <div class="modal" style="max-width:520px">
       <h3 id="branchModalTitle"><i class="ph-bold ph-buildings"></i> Nueva sucursal</h3>
@@ -1782,6 +1866,6 @@
     </div>
   </div>
 
-  <script src="/static/js/app.js?v=20260717b"></script>
+  <script src="/static/js/app.js?v=20260808kds"></script>
 </body>
 </html>

@@ -67,6 +67,7 @@ app.use('/api/superadmin', rateLimit(80, 10 * 60 * 1000), require('./src/routes/
 app.use('/api/notifications', require('./src/routes/notifications'));
 app.use('/api/inventory', require('./src/routes/inventory'));
 app.use('/api/employees', require('./src/routes/employees'));
+app.use('/api/kds', require('./src/routes/kds'));
 
 // Páginas
 const page = (name) => (req, res) => res.sendFile(path.join(__dirname, 'public', name));
@@ -76,6 +77,7 @@ app.get('/register', page('register.html'));
 app.get('/app', page('app.html'));
 app.get('/notificaciones', page('notify.html'));
 app.get('/caja/:slug([a-z0-9-]{3,40})', page('cashier-login.html'));
+app.get('/kds/:slug([a-z0-9-]{3,40})/:token([A-Za-z0-9_-]{20,80})', page('kds.html'));
 app.get('/superadmin/login', page('superadmin-login.html'));
 app.get('/superadmin', page('superadmin.html'));
 app.get('/c/:slug([a-z0-9-]{3,40})', page('chat.html'));
