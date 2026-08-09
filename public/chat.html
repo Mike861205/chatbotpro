@@ -166,6 +166,65 @@
       border-radius: 10px;
       padding: 5px 9px;
     }
+    .bank-transfer-card {
+      width: min(92%, 390px);
+      flex-shrink: 0;
+      align-self: flex-start;
+      overflow: hidden;
+      border: 1px solid color-mix(in srgb, var(--primary) 22%, #dce1ec);
+      border-radius: 18px 18px 18px 6px;
+      background: #fff;
+      box-shadow: 0 5px 18px rgba(15,18,32,0.08);
+      animation: popIn 0.3s var(--ease);
+    }
+    .bank-transfer-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 13px 14px;
+      background: color-mix(in srgb, var(--primary) 7%, #fff);
+      border-bottom: 1px solid color-mix(in srgb, var(--primary) 14%, #e5e7eb);
+    }
+    .bank-transfer-head b { display: block; font-size: 13px; color: #171c2e; }
+    .bank-transfer-head small { display: block; margin-top: 2px; color: #72798a; font-size: 10.5px; }
+    .bank-transfer-head i { color: var(--primary); }
+    .bank-copy-all,
+    .bank-copy-number {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 5px;
+      border: 1px solid color-mix(in srgb, var(--primary) 38%, #d9deea);
+      background: #fff;
+      color: var(--primary);
+      font: inherit;
+      font-size: 11px;
+      font-weight: 800;
+      cursor: pointer;
+      transition: background 0.18s, color 0.18s, transform 0.18s;
+    }
+    .bank-copy-all { flex-shrink: 0; min-height: 34px; padding: 7px 9px; border-radius: 10px; }
+    .bank-copy-number { width: 100%; min-height: 36px; margin-top: 10px; border-radius: 10px; }
+    .bank-copy-all:hover,
+    .bank-copy-number:hover,
+    .bank-copy-all.copied,
+    .bank-copy-number.copied { background: var(--primary); color: #fff; }
+    .bank-copy-all:active,
+    .bank-copy-number:active { transform: scale(0.97); }
+    .bank-account-chat { padding: 13px 14px; }
+    .bank-account-chat + .bank-account-chat { border-top: 1px solid #e9ecf2; }
+    .bank-account-chat-title { display: flex; align-items: center; gap: 7px; margin-bottom: 8px; color: #171c2e; font-size: 13px; }
+    .bank-account-chat-title i { color: var(--primary); font-size: 17px; }
+    .bank-detail-row { display: grid; grid-template-columns: 62px minmax(0, 1fr); gap: 7px; margin-top: 4px; font-size: 12px; }
+    .bank-detail-row span { color: #7a8191; }
+    .bank-detail-row strong { color: #252a38; overflow-wrap: anywhere; user-select: all; }
+    .bank-transfer-foot { padding: 9px 14px 11px; color: #72798a; font-size: 10.5px; border-top: 1px solid #e9ecf2; }
+    @media (max-width: 420px) {
+      .bank-transfer-card { width: 96%; }
+      .bank-transfer-head { align-items: stretch; flex-direction: column; }
+      .bank-copy-all { width: 100%; }
+    }
     /* ── Product cards ── */
     .prods { display: flex; flex-direction: column; gap: 9px; align-self: stretch; animation: popIn 0.3s var(--ease); }
     .prod {
@@ -435,6 +494,70 @@
       scrollDown();
     }
 
+    async function copyToClipboard(text, button) {
+      try {
+        if (navigator.clipboard && globalThis.isSecureContext) {
+          await navigator.clipboard.writeText(text);
+        } else {
+          const textarea = document.createElement('textarea');
+          textarea.value = text;
+          textarea.setAttribute('readonly', '');
+          textarea.style.position = 'fixed';
+          textarea.style.opacity = '0';
+          document.body.appendChild(textarea);
+          textarea.select();
+          if (!document.execCommand('copy')) throw new Error('No se pudo copiar');
+          textarea.remove();
+        }
+        const original = button.innerHTML;
+        button.classList.add('copied');
+        button.innerHTML = '<i class="ph-bold ph-check"></i> Copiado';
+        setTimeout(() => {
+          button.classList.remove('copied');
+          button.innerHTML = original;
+        }, 1600);
+      } catch {
+        addMsg('No pude copiar automáticamente. Mantén presionado el número para seleccionarlo.', 'bot');
+      }
+    }
+
+    function renderBankAccounts(accounts) {
+      if (!Array.isArray(accounts) || !accounts.length) return false;
+      const typeLabels = { account: 'Cuenta', clabe: 'CLABE', card: 'Tarjeta' };
+      const card = document.createElement('section');
+      card.className = 'bank-transfer-card';
+      card.innerHTML = `
+        <div class="bank-transfer-head">
+          <div><b><i class="ph-bold ph-bank"></i> Datos para transferir</b><small>Elige qué información copiar</small></div>
+          <button class="bank-copy-all" type="button"><i class="ph-bold ph-copy"></i> Copiar todo</button>
+        </div>
+        <div class="bank-transfer-list"></div>
+        <div class="bank-transfer-foot"><i class="ph-bold ph-receipt"></i> Conserva tu comprobante de pago.</div>`;
+      const list = card.querySelector('.bank-transfer-list');
+      accounts.forEach((account, index) => {
+        const typeLabel = typeLabels[account.identifierType] || 'Cuenta';
+        const item = document.createElement('div');
+        item.className = 'bank-account-chat';
+        item.innerHTML = `
+          <b class="bank-account-chat-title"><i class="ph-bold ph-buildings"></i>${accounts.length > 1 ? `Cuenta ${index + 1} · ` : ''}${esc(account.bankName)}</b>
+          <div class="bank-detail-row"><span>Titular</span><strong>${esc(account.holderName)}</strong></div>
+          <div class="bank-detail-row"><span>${esc(typeLabel)}</span><strong>${esc(account.identifier)}</strong></div>
+          <button class="bank-copy-number" type="button"><i class="ph-bold ph-copy"></i> Copiar ${esc(typeLabel)}</button>`;
+        item.querySelector('.bank-copy-number').addEventListener('click', (event) => {
+          copyToClipboard(String(account.identifier), event.currentTarget);
+        });
+        list.appendChild(item);
+      });
+      const fullText = accounts.map((account, index) => {
+        const heading = accounts.length > 1 ? `Cuenta ${index + 1} - ${account.bankName}` : account.bankName;
+        return `${heading}\nTitular: ${account.holderName}\n${typeLabels[account.identifierType] || 'Cuenta'}: ${account.identifier}`;
+      }).join('\n\n');
+      card.querySelector('.bank-copy-all').addEventListener('click', (event) => copyToClipboard(fullText, event.currentTarget));
+      messagesEl.appendChild(card);
+      scrollDown();
+      return card.getBoundingClientRect().height > 20;
+    }
+
     function clearInteractive() {
       messagesEl.querySelectorAll('.options, .prods, .wa-btn').forEach((el) => el.remove());
     }
@@ -516,7 +639,11 @@
 
     function renderReply(data) {
       hideTyping();
-      (data.messages || []).forEach((m) => addMsg(m, 'bot'));
+      const bankAccountsRendered = renderBankAccounts(data.bankAccounts);
+      const messages = Array.isArray(data.messages) ? data.messages : [];
+      messages
+        .filter((message) => !bankAccountsRendered || !String(message).startsWith('Datos para realizar tu transferencia:'))
+        .forEach((message) => addMsg(message, 'bot'));
 
       if (data.products && data.products.length) {
         const wrap = document.createElement('div');

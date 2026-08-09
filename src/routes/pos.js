@@ -1,10 +1,24 @@
 const express = require('express');
-const { requireAuth } = require('../middleware/auth');
+const { requireAuth, requireOwner } = require('../middleware/auth');
 const { getSetting } = require('../db');
 const { decrypt } = require('../utils/crypto');
+const { ensureCostingSchema, itemsCost, preciseCost } = require('../utils/costing');
+const { ensurePurchasingSchema } = require('../utils/purchasing');
+const { ensureBranchStockSchema, initializeBranchStock, applyBranchSaleStock, restoreBranchSaleStock } = require('../utils/branchStock');
 
 const router = express.Router();
 router.use(requireAuth);
+router.use(async (req, res, next) => {
+  try {
+    await ensureCostingSchema(req.tdb);
+    await ensurePurchasingSchema(req.tdb);
+    await ensureBranchStockSchema(req.tdb);
+    await initializeBranchStock(req.tdb, req.user?.username || 'system');
+    next();
+  } catch (error) {
+    next(error);
+  }
+});
 
 const PAYMENT_METHODS = new Set(['cash', 'card', 'transfer', 'mixed']);
 const MOVEMENT_KINDS = new Set(['income', 'withdrawal', 'expense']);
@@ -26,6 +40,102 @@ function normalizePublicMediaPath(raw) {
 
 function sameMoney(a, b) {
   return Math.abs(n(a) - n(b)) < 0.01;
+}
+
+function parseJsonArray(value) {
+  try {
+    const parsed = typeof value === 'string' ? JSON.parse(value || '[]') : value;
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function tableItemsTotal(items) {
+  return n(parseJsonArray(items).reduce((sum, item) => sum + n(item?.price) * Math.max(0, Number(item?.qty) || 0), 0));
+}
+
+function serializeTableAccount(row) {
+  if (!row) return null;
+  const items = parseJsonArray(row.items);
+  return {
+    ...row,
+    items,
+    subtotal: n(row.subtotal ?? tableItemsTotal(items)),
+    total: n(row.total ?? tableItemsTotal(items)),
+  };
+}
+
+function serializeTableRound(row) {
+  if (!row) return null;
+  return {
+    id: Number(row.id),
+    accountId: Number(row.account_id),
+    roundNumber: Number(row.round_number),
+    items: parseJsonArray(row.items),
+    subtotal: n(row.subtotal),
+    notes: row.notes || '',
+    createdBy: row.created_by || '',
+    createdAt: row.created_at || '',
+  };
+}
+
+async function listTableRounds(t, accountIds = []) {
+  const ids = [...new Set(accountIds.map(Number).filter((id) => Number.isInteger(id) && id > 0))];
+  if (!ids.length) return [];
+  const rows = await t.all(
+    `SELECT id, account_id, round_number, items, subtotal::float AS subtotal, notes, created_by,
+            to_char(created_at AT TIME ZONE '${TZ}', 'DD Mon YYYY, HH24:MI') AS created_at
+     FROM {s}.table_rounds
+     WHERE account_id = ANY($1::int[])
+     ORDER BY account_id, round_number`,
+    [ids]
+  );
+  return rows.map(serializeTableRound);
+}
+
+async function getTableAccountWithRounds(t, accountId) {
+  const row = await t.get(
+    `SELECT id, table_id, table_number, table_label, branch_id, waiter_name, items,
+            subtotal::float AS subtotal, total::float AS total, status, opened_session_id,
+            closed_session_id, order_id, opened_by, closed_by,
+            to_char(opened_at AT TIME ZONE '${TZ}', 'DD Mon YYYY, HH24:MI') AS opened_at,
+            to_char(closed_at AT TIME ZONE '${TZ}', 'DD Mon YYYY, HH24:MI') AS closed_at
+     FROM {s}.table_accounts WHERE id = $1 LIMIT 1`,
+    [accountId]
+  );
+  if (!row) return null;
+  return { ...serializeTableAccount(row), rounds: await listTableRounds(t, [accountId]) };
+}
+
+async function getSessionTableSummary(t, sessionId) {
+  const session = await t.get('SELECT branch_id FROM {s}.pos_sessions WHERE id = $1 LIMIT 1', [sessionId]);
+  const branchId = Number(session?.branch_id || 0);
+  const closedRows = await t.all(
+    `SELECT id, table_number, table_label, waiter_name, total::float AS total, order_id,
+            to_char(opened_at AT TIME ZONE '${TZ}', 'DD Mon YYYY, HH24:MI') AS opened_at,
+            to_char(closed_at AT TIME ZONE '${TZ}', 'DD Mon YYYY, HH24:MI') AS closed_at
+     FROM {s}.table_accounts
+     WHERE closed_session_id = $1 AND status = 'closed'
+     ORDER BY closed_at, table_number`,
+    [sessionId]
+  );
+  const openRows = await t.all(
+    `SELECT id, table_number, table_label, waiter_name, items, subtotal::float AS subtotal, total::float AS total,
+            to_char(opened_at AT TIME ZONE '${TZ}', 'DD Mon YYYY, HH24:MI') AS opened_at
+     FROM {s}.table_accounts
+     WHERE status = 'open' AND branch_id = $1
+     ORDER BY table_number`,
+    [branchId]
+  );
+  return {
+    closedCount: closedRows.length,
+    closedTotal: n(closedRows.reduce((sum, row) => sum + n(row.total), 0)),
+    closed: closedRows.map(serializeTableAccount),
+    openCount: openRows.length,
+    openTotal: n(openRows.reduce((sum, row) => sum + tableItemsTotal(row.items), 0)),
+    open: openRows.map(serializeTableAccount),
+  };
 }
 
 function badRequest(message) {
@@ -118,6 +228,7 @@ async function getSessionTotals(t, sessionId) {
      WHERE session_id = $1`,
     [sessionId]
   );
+  const tables = await getSessionTableSummary(t, sessionId);
   return {
     tickets: Number(sales?.tickets || 0),
     totalSales: n(sales?.total_sales),
@@ -146,6 +257,7 @@ async function getSessionTotals(t, sessionId) {
       total: n(sales?.delivery_total),
       fees: n(sales?.delivery_fees),
     },
+    tables,
   };
 }
 
@@ -222,7 +334,7 @@ async function loadChatbotOrderForImport(t, orderId) {
   return t.get(
     `SELECT o.id, o.customer_id, o.items, o.total::float AS total, o.status, o.channel, o.delivery, o.notes,
             o.payment_method, o.pickup_branch_name, o.customer_location_text, o.customer_location_resolved,
-            o.delivery_fee::float AS delivery_fee, o.delivery_zone_name, o.service_branch_id, o.service_branch_name,
+            o.delivery_fee::float AS delivery_fee, o.delivery_zone_name, o.service_branch_id, o.service_branch_name,o.branch_stock_applied,
             to_char(o.created_at AT TIME ZONE '${TZ}', 'DD Mon YYYY, HH24:MI') AS created_at,
             c.name_enc, c.phone_enc, c.address_enc
      FROM {s}.orders o
@@ -262,17 +374,19 @@ async function listRecentSales(t, sessionId = null) {
   params.push(15);
   const rows = await t.all(
     `SELECT id, total::float AS total, status, payment_method, payment_breakdown, cash_received::float AS cash_received,
-            cash_change::float AS cash_change, notes, items,
+            cash_change::float AS cash_change, notes, items, table_account_id, table_number, waiter_name,
             to_char(created_at AT TIME ZONE '${TZ}', 'DD Mon YYYY, HH24:MI') AS created_at
      FROM {s}.orders
      ${where}
      ORDER BY id DESC LIMIT $${params.length}`,
     params
   );
+  const rounds = await listTableRounds(t, rows.map((row) => row.table_account_id).filter(Boolean));
   return rows.map((row) => ({
     ...row,
     items: JSON.parse(row.items || '[]'),
     payment_breakdown: row.payment_breakdown ? JSON.parse(row.payment_breakdown) : null,
+    rounds: rounds.filter((round) => Number(round.accountId) === Number(row.table_account_id)),
   }));
 }
 
@@ -338,7 +452,7 @@ async function listSalesHistoryPage(t, options = {}) {
 
   const rows = await t.all(
     `SELECT id, total::float AS total, status, payment_method, payment_breakdown, cash_received::float AS cash_received,
-            cash_change::float AS cash_change, notes, items,
+            cash_change::float AS cash_change, notes, items, table_account_id, table_number, waiter_name,
             to_char(created_at AT TIME ZONE '${TZ}', 'DD Mon YYYY, HH24:MI') AS created_at
      FROM {s}.orders
      ${whereSql}
@@ -347,11 +461,13 @@ async function listSalesHistoryPage(t, options = {}) {
     [...params, safeSize, offset]
   );
 
+  const rounds = await listTableRounds(t, rows.map((row) => row.table_account_id).filter(Boolean));
   return {
     rows: rows.map((row) => ({
       ...row,
       items: JSON.parse(row.items || '[]'),
       payment_breakdown: row.payment_breakdown ? JSON.parse(row.payment_breakdown) : null,
+      rounds: rounds.filter((round) => Number(round.accountId) === Number(row.table_account_id)),
     })),
     page: boundedPage,
     pageSize: safeSize,
@@ -444,12 +560,382 @@ function normalizePayment(method, paymentInput, total, cashReceivedInput) {
   return { method, breakdown, cashReceived, cashChange };
 }
 
+async function normalizePosItems(t, inputItems) {
+  const items = Array.isArray(inputItems) ? inputItems : [];
+  if (!items.length) throw badRequest('Agrega al menos un producto al ticket');
+  const ids = [...new Set(items.map((item) => Number(item.productId ?? item.id)).filter((id) => Number.isInteger(id) && id > 0))];
+  if (!ids.length) throw badRequest('Los productos del ticket no son válidos');
+  const rows = await t.all(
+    `SELECT id, name, price::float AS price, COALESCE(unit_cost, 0)::float AS unit_cost, active, category_id
+     FROM {s}.products
+     WHERE id = ANY($1::int[])`,
+    [ids]
+  );
+  const byId = new Map(rows.map((row) => [Number(row.id), row]));
+  return items.map((item) => {
+    const product = byId.get(Number(item.productId ?? item.id));
+    const qty = Number(item.qty);
+    if (!product || !product.active) throw badRequest('Uno de los productos ya no está disponible');
+    if (!Number.isInteger(qty) || qty <= 0) throw badRequest('La cantidad de un producto es inválida');
+
+    const requestedName = String(item.name || '').trim();
+    const requestedPrice = Number(item.price);
+    const hasCustomLine = Boolean(item.cartKey || item._cartKey || item.variantId || item.modifiersLabel || Array.isArray(item.modifiers));
+    const unitCost = preciseCost(product.unit_cost);
+    return {
+      id: product.id,
+      name: hasCustomLine ? (requestedName || product.name) : product.name,
+      price: hasCustomLine && Number.isFinite(requestedPrice) && requestedPrice >= 0 ? n(requestedPrice) : n(product.price),
+      qty,
+      unitCost,
+      lineCost: preciseCost(unitCost * qty),
+      variantId: item.variantId ? Number(item.variantId) : null,
+      variantName: item.variantName ? String(item.variantName).trim() : null,
+      modifiers: Array.isArray(item.modifiers) ? item.modifiers : [],
+      modifiersLabel: item.modifiersLabel ? String(item.modifiersLabel).trim() : '',
+      modifiersExtraPrice: Number.isFinite(Number(item.modifiersExtraPrice)) ? n(item.modifiersExtraPrice) : 0,
+      _cartKey: item.cartKey || item._cartKey ? String(item.cartKey || item._cartKey) : null,
+    };
+  });
+}
+
+async function attachCostsToExistingItems(t, inputItems) {
+  const items = parseJsonArray(inputItems);
+  const ids = [...new Set(items.map((item) => Number(item?.id || item?.product_id || 0)).filter((id) => id > 0))];
+  if (!ids.length) return items;
+  const rows = await t.all(
+    'SELECT id, COALESCE(unit_cost, 0)::float AS unit_cost FROM {s}.products WHERE id = ANY($1::int[])',
+    [ids]
+  );
+  const costs = new Map(rows.map((row) => [Number(row.id), preciseCost(row.unit_cost)]));
+  return items.map((item) => {
+    const qty = Math.max(0, Number(item?.qty || item?.quantity || 0));
+    const existingCost = Number(item?.unitCost ?? item?.unit_cost);
+    const unitCost = Number.isFinite(existingCost) && existingCost >= 0
+      ? preciseCost(existingCost)
+      : (costs.get(Number(item?.id || item?.product_id || 0)) || 0);
+    return { ...item, unitCost, lineCost: preciseCost(unitCost * qty) };
+  });
+}
+
+async function decrementBranchStockForSale(t, branchId, inputItems) {
+  return applyBranchSaleStock(t, branchId, inputItems);
+}
+
+async function restoreBranchStockForCancelledSale(t, branchId, inputItems) {
+  return restoreBranchSaleStock(t, branchId, inputItems);
+}
+
 function userSessionContext(user) {
   return {
     forUsername: user?.username || null,
     forBranchId: user?.branchId || null,
   };
 }
+
+async function listRestaurantTables(t, session = null, includeDisabled = false) {
+  const branchId = Number(session?.branch_id || 0);
+  const params = [];
+  const where = [];
+  let accountJoin = `LEFT JOIN {s}.table_accounts ta ON ta.table_id = rt.id AND ta.status = 'open' AND 1 = 0`;
+  if (!includeDisabled) where.push('rt.enabled = 1');
+  if (session) {
+    params.push(branchId);
+    where.push(`rt.branch_id IN (0, $${params.length})`);
+    accountJoin = `LEFT JOIN {s}.table_accounts ta ON ta.table_id = rt.id AND ta.status = 'open' AND ta.branch_id = $${params.length}`;
+  }
+  const rows = await t.all(
+    `SELECT rt.id, rt.table_number, rt.label, rt.branch_id, rt.position_x, rt.position_y, rt.shape, rt.enabled,
+            ta.id AS account_id, ta.waiter_name, ta.items, ta.subtotal::float AS account_subtotal,
+            ta.total::float AS account_total,
+            to_char(ta.opened_at AT TIME ZONE '${TZ}', 'DD Mon YYYY, HH24:MI') AS account_opened_at
+     FROM {s}.restaurant_tables rt
+     ${accountJoin}
+     ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
+     ORDER BY rt.branch_id, rt.table_number`,
+    params
+  );
+  const tables = rows.map((row) => ({
+    id: Number(row.id),
+    tableNumber: Number(row.table_number),
+    label: row.label || '',
+    branchId: Number(row.branch_id || 0),
+    positionX: Number(row.position_x || 50),
+    positionY: Number(row.position_y || 50),
+    shape: row.shape || 'round',
+    enabled: Boolean(Number(row.enabled)),
+    account: row.account_id ? { ...serializeTableAccount({
+      id: Number(row.account_id),
+      table_id: Number(row.id),
+      table_number: Number(row.table_number),
+      table_label: row.label || '',
+      waiter_name: row.waiter_name,
+      items: row.items,
+      subtotal: row.account_subtotal,
+      total: row.account_total,
+      opened_at: row.account_opened_at,
+    }), rounds: [] } : null,
+  }));
+  const rounds = await listTableRounds(t, tables.map((table) => table.account?.id).filter(Boolean));
+  const roundsByAccount = new Map();
+  for (const round of rounds) {
+    if (!roundsByAccount.has(round.accountId)) roundsByAccount.set(round.accountId, []);
+    roundsByAccount.get(round.accountId).push(round);
+  }
+  for (const table of tables) {
+    if (table.account) table.account.rounds = roundsByAccount.get(Number(table.account.id)) || [];
+  }
+  return tables;
+}
+
+router.get('/tables/config', requireOwner, async (req, res, next) => {
+  try {
+    res.json({
+      tables: await listRestaurantTables(req.tdb, null, true),
+      branches: await req.tdb.all('SELECT id, name FROM {s}.branches WHERE active = 1 ORDER BY name'),
+    });
+  } catch (e) {
+    next(e);
+  }
+});
+
+router.put('/tables/config', requireOwner, async (req, res, next) => {
+  try {
+    const input = Array.isArray(req.body?.tables) ? req.body.tables : [];
+    if (input.length > 200) return res.status(400).json({ error: 'Puedes configurar hasta 200 mesas' });
+    const validBranches = new Set((await req.tdb.all('SELECT id FROM {s}.branches WHERE active = 1')).map((row) => Number(row.id)));
+    const seen = new Set();
+    await req.tdb.tx(async (tx) => {
+      for (const item of input) {
+        const id = Number(item.id || 0);
+        const tableNumber = Number(item.tableNumber);
+        const branchId = Number(item.branchId || 0);
+        if (!Number.isInteger(tableNumber) || tableNumber < 1 || tableNumber > 999) throw badRequest('Cada mesa debe tener un número entre 1 y 999');
+        if (branchId && !validBranches.has(branchId)) throw badRequest(`La sucursal de la mesa ${tableNumber} no es válida`);
+        const uniqueKey = `${branchId}:${tableNumber}`;
+        if (seen.has(uniqueKey)) throw badRequest(`La mesa ${tableNumber} está repetida en la misma sucursal`);
+        seen.add(uniqueKey);
+        const label = String(item.label || '').trim().slice(0, 40);
+        const positionX = Math.max(5, Math.min(95, Math.round(Number(item.positionX) || 50)));
+        const positionY = Math.max(7, Math.min(93, Math.round(Number(item.positionY) || 50)));
+        const shape = ['round', 'square', 'rectangle'].includes(item.shape) ? item.shape : 'round';
+        const enabled = item.enabled === false || item.enabled === 0 ? 0 : 1;
+        if (id > 0) {
+          const updated = await tx.run(
+            `UPDATE {s}.restaurant_tables
+             SET table_number = $1, label = $2, branch_id = $3, position_x = $4, position_y = $5,
+                 shape = $6, enabled = $7, updated_at = now()
+             WHERE id = $8`,
+            [tableNumber, label, branchId, positionX, positionY, shape, enabled, id]
+          );
+          if (!updated.rowCount) throw badRequest(`No se encontró la mesa ${tableNumber}`);
+        } else {
+          await tx.run(
+            `INSERT INTO {s}.restaurant_tables
+             (table_number, label, branch_id, position_x, position_y, shape, enabled)
+             VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+            [tableNumber, label, branchId, positionX, positionY, shape, enabled]
+          );
+        }
+      }
+    });
+    res.json({ ok: true, tables: await listRestaurantTables(req.tdb, null, true) });
+  } catch (e) {
+    if (e.statusCode === 400 || e.code === '23505') return res.status(400).json({ error: e.code === '23505' ? 'No puede repetirse un número de mesa en la misma sucursal' : e.message });
+    next(e);
+  }
+});
+
+router.delete('/tables/config/:id', requireOwner, async (req, res, next) => {
+  try {
+    const id = Number(req.params.id);
+    const open = await req.tdb.get(`SELECT 1 AS ok FROM {s}.table_accounts WHERE table_id = $1 AND status = 'open' LIMIT 1`, [id]);
+    if (open) return res.status(409).json({ error: 'No puedes eliminar una mesa con cuenta abierta; ciérrala o deshabilítala' });
+    const result = await req.tdb.run('DELETE FROM {s}.restaurant_tables WHERE id = $1', [id]);
+    if (!result.rowCount) return res.status(404).json({ error: 'Mesa no encontrada' });
+    res.json({ ok: true });
+  } catch (e) {
+    next(e);
+  }
+});
+
+router.post('/tables/:id/open', async (req, res, next) => {
+  try {
+    const session = await getOpenSession(req.tdb, userSessionContext(req.user));
+    if (!session) return res.status(400).json({ error: 'Abre una caja antes de abrir una mesa' });
+    const tableId = Number(req.params.id);
+    const table = await req.tdb.get('SELECT * FROM {s}.restaurant_tables WHERE id = $1 AND enabled = 1 LIMIT 1', [tableId]);
+    if (!table) return res.status(404).json({ error: 'Mesa no disponible' });
+    const sessionBranchId = Number(session.branch_id || 0);
+    if (Number(table.branch_id || 0) !== 0 && Number(table.branch_id) !== sessionBranchId) {
+      return res.status(409).json({ error: 'Esta mesa pertenece a otra sucursal' });
+    }
+    const waiterName = String(req.body?.waiterName || '').trim().slice(0, 80);
+    if (!waiterName) return res.status(400).json({ error: 'Escribe el nombre del mesero' });
+    const row = await req.tdb.get(
+      `INSERT INTO {s}.table_accounts
+       (table_id, table_number, table_label, branch_id, waiter_name, items, opened_session_id, opened_by)
+       VALUES ($1, $2, $3, $4, $5, '[]', $6, $7)
+       RETURNING *`,
+      [table.id, table.table_number, table.label || '', sessionBranchId, waiterName, session.id, req.user.username]
+    );
+    res.json({ ok: true, account: { ...serializeTableAccount(row), rounds: [] } });
+  } catch (e) {
+    if (e.code === '23505') return res.status(409).json({ error: 'La mesa ya tiene una cuenta abierta' });
+    next(e);
+  }
+});
+
+router.put('/table-accounts/:id', async (req, res, next) => {
+  try {
+    const session = await getOpenSession(req.tdb, userSessionContext(req.user));
+    if (!session) return res.status(400).json({ error: 'Abre una caja para guardar la cuenta' });
+    const id = Number(req.params.id);
+    const account = await req.tdb.get('SELECT * FROM {s}.table_accounts WHERE id = $1 AND status = $2 LIMIT 1', [id, 'open']);
+    if (!account) return res.status(404).json({ error: 'La cuenta de mesa ya no está abierta' });
+    if (Number(account.branch_id || 0) !== Number(session.branch_id || 0)) return res.status(409).json({ error: 'La cuenta pertenece a otra sucursal' });
+    const items = await normalizePosItems(req.tdb, req.body?.items);
+    const subtotal = n(items.reduce((sum, item) => sum + item.price * item.qty, 0));
+    const waiterName = String(req.body?.waiterName || account.waiter_name || '').trim().slice(0, 80);
+    const row = await req.tdb.get(
+      `UPDATE {s}.table_accounts
+       SET items = $1, subtotal = $2, total = $2, waiter_name = $3, updated_at = now()
+       WHERE id = $4 AND status = 'open'
+       RETURNING *`,
+      [JSON.stringify(items), subtotal, waiterName, id]
+    );
+    res.json({ ok: true, account: await getTableAccountWithRounds(req.tdb, row.id) });
+  } catch (e) {
+    if (e.statusCode === 400) return res.status(400).json({ error: e.message });
+    next(e);
+  }
+});
+
+router.post('/table-accounts/:id/rounds', async (req, res, next) => {
+  try {
+    const session = await getOpenSession(req.tdb, userSessionContext(req.user));
+    if (!session) return res.status(400).json({ error: 'Abre una caja para enviar la ronda' });
+    const accountId = Number(req.params.id);
+    const result = await req.tdb.tx(async (tx) => {
+      const account = await tx.get(
+        `SELECT * FROM {s}.table_accounts WHERE id = $1 AND status = 'open' FOR UPDATE`,
+        [accountId]
+      );
+      if (!account) throw Object.assign(new Error('La cuenta de mesa ya no está abierta'), { statusCode: 409 });
+      if (Number(account.branch_id || 0) !== Number(session.branch_id || 0)) {
+        throw Object.assign(new Error('La cuenta pertenece a otra sucursal'), { statusCode: 409 });
+      }
+      const roundItems = await normalizePosItems(tx, req.body?.items);
+      const roundSubtotal = n(roundItems.reduce((sum, item) => sum + item.price * item.qty, 0));
+      const currentItems = parseJsonArray(account.items);
+      const latest = await tx.get(
+        'SELECT COALESCE(MAX(round_number), 0)::int AS n FROM {s}.table_rounds WHERE account_id = $1',
+        [accountId]
+      );
+      let roundNumber = Number(latest?.n || 0) + 1;
+      if (roundNumber === 1 && currentItems.length) {
+        await tx.run(
+          `INSERT INTO {s}.table_rounds (account_id, round_number, items, subtotal, notes, created_by, created_at)
+           VALUES ($1, 1, $2, $3, 'Ronda inicial migrada', $4, COALESCE($5::timestamptz, now()))`,
+          [accountId, JSON.stringify(currentItems), tableItemsTotal(currentItems), account.opened_by || req.user.username, account.updated_at]
+        );
+        roundNumber = 2;
+      }
+      const notes = String(req.body?.notes || '').trim().slice(0, 180);
+      const round = await tx.get(
+        `INSERT INTO {s}.table_rounds (account_id, round_number, items, subtotal, notes, created_by)
+         VALUES ($1, $2, $3, $4, $5, $6)
+         RETURNING id`,
+        [accountId, roundNumber, JSON.stringify(roundItems), roundSubtotal, notes, req.user.username]
+      );
+      const accumulatedItems = [...currentItems, ...roundItems];
+      const accumulatedTotal = n(tableItemsTotal(accumulatedItems));
+      await tx.run(
+        `UPDATE {s}.table_accounts
+         SET items = $1, subtotal = $2, total = $2, updated_at = now()
+         WHERE id = $3`,
+        [JSON.stringify(accumulatedItems), accumulatedTotal, accountId]
+      );
+      return { roundId: round.id, roundNumber, roundSubtotal, accumulatedTotal };
+    });
+    const account = await getTableAccountWithRounds(req.tdb, accountId);
+    const round = account?.rounds?.find((item) => Number(item.id) === Number(result.roundId));
+    res.json({ ok: true, account, round: round || { id: result.roundId, roundNumber: result.roundNumber, subtotal: result.roundSubtotal, items: [] }, accumulatedTotal: result.accumulatedTotal });
+  } catch (e) {
+    if (e.statusCode === 400 || e.statusCode === 409) return res.status(e.statusCode).json({ error: e.message });
+    next(e);
+  }
+});
+
+router.post('/table-accounts/:id/checkout', async (req, res, next) => {
+  try {
+    const session = await getOpenSession(req.tdb, userSessionContext(req.user));
+    if (!session) return res.status(400).json({ error: 'Abre una caja para cerrar la cuenta' });
+    const accountId = Number(req.params.id);
+    const result = await req.tdb.tx(async (tx) => {
+      const account = await tx.get(
+        `SELECT * FROM {s}.table_accounts WHERE id = $1 AND status = 'open' FOR UPDATE`,
+        [accountId]
+      );
+      if (!account) throw Object.assign(new Error('La cuenta de mesa ya no está abierta'), { statusCode: 409 });
+      if (Number(account.branch_id || 0) !== Number(session.branch_id || 0)) throw Object.assign(new Error('La cuenta pertenece a otra sucursal'), { statusCode: 409 });
+      const items = await attachCostsToExistingItems(tx, account.items);
+      if (!items.length) throw badRequest('La mesa no tiene productos para cobrar');
+      const subtotal = n(items.reduce((sum, item) => sum + n(item.price) * Number(item.qty), 0));
+      const paymentMethod = String(req.body?.paymentMethod || '').trim();
+      const payment = normalizePayment(paymentMethod, req.body?.payments || {}, subtotal, req.body?.cashReceived);
+      const waiterName = String(account.waiter_name || '').trim();
+      const userNote = String(req.body?.notes || '').trim().slice(0, 180);
+      const notes = [`Mesa ${account.table_number}`, `Mesero: ${waiterName}`, userNote].filter(Boolean).join(' · ');
+      const cogsTotal = itemsCost(items);
+      const saleRow = await tx.get(
+        `INSERT INTO {s}.orders
+         (customer_id, items, subtotal, total, status, channel, delivery, notes, payment_method, payment_breakdown,
+          cash_received, cash_change, pos_session_id, delivery_fee, service_branch_id, service_branch_name,
+          table_account_id, table_number, waiter_name, cogs_total)
+         VALUES (NULL, $1, $2, $2, 'entregado', 'pos', 'mesa', $3, $4, $5, $6, $7, $8, 0, $9, $10, $11, $12, $13, $14)
+         RETURNING id`,
+        [JSON.stringify(items), subtotal, notes, payment.method, JSON.stringify(payment.breakdown), payment.cashReceived || null,
+          payment.cashChange || null, session.id, session.branch_id || null, session.branch_name || null,
+          account.id, account.table_number, waiterName, cogsTotal]
+      );
+      if (await decrementBranchStockForSale(tx, session.branch_id, items)) await tx.run('UPDATE {s}.orders SET branch_stock_applied=1 WHERE id=$1', [saleRow.id]);
+      await tx.run(
+        `UPDATE {s}.table_accounts
+         SET items = $1, subtotal = $2, total = $2, status = 'closed', closed_session_id = $3,
+             order_id = $4, closed_by = $5, closed_at = now(), updated_at = now()
+         WHERE id = $6`,
+        [JSON.stringify(items), subtotal, session.id, saleRow.id, req.user.username, account.id]
+      );
+      return { account, items, subtotal, payment, notes, saleId: saleRow.id };
+    });
+    const totals = await getSessionTotals(req.tdb, session.id);
+    const rounds = await listTableRounds(req.tdb, [accountId]);
+    res.json({
+      ok: true,
+      sale: {
+        id: result.saleId,
+        subtotal: result.subtotal,
+        deliveryFee: 0,
+        total: result.subtotal,
+        items: result.items,
+        paymentMethod: result.payment.method,
+        paymentBreakdown: result.payment.breakdown,
+        cashReceived: result.payment.cashReceived,
+        cashChange: result.payment.cashChange,
+        notes: result.notes,
+        tableNumber: result.account.table_number,
+        waiterName: result.account.waiter_name,
+        rounds,
+      },
+      totals,
+      expectedCash: expectedCashForSession(session, totals),
+    });
+  } catch (e) {
+    if (e.statusCode === 400 || e.statusCode === 409 || e.message) return res.status(e.statusCode || 400).json({ error: e.message });
+    next(e);
+  }
+});
 
 router.get('/overview', async (req, res, next) => {
   try {
@@ -500,6 +986,7 @@ router.get('/overview', async (req, res, next) => {
       activeSession,
       lastClosedSession,
       chatbotIntegrationEnabled,
+      tables: await listRestaurantTables(req.tdb, activeSession, false),
       blockedBranchIds,
       recentSales: await listRecentSales(req.tdb, activeSession?.id || null),
       recentMovements: await listRecentMovements(req.tdb, activeSession?.id || null),
@@ -631,6 +1118,8 @@ router.post('/chatbot-orders/:id/import', async (req, res, next) => {
       : 'cash';
     const paymentBreakdown = paymentBreakdownForMethod(paymentMethod, sourceOrder.total);
     const mergedNote = chatbotSummaryNote(sourceOrder);
+    const costedSourceItems = await attachCostsToExistingItems(req.tdb, sourceItems);
+    const cogsTotal = itemsCost(costedSourceItems);
 
     const update = await req.tdb.run(
       `UPDATE {s}.orders
@@ -641,6 +1130,8 @@ router.post('/chatbot-orders/:id/import', async (req, res, next) => {
            payment_breakdown = $3,
            service_branch_id = $7,
            service_branch_name = $8,
+           items = $9,
+           cogs_total = $10,
            cash_received = CASE WHEN $2 = 'cash' THEN total ELSE NULL END,
            cash_change = 0,
            notes = CASE
@@ -654,11 +1145,14 @@ router.post('/chatbot-orders/:id/import', async (req, res, next) => {
        RETURNING id, total::float AS total, payment_method, payment_breakdown, cash_received::float AS cash_received,
                  cash_change::float AS cash_change, notes, items,
                  to_char(created_at AT TIME ZONE '${TZ}', 'DD Mon YYYY, HH24:MI') AS created_at`,
-      [session.id, paymentMethod, JSON.stringify(paymentBreakdown), mergedNote, id, Array.from(CHATBOT_IMPORTABLE_STATUSES), session.branch_id || null, session.branch_name || null]
+      [session.id, paymentMethod, JSON.stringify(paymentBreakdown), mergedNote, id, Array.from(CHATBOT_IMPORTABLE_STATUSES), session.branch_id || null, session.branch_name || null, JSON.stringify(costedSourceItems), cogsTotal]
     );
 
     if (!update.rowCount) {
       return res.status(409).json({ error: 'El pedido ya no está disponible para integrarse al POS' });
+    }
+    if (!Number(sourceOrder.branch_stock_applied) && await decrementBranchStockForSale(req.tdb, session.branch_id, costedSourceItems)) {
+      await req.tdb.run('UPDATE {s}.orders SET branch_stock_applied=1 WHERE id=$1', [id]);
     }
 
     const saleRow = await req.tdb.get(
@@ -806,47 +1300,7 @@ async function createPosSale(req, res, next) {
   try {
     const session = await getOpenSession(req.tdb, userSessionContext(req.user));
     if (!session) return res.status(400).json({ error: 'Abre una caja antes de registrar una venta' });
-    const items = Array.isArray(req.body?.items) ? req.body.items : [];
-    if (!items.length) return res.status(400).json({ error: 'Agrega al menos un producto al ticket' });
-    const ids = [...new Set(items.map((item) => Number(item.productId)).filter((id) => Number.isInteger(id) && id > 0))];
-    if (!ids.length) return res.status(400).json({ error: 'Los productos del ticket no son válidos' });
-    const rows = await req.tdb.all(
-      `SELECT id, name, price::float AS price, active, category_id
-       FROM {s}.products
-       WHERE id = ANY($1::int[])`,
-      [ids]
-    );
-    const byId = new Map(rows.map((row) => [Number(row.id), row]));
-    const saleItems = items.map((item) => {
-      const product = byId.get(Number(item.productId));
-      const qty = Number(item.qty);
-      if (!product || !product.active) throw new Error('Uno de los productos ya no está disponible');
-      if (!Number.isInteger(qty) || qty <= 0) throw new Error('La cantidad de un producto es inválida');
-
-      const requestedName = String(item.name || '').trim();
-      const requestedPrice = Number(item.price);
-      const hasCustomLine = Boolean(item.cartKey || item.variantId || item.modifiersLabel || Array.isArray(item.modifiers));
-
-      const finalName = hasCustomLine
-        ? (requestedName || product.name)
-        : product.name;
-      const finalPrice = hasCustomLine && Number.isFinite(requestedPrice) && requestedPrice >= 0
-        ? n(requestedPrice)
-        : n(product.price);
-
-      return {
-        id: product.id,
-        name: finalName,
-        price: finalPrice,
-        qty,
-        variantId: item.variantId ? Number(item.variantId) : null,
-        variantName: item.variantName ? String(item.variantName).trim() : null,
-        modifiers: Array.isArray(item.modifiers) ? item.modifiers : [],
-        modifiersLabel: item.modifiersLabel ? String(item.modifiersLabel).trim() : '',
-        modifiersExtraPrice: Number.isFinite(Number(item.modifiersExtraPrice)) ? n(item.modifiersExtraPrice) : 0,
-        _cartKey: item.cartKey ? String(item.cartKey) : null,
-      };
-    });
+    const saleItems = await normalizePosItems(req.tdb, req.body?.items);
     const subtotal = n(saleItems.reduce((sum, item) => sum + item.price * item.qty, 0));
     const isDelivery = Boolean(req.body?.isDelivery);
     const deliveryFee = isDelivery ? Math.max(0, n(req.body?.deliveryFee)) : 0;
@@ -855,10 +1309,11 @@ async function createPosSale(req, res, next) {
     const paymentMethod = String(req.body?.paymentMethod || '').trim();
     const payment = normalizePayment(paymentMethod, req.body?.payments || {}, total, req.body?.cashReceived);
     const notes = String(req.body?.notes || '').trim().slice(0, 240);
+    const cogsTotal = itemsCost(saleItems);
     const row = await req.tdb.get(
       `INSERT INTO {s}.orders
-       (customer_id, items, subtotal, total, status, channel, delivery, notes, payment_method, payment_breakdown, cash_received, cash_change, pos_session_id, delivery_fee, service_branch_id, service_branch_name)
-       VALUES (NULL, $1, $2, $3, 'entregado', 'pos', $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+       (customer_id, items, subtotal, total, status, channel, delivery, notes, payment_method, payment_breakdown, cash_received, cash_change, pos_session_id, delivery_fee, service_branch_id, service_branch_name, cogs_total)
+       VALUES (NULL, $1, $2, $3, 'entregado', 'pos', $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
        RETURNING id`,
       [
         JSON.stringify(saleItems),
@@ -874,8 +1329,10 @@ async function createPosSale(req, res, next) {
         deliveryFee,
         session.branch_id || null,
         session.branch_name || null,
+        cogsTotal,
       ]
     );
+    if (await decrementBranchStockForSale(req.tdb, session.branch_id, saleItems)) await req.tdb.run('UPDATE {s}.orders SET branch_stock_applied=1 WHERE id=$1', [row.id]);
     const totals = await getSessionTotals(req.tdb, session.id);
     res.json({
       ok: true,
@@ -906,7 +1363,7 @@ router.post('/sales/:id/cancel', async (req, res, next) => {
     const id = Number(req.params.id);
     if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: 'Venta inválida' });
     const sale = await req.tdb.get(
-      `SELECT id, status, notes, pos_session_id
+      `SELECT id, status, notes, pos_session_id, items, service_branch_id, pickup_branch_id,branch_stock_applied
        FROM {s}.orders
        WHERE id = $1 AND channel = 'pos'
        LIMIT 1`,
@@ -923,6 +1380,7 @@ router.post('/sales/:id/cancel', async (req, res, next) => {
     await req.tdb.run(
       `UPDATE {s}.orders
        SET status = 'cancelado',
+           branch_stock_applied = 0,
            notes = CASE
              WHEN COALESCE(notes, '') = '' THEN $1
              ELSE notes || E'\n' || $1
@@ -930,6 +1388,7 @@ router.post('/sales/:id/cancel', async (req, res, next) => {
        WHERE id = $2`,
       [cancelText, id]
     );
+    if (Number(sale.branch_stock_applied)) await restoreBranchStockForCancelledSale(req.tdb, sale.service_branch_id || sale.pickup_branch_id, sale.items);
 
     const totals = sale.pos_session_id ? await getSessionTotals(req.tdb, sale.pos_session_id) : null;
     res.json({ ok: true, saleId: id, totals });

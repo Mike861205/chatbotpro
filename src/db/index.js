@@ -57,6 +57,26 @@ function tdb(slug) {
     all: async (sql, p = []) => (await q(fix(sql), p)).rows,
     get: async (sql, p = []) => (await q(fix(sql), p)).rows[0],
     run: async (sql, p = []) => q(fix(sql), p),
+    tx: async (callback) => {
+      const client = await pool.connect();
+      const scoped = {
+        schema: s,
+        all: async (sql, p = []) => (await client.query(fix(sql), p)).rows,
+        get: async (sql, p = []) => (await client.query(fix(sql), p)).rows[0],
+        run: async (sql, p = []) => client.query(fix(sql), p),
+      };
+      try {
+        await client.query('BEGIN');
+        const result = await callback(scoped);
+        await client.query('COMMIT');
+        return result;
+      } catch (error) {
+        await client.query('ROLLBACK');
+        throw error;
+      } finally {
+        client.release();
+      }
+    },
   };
 }
 
@@ -279,6 +299,65 @@ async function createTenantSchema(slug) {
       active INTEGER DEFAULT 1,
       created_at TIMESTAMPTZ DEFAULT now()
     );
+    ALTER TABLE "${s}".products ADD COLUMN IF NOT EXISTS unit_cost NUMERIC(12,4) DEFAULT 0;
+    CREATE TABLE IF NOT EXISTS "${s}".restaurant_tables (
+      id SERIAL PRIMARY KEY,
+      table_number INTEGER NOT NULL,
+      label TEXT DEFAULT '',
+      branch_id INTEGER NOT NULL DEFAULT 0,
+      position_x INTEGER NOT NULL DEFAULT 50,
+      position_y INTEGER NOT NULL DEFAULT 50,
+      shape TEXT NOT NULL DEFAULT 'round',
+      enabled INTEGER NOT NULL DEFAULT 1,
+      created_at TIMESTAMPTZ DEFAULT now(),
+      updated_at TIMESTAMPTZ DEFAULT now()
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_${s}_restaurant_tables_number
+      ON "${s}".restaurant_tables(branch_id, table_number);
+    CREATE TABLE IF NOT EXISTS "${s}".table_accounts (
+      id SERIAL PRIMARY KEY,
+      table_id INTEGER NOT NULL,
+      table_number INTEGER NOT NULL,
+      table_label TEXT DEFAULT '',
+      branch_id INTEGER NOT NULL DEFAULT 0,
+      waiter_name TEXT NOT NULL,
+      items TEXT NOT NULL DEFAULT '[]',
+      subtotal NUMERIC(12,2) NOT NULL DEFAULT 0,
+      total NUMERIC(12,2) NOT NULL DEFAULT 0,
+      status TEXT NOT NULL DEFAULT 'open',
+      opened_session_id INTEGER,
+      closed_session_id INTEGER,
+      order_id INTEGER,
+      opened_by TEXT DEFAULT '',
+      closed_by TEXT DEFAULT '',
+      opened_at TIMESTAMPTZ DEFAULT now(),
+      updated_at TIMESTAMPTZ DEFAULT now(),
+      closed_at TIMESTAMPTZ
+    );
+    CREATE TABLE IF NOT EXISTS "${s}".table_rounds (
+      id SERIAL PRIMARY KEY,
+      account_id INTEGER NOT NULL,
+      round_number INTEGER NOT NULL,
+      items TEXT NOT NULL DEFAULT '[]',
+      subtotal NUMERIC(12,2) NOT NULL DEFAULT 0,
+      notes TEXT DEFAULT '',
+      created_by TEXT DEFAULT '',
+      created_at TIMESTAMPTZ DEFAULT now(),
+      UNIQUE(account_id, round_number)
+    );
+    CREATE INDEX IF NOT EXISTS idx_${s}_table_rounds_account
+      ON "${s}".table_rounds(account_id, round_number);
+    DROP INDEX IF EXISTS "${s}".idx_${s}_table_accounts_one_open;
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_${s}_table_accounts_one_open_branch
+      ON "${s}".table_accounts(table_id, branch_id) WHERE status = 'open';
+    CREATE INDEX IF NOT EXISTS idx_${s}_table_accounts_session
+      ON "${s}".table_accounts(closed_session_id, status, closed_at DESC);
+    INSERT INTO "${s}".table_rounds (account_id, round_number, items, subtotal, notes, created_by, created_at)
+    SELECT ta.id, 1, ta.items, ta.subtotal, 'Ronda inicial migrada', ta.opened_by, COALESCE(ta.updated_at, ta.opened_at)
+    FROM "${s}".table_accounts ta
+    WHERE ta.status = 'open'
+      AND COALESCE(ta.items, '[]') <> '[]'
+      AND NOT EXISTS (SELECT 1 FROM "${s}".table_rounds tr WHERE tr.account_id = ta.id);
     CREATE TABLE IF NOT EXISTS "${s}".kds_areas (
       id SERIAL PRIMARY KEY,
       name TEXT NOT NULL,
@@ -333,6 +412,10 @@ async function createTenantSchema(slug) {
     ALTER TABLE "${s}".orders ADD COLUMN IF NOT EXISTS pos_session_id INTEGER;
     ALTER TABLE "${s}".orders ADD COLUMN IF NOT EXISTS service_branch_id INTEGER;
     ALTER TABLE "${s}".orders ADD COLUMN IF NOT EXISTS service_branch_name TEXT;
+    ALTER TABLE "${s}".orders ADD COLUMN IF NOT EXISTS table_account_id INTEGER;
+    ALTER TABLE "${s}".orders ADD COLUMN IF NOT EXISTS table_number INTEGER;
+    ALTER TABLE "${s}".orders ADD COLUMN IF NOT EXISTS waiter_name TEXT;
+    ALTER TABLE "${s}".orders ADD COLUMN IF NOT EXISTS cogs_total NUMERIC(14,4);
     ALTER TABLE "${s}".pos_sessions ADD COLUMN IF NOT EXISTS branch_id INTEGER;
     ALTER TABLE "${s}".pos_sessions ADD COLUMN IF NOT EXISTS branch_name TEXT;
     CREATE TABLE IF NOT EXISTS "${s}".product_variants (
@@ -386,6 +469,62 @@ async function createTenantSchema(slug) {
       created_by TEXT DEFAULT '',
       created_at TIMESTAMPTZ DEFAULT now()
     );
+    ALTER TABLE "${s}".inventory_movements ADD COLUMN IF NOT EXISTS unit_cost NUMERIC(12,4);
+    ALTER TABLE "${s}".inventory_movements ADD COLUMN IF NOT EXISTS total_cost NUMERIC(14,4);
+    CREATE TABLE IF NOT EXISTS "${s}".business_expenses (
+      id SERIAL PRIMARY KEY,
+      branch_id INTEGER,
+      branch_name TEXT DEFAULT '',
+      expense_date DATE NOT NULL DEFAULT CURRENT_DATE,
+      concept TEXT NOT NULL,
+      amount NUMERIC(14,2) NOT NULL,
+      notes TEXT DEFAULT '',
+      created_by TEXT DEFAULT '',
+      created_at TIMESTAMPTZ DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS idx_${s}_business_expenses_date ON "${s}".business_expenses(expense_date);
+    CREATE INDEX IF NOT EXISTS idx_${s}_business_expenses_branch ON "${s}".business_expenses(branch_id);
+    CREATE TABLE IF NOT EXISTS "${s}".suppliers (
+      id SERIAL PRIMARY KEY, name TEXT NOT NULL, tax_id TEXT DEFAULT '', contact_name TEXT DEFAULT '',
+      phone TEXT DEFAULT '', email TEXT DEFAULT '', address TEXT DEFAULT '', notes TEXT DEFAULT '', active INTEGER DEFAULT 1,
+      created_at TIMESTAMPTZ DEFAULT now(), updated_at TIMESTAMPTZ DEFAULT now()
+    );
+    CREATE TABLE IF NOT EXISTS "${s}".purchase_orders (
+      id SERIAL PRIMARY KEY, order_number TEXT UNIQUE, supplier_id INTEGER, supplier_name TEXT NOT NULL,
+      branch_id INTEGER, branch_name TEXT DEFAULT '', status TEXT NOT NULL DEFAULT 'draft',
+      order_date DATE NOT NULL DEFAULT CURRENT_DATE, expected_date DATE, subtotal NUMERIC(14,2) DEFAULT 0,
+      total NUMERIC(14,2) DEFAULT 0, notes TEXT DEFAULT '', created_by TEXT DEFAULT '', received_by TEXT DEFAULT '',
+      cancelled_by TEXT DEFAULT '', created_at TIMESTAMPTZ DEFAULT now(), updated_at TIMESTAMPTZ DEFAULT now(),
+      received_at TIMESTAMPTZ, cancelled_at TIMESTAMPTZ
+    );
+    CREATE TABLE IF NOT EXISTS "${s}".purchase_order_items (
+      id SERIAL PRIMARY KEY, purchase_order_id INTEGER NOT NULL, product_id INTEGER NOT NULL, product_name TEXT NOT NULL,
+      quantity NUMERIC(14,4) NOT NULL, unit_cost NUMERIC(14,4) NOT NULL, line_total NUMERIC(14,2) NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS "${s}".branch_inventory (
+      id SERIAL PRIMARY KEY, branch_id INTEGER NOT NULL, product_id INTEGER NOT NULL,
+      quantity NUMERIC(14,4) NOT NULL DEFAULT 0, updated_at TIMESTAMPTZ DEFAULT now(), UNIQUE(branch_id, product_id)
+    );
+    CREATE TABLE IF NOT EXISTS "${s}".inventory_transfers (
+      id SERIAL PRIMARY KEY, transfer_number TEXT UNIQUE, from_branch_id INTEGER NOT NULL, from_branch_name TEXT NOT NULL,
+      to_branch_id INTEGER NOT NULL, to_branch_name TEXT NOT NULL, status TEXT DEFAULT 'completed', notes TEXT DEFAULT '',
+      created_by TEXT DEFAULT '', created_at TIMESTAMPTZ DEFAULT now(), completed_at TIMESTAMPTZ DEFAULT now()
+    );
+    CREATE TABLE IF NOT EXISTS "${s}".inventory_transfer_items (
+      id SERIAL PRIMARY KEY, transfer_id INTEGER NOT NULL, product_id INTEGER NOT NULL, product_name TEXT NOT NULL,
+      quantity NUMERIC(14,4) NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS "${s}".purchase_audit_log (
+      id SERIAL PRIMARY KEY, entity_type TEXT NOT NULL, entity_id INTEGER NOT NULL, action TEXT NOT NULL,
+      payload TEXT DEFAULT '{}', actor TEXT DEFAULT '', created_at TIMESTAMPTZ DEFAULT now()
+    );
+    ALTER TABLE "${s}".inventory_movements ADD COLUMN IF NOT EXISTS branch_id INTEGER;
+    ALTER TABLE "${s}".inventory_movements ADD COLUMN IF NOT EXISTS purchase_order_id INTEGER;
+    ALTER TABLE "${s}".inventory_movements ADD COLUMN IF NOT EXISTS transfer_id INTEGER;
+    ALTER TABLE "${s}".inventory_movements ADD COLUMN IF NOT EXISTS source_type TEXT DEFAULT 'manual';
+    ALTER TABLE "${s}".branch_inventory ADD COLUMN IF NOT EXISTS initial_quantity NUMERIC(14,4) NOT NULL DEFAULT 0;
+    ALTER TABLE "${s}".branch_inventory ADD COLUMN IF NOT EXISTS baseline_started_at TIMESTAMPTZ;
+    ALTER TABLE "${s}".orders ADD COLUMN IF NOT EXISTS branch_stock_applied INTEGER NOT NULL DEFAULT 0;
     CREATE TABLE IF NOT EXISTS "${s}".inventory_counts (
       id SERIAL PRIMARY KEY,
       product_id INTEGER NOT NULL,
@@ -394,6 +533,7 @@ async function createTenantSchema(slug) {
       counted_by TEXT DEFAULT '',
       counted_at TIMESTAMPTZ DEFAULT now()
     );
+    ALTER TABLE "${s}".inventory_counts ADD COLUMN IF NOT EXISTS branch_id INTEGER;
     CREATE TABLE IF NOT EXISTS "${s}".inventory_closure_logs (
       id SERIAL PRIMARY KEY,
       product_id INTEGER NOT NULL,

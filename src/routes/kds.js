@@ -87,7 +87,7 @@ function itemBelongsToArea(item, productById, assignments) {
 }
 
 async function buildKdsPayload(tenant, tenantDb, area) {
-  const [categoryAssignments, productAssignments, orderRows, settingsRows] = await Promise.all([
+  const [categoryAssignments, productAssignments, orderRows, tableRoundRows, settingsRows] = await Promise.all([
     tenantDb.all('SELECT category_id FROM {s}.kds_area_categories WHERE area_id = $1', [area.id]),
     tenantDb.all('SELECT product_id FROM {s}.kds_area_products WHERE area_id = $1', [area.id]),
     tenantDb.all(
@@ -97,15 +97,32 @@ async function buildKdsPayload(tenant, tenantDb, area) {
        FROM {s}.orders o
        LEFT JOIN {s}.kds_ticket_states s ON s.order_id = o.id AND s.area_id = $1
        WHERE o.status <> 'cancelado'
+         AND o.table_account_id IS NULL
          AND (o.created_at AT TIME ZONE 'America/Mexico_City')::date = (now() AT TIME ZONE 'America/Mexico_City')::date
          AND ($2::int IS NULL OR o.service_branch_id = $2 OR o.pickup_branch_id = $2)
        ORDER BY o.created_at ASC`,
       [area.id, area.branch_id || null]
     ),
+    tenantDb.all(
+      `SELECT (-tr.id) AS id, NULL::int AS customer_id, tr.items, 'pendiente' AS order_status,
+              'table_round' AS channel, 'mesa' AS delivery, tr.notes,
+              NULLIF(ta.branch_id, 0) AS service_branch_id, b.name AS service_branch_name,
+              NULL::int AS pickup_branch_id, NULL::text AS pickup_branch_name, tr.created_at,
+              s.status AS kds_status, s.started_at, s.ready_at, s.completed_at, s.updated_at,
+              ta.table_number, tr.round_number, ta.waiter_name
+       FROM {s}.table_rounds tr
+       JOIN {s}.table_accounts ta ON ta.id = tr.account_id
+       LEFT JOIN {s}.branches b ON b.id = NULLIF(ta.branch_id, 0)
+       LEFT JOIN {s}.kds_ticket_states s ON s.order_id = -tr.id AND s.area_id = $1
+       WHERE (tr.created_at AT TIME ZONE 'America/Mexico_City')::date = (now() AT TIME ZONE 'America/Mexico_City')::date
+         AND ($2::int IS NULL OR ta.branch_id = $2)
+       ORDER BY tr.created_at ASC`,
+      [area.id, area.branch_id || null]
+    ),
     tenantDb.all("SELECT key, value FROM {s}.settings WHERE key IN ('business_name','currency')"),
   ]);
 
-  const parsedOrders = orderRows.map((row) => ({ ...row, parsedItems: parseItems(row.items) }));
+  const parsedOrders = [...orderRows, ...tableRoundRows].map((row) => ({ ...row, parsedItems: parseItems(row.items) }));
   const productIds = [...new Set(parsedOrders.flatMap((order) => order.parsedItems.map(itemProductId).filter(Boolean)))];
   const products = productIds.length
     ? await tenantDb.all(
@@ -176,6 +193,9 @@ async function buildKdsPayload(tenant, tenantDb, area) {
       otherItems,
       routedAreas,
       isMixed: routedAreas.length > 1,
+      tableNumber: order.table_number ? Number(order.table_number) : null,
+      roundNumber: order.round_number ? Number(order.round_number) : null,
+      waiterName: order.waiter_name || '',
     });
   }
 
@@ -217,7 +237,7 @@ router.patch('/public/:slug/:token/orders/:orderId', async (req, res, next) => {
     if (!found) return res.status(404).json({ error: 'Pantalla KDS no encontrada o desactivada' });
     const orderId = Number(req.params.orderId);
     const status = String(req.body?.status || '').trim().toLowerCase();
-    if (!Number.isInteger(orderId) || orderId <= 0 || !KDS_STATUSES.has(status)) {
+    if (!Number.isInteger(orderId) || orderId === 0 || !KDS_STATUSES.has(status)) {
       return res.status(400).json({ error: 'Estado de comanda inválido' });
     }
     const visible = await buildKdsPayload(found.tenant, found.tenantDb, found.area);

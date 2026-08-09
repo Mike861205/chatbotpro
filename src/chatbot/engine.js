@@ -6,6 +6,8 @@ const OpenAI = require('openai');
 const { q, getSetting, getSuperAdminSetting } = require('../db');
 const { encrypt, decrypt, lookupHash } = require('../utils/crypto');
 const { emitNewOrder, emitSessionUpdate } = require('../notifications');
+const { ensurePurchasingSchema } = require('../utils/purchasing');
+const { ensureBranchStockSchema, initializeBranchStock, applyBranchSaleStock } = require('../utils/branchStock');
 
 let aiConfigCache = { expiresAt: 0, value: null };
 const aiClientCache = new Map();
@@ -358,6 +360,32 @@ function enabledPaymentOptions(settings) {
   if (settings.transfer) options.push({ label: '🏦 Transferencia', value: 'pay_transfer', method: 'transfer' });
   if (settings.card) options.push({ label: '💳 Tarjeta', value: 'pay_card', method: 'card' });
   return options;
+}
+
+function parseBankAccounts(raw) {
+  try {
+    const accounts = JSON.parse(String(raw || '[]'));
+    if (!Array.isArray(accounts)) return [];
+    return accounts.filter((account) => (
+      account
+      && account.bankName
+      && account.holderName
+      && ['account', 'clabe', 'card'].includes(account.identifierType)
+      && account.identifier
+    )).slice(0, 10);
+  } catch {
+    return [];
+  }
+}
+
+function bankAccountsFallbackMessage(accounts) {
+  const typeLabels = { account: 'Cuenta', clabe: 'CLABE', card: 'Tarjeta' };
+  const details = accounts.map((account, index) => [
+    `🏦 ${accounts.length > 1 ? `Cuenta ${index + 1} · ` : ''}${account.bankName}`,
+    `Titular: ${account.holderName}`,
+    `${typeLabels[account.identifierType] || 'Cuenta'}: ${account.identifier}`,
+  ].join('\n'));
+  return `Datos para realizar tu transferencia:\n\n${details.join('\n\n')}\n\nConserva tu comprobante de pago.`;
 }
 
 async function getState(t, sessionId) {
@@ -1171,6 +1199,7 @@ async function handleMessage(t, slug, sessionId, rawInput) {
     transfer: (await getSetting(t, 'chatbot_payment_pickup_transfer', '0')) === '1',
     card: (await getSetting(t, 'chatbot_payment_pickup_card', '0')) === '1',
   };
+  const bankAccounts = parseBankAccounts(await getSetting(t, 'chatbot_bank_accounts_json', '[]'));
   const upsellEnabled = (await getSetting(t, 'chatbot_upsell_enabled', '0')) === '1';
   const legacyUpsellQuestion = String(
     await getSetting(t, 'chatbot_upsell_question', '¿Deseas agregar alguno de estos productos a tu pedido?')
@@ -1203,8 +1232,14 @@ async function handleMessage(t, slug, sessionId, rawInput) {
   if (!Array.isArray(state.aiHistory)) state.aiHistory = [];
   state.currency = currency;
 
-  const reply = { messages: [], options: [], products: null, cart: null, order: null };
+  const reply = { messages: [], options: [], products: null, cart: null, order: null, bankAccounts: null };
   const lower = input.toLowerCase();
+
+  const attachBankAccounts = () => {
+    if (!bankAccounts.length) return;
+    reply.bankAccounts = bankAccounts;
+    reply.messages.push(bankAccountsFallbackMessage(bankAccounts));
+  };
 
   const finish = async () => {
     await saveState(t, sessionId, state);
@@ -2303,13 +2338,21 @@ async function handleMessage(t, slug, sessionId, rawInput) {
     }
     state.customer.paymentMethod = selected;
     state.step = 'confirm';
-    reply.messages = [confirmText(state, businessName, currency, labels)];
+    if (selected === 'transfer' && bankAccounts.length) {
+      attachBankAccounts();
+      reply.messages.push(confirmText(state, businessName, currency, labels));
+    } else {
+      reply.messages = [confirmText(state, businessName, currency, labels)];
+    }
     reply.options = confirmOptions();
     return finish();
   }
 
   if (state.step === 'confirm') {
     if (lower === 'confirm_yes') {
+      await ensurePurchasingSchema(t);
+      await ensureBranchStockSchema(t);
+      await initializeBranchStock(t, 'chatbot');
       // Guarda cliente CIFRADO y crea el pedido en el schema aislado del tenant
       const phoneHash = lookupHash(state.customer.phone);
       let customer = await t.get('SELECT id FROM {s}.customers WHERE phone_hash = $1', [phoneHash]);
@@ -2360,6 +2403,9 @@ async function handleMessage(t, slug, sessionId, rawInput) {
         ]
       );
       await t.run('UPDATE {s}.orders SET payment_method = $1 WHERE id = $2', [state.customer.paymentMethod || '', orderRow.id]);
+      if (await applyBranchSaleStock(t, serviceBranchId, state.cart)) {
+        await t.run('UPDATE {s}.orders SET branch_stock_applied=1 WHERE id=$1', [orderRow.id]);
+      }
 
       const orderText = buildOrderText(businessName, state.cart, state.customer, state.delivery, currency, labels);
       const waLink = whatsapp ? `https://wa.me/${whatsapp}?text=${encodeURIComponent(orderText)}` : null;
@@ -2379,6 +2425,7 @@ async function handleMessage(t, slug, sessionId, rawInput) {
       reply.messages = [
         `🎉 *¡Pedido #${orderRow.id} recibido!*\n\nEn breve lo confirmamos. ¡Gracias por tu preferencia! 🙏`,
       ];
+      if (state.customer.paymentMethod === 'transfer') attachBankAccounts();
       reply.order = { id: orderRow.id, total, totalLabel: money(total, currency), whatsappLink: waLink, summary: orderText };
       if (waLink) reply.messages.push('👇 Toca el botón para enviar el resumen de tu pedido por WhatsApp y agilizar la atención.');
       if (!waLink) reply.messages.push('⚠️ El negocio aún no tiene un WhatsApp válido para envío automático. Tu pedido ya quedó registrado.');

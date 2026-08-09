@@ -28,6 +28,7 @@ const SETTING_KEYS = [
   'chatbot_payment_pickup_cash',
   'chatbot_payment_pickup_transfer',
   'chatbot_payment_pickup_card',
+  'chatbot_bank_accounts_json',
   'chatbot_upsell_enabled',
   'chatbot_upsell_question',
   'chatbot_upsell_product_ids',
@@ -46,6 +47,30 @@ const SETTING_KEYS = [
   'pos_catalog_sort_mode',
 ];
 
+function normalizeBankAccounts(raw) {
+  let accounts;
+  try {
+    accounts = JSON.parse(String(raw || '[]'));
+  } catch {
+    throw new Error('La configuración de cuentas bancarias no es válida');
+  }
+  if (!Array.isArray(accounts) || accounts.length > 10) {
+    throw new Error('Puedes configurar hasta 10 cuentas bancarias');
+  }
+  return accounts.map((account) => {
+    const bankName = String(account?.bankName || '').trim().slice(0, 80);
+    const holderName = String(account?.holderName || '').trim().slice(0, 100);
+    const identifier = String(account?.identifier || '').trim().slice(0, 50);
+    const identifierType = ['account', 'clabe', 'card'].includes(account?.identifierType)
+      ? account.identifierType
+      : '';
+    if (!bankName || !holderName || !identifier || !identifierType) {
+      throw new Error('Completa banco, titular, tipo y número en cada cuenta bancaria');
+    }
+    return { bankName, holderName, identifierType, identifier };
+  });
+}
+
 router.get('/', async (req, res, next) => {
   try {
     const out = {};
@@ -62,6 +87,13 @@ router.put('/', upload.single('logo'), async (req, res, next) => {
   try {
     if (req.user.role !== 'owner') return res.status(403).json({ error: 'No tienes permiso para modificar la configuración' });
     const body = req.body || {};
+    if (body.chatbot_bank_accounts_json !== undefined) {
+      try {
+        body.chatbot_bank_accounts_json = JSON.stringify(normalizeBankAccounts(body.chatbot_bank_accounts_json));
+      } catch (error) {
+        return res.status(400).json({ error: error.message });
+      }
+    }
     for (const k of SETTING_KEYS) {
       if (body[k] !== undefined) await setSetting(req.tdb, k, body[k]);
     }

@@ -3,6 +3,48 @@ let ME = null;
 let SETTINGS = null;
 let salesChart = null;
 let topChart = null;
+let SALES_REPORT_DATA = null;
+let SALES_DAILY_CHART = null;
+let SALES_MONTHLY_CHART = null;
+let SALES_REPORT_MODE = 'daily';
+let SALES_REPORT_BRANCH = 'all';
+let SALES_REPORT_YEAR = new Date().getFullYear();
+let SALES_REPORT_MONTH = new Date().getMonth() + 1;
+let SALES_DETAIL_DATA = null;
+let SALES_DETAIL_TITLE = '';
+let SALES_DETAIL_RANGE_MODE = 'day';
+let COSTING_DATA = { products: [], categories: [], branches: [] };
+let COSTING_DRAFT = new Map();
+let COSTING_DIRTY = new Set();
+let COSTING_TAB = 'products';
+let COSTING_SORT = 'alphabetical';
+let COSTING_CATEGORY = 'all';
+let COSTING_SEARCH = '';
+let COSTING_EXPENSE_BRANCH = 'all';
+let COSTING_EXPENSE_YEAR = new Date().getFullYear();
+let COSTING_EXPENSE_MONTH = new Date().getMonth() + 1;
+let COSTING_SAVE_QUEUE = Promise.resolve(true);
+const COSTING_AUTOSAVE_TIMERS = new Map();
+let PURCHASE_DATA = { suppliers: [], branches: [], products: [], branchStock: [] };
+let PURCHASE_ORDERS = [];
+let PURCHASE_TRANSFERS = [];
+let PURCHASE_REPORT = null;
+let PURCHASE_CHART = null;
+let PURCHASE_TAB = 'dashboard';
+let PURCHASE_PERIOD = 'day';
+let PURCHASE_ORDER_ITEMS = [];
+let PURCHASE_TRANSFER_ITEMS = [];
+let BRANCH_STOCK_DATA = { branches: [], summaries: [], rows: [] };
+let BRANCH_STOCK_SEARCH = '';
+let BRANCH_STOCK_CATEGORY = 'all';
+let BRANCH_STOCK_ONLY_AVAILABLE = false;
+let BRANCH_STOCK_BRANCH = 'all';
+let BRANCH_STOCK_PAGE = 1;
+let BRANCH_STOCK_PAGE_SIZE = 10;
+try {
+  const savedBranchStockPageSize = Number(localStorage.getItem('branchStockPageSize'));
+  if ([10, 20, 50, 100].includes(savedBranchStockPageSize)) BRANCH_STOCK_PAGE_SIZE = savedBranchStockPageSize;
+} catch {}
 let DASHBOARD_PERIOD = 'day';
 let orderStatusFilter = '';
 let orderPage = 1;
@@ -47,6 +89,10 @@ let POS_CHATBOT_QUEUE = [];
 let POS_CHATBOT_PAGE = 1;
 let POS_CHATBOT_TOTAL_PAGES = 1;
 const POS_CHATBOT_IMPORTING = new Set();
+let POS_TABLE_ACCOUNT = null;
+let TABLES_CONFIG = [];
+let TABLES_CONFIG_BRANCHES = [];
+let TABLES_CONFIG_SELECTED_ID = null;
 let CHATBOT_SUBTAB = 'flow';
 let CHATBOT_UPSELL_PRODUCTS = [];
 let CHATBOT_UPSELL_SELECTED = new Set();
@@ -400,8 +446,12 @@ const VIEW_META = {
   clientes: ['Clientes', 'Fidelidad y valor de clientes del chatbot', 'ph-users-three'],
   pos: ['Punto de venta', 'Caja, cobro y cierre del día', 'ph-cash-register'],
   kds: ['Pantallas KDS', 'Comandas automáticas por área de preparación', 'ph-monitor-play'],
+  ventas: ['Ventas', 'Reportes diarios y mensuales por sucursal', 'ph-chart-line-up'],
   productos: ['Productos', 'Tu menú visible en el chatbot', 'ph-hamburger'],
+  costos: ['Costo de ventas', 'Costos, precios, márgenes y gastos por sucursal', 'ph-coins'],
   inventarios: ['Inventarios', 'Control de stock, entradas, mermas y conteo físico', 'ph-package'],
+  'stock-sucursales': ['Stock por sucursal', 'Existencias reales y consolidadas por ubicación', 'ph-buildings'],
+  compras: ['Compras', 'Proveedores, órdenes y traslados entre sucursales', 'ph-shopping-cart-simple'],
   empleados: ['Productividad Empleados', 'Métricas, comisiones y desempeño del equipo', 'ph-identification-badge'],
   chatbot: ['Mi chatbot', 'Configura el flujo y comparte tu liga', 'ph-chat-circle-dots'],
   config: ['Mi negocio', 'Identidad, branding y contacto', 'ph-storefront'],
@@ -414,8 +464,12 @@ const VIEW_LOADERS = {
   clientes: loadCustomers,
   pos: loadPos,
   kds: loadKds,
+  ventas: loadSalesReport,
   productos: loadProducts,
+  costos: loadCosting,
   inventarios: loadInventarios,
+  'stock-sucursales': loadBranchStock,
+  compras: loadPurchases,
   empleados: loadEmpleados,
   chatbot: fillBotForm,
   config: fillConfigForm,
@@ -458,6 +512,13 @@ function applyUserScopeUI() {
 
 async function navigate(view) {
   const nextView = normalizeView(view);
+  if (CURRENT_VIEW === 'costos' && COSTING_DIRTY.size) {
+    const saved = await saveCostingProducts({ silent: true });
+    if (!saved) {
+      toast('No se pudo guardar. Revisa tu conexión antes de salir de Costos.', true);
+      return;
+    }
+  }
   CURRENT_VIEW = nextView;
   document.body.setAttribute('data-current-view', nextView);
 
@@ -608,6 +669,1058 @@ async function loadDashboard() {
     ? ordersTableHTML(recent, false)
     : emptyHTML('ph-receipt', 'Aún no hay pedidos', 'Comparte tu liga del chatbot para empezar a vender.');
 }
+
+/* ===== Reporte de ventas ===== */
+function salesMonthName(month, style = 'long') {
+  return new Intl.DateTimeFormat('es-MX', { month: style, timeZone: 'UTC' })
+    .format(new Date(Date.UTC(2024, Math.max(0, Number(month || 1) - 1), 1)));
+}
+
+function salesScopeLabel() {
+  if (SALES_REPORT_BRANCH === 'all') return 'Todas las sucursales';
+  if (SALES_REPORT_BRANCH === 'general') return 'Sin sucursal asignada';
+  const branch = SALES_REPORT_DATA?.branches?.find((row) => String(row.id) === String(SALES_REPORT_BRANCH));
+  return branch?.name || 'Sucursal seleccionada';
+}
+
+function populateSalesBranchFilter() {
+  const select = $('#salesBranchFilter');
+  if (!select || !SALES_REPORT_DATA) return;
+  const options = [
+    '<option value="all">Todas las sucursales</option>',
+    '<option value="general">Sin sucursal asignada</option>',
+    ...SALES_REPORT_DATA.branches.map((branch) => (
+      `<option value="${branch.id}">${esc(branch.name)}${branch.active ? '' : ' (inactiva)'}</option>`
+    )),
+  ];
+  select.innerHTML = options.join('');
+  select.value = SALES_REPORT_BRANCH;
+  if (select.value !== SALES_REPORT_BRANCH) {
+    SALES_REPORT_BRANCH = 'all';
+    select.value = 'all';
+  }
+}
+
+function renderSalesReportStats() {
+  const host = $('#salesReportStats');
+  if (!host || !SALES_REPORT_DATA) return;
+  const summary = SALES_REPORT_DATA.summary || {};
+  const dailyMode = SALES_REPORT_MODE === 'daily';
+  const sales = dailyMode ? summary.selectedMonthSales : summary.yearSales;
+  const tickets = dailyMode ? summary.selectedMonthTickets : summary.yearTickets;
+  const cogs = dailyMode ? summary.selectedMonthCogs : summary.yearCogs;
+  const expenses = dailyMode ? summary.selectedMonthExpenses : summary.yearExpenses;
+  const purchases = dailyMode ? summary.selectedMonthPurchases : summary.yearPurchases;
+  const cashResult = dailyMode ? summary.selectedMonthCashResult : summary.yearCashResult;
+  const netProfit = dailyMode ? summary.selectedMonthNetProfit : summary.yearNetProfit;
+  const marginPercent = dailyMode ? summary.selectedMonthMarginPercent : summary.yearMarginPercent;
+  const periodLabel = dailyMode ? `${salesMonthName(SALES_REPORT_MONTH)} ${SALES_REPORT_YEAR}` : `Año ${SALES_REPORT_YEAR}`;
+
+  host.innerHTML = `
+    <div class="card sales-report-stat sales-report-stat-primary">
+      <span class="sales-report-stat-icon"><i class="ph-bold ph-currency-dollar"></i></span>
+      <div><small>Ingresos · ${esc(periodLabel)}</small><strong>${fmtMoney(sales)}</strong><span>${tickets} venta${Number(tickets) === 1 ? '' : 's'} · ${esc(salesScopeLabel())}</span></div>
+    </div>
+    <div class="card sales-report-stat">
+      <span class="sales-report-stat-icon blue"><i class="ph-bold ph-package"></i></span>
+      <div><small>Costo de ventas</small><strong>${fmtMoney(cogs)}</strong><span>Costo de las unidades vendidas</span></div>
+    </div>
+    <div class="card sales-report-stat">
+      <span class="sales-report-stat-icon violet"><i class="ph-bold ph-receipt"></i></span>
+      <div><small>Gastos</small><strong>${fmtMoney(expenses)}</strong><span>Manuales y registrados en caja</span></div>
+    </div>
+    <div class="card sales-report-stat">
+      <span class="sales-report-stat-icon blue"><i class="ph-bold ph-shopping-cart-simple"></i></span>
+      <div><small>Compras recibidas</small><strong>${fmtMoney(purchases)}</strong><span>Entrada de inventario; no duplica el costo vendido</span></div>
+    </div>
+    <div class="card sales-report-stat ${Number(netProfit) < 0 ? 'sales-report-stat-loss' : ''}">
+      <span class="sales-report-stat-icon amber"><i class="ph-bold ${Number(netProfit) < 0 ? 'ph-trend-down' : 'ph-trend-up'}"></i></span>
+      <div><small>${Number(netProfit) < 0 ? 'Pérdida neta' : 'Utilidad neta'}</small><strong>${fmtMoney(netProfit)}</strong><span>Margen neto ${Number(marginPercent || 0).toFixed(1)}%</span></div>
+    </div>
+    <div class="card sales-report-stat ${Number(cashResult) < 0 ? 'sales-report-stat-loss' : ''}">
+      <span class="sales-report-stat-icon amber"><i class="ph-bold ph-wallet"></i></span>
+      <div><small>Resultado de efectivo</small><strong>${fmtMoney(cashResult)}</strong><span>Ventas menos compras y gastos</span></div>
+    </div>`;
+}
+
+function renderSalesCalendar() {
+  const host = $('#salesCalendarGrid');
+  if (!host || !SALES_REPORT_DATA) return;
+  const rows = SALES_REPORT_DATA.daily || [];
+  const title = `${salesMonthName(SALES_REPORT_MONTH)} ${SALES_REPORT_YEAR}`;
+  $('#salesCalendarTitle').textContent = title.charAt(0).toUpperCase() + title.slice(1);
+  $('#salesDailyScope').textContent = salesScopeLabel();
+
+  if (!rows.length) {
+    host.innerHTML = emptyHTML('ph-calendar-x', 'No hay días para mostrar', 'Selecciona otro periodo.');
+    return;
+  }
+
+  const firstWeekday = new Date(`${rows[0].date}T12:00:00`).getDay();
+  const bestDate = SALES_REPORT_DATA.summary?.bestDay?.sales > 0 ? SALES_REPORT_DATA.summary.bestDay.date : '';
+  const blanks = Array.from({ length: firstWeekday }, () => '<div class="sales-calendar-empty" aria-hidden="true"></div>');
+  const days = rows.map((row) => {
+    const hasSales = Number(row.sales) > 0;
+    const isBest = row.date === bestDate;
+    const classes = ['sales-calendar-day', hasSales ? 'has-sales' : 'no-sales', isBest ? 'is-best' : ''].filter(Boolean).join(' ');
+    return `<article class="${classes}" role="button" tabindex="0" data-sales-detail-date="${row.date}" title="Ver detalle e imprimir este día">
+      <div class="sales-calendar-day-head"><b>${row.day}</b>${isBest ? '<span><i class="ph-fill ph-trophy"></i> Mejor día</span>' : ''}</div>
+      <strong>${fmtMoney(row.sales)}</strong>
+      <small>${row.tickets} ${Number(row.tickets) === 1 ? 'venta' : 'ventas'} · Costo ${fmtMoney(row.cogs)}</small>
+      <small>Compras ${fmtMoney(row.purchases)} · Efectivo ${fmtMoney(row.cashResult)}</small>
+      <span class="sales-calendar-result ${Number(row.netProfit) < 0 ? 'loss' : 'profit'}">${Number(row.netProfit) < 0 ? 'Pérdida' : 'Utilidad'} ${fmtMoney(row.netProfit)}</span>
+    </article>`;
+  });
+  host.innerHTML = [...blanks, ...days].join('');
+  host.querySelectorAll('[data-sales-detail-date]').forEach((card) => {
+    const open = () => {
+      const date = card.dataset.salesDetailDate;
+      const label = new Date(`${date}T12:00:00`).toLocaleDateString('es-MX', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
+      openSalesDetail(date, date, label);
+    };
+    card.addEventListener('click', open);
+    card.addEventListener('keydown', (event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); open(); } });
+  });
+}
+
+function renderSalesDailyChart() {
+  const canvas = $('#salesDailyChart');
+  if (!canvas || !SALES_REPORT_DATA) return;
+  if (SALES_DAILY_CHART) SALES_DAILY_CHART.destroy();
+  const primary = ME?.tenant?.primaryColor || '#16a34a';
+  const ctx = canvas.getContext('2d');
+  const gradient = ctx.createLinearGradient(0, 0, 0, 280);
+  gradient.addColorStop(0, `${primary}55`);
+  gradient.addColorStop(1, `${primary}05`);
+  SALES_DAILY_CHART = new Chart(ctx, {
+    type: 'line',
+    data: {
+      labels: SALES_REPORT_DATA.daily.map((row) => row.day),
+      datasets: [{
+        label: 'Ventas',
+        data: SALES_REPORT_DATA.daily.map((row) => row.sales),
+        borderColor: primary,
+        backgroundColor: gradient,
+        borderWidth: 3,
+        pointRadius: 3,
+        pointHoverRadius: 6,
+        pointBackgroundColor: '#fff',
+        pointBorderColor: primary,
+        pointBorderWidth: 2,
+        fill: true,
+        tension: 0.35,
+      }, {
+        label: 'Compras recibidas',
+        data: SALES_REPORT_DATA.daily.map((row) => row.purchases),
+        borderColor: '#2563eb',
+        backgroundColor: '#2563eb',
+        borderWidth: 2,
+        borderDash: [5, 4],
+        pointRadius: 2,
+        fill: false,
+        tension: 0.25,
+      }, {
+        label: 'Utilidad neta',
+        data: SALES_REPORT_DATA.daily.map((row) => row.netProfit),
+        borderColor: '#f59e0b',
+        backgroundColor: '#f59e0b',
+        borderWidth: 2,
+        pointRadius: 2,
+        fill: false,
+        tension: 0.35,
+      }],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      interaction: { intersect: false, mode: 'index' },
+      plugins: {
+        legend: { display: true, position: 'bottom', labels: { usePointStyle: true, boxWidth: 8 } },
+        tooltip: { callbacks: { label: (context) => ` ${fmtMoney(context.parsed.y)}` } },
+      },
+      scales: {
+        y: { beginAtZero: true, grid: { color: '#eef0f6' }, ticks: { callback: (value) => fmtMoney(value) } },
+        x: { title: { display: true, text: 'Día del mes' }, grid: { display: false } },
+      },
+    },
+  });
+}
+
+function renderSalesBranchBreakdown() {
+  const host = $('#salesBranchBreakdown');
+  if (!host || !SALES_REPORT_DATA) return;
+  const rows = SALES_REPORT_DATA.branchBreakdown || [];
+  const total = Number(SALES_REPORT_DATA.summary?.selectedMonthSales || 0);
+  if (!rows.length) {
+    host.innerHTML = emptyHTML('ph-storefront', 'Sin ventas en este mes', 'No hay operaciones registradas para el filtro seleccionado.');
+    return;
+  }
+  host.innerHTML = `<table class="sales-branch-table"><thead><tr><th>Sucursal</th><th>Ventas</th><th>Costo vendido</th><th>Compras</th><th>Gastos</th><th>Utilidad / pérdida</th><th>Resultado efectivo</th></tr></thead><tbody>${rows.map((row) => {
+    return `<tr><td><b>${esc(row.name)}</b><small>${row.tickets} operaciones</small></td><td><b>${fmtMoney(row.sales)}</b></td><td>${fmtMoney(row.cogs)}</td><td>${fmtMoney(row.purchases)}</td><td>${fmtMoney(row.expenses)}</td><td><b class="${Number(row.netProfit) < 0 ? 'sales-value-loss' : 'sales-value-profit'}">${fmtMoney(row.netProfit)}</b><small>${Number(row.marginPercent || 0).toFixed(1)}%</small></td><td><b class="${Number(row.cashResult) < 0 ? 'sales-value-loss' : 'sales-value-profit'}">${fmtMoney(row.cashResult)}</b></td></tr>`;
+  }).join('')}</tbody></table>`;
+}
+
+function renderSalesMonthly() {
+  if (!SALES_REPORT_DATA) return;
+  $('#salesMonthlyTitle').textContent = `Ventas por mes · ${SALES_REPORT_YEAR}`;
+  $('#salesMonthlyScope').textContent = salesScopeLabel();
+  const host = $('#salesMonthGrid');
+  const bestMonth = SALES_REPORT_DATA.summary?.bestMonth?.sales > 0 ? Number(SALES_REPORT_DATA.summary.bestMonth.month) : 0;
+  host.innerHTML = SALES_REPORT_DATA.monthly.map((row) => `
+    <article class="card sales-month-card ${Number(row.month) === bestMonth ? 'is-best' : ''}" role="button" tabindex="0" data-sales-detail-month="${row.month}" title="Ver detalle e imprimir este mes">
+      <div><span>${esc(row.label)}</span>${Number(row.month) === bestMonth ? '<i class="ph-fill ph-trophy" title="Mejor mes"></i>' : ''}</div>
+      <strong>${fmtMoney(row.sales)}</strong>
+      <small>${row.tickets} ${Number(row.tickets) === 1 ? 'venta' : 'ventas'} · Costo ${fmtMoney(row.cogs)}</small>
+      <small>Compras ${fmtMoney(row.purchases)} · Efectivo ${fmtMoney(row.cashResult)}</small>
+      <span class="sales-month-result ${Number(row.netProfit) < 0 ? 'loss' : 'profit'}">${Number(row.netProfit) < 0 ? 'Pérdida' : 'Utilidad'} ${fmtMoney(row.netProfit)}</span>
+    </article>`).join('');
+  host.querySelectorAll('[data-sales-detail-month]').forEach((card) => {
+    const open = () => {
+      const month = Number(card.dataset.salesDetailMonth);
+      const start = `${SALES_REPORT_YEAR}-${String(month).padStart(2, '0')}-01`;
+      const end = `${SALES_REPORT_YEAR}-${String(month).padStart(2, '0')}-${String(new Date(SALES_REPORT_YEAR, month, 0).getDate()).padStart(2, '0')}`;
+      openSalesDetail(start, end, `${salesMonthName(month)} ${SALES_REPORT_YEAR}`);
+    };
+    card.addEventListener('click', open);
+    card.addEventListener('keydown', (event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); open(); } });
+  });
+
+  const canvas = $('#salesMonthlyChart');
+  if (SALES_MONTHLY_CHART) SALES_MONTHLY_CHART.destroy();
+  const primary = ME?.tenant?.primaryColor || '#16a34a';
+  SALES_MONTHLY_CHART = new Chart(canvas, {
+    type: 'bar',
+    data: {
+      labels: SALES_REPORT_DATA.monthly.map((row) => row.label.slice(0, 3)),
+      datasets: [{
+        label: 'Ventas',
+        data: SALES_REPORT_DATA.monthly.map((row) => row.sales),
+        backgroundColor: SALES_REPORT_DATA.monthly.map((row) => Number(row.month) === bestMonth ? '#f59e0b' : `${primary}cc`),
+        borderRadius: 9,
+        borderSkipped: false,
+        maxBarThickness: 54,
+      }, {
+        label: 'Compras recibidas',
+        data: SALES_REPORT_DATA.monthly.map((row) => row.purchases),
+        backgroundColor: '#2563ebbb',
+        borderRadius: 9,
+        borderSkipped: false,
+        maxBarThickness: 40,
+      }, {
+        label: 'Utilidad neta',
+        data: SALES_REPORT_DATA.monthly.map((row) => row.netProfit),
+        backgroundColor: SALES_REPORT_DATA.monthly.map((row) => Number(row.netProfit) < 0 ? '#ef4444cc' : '#10b981cc'),
+        borderRadius: 9,
+        borderSkipped: false,
+        maxBarThickness: 40,
+      }],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      interaction: { intersect: false, mode: 'index' },
+      plugins: {
+        legend: { display: true, position: 'bottom', labels: { usePointStyle: true, boxWidth: 8 } },
+        tooltip: { callbacks: { label: (context) => ` ${fmtMoney(context.parsed.y)}` } },
+      },
+      scales: {
+        y: { beginAtZero: true, grid: { color: '#eef0f6' }, ticks: { callback: (value) => fmtMoney(value) } },
+        x: { grid: { display: false } },
+      },
+    },
+  });
+}
+
+function renderSalesReport() {
+  if (!SALES_REPORT_DATA) return;
+  const dailyMode = SALES_REPORT_MODE === 'daily';
+  $('#salesDailyPanel').hidden = !dailyMode;
+  $('#salesMonthlyPanel').hidden = dailyMode;
+  $('#salesDailyControls').hidden = !dailyMode;
+  $('#salesMonthlyControls').hidden = dailyMode;
+  document.querySelectorAll('#salesReportTabs [data-sales-mode]').forEach((button) => {
+    button.classList.toggle('on', button.dataset.salesMode === SALES_REPORT_MODE);
+  });
+  renderSalesReportStats();
+  if (dailyMode) {
+    renderSalesCalendar();
+    renderSalesBranchBreakdown();
+    requestAnimationFrame(renderSalesDailyChart);
+  } else {
+    requestAnimationFrame(renderSalesMonthly);
+  }
+}
+
+async function loadSalesReport() {
+  const refreshButton = $('#salesRefreshBtn');
+  if (refreshButton) refreshButton.disabled = true;
+  try {
+    const query = new URLSearchParams({
+      year: String(SALES_REPORT_YEAR),
+      month: String(SALES_REPORT_MONTH),
+      branch: SALES_REPORT_BRANCH,
+    });
+    SALES_REPORT_DATA = await api(`/api/sales/report?${query.toString()}`);
+    SALES_REPORT_YEAR = Number(SALES_REPORT_DATA.filters.year);
+    SALES_REPORT_MONTH = Number(SALES_REPORT_DATA.filters.month);
+    SALES_REPORT_BRANCH = String(SALES_REPORT_DATA.filters.branch || 'all');
+    $('#salesMonthFilter').value = `${SALES_REPORT_YEAR}-${String(SALES_REPORT_MONTH).padStart(2, '0')}`;
+    $('#salesYearFilter').value = SALES_REPORT_YEAR;
+    populateSalesBranchFilter();
+    renderSalesReport();
+  } finally {
+    if (refreshButton) refreshButton.disabled = false;
+  }
+}
+
+function refreshSalesReportSafely() {
+  loadSalesReport().catch((error) => toast(error.message || 'No se pudo cargar el reporte de ventas', true));
+}
+
+function shiftSalesMonth(delta) {
+  const date = new Date(SALES_REPORT_YEAR, SALES_REPORT_MONTH - 1 + delta, 1);
+  SALES_REPORT_YEAR = date.getFullYear();
+  SALES_REPORT_MONTH = date.getMonth() + 1;
+  refreshSalesReportSafely();
+}
+
+document.querySelectorAll('#salesReportTabs [data-sales-mode]').forEach((button) => {
+  button.addEventListener('click', () => {
+    SALES_REPORT_MODE = button.dataset.salesMode === 'monthly' ? 'monthly' : 'daily';
+    renderSalesReport();
+  });
+});
+$('#salesBranchFilter')?.addEventListener('change', (event) => {
+  SALES_REPORT_BRANCH = String(event.target.value || 'all');
+  refreshSalesReportSafely();
+});
+$('#salesMonthFilter')?.addEventListener('change', (event) => {
+  const match = String(event.target.value || '').match(/^(\d{4})-(\d{2})$/);
+  if (!match) return;
+  SALES_REPORT_YEAR = Number(match[1]);
+  SALES_REPORT_MONTH = Number(match[2]);
+  refreshSalesReportSafely();
+});
+$('#salesYearFilter')?.addEventListener('change', (event) => {
+  SALES_REPORT_YEAR = Math.max(2000, Math.min(2100, Number(event.target.value) || new Date().getFullYear()));
+  refreshSalesReportSafely();
+});
+$('#salesPrevMonthBtn')?.addEventListener('click', () => shiftSalesMonth(-1));
+$('#salesNextMonthBtn')?.addEventListener('click', () => shiftSalesMonth(1));
+$('#salesPrevYearBtn')?.addEventListener('click', () => {
+  SALES_REPORT_YEAR = Math.max(2000, SALES_REPORT_YEAR - 1);
+  refreshSalesReportSafely();
+});
+$('#salesNextYearBtn')?.addEventListener('click', () => {
+  SALES_REPORT_YEAR = Math.min(2100, SALES_REPORT_YEAR + 1);
+  refreshSalesReportSafely();
+});
+$('#salesRefreshBtn')?.addEventListener('click', refreshSalesReportSafely);
+
+function salesIsoDate(date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function setSalesDetailQuickRange(mode) {
+  SALES_DETAIL_RANGE_MODE = ['day', 'week', 'month', 'custom'].includes(mode) ? mode : 'day';
+  const today = new Date();
+  let start = new Date(today);
+  let end = new Date(today);
+  if (SALES_DETAIL_RANGE_MODE === 'week') {
+    const weekday = today.getDay();
+    start.setDate(today.getDate() + (weekday === 0 ? -6 : 1 - weekday));
+    end = new Date(start);
+    end.setDate(start.getDate() + 6);
+  } else if (SALES_DETAIL_RANGE_MODE === 'month') {
+    start = new Date(today.getFullYear(), today.getMonth(), 1);
+    end = new Date(today.getFullYear(), today.getMonth() + 1, 0);
+  }
+  if (SALES_DETAIL_RANGE_MODE !== 'custom' || !$('#salesDetailStartDate').value || !$('#salesDetailEndDate').value) {
+    $('#salesDetailStartDate').value = salesIsoDate(start);
+    $('#salesDetailEndDate').value = salesIsoDate(end);
+  }
+  document.querySelectorAll('#salesDetailQuickRange [data-sales-range]').forEach((button) => button.classList.toggle('on', button.dataset.salesRange === SALES_DETAIL_RANGE_MODE));
+  $('#salesDetailStartDate').classList.toggle('is-custom', SALES_DETAIL_RANGE_MODE === 'custom');
+  $('#salesDetailEndDate').classList.toggle('is-custom', SALES_DETAIL_RANGE_MODE === 'custom');
+}
+
+function salesDetailRangeTitle(startDate, endDate) {
+  const format = (value) => new Date(`${value}T12:00:00`).toLocaleDateString('es-MX', { day: 'numeric', month: 'long', year: 'numeric' });
+  return startDate === endDate ? format(startDate) : `${format(startDate)} al ${format(endDate)}`;
+}
+
+function salesDetailPaymentLabel(sale) {
+  const labels = { cash: 'Efectivo', card: 'Tarjeta', transfer: 'Transferencia', mixed: 'Mixto', other: 'Otro' };
+  const label = labels[sale.paymentMethod] || 'Otro';
+  if (sale.paymentMethod !== 'mixed') return label;
+  const parts = [];
+  if (Number(sale.paymentBreakdown?.cash) > 0) parts.push(`Efectivo ${fmtMoney(sale.paymentBreakdown.cash)}`);
+  if (Number(sale.paymentBreakdown?.card) > 0) parts.push(`Tarjeta ${fmtMoney(sale.paymentBreakdown.card)}`);
+  if (Number(sale.paymentBreakdown?.transfer) > 0) parts.push(`Transferencia ${fmtMoney(sale.paymentBreakdown.transfer)}`);
+  return parts.length ? `Mixto · ${parts.join(' / ')}` : label;
+}
+
+function renderSalesDetail(data) {
+  const host = $('#salesDetailContent');
+  if (!host) return;
+  const summary = data.summary || {};
+  const netLoss = Number(summary.netProfit) < 0;
+  const salesRows = data.sales.length ? `<table><thead><tr><th>Ticket</th><th>Fecha</th><th>Sucursal</th><th>Origen</th><th>Forma de pago</th><th>Venta</th><th>Costo</th><th>Utilidad</th></tr></thead><tbody>${data.sales.map((sale) => `<tr>
+    <td><b>#${sale.id}</b>${sale.tableNumber ? `<small>Mesa ${sale.tableNumber}${sale.waiterName ? ` · ${esc(sale.waiterName)}` : ''}</small>` : ''}</td>
+    <td>${esc(sale.createdAt)}</td><td>${esc(sale.branchName)}</td><td>${sale.channel === 'pos' ? 'POS' : 'Chatbot'}</td><td>${esc(salesDetailPaymentLabel(sale))}</td>
+    <td><b>${fmtMoney(sale.total)}</b></td><td>${fmtMoney(sale.cogs)}</td><td><b class="${Number(sale.grossProfit) < 0 ? 'sales-value-loss' : 'sales-value-profit'}">${fmtMoney(sale.grossProfit)}</b></td></tr>`).join('')}</tbody></table>` : emptyHTML('ph-receipt', 'Sin ventas en el periodo', 'No se encontraron operaciones no canceladas.');
+  const productRows = data.products.length ? `<table><thead><tr><th>Producto</th><th>Cantidad</th><th>Ventas</th><th>Costo</th><th>Utilidad</th></tr></thead><tbody>${data.products.map((row) => `<tr><td><b>${esc(row.name)}</b></td><td>${row.quantity}</td><td>${fmtMoney(row.sales)}</td><td>${fmtMoney(row.cogs)}</td><td><b class="${Number(row.profit) < 0 ? 'sales-value-loss' : 'sales-value-profit'}">${fmtMoney(row.profit)}</b></td></tr>`).join('')}</tbody></table>` : emptyHTML('ph-package', 'Sin productos vendidos', 'No hay productos en este periodo.');
+  const expenseRows = data.expenses.length ? `<table><thead><tr><th>Fecha</th><th>Sucursal</th><th>Concepto</th><th>Origen</th><th>Monto</th></tr></thead><tbody>${data.expenses.map((expense) => `<tr><td>${esc(expense.createdAt || expense.date)}</td><td>${esc(expense.branchName)}</td><td><b>${esc(expense.concept)}</b>${expense.notes ? `<small>${esc(expense.notes)}</small>` : ''}</td><td>${expense.source === 'pos' ? 'Caja POS' : 'Manual'}</td><td><b class="sales-value-loss">${fmtMoney(expense.amount)}</b></td></tr>`).join('')}</tbody></table>` : emptyHTML('ph-receipt', 'Sin gastos en el periodo', 'No existen gastos manuales ni gastos registrados en caja.');
+  const purchaseRows = data.purchases?.length ? `<table><thead><tr><th>Orden</th><th>Recepción</th><th>Proveedor</th><th>Sucursal</th><th>Productos</th><th>Total</th></tr></thead><tbody>${data.purchases.map((purchase) => `<tr><td><b>${esc(purchase.orderNumber)}</b></td><td>${esc(purchase.receivedAt)}</td><td>${esc(purchase.supplierName)}</td><td>${esc(purchase.branchName)}</td><td>${purchase.items.map((item) => `${esc(item.name)} × ${item.quantity}`).join('<br>')}</td><td><b>${fmtMoney(purchase.total)}</b></td></tr>`).join('')}</tbody></table>` : emptyHTML('ph-shopping-cart-simple', 'Sin compras recibidas', 'No hubo entradas de inventario por compra en este periodo.');
+  host.innerHTML = `
+    <div class="sales-detail-summary">
+      <div><small>Ventas</small><strong>${fmtMoney(summary.sales)}</strong><span>${summary.tickets} operaciones</span></div>
+      <div><small>Costo de ventas</small><strong>${fmtMoney(summary.cogs)}</strong><span>Unidades vendidas</span></div>
+      <div><small>Utilidad bruta</small><strong>${fmtMoney(summary.grossProfit)}</strong><span>Antes de gastos</span></div>
+      <div><small>Gastos</small><strong>${fmtMoney(summary.expenses)}</strong><span>Caja y manuales</span></div>
+      <div><small>Compras recibidas</small><strong>${fmtMoney(summary.purchases)}</strong><span>Flujo destinado a inventario</span></div>
+      <div class="${netLoss ? 'loss' : 'profit'}"><small>${netLoss ? 'Pérdida neta' : 'Utilidad neta'}</small><strong>${fmtMoney(summary.netProfit)}</strong><span>Margen ${Number(summary.marginPercent || 0).toFixed(1)}%</span></div>
+      <div class="${Number(summary.cashResult) < 0 ? 'loss' : 'profit'}"><small>Resultado de efectivo</small><strong>${fmtMoney(summary.cashResult)}</strong><span>Ventas − compras − gastos</span></div>
+      <div><small>Ticket promedio</small><strong>${fmtMoney(summary.averageTicket)}</strong><span>Promedio del periodo</span></div>
+    </div>
+    <div class="sales-detail-payments">
+      <div><i class="ph-bold ph-money"></i><span>Efectivo</span><b>${fmtMoney(data.payments.cash)}</b></div>
+      <div><i class="ph-bold ph-credit-card"></i><span>Tarjeta</span><b>${fmtMoney(data.payments.card)}</b></div>
+      <div><i class="ph-bold ph-bank"></i><span>Transferencia</span><b>${fmtMoney(data.payments.transfer)}</b></div>
+      <div><i class="ph-bold ph-dots-three-circle"></i><span>Otros</span><b>${fmtMoney(data.payments.other)}</b></div>
+    </div>
+    <div class="sales-detail-section"><h4><i class="ph-bold ph-receipt"></i> Ventas y formas de pago</h4><div class="table-wrap">${salesRows}</div></div>
+    <div class="sales-detail-section"><h4><i class="ph-bold ph-shopping-cart-simple"></i> Compras recibidas <small>Se muestran aparte: aumentan inventario y sólo se vuelven costo cuando el producto se vende.</small></h4><div class="table-wrap">${purchaseRows}</div></div>
+    <div class="sales-detail-columns">
+      <div class="sales-detail-section"><h4><i class="ph-bold ph-package"></i> Productos vendidos</h4><div class="table-wrap">${productRows}</div></div>
+      <div class="sales-detail-section"><h4><i class="ph-bold ph-money-wavy"></i> Gastos</h4><div class="table-wrap">${expenseRows}</div></div>
+    </div>`;
+}
+
+async function fetchSalesDetail(startDate, endDate, title = '') {
+  if (!startDate || !endDate) throw new Error('Selecciona las fechas del reporte');
+  const query = new URLSearchParams({ startDate, endDate, branch: SALES_REPORT_BRANCH });
+  const data = await api(`/api/sales/detail?${query.toString()}`);
+  SALES_DETAIL_DATA = data;
+  SALES_DETAIL_TITLE = title || salesDetailRangeTitle(startDate, endDate);
+  return data;
+}
+
+async function openSalesDetail(startDate, endDate, title = '') {
+  try {
+    $('#salesDetailModalTitle').textContent = 'Cargando detalle…';
+    $('#salesDetailModalSubtitle').textContent = '';
+    $('#salesDetailContent').innerHTML = '<div class="empty"><div class="spinner"></div><p>Preparando información financiera…</p></div>';
+    openModal('salesDetailModal');
+    const data = await fetchSalesDetail(startDate, endDate, title);
+    $('#salesDetailModalTitle').textContent = SALES_DETAIL_TITLE;
+    $('#salesDetailModalSubtitle').textContent = `${salesScopeLabel()} · ${data.filters.rangeDays} día${data.filters.rangeDays === 1 ? '' : 's'}`;
+    renderSalesDetail(data);
+  } catch (error) {
+    closeModal('salesDetailModal');
+    toast(error.message || 'No se pudo cargar el detalle', true);
+  }
+}
+
+function salesDetailFileBase(data = SALES_DETAIL_DATA) {
+  const start = data?.filters?.startDate || 'inicio';
+  const end = data?.filters?.endDate || 'fin';
+  return `ventas_${start}_${end}`;
+}
+
+function salesDetailPrintHtml(data) {
+  const s = data.summary;
+  const paymentRows = [
+    ['Efectivo', data.payments.cash], ['Tarjeta', data.payments.card], ['Transferencia', data.payments.transfer], ['Otros', data.payments.other],
+  ].map(([name, amount]) => `<tr><td>${name}</td><td class="num">${esc(fmtMoney(amount))}</td></tr>`).join('');
+  const salesRows = data.sales.map((sale) => `<tr><td>#${sale.id}</td><td>${esc(sale.createdAt)}</td><td>${esc(sale.branchName)}</td><td>${esc(salesDetailPaymentLabel(sale))}</td><td class="num">${esc(fmtMoney(sale.total))}</td><td class="num">${esc(fmtMoney(sale.cogs))}</td><td class="num">${esc(fmtMoney(sale.grossProfit))}</td></tr>`).join('');
+  const purchaseRows = (data.purchases || []).map((row) => `<tr><td>${esc(row.orderNumber)}</td><td>${esc(row.receivedAt)}</td><td>${esc(row.supplierName)}</td><td>${esc(row.branchName)}</td><td class="num">${esc(fmtMoney(row.total))}</td></tr>`).join('');
+  const expenseRows = data.expenses.map((row) => `<tr><td>${esc(row.createdAt || row.date)}</td><td>${esc(row.branchName)}</td><td>${esc(row.concept)}</td><td class="num">${esc(fmtMoney(row.amount))}</td></tr>`).join('');
+  const productRows = data.products.map((row) => `<tr><td>${esc(row.name)}</td><td class="num">${row.quantity}</td><td class="num">${esc(fmtMoney(row.sales))}</td><td class="num">${esc(fmtMoney(row.cogs))}</td><td class="num">${esc(fmtMoney(row.profit))}</td></tr>`).join('');
+  return `<!doctype html><html lang="es"><head><meta charset="utf-8"><title>${esc(SALES_DETAIL_TITLE)}</title><style>body{font-family:Arial,sans-serif;color:#172033;padding:24px;font-size:11px}h1{font-size:21px;margin:0 0 4px}h2{font-size:14px;margin:22px 0 8px}.muted{color:#64748b}.summary{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin:16px 0}.summary div{border:1px solid #dfe4ec;border-radius:8px;padding:9px}.summary small{display:block;color:#64748b;text-transform:uppercase;font-weight:700}.summary b{display:block;font-size:16px;margin-top:4px}table{width:100%;border-collapse:collapse;margin-bottom:14px}th,td{padding:6px;border-bottom:1px solid #e5e7eb;text-align:left}th{background:#f1f5f9;font-size:9px;text-transform:uppercase}.num{text-align:right}@media print{button{display:none}}</style></head><body><h1>${esc(ME?.tenant?.businessName || SETTINGS?.business_name || 'Reporte de ventas')}</h1><div class="muted">${esc(SALES_DETAIL_TITLE)} · ${esc(salesScopeLabel())}</div><div class="summary"><div><small>Ventas</small><b>${esc(fmtMoney(s.sales))}</b></div><div><small>Costo vendido</small><b>${esc(fmtMoney(s.cogs))}</b></div><div><small>Compras</small><b>${esc(fmtMoney(s.purchases))}</b></div><div><small>Gastos</small><b>${esc(fmtMoney(s.expenses))}</b></div><div><small>Utilidad bruta</small><b>${esc(fmtMoney(s.grossProfit))}</b></div><div><small>Utilidad / pérdida neta</small><b>${esc(fmtMoney(s.netProfit))}</b></div><div><small>Resultado efectivo</small><b>${esc(fmtMoney(s.cashResult))}</b></div><div><small>Margen neto</small><b>${Number(s.marginPercent || 0).toFixed(1)}%</b></div></div><h2>Formas de pago</h2><table><thead><tr><th>Forma</th><th class="num">Total</th></tr></thead><tbody>${paymentRows}</tbody></table><h2>Ventas</h2><table><thead><tr><th>Ticket</th><th>Fecha</th><th>Sucursal</th><th>Pago</th><th class="num">Venta</th><th class="num">Costo</th><th class="num">Utilidad</th></tr></thead><tbody>${salesRows || '<tr><td colspan="7">Sin ventas</td></tr>'}</tbody></table><h2>Compras recibidas</h2><table><thead><tr><th>Orden</th><th>Recepción</th><th>Proveedor</th><th>Sucursal</th><th class="num">Total</th></tr></thead><tbody>${purchaseRows || '<tr><td colspan="5">Sin compras</td></tr>'}</tbody></table><h2>Productos vendidos</h2><table><thead><tr><th>Producto</th><th class="num">Cantidad</th><th class="num">Ventas</th><th class="num">Costo</th><th class="num">Utilidad</th></tr></thead><tbody>${productRows || '<tr><td colspan="5">Sin productos</td></tr>'}</tbody></table><h2>Gastos</h2><table><thead><tr><th>Fecha</th><th>Sucursal</th><th>Concepto</th><th class="num">Monto</th></tr></thead><tbody>${expenseRows || '<tr><td colspan="4">Sin gastos</td></tr>'}</tbody></table></body></html>`;
+}
+
+function printSalesDetail() {
+  if (!SALES_DETAIL_DATA) return toast('Primero abre un detalle de ventas', true);
+  const popup = window.open('', '_blank', 'width=1100,height=800');
+  if (!popup) return toast('Permite ventanas emergentes para imprimir', true);
+  popup.document.open(); popup.document.write(salesDetailPrintHtml(SALES_DETAIL_DATA)); popup.document.close();
+  popup.onload = () => { popup.focus(); popup.print(); };
+}
+
+function exportSalesDetailExcel(data = SALES_DETAIL_DATA) {
+  if (!data || !globalThis.XLSX) return toast('No se pudo preparar el archivo Excel', true);
+  const workbook = XLSX.utils.book_new();
+  const s = data.summary;
+  const summaryRows = [
+    ['Periodo', SALES_DETAIL_TITLE], ['Sucursal', salesScopeLabel()], ['Ventas', s.sales], ['Costo de ventas', s.cogs],
+    ['Utilidad bruta', s.grossProfit], ['Compras recibidas', s.purchases], ['Gastos', s.expenses], ['Utilidad o pérdida neta', s.netProfit],
+    ['Resultado de efectivo (ventas - compras - gastos)', s.cashResult],
+    ['Margen neto %', s.marginPercent], ['Operaciones', s.tickets], ['Ticket promedio', s.averageTicket],
+  ];
+  XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet([['Concepto', 'Valor'], ...summaryRows]), 'Resumen');
+  XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet([
+    { Forma: 'Efectivo', Total: data.payments.cash }, { Forma: 'Tarjeta', Total: data.payments.card },
+    { Forma: 'Transferencia', Total: data.payments.transfer }, { Forma: 'Otros', Total: data.payments.other },
+  ]), 'Formas de pago');
+  XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(data.sales.map((row) => ({ Ticket: row.id, Fecha: row.createdAt, Sucursal: row.branchName, Origen: row.channel, Pago: salesDetailPaymentLabel(row), Venta: row.total, Costo: row.cogs, Utilidad: row.grossProfit }))), 'Ventas');
+  XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet((data.purchases || []).map((row) => ({ Orden: row.orderNumber, Recepción: row.receivedAt, Proveedor: row.supplierName, Sucursal: row.branchName, Total: row.total, Productos: row.items.map((item) => `${item.name} x ${item.quantity}`).join('; ') }))), 'Compras');
+  XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(data.products.map((row) => ({ Producto: row.name, Cantidad: row.quantity, Ventas: row.sales, Costo: row.cogs, Utilidad: row.profit }))), 'Productos');
+  XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(data.expenses.map((row) => ({ Fecha: row.createdAt || row.date, Sucursal: row.branchName, Concepto: row.concept, Origen: row.source === 'pos' ? 'Caja POS' : 'Manual', Monto: row.amount }))), 'Gastos');
+  XLSX.writeFile(workbook, `${salesDetailFileBase(data)}.xlsx`);
+}
+
+function exportSalesDetailPdf(data = SALES_DETAIL_DATA) {
+  if (!data || !globalThis.jspdf?.jsPDF) return toast('No se pudo preparar el archivo PDF', true);
+  const doc = new globalThis.jspdf.jsPDF({ orientation: 'landscape', unit: 'mm', format: 'letter' });
+  const s = data.summary;
+  doc.setFontSize(16); doc.text(ME?.tenant?.businessName || SETTINGS?.business_name || 'Reporte de ventas', 14, 14);
+  doc.setFontSize(9); doc.setTextColor(90); doc.text(`${SALES_DETAIL_TITLE} · ${salesScopeLabel()}`, 14, 20); doc.setTextColor(0);
+  doc.autoTable({ startY: 25, theme: 'grid', head: [['Ventas', 'Costo vendido', 'Compras', 'Gastos', 'Utilidad neta', 'Resultado efectivo', 'Margen']], body: [[fmtMoney(s.sales), fmtMoney(s.cogs), fmtMoney(s.purchases), fmtMoney(s.expenses), fmtMoney(s.netProfit), fmtMoney(s.cashResult), `${Number(s.marginPercent || 0).toFixed(1)}%`]], styles: { fontSize: 8 }, headStyles: { fillColor: [30, 136, 76] } });
+  doc.autoTable({ startY: doc.lastAutoTable.finalY + 5, theme: 'striped', head: [['Forma de pago', 'Total']], body: [['Efectivo', fmtMoney(data.payments.cash)], ['Tarjeta', fmtMoney(data.payments.card)], ['Transferencia', fmtMoney(data.payments.transfer)], ['Otros', fmtMoney(data.payments.other)]], styles: { fontSize: 8 }, tableWidth: 90 });
+  doc.autoTable({ startY: doc.lastAutoTable.finalY + 6, theme: 'striped', head: [['Ticket', 'Fecha', 'Sucursal', 'Origen', 'Pago', 'Venta', 'Costo', 'Utilidad']], body: data.sales.map((row) => [`#${row.id}`, row.createdAt, row.branchName, row.channel === 'pos' ? 'POS' : 'Chatbot', salesDetailPaymentLabel(row), fmtMoney(row.total), fmtMoney(row.cogs), fmtMoney(row.grossProfit)]), styles: { fontSize: 7 }, headStyles: { fillColor: [37, 99, 235] } });
+  doc.autoTable({ startY: doc.lastAutoTable.finalY + 6, theme: 'striped', head: [['Orden', 'Recepción', 'Proveedor', 'Sucursal', 'Total']], body: (data.purchases || []).map((row) => [row.orderNumber, row.receivedAt, row.supplierName, row.branchName, fmtMoney(row.total)]), styles: { fontSize: 7 }, headStyles: { fillColor: [234, 88, 12] } });
+  doc.autoTable({ startY: doc.lastAutoTable.finalY + 6, theme: 'striped', head: [['Producto', 'Cantidad', 'Ventas', 'Costo', 'Utilidad']], body: data.products.map((row) => [row.name, row.quantity, fmtMoney(row.sales), fmtMoney(row.cogs), fmtMoney(row.profit)]), styles: { fontSize: 7 }, headStyles: { fillColor: [124, 58, 237] } });
+  doc.autoTable({ startY: doc.lastAutoTable.finalY + 6, theme: 'striped', head: [['Fecha', 'Sucursal', 'Concepto', 'Origen', 'Monto']], body: data.expenses.map((row) => [row.createdAt || row.date, row.branchName, row.concept, row.source === 'pos' ? 'Caja POS' : 'Manual', fmtMoney(row.amount)]), styles: { fontSize: 7 }, headStyles: { fillColor: [220, 38, 38] } });
+  doc.save(`${salesDetailFileBase(data)}.pdf`);
+}
+
+async function salesDetailToolbarAction(action) {
+  const start = $('#salesDetailStartDate').value;
+  const end = $('#salesDetailEndDate').value;
+  try {
+    if (action === 'view') {
+      await openSalesDetail(start, end, salesDetailRangeTitle(start, end));
+      return;
+    }
+    const data = await fetchSalesDetail(start, end, salesDetailRangeTitle(start, end));
+    if (action === 'pdf') exportSalesDetailPdf(data);
+    else if (action === 'excel') exportSalesDetailExcel(data);
+  } catch (error) { toast(error.message || 'No se pudo generar el reporte', true); }
+}
+
+document.querySelectorAll('#salesDetailQuickRange [data-sales-range]').forEach((button) => button.addEventListener('click', () => setSalesDetailQuickRange(button.dataset.salesRange)));
+$('#salesDetailStartDate')?.addEventListener('change', () => setSalesDetailQuickRange('custom'));
+$('#salesDetailEndDate')?.addEventListener('change', () => setSalesDetailQuickRange('custom'));
+$('#salesDetailViewBtn')?.addEventListener('click', () => salesDetailToolbarAction('view'));
+$('#salesDetailPdfBtn')?.addEventListener('click', () => salesDetailToolbarAction('pdf'));
+$('#salesDetailExcelBtn')?.addEventListener('click', () => salesDetailToolbarAction('excel'));
+$('#salesDetailCloseBtn')?.addEventListener('click', () => closeModal('salesDetailModal'));
+$('#salesDetailPrintBtn')?.addEventListener('click', printSalesDetail);
+$('#salesDetailModalPdfBtn')?.addEventListener('click', () => exportSalesDetailPdf());
+$('#salesDetailModalExcelBtn')?.addEventListener('click', () => exportSalesDetailExcel());
+setSalesDetailQuickRange('day');
+
+/* ===== Costo de ventas ===== */
+function costingMetrics(row) {
+  const unitCost = Math.max(0, Number(row?.unitCost || 0));
+  const salePrice = Math.max(0, Number(row?.salePrice || 0));
+  const margin = Number((salePrice - unitCost).toFixed(2));
+  const marginPercent = salePrice ? Number(((margin / salePrice) * 100).toFixed(2)) : 0;
+  return { unitCost, salePrice, margin, marginPercent };
+}
+
+function costingMarginTone(margin) {
+  if (margin < 0) return 'loss';
+  if (margin === 0) return 'neutral';
+  return 'profit';
+}
+
+function renderCostingStats() {
+  const host = $('#costingStats');
+  if (!host) return;
+  const rows = [...COSTING_DRAFT.values()];
+  const configured = rows.filter((row) => Number(row.unitCost) > 0).length;
+  const losses = rows.filter((row) => costingMetrics(row).margin < 0).length;
+  const positive = rows.map(costingMetrics).filter((row) => row.salePrice > 0);
+  const averageMargin = positive.length ? positive.reduce((sum, row) => sum + row.marginPercent, 0) / positive.length : 0;
+  const unitProfit = rows.reduce((sum, row) => sum + costingMetrics(row).margin, 0);
+  host.innerHTML = `
+    <div class="card costing-stat"><i class="ph-bold ph-check-circle"></i><div><small>Costos configurados</small><strong>${configured} / ${rows.length}</strong></div></div>
+    <div class="card costing-stat"><i class="ph-bold ph-percent"></i><div><small>Margen promedio</small><strong>${averageMargin.toFixed(1)}%</strong></div></div>
+    <div class="card costing-stat ${losses ? 'danger' : ''}"><i class="ph-bold ph-warning-circle"></i><div><small>Productos con pérdida</small><strong>${losses}</strong></div></div>
+    <div class="card costing-stat"><i class="ph-bold ph-trend-up"></i><div><small>Utilidad unitaria combinada</small><strong>${fmtMoney(unitProfit)}</strong></div></div>`;
+}
+
+function populateCostingFilters() {
+  const category = $('#costingCategory');
+  category.innerHTML = '<option value="all">Todas las categorías</option>' + COSTING_DATA.categories.map((row) => `<option value="${row.id}">${esc(row.name)}</option>`).join('');
+  category.value = COSTING_CATEGORY;
+
+  const branchOptions = COSTING_DATA.branches.map((row) => `<option value="${row.id}">${esc(row.name)}${row.active ? '' : ' (inactiva)'}</option>`).join('');
+  $('#costingExpenseBranch').innerHTML = `<option value="general">Sin sucursal</option>${branchOptions}`;
+  $('#costingExpenseFilterBranch').innerHTML = `<option value="all">Todas las sucursales</option><option value="general">Sin sucursal</option>${branchOptions}`;
+  $('#costingExpenseFilterBranch').value = COSTING_EXPENSE_BRANCH;
+}
+
+function costingFilteredProducts() {
+  const query = COSTING_SEARCH.trim().toLocaleLowerCase('es-MX');
+  const rows = COSTING_DATA.products.filter((product) => {
+    if (COSTING_CATEGORY !== 'all' && String(product.categoryId || '') !== COSTING_CATEGORY) return false;
+    return !query || product.name.toLocaleLowerCase('es-MX').includes(query) || product.categoryName.toLocaleLowerCase('es-MX').includes(query);
+  });
+  return rows.sort((a, b) => {
+    if (COSTING_SORT === 'category') {
+      const category = a.categoryName.localeCompare(b.categoryName, 'es-MX');
+      if (category) return category;
+    }
+    return a.name.localeCompare(b.name, 'es-MX');
+  });
+}
+
+function updateCostingPendingLabel() {
+  const count = COSTING_DIRTY.size;
+  $('#costingPendingLabel').textContent = count ? `${count} cambio${count === 1 ? '' : 's'} pendiente${count === 1 ? '' : 's'} de guardar` : 'Sin cambios pendientes';
+  $('#costingSaveBtn').disabled = !count;
+  $('#costingSaveBottomBtn').disabled = !count;
+}
+
+function costingDraftStorageKey() {
+  return `chatbotpro:costing-draft:${ME?.tenant?.slug || 'default'}`;
+}
+
+function persistCostingLocalDraft() {
+  try {
+    if (!COSTING_DIRTY.size) {
+      localStorage.removeItem(costingDraftStorageKey());
+      return;
+    }
+    const items = [...COSTING_DIRTY].map((id) => {
+      const row = COSTING_DRAFT.get(id);
+      return row ? { id, unitCost: row.unitCost, salePrice: row.salePrice } : null;
+    }).filter(Boolean);
+    localStorage.setItem(costingDraftStorageKey(), JSON.stringify({ items, savedAt: Date.now() }));
+  } catch {}
+}
+
+function restoreCostingLocalDraft() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(costingDraftStorageKey()) || '{}');
+    if (!Array.isArray(parsed.items)) return 0;
+    let restored = 0;
+    for (const item of parsed.items) {
+      const id = Number(item?.id);
+      const draft = COSTING_DRAFT.get(id);
+      if (!draft) continue;
+      draft.unitCost = Math.max(0, Number(item.unitCost) || 0);
+      draft.salePrice = Math.max(0, Number(item.salePrice) || 0);
+      COSTING_DIRTY.add(id);
+      restored += 1;
+    }
+    return restored;
+  } catch {
+    return 0;
+  }
+}
+
+function updateCostingRow(rowElement, productId) {
+  const draft = COSTING_DRAFT.get(Number(productId));
+  if (!rowElement || !draft) return;
+  const metrics = costingMetrics(draft);
+  const tone = costingMarginTone(metrics.margin);
+  rowElement.querySelector('.costing-profit-value').textContent = fmtMoney(metrics.margin);
+  rowElement.querySelector('.costing-margin-value').textContent = `${metrics.marginPercent.toFixed(1)}%`;
+  rowElement.querySelector('.costing-profit-value').className = `costing-profit-value ${tone}`;
+  rowElement.querySelector('.costing-margin-value').className = `costing-margin-value ${tone}`;
+  const status = rowElement.querySelector('.costing-status');
+  if (status) {
+    status.className = `costing-status ${metrics.unitCost > 0 ? 'ready' : 'pending'}`;
+    status.innerHTML = metrics.unitCost > 0
+      ? '<i class="ph-fill ph-check-circle"></i> Configurado'
+      : '<i class="ph-fill ph-clock"></i> Falta costo';
+  }
+}
+
+function renderCostingProducts() {
+  const tbody = $('#costingProductsTbody');
+  if (!tbody) return;
+  const rows = costingFilteredProducts();
+  if (!rows.length) {
+    tbody.innerHTML = '<tr><td colspan="7"><div class="empty-cell">No hay productos para este filtro.</div></td></tr>';
+    return;
+  }
+  tbody.innerHTML = rows.map((product) => {
+    const draft = COSTING_DRAFT.get(Number(product.id)) || product;
+    const metrics = costingMetrics(draft);
+    const tone = costingMarginTone(metrics.margin);
+    return `<tr data-cost-product="${product.id}" class="${COSTING_DIRTY.has(Number(product.id)) ? 'is-dirty' : ''}">
+      <td><b>${esc(product.name)}</b>${product.active ? '' : '<small class="costing-inactive">Inactivo</small>'}</td>
+      <td><span class="costing-category-pill">${esc(product.categoryName)}</span></td>
+      <td><div class="costing-money-input"><span>$</span><input type="number" min="0" step="0.0001" data-cost-field="unitCost" value="${metrics.unitCost}" /></div></td>
+      <td><div class="costing-money-input"><span>$</span><input type="number" min="0" step="0.01" data-cost-field="salePrice" value="${metrics.salePrice}" /></div></td>
+      <td><strong class="costing-profit-value ${tone}">${fmtMoney(metrics.margin)}</strong></td>
+      <td><strong class="costing-margin-value ${tone}">${metrics.marginPercent.toFixed(1)}%</strong></td>
+      <td>${metrics.unitCost > 0 ? '<span class="costing-status ready"><i class="ph-fill ph-check-circle"></i> Configurado</span>' : '<span class="costing-status pending"><i class="ph-fill ph-clock"></i> Falta costo</span>'}</td>
+    </tr>`;
+  }).join('');
+
+  tbody.querySelectorAll('[data-cost-field]').forEach((input) => {
+    input.addEventListener('input', () => {
+      const rowElement = input.closest('[data-cost-product]');
+      const id = Number(rowElement.dataset.costProduct);
+      const draft = COSTING_DRAFT.get(id);
+      if (!draft) return;
+      draft[input.dataset.costField] = Math.max(0, Number(input.value) || 0);
+      COSTING_DIRTY.add(id);
+      persistCostingLocalDraft();
+      rowElement.classList.add('is-dirty');
+      updateCostingRow(rowElement, id);
+      updateCostingPendingLabel();
+      renderCostingStats();
+      clearTimeout(COSTING_AUTOSAVE_TIMERS.get(id));
+      COSTING_AUTOSAVE_TIMERS.set(id, setTimeout(() => {
+        COSTING_AUTOSAVE_TIMERS.delete(id);
+        saveCostingProducts({ silent: true, ids: [id] });
+      }, 900));
+    });
+  });
+}
+
+async function persistCostingProducts(options = {}) {
+  const silent = Boolean(options.silent);
+  const requestedIds = Array.isArray(options.ids) ? options.ids.map(Number) : [...COSTING_DIRTY];
+  const targetIds = requestedIds.filter((id) => COSTING_DIRTY.has(id) && COSTING_DRAFT.has(id));
+  if (!targetIds.length) return true;
+  const buttons = [$('#costingSaveBtn'), $('#costingSaveBottomBtn')].filter(Boolean);
+  buttons.forEach((button) => { button.disabled = true; });
+  try {
+    const items = targetIds.map((id) => {
+      const row = COSTING_DRAFT.get(id);
+      return { id, unitCost: row.unitCost, salePrice: row.salePrice };
+    });
+    const result = await api('/api/costs/products', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ items }),
+    });
+    let confirmedRows = Array.isArray(result.saved) ? result.saved : null;
+    if (!confirmedRows) {
+      const verification = await api(`/api/costs/products?sort=${encodeURIComponent(COSTING_SORT)}&verify=${Date.now()}`);
+      confirmedRows = verification.products || [];
+    }
+    for (const requested of items) {
+      const confirmed = confirmedRows.find((row) => Number(row.id) === Number(requested.id));
+      if (!confirmed || Math.abs(Number(confirmed.unitCost) - Number(requested.unitCost)) > 0.0001 || Math.abs(Number(confirmed.salePrice) - Number(requested.salePrice)) > 0.001) {
+        throw new Error(`No se pudo confirmar el guardado de ${COSTING_DRAFT.get(Number(requested.id))?.name || 'un producto'}`);
+      }
+    }
+    for (const saved of items) {
+      const current = COSTING_DRAFT.get(Number(saved.id));
+      if (current && Number(current.unitCost) === Number(saved.unitCost) && Number(current.salePrice) === Number(saved.salePrice)) {
+        COSTING_DIRTY.delete(Number(saved.id));
+        const original = COSTING_DATA.products.find((row) => Number(row.id) === Number(saved.id));
+        if (original) Object.assign(original, { unitCost: saved.unitCost, salePrice: saved.salePrice });
+        document.querySelector(`[data-cost-product="${saved.id}"]`)?.classList.remove('is-dirty');
+      }
+    }
+    persistCostingLocalDraft();
+    updateCostingPendingLabel();
+    if (!silent) toast(`${items.length} producto${items.length === 1 ? '' : 's'} guardado${items.length === 1 ? '' : 's'} permanentemente`);
+    else if (!COSTING_DIRTY.size) $('#costingPendingLabel').textContent = 'Todos los cambios están guardados';
+    return true;
+  } catch (error) {
+    if (!silent) toast(error.message || 'No se pudieron guardar los costos', true);
+    updateCostingPendingLabel();
+    persistCostingLocalDraft();
+    return false;
+  } finally {
+    buttons.forEach((button) => { button.disabled = !COSTING_DIRTY.size; });
+  }
+}
+
+function saveCostingProducts(options = {}) {
+  COSTING_SAVE_QUEUE = COSTING_SAVE_QUEUE.then(
+    () => persistCostingProducts(options),
+    () => persistCostingProducts(options)
+  );
+  return COSTING_SAVE_QUEUE;
+}
+
+function setCostingTab(tab) {
+  COSTING_TAB = tab === 'expenses' ? 'expenses' : 'products';
+  $('#costingProductsPanel').hidden = COSTING_TAB !== 'products';
+  $('#costingExpensesPanel').hidden = COSTING_TAB !== 'expenses';
+  document.querySelectorAll('#costingTabs [data-costing-tab]').forEach((button) => button.classList.toggle('on', button.dataset.costingTab === COSTING_TAB));
+  if (COSTING_TAB === 'expenses') loadCostingExpenses().catch((error) => toast(error.message || 'No se pudieron cargar los gastos', true));
+}
+
+async function loadCosting() {
+  COSTING_DATA = await api(`/api/costs/products?sort=${encodeURIComponent(COSTING_SORT)}`);
+  COSTING_DRAFT = new Map(COSTING_DATA.products.map((product) => [Number(product.id), { ...product }]));
+  COSTING_DIRTY.clear();
+  const restored = restoreCostingLocalDraft();
+  populateCostingFilters();
+  renderCostingStats();
+  renderCostingProducts();
+  updateCostingPendingLabel();
+  if (restored) saveCostingProducts({ silent: true });
+  $('#costingExpenseDate').value ||= getLocalIsoDate();
+  $('#costingExpenseMonth').value = `${COSTING_EXPENSE_YEAR}-${String(COSTING_EXPENSE_MONTH).padStart(2, '0')}`;
+  setCostingTab(COSTING_TAB);
+}
+
+async function loadCostingExpenses() {
+  const query = new URLSearchParams({ year: String(COSTING_EXPENSE_YEAR), month: String(COSTING_EXPENSE_MONTH), branch: COSTING_EXPENSE_BRANCH });
+  const data = await api(`/api/costs/expenses?${query.toString()}`);
+  $('#costingExpenseTotal').textContent = `Total: ${fmtMoney(data.total)}`;
+  const host = $('#costingExpensesTable');
+  if (!data.expenses.length) {
+    host.innerHTML = emptyHTML('ph-receipt', 'Sin gastos en este periodo', 'Los gastos registrados aquí o desde el POS aparecerán en esta lista.');
+    return;
+  }
+  host.innerHTML = `<table><thead><tr><th>Fecha</th><th>Sucursal</th><th>Concepto</th><th>Origen</th><th>Monto</th><th>Usuario</th><th></th></tr></thead><tbody>${data.expenses.map((expense) => `<tr>
+    <td>${esc(String(expense.expense_date || '').slice(0, 10))}</td><td>${esc(expense.branch_name)}</td><td><b>${esc(expense.concept)}</b>${expense.notes ? `<small class="costing-expense-note">${esc(expense.notes)}</small>` : ''}</td>
+    <td><span class="costing-source ${expense.source}">${expense.source === 'pos' ? 'Punto de venta' : 'Manual'}</span></td><td><b>${fmtMoney(expense.amount)}</b></td><td>${esc(expense.created_by || '—')}</td>
+    <td>${expense.source === 'manual' ? `<button class="btn btn-ghost btn-sm costing-delete-expense" data-expense-id="${expense.id}" title="Eliminar"><i class="ph-bold ph-trash"></i></button>` : ''}</td></tr>`).join('')}</tbody></table>`;
+  host.querySelectorAll('.costing-delete-expense').forEach((button) => button.addEventListener('click', async () => {
+    if (!await askConfirm('Eliminar gasto', '¿Deseas eliminar este gasto? El reporte de utilidad se actualizará.')) return;
+    try {
+      await api(`/api/costs/expenses/${button.dataset.expenseId}`, { method: 'DELETE' });
+      await loadCostingExpenses();
+      if (SALES_REPORT_DATA) refreshSalesReportSafely();
+      toast('Gasto eliminado');
+    } catch (error) { toast(error.message || 'No se pudo eliminar el gasto', true); }
+  }));
+}
+
+document.querySelectorAll('#costingTabs [data-costing-tab]').forEach((button) => button.addEventListener('click', () => setCostingTab(button.dataset.costingTab)));
+document.querySelectorAll('#costingSort [data-cost-sort]').forEach((button) => button.addEventListener('click', () => {
+  COSTING_SORT = button.dataset.costSort === 'category' ? 'category' : 'alphabetical';
+  document.querySelectorAll('#costingSort [data-cost-sort]').forEach((row) => row.classList.toggle('on', row.dataset.costSort === COSTING_SORT));
+  renderCostingProducts();
+}));
+$('#costingSearch')?.addEventListener('input', (event) => { COSTING_SEARCH = event.target.value; renderCostingProducts(); });
+$('#costingCategory')?.addEventListener('change', (event) => { COSTING_CATEGORY = event.target.value; renderCostingProducts(); });
+$('#costingSaveBtn')?.addEventListener('click', saveCostingProducts);
+$('#costingSaveBottomBtn')?.addEventListener('click', saveCostingProducts);
+$('#costingExpenseForm')?.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  try {
+    await api('/api/costs/expenses', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({
+        branchId: $('#costingExpenseBranch').value === 'general' ? null : Number($('#costingExpenseBranch').value),
+        expenseDate: $('#costingExpenseDate').value,
+        concept: $('#costingExpenseConcept').value,
+        amount: Number($('#costingExpenseAmount').value),
+        notes: $('#costingExpenseNotes').value,
+      }),
+    });
+    $('#costingExpenseConcept').value = '';
+    $('#costingExpenseAmount').value = '';
+    $('#costingExpenseNotes').value = '';
+    await loadCostingExpenses();
+    if (SALES_REPORT_DATA) refreshSalesReportSafely();
+    toast('Gasto registrado');
+  } catch (error) { toast(error.message || 'No se pudo registrar el gasto', true); }
+});
+$('#costingExpenseMonth')?.addEventListener('change', (event) => {
+  const match = String(event.target.value || '').match(/^(\d{4})-(\d{2})$/);
+  if (!match) return;
+  COSTING_EXPENSE_YEAR = Number(match[1]); COSTING_EXPENSE_MONTH = Number(match[2]);
+  loadCostingExpenses().catch((error) => toast(error.message, true));
+});
+$('#costingExpenseFilterBranch')?.addEventListener('change', (event) => {
+  COSTING_EXPENSE_BRANCH = event.target.value;
+  loadCostingExpenses().catch((error) => toast(error.message, true));
+});
+$('#costingExpenseRefresh')?.addEventListener('click', () => loadCostingExpenses().catch((error) => toast(error.message, true)));
+
+/* ===== Stock por sucursal ===== */
+async function loadBranchStock() {
+  try {
+    BRANCH_STOCK_DATA = await api('/api/branch-stock');
+    const categories = [...new Set(BRANCH_STOCK_DATA.rows.map((row)=>row.categoryName))].sort((a,b)=>a.localeCompare(b,'es'));
+    const category = $('#branchStockCategory');
+    category.innerHTML = '<option value="all">Todas las categorías</option>' + categories.map((name)=>`<option value="${esc(name)}">${esc(name)}</option>`).join('');
+    category.value = BRANCH_STOCK_CATEGORY;
+    const branch = $('#branchStockBranch');
+    if (!BRANCH_STOCK_DATA.branches.some((row)=>String(row.id)===String(BRANCH_STOCK_BRANCH))) BRANCH_STOCK_BRANCH = 'all';
+    branch.innerHTML = '<option value="all">Todas las sucursales</option>' + BRANCH_STOCK_DATA.branches.map((row)=>`<option value="${row.id}">${esc(row.name)}${row.active?'':' · Inactiva'}</option>`).join('');
+    branch.value = BRANCH_STOCK_BRANCH;
+    $('#branchStockPageSize').value = String(BRANCH_STOCK_PAGE_SIZE);
+    renderBranchStock();
+  } catch (error) { toast(error.message || 'No se pudo cargar el stock por sucursal', true); }
+}
+
+function renderBranchStock() {
+  const data = BRANCH_STOCK_DATA;
+  const selectedBranchId = BRANCH_STOCK_BRANCH === 'all' ? 0 : Number(BRANCH_STOCK_BRANCH);
+  const visibleBranches = selectedBranchId ? data.branches.filter((row)=>Number(row.id)===selectedBranchId) : data.branches;
+  const visibleSummaries = selectedBranchId ? data.summaries.filter((row)=>Number(row.branchId)===selectedBranchId) : data.summaries;
+  $('#branchStockSummary').innerHTML = visibleSummaries.map((row)=>`<div class="card branch-stock-card"><i class="ph-bold ph-storefront"></i><div><small>${esc(row.branchName)}${row.active?'':' · Inactiva'}</small><strong>${invFmt(row.totalUnits)} unidades</strong><span>${row.productsWithStock} productos · ${fmtMoney(row.stockValue)}</span></div></div>`).join('');
+  const query = BRANCH_STOCK_SEARCH.toLowerCase();
+  const rows = data.rows.filter((row)=>{
+    const scopedQuantity = selectedBranchId ? Number(row.locations.find((location)=>location.branchId===selectedBranchId)?.quantity || 0) : Number(row.globalQuantity || 0);
+    return (!query||row.productName.toLowerCase().includes(query))&&(BRANCH_STOCK_CATEGORY==='all'||row.categoryName===BRANCH_STOCK_CATEGORY)&&(!BRANCH_STOCK_ONLY_AVAILABLE||scopedQuantity>0);
+  });
+  const totalPages = Math.max(1, Math.ceil(rows.length / BRANCH_STOCK_PAGE_SIZE));
+  BRANCH_STOCK_PAGE = Math.min(Math.max(1, BRANCH_STOCK_PAGE), totalPages);
+  const start = (BRANCH_STOCK_PAGE - 1) * BRANCH_STOCK_PAGE_SIZE;
+  const pageRows = rows.slice(start, start + BRANCH_STOCK_PAGE_SIZE);
+  const range = $('#branchStockRange');
+  const pageInfo = $('#branchStockPageInfo');
+  const prev = $('#branchStockPrev');
+  const next = $('#branchStockNext');
+  if (range) range.textContent = rows.length ? `Mostrando ${start + 1}–${start + pageRows.length} de ${rows.length} productos` : '0 productos';
+  if (pageInfo) pageInfo.textContent = `${BRANCH_STOCK_PAGE} / ${totalPages}`;
+  if (prev) prev.disabled = BRANCH_STOCK_PAGE <= 1;
+  if (next) next.disabled = BRANCH_STOCK_PAGE >= totalPages;
+  const host=$('#branchStockMatrix');
+  if(!pageRows.length){host.innerHTML=emptyHTML('ph-package','Sin productos','No hay existencias para los filtros elegidos.');return;}
+  host.innerHTML=`<table class="branch-stock-table"><thead><tr><th>Producto</th>${visibleBranches.map((branch)=>`<th>${esc(branch.name)}${branch.active?'':' · Inactiva'}</th>`).join('')}<th>Global</th></tr></thead><tbody>${pageRows.map((row)=>`<tr><td><b>${esc(row.productName)}</b><small>${esc(row.categoryName)} · Costo ${fmtMoney(row.unitCost)}</small></td>${row.locations.filter((location)=>!selectedBranchId||location.branchId===selectedBranchId).map((location)=>`<td><button class="branch-stock-cell ${location.quantity<=0?'empty':''}" data-product="${row.productId}" data-branch="${location.branchId}" ${location.active?'':'disabled'}><b>${invFmt(location.quantity)}</b><span>${location.active?'Ajustar':'Histórico'}</span></button></td>`).join('')}<td><b class="branch-stock-global">${invFmt(row.globalQuantity)}</b></td></tr>`).join('')}</tbody></table>`;
+  host.querySelectorAll('.branch-stock-cell').forEach((button)=>button.addEventListener('click',()=>openBranchStockAdjust(Number(button.dataset.product),Number(button.dataset.branch))));
+}
+
+function openBranchStockAdjust(productId,branchId){const product=BRANCH_STOCK_DATA.rows.find((row)=>row.productId===productId);const location=product?.locations.find((row)=>row.branchId===branchId);if(!product||!location)return;$('#branchStockAdjustProduct').value=productId;$('#branchStockAdjustBranch').value=branchId;$('#branchStockAdjustQuantity').value=location.quantity;$('#branchStockAdjustReason').value='';$('#branchStockAdjustContext').innerHTML=`<div><small>Producto</small><b>${esc(product.productName)}</b></div><div><small>Sucursal</small><b>${esc(location.branchName)}</b></div><div><small>Stock actual</small><b>${invFmt(location.quantity)}</b></div>`;openModal('branchStockAdjustModal');}
+
+async function openBranchStockAudit(){try{const rows=await api('/api/branch-stock/audit');$('#branchStockAuditContent').innerHTML=rows.length?`<div class="purchase-audit-list">${rows.map((row)=>`<article><i class="ph-bold ph-shield-check"></i><div><b>${esc(row.action)}</b><span>${esc(row.actor||'Sistema')} · ${esc(row.createdAt)}</span><pre>${esc(JSON.stringify(row.payload,null,2))}</pre></div></article>`).join('')}</div>`:emptyHTML('ph-shield-check','Sin ajustes','Todavía no hay movimientos auditados.');openModal('branchStockAuditModal');}catch(error){toast(error.message,true);}}
+
+$('#branchStockSearch')?.addEventListener('input',(event)=>{BRANCH_STOCK_SEARCH=event.target.value.trim();BRANCH_STOCK_PAGE=1;renderBranchStock();});
+$('#branchStockBranch')?.addEventListener('change',(event)=>{BRANCH_STOCK_BRANCH=event.target.value;BRANCH_STOCK_PAGE=1;renderBranchStock();});
+$('#branchStockCategory')?.addEventListener('change',(event)=>{BRANCH_STOCK_CATEGORY=event.target.value;BRANCH_STOCK_PAGE=1;renderBranchStock();});
+$('#branchStockOnlyAvailable')?.addEventListener('change',(event)=>{BRANCH_STOCK_ONLY_AVAILABLE=event.target.checked;BRANCH_STOCK_PAGE=1;renderBranchStock();});
+$('#branchStockPageSize')?.addEventListener('change',(event)=>{const size=Number(event.target.value);BRANCH_STOCK_PAGE_SIZE=[10,20,50,100].includes(size)?size:10;BRANCH_STOCK_PAGE=1;try{localStorage.setItem('branchStockPageSize',String(BRANCH_STOCK_PAGE_SIZE));}catch{}renderBranchStock();});
+$('#branchStockPrev')?.addEventListener('click',()=>{if(BRANCH_STOCK_PAGE>1){BRANCH_STOCK_PAGE-=1;renderBranchStock();}});
+$('#branchStockNext')?.addEventListener('click',()=>{BRANCH_STOCK_PAGE+=1;renderBranchStock();});
+$('#branchStockRefresh')?.addEventListener('click',loadBranchStock);$('#branchStockAuditBtn')?.addEventListener('click',openBranchStockAudit);
+$('#branchStockAdjustForm')?.addEventListener('submit',async(event)=>{event.preventDefault();try{const result=await api('/api/branch-stock/adjust',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({productId:Number($('#branchStockAdjustProduct').value),branchId:Number($('#branchStockAdjustBranch').value),physicalQuantity:Number($('#branchStockAdjustQuantity').value),reason:$('#branchStockAdjustReason').value})});closeModal('branchStockAdjustModal');await loadBranchStock();toast(`Stock ajustado: ${result.productName} · ${result.branchName}`);}catch(error){toast(error.message,true);}});
+
+/* ===== Compras, proveedores y traslados ===== */
+function purchaseSetPeriod(period) {
+  PURCHASE_PERIOD = ['day', 'week', 'month', 'custom'].includes(period) ? period : 'day';
+  const today = new Date(); let start = new Date(today); let end = new Date(today);
+  if (PURCHASE_PERIOD === 'week') { const day = today.getDay(); start.setDate(today.getDate() + (day === 0 ? -6 : 1 - day)); end = new Date(start); end.setDate(start.getDate() + 6); }
+  else if (PURCHASE_PERIOD === 'month') { start = new Date(today.getFullYear(), today.getMonth(), 1); end = new Date(today.getFullYear(), today.getMonth() + 1, 0); }
+  if (PURCHASE_PERIOD !== 'custom' || !$('#purchaseStartDate').value || !$('#purchaseEndDate').value) { $('#purchaseStartDate').value = salesIsoDate(start); $('#purchaseEndDate').value = salesIsoDate(end); }
+  document.querySelectorAll('#purchasePeriodTabs [data-purchase-period]').forEach((button) => button.classList.toggle('on', button.dataset.purchasePeriod === PURCHASE_PERIOD));
+}
+
+function purchaseBranchOptions(includeAll = false) {
+  return `${includeAll ? '<option value="all">Todas las sucursales</option>' : '<option value="">Selecciona…</option>'}${PURCHASE_DATA.branches.filter((row) => row.active).map((row) => `<option value="${row.id}">${esc(row.name)}</option>`).join('')}`;
+}
+function purchaseSupplierOptions() { return `<option value="">Selecciona…</option>${PURCHASE_DATA.suppliers.filter((row) => row.active).map((row) => `<option value="${row.id}">${esc(row.name)}</option>`).join('')}`; }
+function purchaseProductOptions(selected = '') { return `<option value="">Selecciona producto…</option>${PURCHASE_DATA.products.map((row) => `<option value="${row.id}" ${String(row.id) === String(selected) ? 'selected' : ''}>${esc(row.name)}</option>`).join('')}`; }
+function purchaseStock(branchId, productId) { return Number(PURCHASE_DATA.branchStock.find((row) => Number(row.branchId) === Number(branchId) && Number(row.productId) === Number(productId))?.quantity || 0); }
+
+function setPurchaseTab(tab) {
+  PURCHASE_TAB = ['dashboard','orders','suppliers','transfers'].includes(tab) ? tab : 'dashboard';
+  ['dashboard','orders','suppliers','transfers'].forEach((name) => { $(`#purchase${name[0].toUpperCase()}${name.slice(1)}Panel`).hidden = name !== PURCHASE_TAB; });
+  document.querySelectorAll('#purchaseTabs [data-purchase-tab]').forEach((button) => button.classList.toggle('on', button.dataset.purchaseTab === PURCHASE_TAB));
+  if (PURCHASE_TAB === 'dashboard') loadPurchaseReport();
+  else if (PURCHASE_TAB === 'orders') loadPurchaseOrders();
+  else if (PURCHASE_TAB === 'suppliers') renderPurchaseSuppliers();
+  else loadPurchaseTransfers();
+}
+
+async function loadPurchases() {
+  PURCHASE_DATA = await api('/api/purchases/bootstrap');
+  $('#purchaseReportBranch').innerHTML = purchaseBranchOptions(true);
+  $('#purchaseOrderSupplier').innerHTML = purchaseSupplierOptions();
+  $('#purchaseOrderBranch').innerHTML = purchaseBranchOptions();
+  $('#purchaseTransferFrom').innerHTML = purchaseBranchOptions();
+  $('#purchaseTransferTo').innerHTML = purchaseBranchOptions();
+  if (!$('#purchaseStartDate').value) purchaseSetPeriod(PURCHASE_PERIOD);
+  setPurchaseTab(PURCHASE_TAB);
+}
+
+async function loadPurchaseReport() {
+  try {
+    const query = new URLSearchParams({ startDate: $('#purchaseStartDate').value, endDate: $('#purchaseEndDate').value, branch: $('#purchaseReportBranch').value || 'all' });
+    PURCHASE_REPORT = await api(`/api/purchases/report?${query}`);
+    const s = PURCHASE_REPORT.summary;
+    $('#purchaseStats').innerHTML = `<div class="card purchase-stat"><i class="ph-bold ph-currency-dollar"></i><div><small>Total comprado</small><strong>${fmtMoney(s.total)}</strong></div></div><div class="card purchase-stat"><i class="ph-bold ph-receipt"></i><div><small>Órdenes recibidas</small><strong>${s.orders}</strong></div></div><div class="card purchase-stat"><i class="ph-bold ph-package"></i><div><small>Unidades compradas</small><strong>${s.quantity}</strong></div></div><div class="card purchase-stat"><i class="ph-bold ph-calculator"></i><div><small>Promedio por orden</small><strong>${fmtMoney(s.averageOrder)}</strong></div></div>`;
+    const host = $('#purchaseProductsReport');
+    host.innerHTML = PURCHASE_REPORT.products.length ? `<table><thead><tr><th>Producto</th><th>Unidades</th><th>Órdenes</th><th>Total comprado</th></tr></thead><tbody>${PURCHASE_REPORT.products.map((row) => `<tr><td><b>${esc(row.productName)}</b></td><td>${row.quantity}</td><td>${row.orders}</td><td><b>${fmtMoney(row.total)}</b></td></tr>`).join('')}</tbody></table>` : emptyHTML('ph-shopping-cart-simple','Sin compras recibidas','Recibe una orden para verla en este reporte.');
+    if (PURCHASE_CHART) PURCHASE_CHART.destroy();
+    PURCHASE_CHART = new Chart($('#purchaseChart'), { type:'bar', data:{ labels:PURCHASE_REPORT.series.map((row)=>new Date(`${row.date}T12:00:00`).toLocaleDateString('es-MX',{day:'numeric',month:'short'})), datasets:[{label:'Importe comprado',data:PURCHASE_REPORT.series.map((row)=>row.total),backgroundColor:'#2563ebcc',borderRadius:8,yAxisID:'y'},{label:'Unidades',data:PURCHASE_REPORT.series.map((row)=>row.quantity),backgroundColor:'#10b981aa',borderRadius:8,yAxisID:'y1'}]}, options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{position:'bottom'}},scales:{y:{beginAtZero:true,ticks:{callback:(v)=>fmtMoney(v)}},y1:{beginAtZero:true,position:'right',grid:{drawOnChartArea:false}},x:{grid:{display:false}}}} });
+  } catch (error) { toast(error.message || 'No se pudo cargar el reporte de compras', true); }
+}
+
+async function loadPurchaseOrders() {
+  try { const status=$('#purchaseOrderStatus').value; PURCHASE_ORDERS=await api(`/api/purchases/orders${status?`?status=${encodeURIComponent(status)}`:''}`); renderPurchaseOrders(); } catch(error){toast(error.message||'No se pudieron cargar las órdenes',true);}
+}
+function purchaseStatusBadge(status){const labels={ordered:'Pendiente',received:'Recibida',cancelled:'Cancelada'};return `<span class="purchase-status ${status}">${labels[status]||status}</span>`;}
+function renderPurchaseOrders(){const host=$('#purchaseOrdersTable');if(!PURCHASE_ORDERS.length){host.innerHTML=emptyHTML('ph-shopping-cart-simple','Sin órdenes de compra','Crea tu primera orden para comenzar.');return;}host.innerHTML=`<table><thead><tr><th>Orden</th><th>Proveedor</th><th>Sucursal</th><th>Productos</th><th>Total</th><th>Fecha</th><th>Estatus</th><th>Acciones</th></tr></thead><tbody>${PURCHASE_ORDERS.map(order=>`<tr><td><b>${esc(order.orderNumber)}</b><small>${esc(order.createdBy)}</small></td><td>${esc(order.supplierName)}</td><td>${esc(order.branchName)}</td><td>${order.items.map(item=>`${item.quantity} ${esc(item.productName)}`).join('<br>')}</td><td><b>${fmtMoney(order.total)}</b></td><td>${esc(order.orderDate)}${order.receivedAt?`<small>Recibida ${esc(order.receivedAt)}</small>`:''}</td><td>${purchaseStatusBadge(order.status)}</td><td><div class="purchase-row-actions">${order.status==='ordered'?`<button class="btn btn-primary btn-sm purchase-receive" data-id="${order.id}"><i class="ph-bold ph-package"></i> Recibir</button><button class="btn btn-ghost btn-sm purchase-cancel" data-id="${order.id}"><i class="ph-bold ph-x"></i></button>`:''}<button class="btn btn-ghost btn-sm purchase-audit" data-entity="purchase_order" data-id="${order.id}" data-title="${esc(order.orderNumber)}"><i class="ph-bold ph-shield-check"></i></button></div></td></tr>`).join('')}</tbody></table>`;
+  host.querySelectorAll('.purchase-receive').forEach(button=>button.addEventListener('click',async()=>{const order=PURCHASE_ORDERS.find(row=>row.id===Number(button.dataset.id));if(!await askConfirm('Recibir orden',`Se agregarán ${order.items.length} productos al inventario de ${order.branchName} y se actualizarán sus costos promedio.`))return;try{await api(`/api/purchases/orders/${order.id}/receive`,{method:'POST'});toast('Orden recibida e inventario actualizado');PURCHASE_DATA=await api('/api/purchases/bootstrap');await loadPurchaseOrders();await loadPurchaseReport();}catch(error){toast(error.message||'No se pudo recibir',true);}}));
+  host.querySelectorAll('.purchase-cancel').forEach(button=>button.addEventListener('click',async()=>{if(!await askConfirm('Cancelar orden','La orden quedará en la auditoría y no afectará inventario.'))return;try{await api(`/api/purchases/orders/${button.dataset.id}/cancel`,{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});await loadPurchaseOrders();toast('Orden cancelada');}catch(error){toast(error.message,true);}}));
+  bindPurchaseAuditButtons(host);
+}
+
+function renderPurchaseSuppliers(){const host=$('#purchaseSuppliersTable');const rows=PURCHASE_DATA.suppliers;if(!rows.length){host.innerHTML=emptyHTML('ph-truck','Sin proveedores','Registra tu primer proveedor.');return;}host.innerHTML=`<table><thead><tr><th>Proveedor</th><th>Contacto</th><th>Teléfono</th><th>Correo</th><th>RFC</th><th>Estatus</th><th>Acciones</th></tr></thead><tbody>${rows.map(row=>`<tr><td><b>${esc(row.name)}</b><small>${esc(row.address||'')}</small></td><td>${esc(row.contact_name||'—')}</td><td>${esc(row.phone||'—')}</td><td>${esc(row.email||'—')}</td><td>${esc(row.tax_id||'—')}</td><td>${row.active?'<span class="purchase-status received">Activo</span>':'<span class="purchase-status cancelled">Inactivo</span>'}</td><td><div class="purchase-row-actions"><button class="btn btn-ghost btn-sm purchase-edit-supplier" data-id="${row.id}"><i class="ph-bold ph-pencil"></i></button>${row.active?`<button class="btn btn-ghost btn-sm purchase-disable-supplier" data-id="${row.id}"><i class="ph-bold ph-user-minus"></i></button>`:''}<button class="btn btn-ghost btn-sm purchase-audit" data-entity="supplier" data-id="${row.id}" data-title="${esc(row.name)}"><i class="ph-bold ph-shield-check"></i></button></div></td></tr>`).join('')}</tbody></table>`;host.querySelectorAll('.purchase-edit-supplier').forEach(button=>button.addEventListener('click',()=>openPurchaseSupplier(Number(button.dataset.id))));host.querySelectorAll('.purchase-disable-supplier').forEach(button=>button.addEventListener('click',async()=>{if(!await askConfirm('Desactivar proveedor','Sus órdenes anteriores se conservarán.'))return;await api(`/api/purchases/suppliers/${button.dataset.id}`,{method:'DELETE'});await loadPurchases();setPurchaseTab('suppliers');}));bindPurchaseAuditButtons(host);}
+
+async function loadPurchaseTransfers(){try{PURCHASE_TRANSFERS=await api('/api/purchases/transfers');const host=$('#purchaseTransfersTable');host.innerHTML=PURCHASE_TRANSFERS.length?`<table><thead><tr><th>Traslado</th><th>Origen</th><th>Destino</th><th>Productos</th><th>Usuario</th><th>Fecha</th><th></th></tr></thead><tbody>${PURCHASE_TRANSFERS.map(row=>`<tr><td><b>${esc(row.transfer_number)}</b></td><td>${esc(row.from_branch_name)}</td><td>${esc(row.to_branch_name)}</td><td>${row.items.map(item=>`${item.quantity} ${esc(item.productName)}`).join('<br>')}</td><td>${esc(row.created_by||'—')}</td><td>${esc(row.created_at)}</td><td><button class="btn btn-ghost btn-sm purchase-audit" data-entity="transfer" data-id="${row.id}" data-title="${esc(row.transfer_number)}"><i class="ph-bold ph-shield-check"></i></button></td></tr>`).join('')}</tbody></table>`:emptyHTML('ph-arrows-left-right','Sin traslados','Los movimientos entre sucursales aparecerán aquí.');bindPurchaseAuditButtons(host);}catch(error){toast(error.message||'No se cargaron los traslados',true);}}
+
+function bindPurchaseAuditButtons(host){host.querySelectorAll('.purchase-audit').forEach(button=>button.addEventListener('click',()=>openPurchaseAudit(button.dataset.entity,button.dataset.id,button.dataset.title)));}
+async function openPurchaseAudit(entity,id,title){try{const rows=await api(`/api/purchases/audit/${entity}/${id}`);$('#purchaseAuditTitle').textContent=`Bitácora · ${title}`;$('#purchaseAuditContent').innerHTML=rows.length?`<div class="purchase-audit-list">${rows.map(row=>`<article><i class="ph-bold ph-shield-check"></i><div><b>${esc(row.action)}</b><span>${esc(row.actor||'Sistema')} · ${esc(row.created_at)}</span><pre>${esc(JSON.stringify(row.payload,null,2))}</pre></div></article>`).join('')}</div>`:emptyHTML('ph-shield-check','Sin eventos','No hay movimientos auditados.');openModal('purchaseAuditModal');}catch(error){toast(error.message,true);}}
+
+function openPurchaseSupplier(id=null){const row=PURCHASE_DATA.suppliers.find(item=>Number(item.id)===Number(id));$('#purchaseSupplierModalTitle').textContent=row?'Editar proveedor':'Nuevo proveedor';$('#purchaseSupplierId').value=row?.id||'';$('#purchaseSupplierName').value=row?.name||'';$('#purchaseSupplierTaxId').value=row?.tax_id||'';$('#purchaseSupplierContact').value=row?.contact_name||'';$('#purchaseSupplierPhone').value=row?.phone||'';$('#purchaseSupplierEmail').value=row?.email||'';$('#purchaseSupplierAddress').value=row?.address||'';$('#purchaseSupplierNotes').value=row?.notes||'';$('#purchaseSupplierActive').checked=row?Boolean(row.active):true;openModal('purchaseSupplierModal');}
+
+function newPurchaseOrderItem(){return{key:`i${Date.now()}${Math.random()}`,productId:'',quantity:1,unitCost:0};}
+function purchaseGlobalStock(productId){return Math.max(0,PURCHASE_DATA.branchStock.filter((row)=>Number(row.productId)===Number(productId)).reduce((sum,row)=>sum+Number(row.quantity||0),0));}
+function purchaseCostGuidance(item){
+  const product=PURCHASE_DATA.products.find((row)=>Number(row.id)===Number(item.productId));
+  if(!product)return 'Selecciona un producto para cargar su costo.';
+  const currentCost=Math.max(0,Number(product.unitCost||0));
+  const purchaseCost=Math.max(0,Number(item.unitCost||0));
+  const quantity=Math.max(0,Number(item.quantity||0));
+  const currentStock=purchaseGlobalStock(item.productId);
+  const estimatedAverage=currentStock+quantity>0?((currentStock*currentCost)+(quantity*purchaseCost))/(currentStock+quantity):purchaseCost;
+  return `Costo actual: ${fmtMoney(currentCost)}${Math.abs(currentCost-purchaseCost)>0.0001?` · Promedio estimado: ${fmtMoney(estimatedAverage)}`:' · Se conservará al recibir'} `;
+}
+function updatePurchaseOrderTotal(){
+  $('#purchaseOrderTotal').textContent=fmtMoney(PURCHASE_ORDER_ITEMS.reduce((sum,item)=>sum+Number(item.quantity||0)*Number(item.unitCost||0),0));
+}
+function updatePurchaseOrderRow(index){
+  const item=PURCHASE_ORDER_ITEMS[index];
+  const row=document.querySelector(`#purchaseOrderItems [data-index="${index}"]`);
+  if(!item||!row)return;
+  const lineTotal=row.querySelector('[data-po-line-total]');
+  const guidance=row.querySelector('[data-po-cost-guidance]');
+  if(lineTotal)lineTotal.textContent=fmtMoney(Number(item.quantity||0)*Number(item.unitCost||0));
+  if(guidance)guidance.textContent=purchaseCostGuidance(item);
+  updatePurchaseOrderTotal();
+}
+function renderPurchaseOrderItems(){
+  const host=$('#purchaseOrderItems');
+  host.innerHTML=PURCHASE_ORDER_ITEMS.map((item,index)=>`<div class="purchase-item-row" data-index="${index}">
+    <div class="purchase-item-field" data-label="Producto"><select data-po-field="productId" aria-label="Producto">${purchaseProductOptions(item.productId)}</select></div>
+    <div class="purchase-item-field" data-label="Cantidad"><input data-po-field="quantity" aria-label="Cantidad" type="number" min="0.0001" step="0.0001" value="${item.quantity}" placeholder="Cantidad"></div>
+    <div class="purchase-item-field purchase-cost-input" data-label="Costo unitario"><input data-po-field="unitCost" aria-label="Costo unitario" type="number" min="0" step="0.0001" value="${item.unitCost}" placeholder="Costo unitario"><small data-po-cost-guidance>${purchaseCostGuidance(item)}</small></div>
+    <b class="purchase-item-line-total" data-label="Importe" data-po-line-total>${fmtMoney(Number(item.quantity||0)*Number(item.unitCost||0))}</b>
+    <button type="button" class="btn btn-ghost btn-sm purchase-remove-item" aria-label="Eliminar producto"><i class="ph-bold ph-trash"></i></button>
+  </div>`).join('');
+  host.querySelectorAll('[data-po-field="productId"]').forEach(select=>select.addEventListener('change',()=>{
+    const index=Number(select.closest('[data-index]').dataset.index);
+    PURCHASE_ORDER_ITEMS[index].productId=select.value;
+    const product=PURCHASE_DATA.products.find((row)=>String(row.id)===select.value);
+    PURCHASE_ORDER_ITEMS[index].unitCost=product?Number(product.unitCost||0):0;
+    renderPurchaseOrderItems();
+  }));
+  host.querySelectorAll('[data-po-field="quantity"],[data-po-field="unitCost"]').forEach(input=>input.addEventListener('input',()=>{
+    const index=Number(input.closest('[data-index]').dataset.index);
+    PURCHASE_ORDER_ITEMS[index][input.dataset.poField]=Math.max(0,Number(input.value)||0);
+    updatePurchaseOrderRow(index);
+  }));
+  host.querySelectorAll('.purchase-remove-item').forEach(button=>button.addEventListener('click',()=>{PURCHASE_ORDER_ITEMS.splice(Number(button.closest('[data-index]').dataset.index),1);renderPurchaseOrderItems();}));
+  updatePurchaseOrderTotal();
+}
+function openPurchaseOrder(){if(!PURCHASE_DATA.suppliers.some(row=>row.active))return toast('Primero registra un proveedor activo',true);if(!PURCHASE_DATA.branches.some(row=>row.active))return toast('Primero configura una sucursal',true);PURCHASE_ORDER_ITEMS=[newPurchaseOrderItem()];$('#purchaseOrderSupplier').innerHTML=purchaseSupplierOptions();$('#purchaseOrderBranch').innerHTML=purchaseBranchOptions();$('#purchaseOrderDate').value=getLocalIsoDate();$('#purchaseExpectedDate').value='';$('#purchaseOrderNotes').value='';renderPurchaseOrderItems();openModal('purchaseOrderModal');}
+
+function newPurchaseTransferItem(){return{productId:'',quantity:1};}
+function renderPurchaseTransferItems(){const host=$('#purchaseTransferItems'),from=$('#purchaseTransferFrom').value;host.innerHTML=PURCHASE_TRANSFER_ITEMS.map((item,index)=>`<div class="purchase-item-row transfer" data-index="${index}"><select data-pt-field="productId">${purchaseProductOptions(item.productId)}</select><input data-pt-field="quantity" type="number" min="0.0001" step="0.0001" value="${item.quantity}" placeholder="Cantidad"><span>Disponible: <b>${item.productId?purchaseStock(from,item.productId):0}</b></span><button type="button" class="btn btn-ghost btn-sm purchase-remove-item"><i class="ph-bold ph-trash"></i></button></div>`).join('');host.querySelectorAll('[data-pt-field]').forEach(input=>input.addEventListener('change',()=>{const index=Number(input.closest('[data-index]').dataset.index);PURCHASE_TRANSFER_ITEMS[index][input.dataset.ptField]=input.dataset.ptField==='productId'?input.value:Number(input.value)||0;renderPurchaseTransferItems();}));host.querySelectorAll('.purchase-remove-item').forEach(button=>button.addEventListener('click',()=>{PURCHASE_TRANSFER_ITEMS.splice(Number(button.closest('[data-index]').dataset.index),1);renderPurchaseTransferItems();}));}
+function openPurchaseTransfer(){if(PURCHASE_DATA.branches.filter(row=>row.active).length<2)return toast('Configura al menos dos sucursales',true);PURCHASE_TRANSFER_ITEMS=[newPurchaseTransferItem()];$('#purchaseTransferFrom').innerHTML=purchaseBranchOptions();$('#purchaseTransferTo').innerHTML=purchaseBranchOptions();$('#purchaseTransferNotes').value='';renderPurchaseTransferItems();openModal('purchaseTransferModal');}
+
+document.querySelectorAll('#purchaseTabs [data-purchase-tab]').forEach(button=>button.addEventListener('click',()=>setPurchaseTab(button.dataset.purchaseTab)));
+document.querySelectorAll('#purchasePeriodTabs [data-purchase-period]').forEach(button=>button.addEventListener('click',()=>purchaseSetPeriod(button.dataset.purchasePeriod)));
+$('#purchaseStartDate')?.addEventListener('change',()=>purchaseSetPeriod('custom'));$('#purchaseEndDate')?.addEventListener('change',()=>purchaseSetPeriod('custom'));$('#purchaseApplyReport')?.addEventListener('click',loadPurchaseReport);$('#purchaseReportBranch')?.addEventListener('change',loadPurchaseReport);
+$('#purchaseOrderStatus')?.addEventListener('change',loadPurchaseOrders);$('#purchaseRefreshOrders')?.addEventListener('click',loadPurchaseOrders);$('#purchaseNewOrder')?.addEventListener('click',openPurchaseOrder);$('#purchaseNewSupplier')?.addEventListener('click',()=>openPurchaseSupplier());$('#purchaseNewTransfer')?.addEventListener('click',openPurchaseTransfer);
+$('#purchaseAddOrderItem')?.addEventListener('click',()=>{PURCHASE_ORDER_ITEMS.push(newPurchaseOrderItem());renderPurchaseOrderItems();});$('#purchaseAddTransferItem')?.addEventListener('click',()=>{PURCHASE_TRANSFER_ITEMS.push(newPurchaseTransferItem());renderPurchaseTransferItems();});$('#purchaseTransferFrom')?.addEventListener('change',renderPurchaseTransferItems);
+$('#purchaseSupplierForm')?.addEventListener('submit',async event=>{event.preventDefault();const id=Number($('#purchaseSupplierId').value);const body={name:$('#purchaseSupplierName').value,taxId:$('#purchaseSupplierTaxId').value,contactName:$('#purchaseSupplierContact').value,phone:$('#purchaseSupplierPhone').value,email:$('#purchaseSupplierEmail').value,address:$('#purchaseSupplierAddress').value,notes:$('#purchaseSupplierNotes').value,active:$('#purchaseSupplierActive').checked};try{await api(id?`/api/purchases/suppliers/${id}`:'/api/purchases/suppliers',{method:id?'PUT':'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});closeModal('purchaseSupplierModal');PURCHASE_DATA=await api('/api/purchases/bootstrap');renderPurchaseSuppliers();toast('Proveedor guardado');}catch(error){toast(error.message,true);}});
+$('#purchaseOrderForm')?.addEventListener('submit',async event=>{event.preventDefault();try{await api('/api/purchases/orders',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({supplierId:Number($('#purchaseOrderSupplier').value),branchId:Number($('#purchaseOrderBranch').value),orderDate:$('#purchaseOrderDate').value,expectedDate:$('#purchaseExpectedDate').value,notes:$('#purchaseOrderNotes').value,items:PURCHASE_ORDER_ITEMS.map(item=>({productId:Number(item.productId),quantity:Number(item.quantity),unitCost:Number(item.unitCost)}))})});closeModal('purchaseOrderModal');setPurchaseTab('orders');toast('Orden de compra creada');}catch(error){toast(error.message,true);}});
+$('#purchaseTransferForm')?.addEventListener('submit',async event=>{event.preventDefault();try{await api('/api/purchases/transfers',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({fromBranchId:Number($('#purchaseTransferFrom').value),toBranchId:Number($('#purchaseTransferTo').value),notes:$('#purchaseTransferNotes').value,items:PURCHASE_TRANSFER_ITEMS.map(item=>({productId:Number(item.productId),quantity:Number(item.quantity)}))})});closeModal('purchaseTransferModal');PURCHASE_DATA=await api('/api/purchases/bootstrap');await loadPurchaseTransfers();toast('Traslado completado');}catch(error){toast(error.message,true);}});
 
 function emptyHTML(icon, title, msg) {
   return `<div class="empty"><i class="ph ${icon}"></i><b>${title}</b><p>${msg}</p></div>`;
@@ -1188,6 +2301,9 @@ function posCartTotal() {
 }
 
 function posGrandTotal() {
+  if (POS_TABLE_ACCOUNT) {
+    return moneyNum(Number(POS_TABLE_ACCOUNT.total || 0) + posCartTotal());
+  }
   const fee = POS_IS_DELIVERY ? moneyNum(Number(POS_DELIVERY_FEE) || 0) : 0;
   return moneyNum(posCartTotal() + fee);
 }
@@ -1384,7 +2500,7 @@ function syncPosCartFromCatalog() {
 
 function setPosPaymentDefaults() {
   const total = posGrandTotal();
-  if (POS_PAYMENT_METHOD === 'cash' && (POS_PAYMENT_FORM.cashReceived === '' || POS_PAYMENT_FORM.cashReceived === null)) {
+  if (POS_PAYMENT_METHOD === 'cash' && (POS_PAYMENT_FORM.cashReceived === '' || POS_PAYMENT_FORM.cashReceived === null || moneyNum(POS_PAYMENT_FORM.cashReceived) < total)) {
     POS_PAYMENT_FORM.cashReceived = String(total || '');
   }
   if (POS_PAYMENT_METHOD !== 'mixed') {
@@ -1492,6 +2608,9 @@ function buildPosTicketData() {
       cashReceived: moneyNum(LAST_POS_SALE.cashReceived || 0),
       cashChange: moneyNum(LAST_POS_SALE.cashChange || 0),
       notes: LAST_POS_SALE.notes || '',
+      tableNumber: LAST_POS_SALE.tableNumber || null,
+      waiterName: LAST_POS_SALE.waiterName || '',
+      rounds: Array.isArray(LAST_POS_SALE.rounds) ? LAST_POS_SALE.rounds : [],
     };
   }
   return null;
@@ -1520,7 +2639,10 @@ function openThermalPrintWindow(ticket) {
   const logo = ME?.tenant?.logo
     ? `${location.origin}${ME.tenant.logo.startsWith('/') ? ME.tenant.logo : `/${ME.tenant.logo}`}`
     : '';
-  const ticketId = ticket.id ? `#${ticket.id}` : 'Pre-ticket';
+  const isRoundTicket = Boolean(ticket.isTableRound);
+  const ticketId = isRoundTicket
+    ? `Mesa ${ticket.tableNumber} · Ronda ${ticket.roundNumber}`
+    : ticket.id ? `#${ticket.id}` : 'Pre-ticket';
   const itemRows = (ticket.items || [])
     .map(
       (it) => `<tr>
@@ -1529,6 +2651,12 @@ function openThermalPrintWindow(ticket) {
       </tr>`
     )
     .join('') || '<tr><td>Sin productos</td><td class="r">$0.00</td></tr>';
+  const groupedRoundRows = !isRoundTicket && Array.isArray(ticket.rounds) && ticket.rounds.length
+    ? ticket.rounds.map((round) => `
+      <tr><td colspan="2" style="padding-top:7px;border-top:1px dashed #777"><b>RONDA ${esc(String(round.roundNumber))}</b><span style="float:right"><b>${esc(fmtMoney(round.subtotal || 0, currency))}</b></span></td></tr>
+      ${(round.items || []).map((it) => `<tr><td>${esc(`${it.qty} x ${it.name}`)}<div style="font-size:${Math.max(fontPx-2,10)}px;color:#555">${esc(fmtMoney(it.price, currency))} c/u</div></td><td class="r">${esc(fmtMoney(Number(it.qty || 0) * Number(it.price || 0), currency))}</td></tr>`).join('')}
+    `).join('')
+    : '';
 
   const breakdownObj = ticket.paymentBreakdown || {};
   const isMixed = ticket.paymentMethod === 'mixed';
@@ -1575,22 +2703,27 @@ function openThermalPrintWindow(ticket) {
   <div class="center meta">Ticket ${esc(ticketId)}</div>
   <div class="center meta">${esc(ticket.createdAt)}</div>
   <div class="center meta">Cajero: ${seller}</div>
+  ${isRoundTicket ? `<div class="center meta"><b>Mesero: ${esc(ticket.waiterName || '—')}</b></div><div class="center meta"><b>COMANDA DE RONDA</b></div>` : ''}
+  ${!isRoundTicket && ticket.tableNumber ? `<div class="center meta"><b>Mesa ${esc(String(ticket.tableNumber))} · Mesero: ${esc(ticket.waiterName || '—')}</b></div>` : ''}
   <div class="sep"></div>
-  <table>${itemRows}</table>
+  <table>${groupedRoundRows || itemRows}</table>
   <div class="sep"></div>
   <table>
-    <tr><td>Método</td><td class="r">${esc(posMethodLabel(ticket.paymentMethod || 'cash'))}</td></tr>
+    ${isRoundTicket
+      ? `<tr><td>Total ronda ${esc(String(ticket.roundNumber))}</td><td class="r">${esc(fmtMoney(subtotal, currency))}</td></tr>
+         <tr><td class="tot">ACUMULADO MESA</td><td class="tot r">${esc(fmtMoney(total, currency))}</td></tr>`
+      : `<tr><td>Método</td><td class="r">${esc(posMethodLabel(ticket.paymentMethod || 'cash'))}</td></tr>
     ${breakdownLines}
     ${Number(ticket.deliveryFee || 0) > 0
       ? `<tr><td>Subtotal</td><td class="r">${esc(fmtMoney(subtotal, currency))}</td></tr><tr><td>&#x1F6F5; Envío domicilio</td><td class="r">+ ${esc(fmtMoney(Number(ticket.deliveryFee), currency))}</td></tr>`
       : `<tr><td>Subtotal</td><td class="r">${esc(fmtMoney(subtotal, currency))}</td></tr>`}
     <tr><td class="tot">TOTAL</td><td class="tot r">${esc(fmtMoney(total, currency))}</td></tr>
     ${!isMixed && Number(ticket.cashReceived || 0) > 0 ? `<tr><td>Efectivo recibido</td><td class="r">${esc(fmtMoney(ticket.cashReceived, currency))}</td></tr>` : ''}
-    ${!isMixed && Number(ticket.cashChange || 0) > 0 ? `<tr><td>Cambio</td><td class="r">${esc(fmtMoney(ticket.cashChange, currency))}</td></tr>` : ''}
+    ${!isMixed && Number(ticket.cashChange || 0) > 0 ? `<tr><td>Cambio</td><td class="r">${esc(fmtMoney(ticket.cashChange, currency))}</td></tr>` : ''}`}
   </table>
   ${ticket.notes ? `<div class="sep"></div><div class="meta">Nota: ${esc(ticket.notes)}</div>` : ''}
   <div class="sep"></div>
-  <div class="center meta">Gracias por tu compra</div>
+  <div class="center meta">${isRoundTicket ? 'Ronda enviada a preparación' : 'Gracias por tu compra'}</div>
   </div>
   <script>
     window.onload = () => {
@@ -1605,6 +2738,25 @@ function openThermalPrintWindow(ticket) {
   const w = window.open(blobUrl, '_blank', printWindowSize);
   if (!w) return toast('Permite ventanas emergentes para imprimir', true);
   setTimeout(() => URL.revokeObjectURL(blobUrl), 10000);
+}
+
+function printTableRoundTicket(round, account, accumulatedTotal) {
+  if (!round || !account) return;
+  const items = Array.isArray(round.items) ? round.items : [];
+  openThermalPrintWindow({
+    isTableRound: true,
+    tableNumber: account.table_number,
+    roundNumber: round.roundNumber,
+    waiterName: account.waiter_name,
+    createdAt: round.createdAt || new Date().toLocaleString('es-MX'),
+    items: items.map((item) => ({
+      qty: Number(item.qty || 0), name: String(item.name || ''), price: Number(item.price || 0),
+      total: moneyNum(Number(item.qty || 0) * Number(item.price || 0)),
+    })),
+    subtotal: Number(round.subtotal || 0),
+    total: Number(accumulatedTotal ?? account.total ?? 0),
+    notes: round.notes || '',
+  });
 }
 
 function printPosTicket() {
@@ -1634,6 +2786,9 @@ function printPosSaleById(id) {
     cashReceived: moneyNum(sale.cash_received || 0),
     cashChange: moneyNum(sale.cash_change || 0),
     notes: String(sale.notes || ''),
+    tableNumber: sale.table_number || null,
+    waiterName: sale.waiter_name || '',
+    rounds: Array.isArray(sale.rounds) ? sale.rounds : [],
   };
   openThermalPrintWindow(ticket);
 }
@@ -1650,6 +2805,7 @@ function exportPosClosePdf(closeResult) {
   const movements = totals.movements || {};
   const cancellations = totals.cancellations || {};
   const delivery = totals.delivery || {};
+  const tables = totals.tables || {};
 
   const doc = new globalThis.jspdf.jsPDF({ orientation: 'portrait' });
   const bizName = SETTINGS?.business_name || ME?.tenant?.businessName || 'Negocio';
@@ -1710,6 +2866,19 @@ function exportPosClosePdf(closeResult) {
     headStyles: { fillColor: [14, 165, 233] },
   });
 
+  doc.autoTable({
+    startY: doc.lastAutoTable.finalY + 6,
+    head: [['Mesas', 'Cantidad / total']],
+    body: [
+      ['Mesas cerradas', `${Number(tables.closedCount || 0)} · ${fmtMoney(tables.closedTotal || 0)}`],
+      ['Mesas abiertas al cierre', `${Number(tables.openCount || 0)} · ${fmtMoney(tables.openTotal || 0)}`],
+      ...(tables.closed || []).map((row) => [`Cerrada · Mesa ${row.table_number} · ${row.waiter_name || 'Sin mesero'}`, fmtMoney(row.total || 0)]),
+      ...(tables.open || []).map((row) => [`Abierta · Mesa ${row.table_number} · ${row.waiter_name || 'Sin mesero'}`, fmtMoney(row.total || 0)]),
+    ],
+    styles: { fontSize: 9 },
+    headStyles: { fillColor: [249, 115, 22] },
+  });
+
   const notes = String(closeResult?.closedSession?.notes || '').trim();
   if (notes) {
     doc.setFontSize(9);
@@ -1727,6 +2896,7 @@ function printPosCloseReport(closeResult) {
   const movements = totals.movements || {};
   const cancellations = totals.cancellations || {};
   const delivery = totals.delivery || {};
+  const tables = totals.tables || {};
   const biz = esc(SETTINGS?.business_name || ME?.tenant?.businessName || 'Negocio');
   const now = new Date().toLocaleString('es-MX');
   const closedBy = esc(closeResult?.closedSession?.closed_by || ME?.username || 'cajero');
@@ -1779,6 +2949,13 @@ function printPosCloseReport(closeResult) {
     <tr><td>Domicilios tickets</td><td>${esc(String(delivery.tickets || 0))}</td></tr>
     <tr><td>Domicilios total</td><td>${esc(fmtMoney(delivery.total || 0))}</td></tr>
     <tr><td>Costo envíos</td><td>${esc(fmtMoney(delivery.fees || 0))}</td></tr>
+  </table>
+  <table>
+    <tr><th>Mesas</th><th>Detalle</th></tr>
+    <tr><td>Mesas cerradas</td><td>${esc(String(tables.closedCount || 0))} · ${esc(fmtMoney(tables.closedTotal || 0))}</td></tr>
+    <tr><td>Mesas abiertas al cierre</td><td>${esc(String(tables.openCount || 0))} · ${esc(fmtMoney(tables.openTotal || 0))}</td></tr>
+    ${(tables.closed || []).map((row) => `<tr><td>Cerrada · Mesa ${esc(String(row.table_number))}</td><td>${esc(row.waiter_name || 'Sin mesero')} · ${esc(fmtMoney(row.total || 0))}</td></tr>`).join('')}
+    ${(tables.open || []).map((row) => `<tr><td>Abierta · Mesa ${esc(String(row.table_number))}</td><td>${esc(row.waiter_name || 'Sin mesero')} · ${esc(fmtMoney(row.total || 0))}</td></tr>`).join('')}
   </table>
   <script>
     window.onload = () => {
@@ -2003,6 +3180,101 @@ function clearPosCart() {
   renderPosCart();
 }
 
+function posCartPayload() {
+  return POS_CART.map((item) => ({
+    productId: item.id,
+    qty: item.qty,
+    name: item.name,
+    price: Number(item.price),
+    cartKey: item._cartKey || null,
+    variantId: item.variantId || null,
+    variantName: item.variantName || null,
+    modifiers: Array.isArray(item.modifiers) ? item.modifiers : [],
+    modifiersLabel: item.modifiersLabel || '',
+    modifiersExtraPrice: Number(item.modifiersExtraPrice || 0),
+  }));
+}
+
+function selectPosTableAccount(account) {
+  if (!account) return;
+  POS_TABLE_ACCOUNT = { ...account };
+  POS_CART = [];
+  resetPosPaymentForm();
+  $('#posTablesModal')?.classList.remove('show');
+  renderPosCart();
+  toast(`Mesa ${account.table_number || account.tableNumber} seleccionada`);
+}
+
+function exitPosTableAccount() {
+  POS_TABLE_ACCOUNT = null;
+  POS_CART = [];
+  resetPosPaymentForm();
+  renderPosCart();
+}
+
+async function sendActiveTableRound({ silent = false } = {}) {
+  if (!POS_TABLE_ACCOUNT) return;
+  if (!POS_CART.length) throw new Error('Agrega al menos un producto para enviar la ronda');
+  const draftItems = posCartPayload();
+  const result = await api(`/api/pos/table-accounts/${POS_TABLE_ACCOUNT.id}/rounds`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ items: draftItems, notes: POS_PAYMENT_FORM.notes || '' }),
+  });
+  POS_TABLE_ACCOUNT = result.account;
+  POS_CART = [];
+  POS_PAYMENT_FORM.notes = '';
+  resetPosPaymentForm();
+  const overviewTable = (POS_OVERVIEW?.tables || []).find((table) => Number(table.account?.id) === Number(result.account.id));
+  if (overviewTable) overviewTable.account = result.account;
+  const openSummary = POS_OVERVIEW?.activeSession?.totals?.tables;
+  if (openSummary) {
+    const summaryAccount = (openSummary.open || []).find((item) => Number(item.id) === Number(result.account.id));
+    if (summaryAccount) Object.assign(summaryAccount, result.account);
+    openSummary.openTotal = moneyNum((openSummary.open || []).reduce((sum, item) => sum + Number(item.total || 0), 0));
+  }
+  printTableRoundTicket(result.round, result.account, result.accumulatedTotal);
+  if (!silent) toast(`Ronda ${result.round.roundNumber} enviada · Mesa ${result.account.table_number}`);
+  renderPosActions();
+  renderPosCart();
+  return result;
+}
+
+function renderPosTablesLayout() {
+  const host = $('#posTablesLayout');
+  if (!host) return;
+  const tables = Array.isArray(POS_OVERVIEW?.tables) ? POS_OVERVIEW.tables : [];
+  const busy = tables.filter((table) => table.account).length;
+  $('#posTablesCounts').textContent = `${tables.length} mesas · ${busy} abiertas`;
+  host.innerHTML = tables.length
+    ? tables.map((table) => {
+        const account = table.account;
+        const label = table.label || `Mesa ${table.tableNumber}`;
+        return `<button type="button" class="pos-table-node ${esc(table.shape)} ${account ? 'busy' : ''}" data-pos-table="${table.id}" style="--x:${table.positionX}%;--y:${table.positionY}%">
+          <b>${esc(label)}</b>
+          <small>${account ? `${esc(account.waiter_name || 'Cuenta abierta')} · ${(account.rounds || []).length} ronda(s)` : 'Disponible'}</small>
+          ${account ? `<span class="table-total">${fmtMoney(account.total || 0)}</span>` : ''}
+        </button>`;
+      }).join('')
+    : emptyHTML('ph-fork-knife', 'Sin mesas habilitadas', 'Configura y habilita mesas desde Mi chatbot > Mesas.');
+  host.querySelectorAll('[data-pos-table]').forEach((button) => button.addEventListener('click', () => {
+    const table = tables.find((item) => Number(item.id) === Number(button.dataset.posTable));
+    if (!table) return;
+    if (table.account) return selectPosTableAccount(table.account);
+    $('#posTableOpenId').value = String(table.id);
+    $('#posTableOpenTitle').textContent = table.label || `Mesa ${table.tableNumber}`;
+    $('#posTableWaiterName').value = ME?.displayName || ME?.username || '';
+    $('#posTableOpenModal').classList.add('show');
+    setTimeout(() => $('#posTableWaiterName')?.focus(), 40);
+  }));
+}
+
+function openPosTablesModal() {
+  if (!POS_OVERVIEW?.activeSession) return toast('Abre una caja antes de operar mesas', true);
+  renderPosTablesLayout();
+  $('#posTablesModal').classList.add('show');
+}
+
 function renderPos() {
   renderPosFinanceStrip();
   renderPosDeliveryStrip();
@@ -2055,7 +3327,12 @@ function renderPosActions() {
   if (!el) return;
   const hasSession = Boolean(POS_OVERVIEW?.activeSession);
   const chatbotEnabled = Boolean(POS_OVERVIEW?.chatbotIntegrationEnabled);
+  const tables = Array.isArray(POS_OVERVIEW?.tables) ? POS_OVERVIEW.tables : [];
+  const openTables = tables.filter((table) => table.account).length;
   el.innerHTML = `
+    <button type="button" class="pos-action-btn" id="posOpenTables" ${hasSession ? '' : 'disabled'}>
+      <i class="ph-bold ph-fork-knife"></i> Mesas${openTables ? ` (${openTables})` : ''}
+    </button>
     ${chatbotEnabled ? `<button type="button" class="pos-action-btn" id="posOpenChatbotQueue" ${hasSession ? '' : 'disabled'}>
       <i class="ph-bold ph-chat-circle-dots"></i> Pedidos chatbot
     </button>` : ''}
@@ -2069,6 +3346,7 @@ function renderPosActions() {
       <i class="ph-bold ph-lock"></i> Cierre de caja
     </button>
   `;
+  $('#posOpenTables')?.addEventListener('click', openPosTablesModal);
   $('#posOpenChatbotQueue')?.addEventListener('click', openPosChatbotQueueModal);
   $('#posOpenSalesHistory')?.addEventListener('click', openPosSalesHistoryModal);
   $('#posOpenMovement')?.addEventListener('click', openPosMovementModal);
@@ -2240,6 +3518,18 @@ function renderPosCart() {
   const subtotalItems = posCartTotal();
   const deliveryFeeAmt = POS_IS_DELIVERY ? moneyNum(Number(POS_DELIVERY_FEE) || 0) : 0;
   const session = POS_OVERVIEW?.activeSession;
+  const tableAccount = POS_TABLE_ACCOUNT;
+  const tableNumber = tableAccount?.table_number || tableAccount?.tableNumber;
+  const tableRounds = Array.isArray(tableAccount?.rounds) ? tableAccount.rounds : [];
+  const roundHistoryHtml = tableAccount && tableRounds.length ? `
+    <div class="pos-rounds-list">
+      ${tableRounds.map((round) => `
+        <div class="pos-round-card">
+          <div class="pos-round-head"><b>Ronda ${round.roundNumber}</b><span>${fmtMoney(round.subtotal || 0)}</span></div>
+          <div class="pos-round-items">${(round.items || []).map((item) => `<span>${Number(item.qty || 1)}× ${esc(item.name || 'Producto')}</span>`).join('')}</div>
+          <div class="pos-round-foot"><small>${esc(round.createdAt || '')}</small><button type="button" class="btn btn-ghost btn-icon" data-print-table-round="${round.id}" title="Reimprimir ronda"><i class="ph-bold ph-printer"></i></button></div>
+        </div>`).join('')}
+    </div>` : (tableAccount ? '<div class="hint" style="margin-bottom:10px">Aún no se ha enviado ninguna ronda.</div>' : '');
   setPosPaymentDefaults();
   const methodButtons = ['cash', 'card', 'transfer', 'mixed']
     .map((method) => `<button type="button" class="${POS_PAYMENT_METHOD === method ? 'on' : ''}" data-pos-method="${method}">${posMethodLabel(method)}</button>`)
@@ -2268,8 +3558,10 @@ function renderPosCart() {
   const mixedValid = POS_PAYMENT_METHOD !== 'mixed' || Math.abs(mixedSum - total) < 0.01;
   const submitDisabled = session && mixedValid ? '' : 'disabled';
   const sessionHint = session ? '' : '<div class="hint" style="margin-top:10px">Abre una caja para poder finalizar ventas.</div>';
-  const cartHtml = POS_CART.length
-    ? `<div class="pos-cart-list">
+  const cartHtml = POS_CART.length || Number(tableAccount?.total || 0) > 0
+    ? `${roundHistoryHtml}
+      ${tableAccount ? `<div class="pos-current-round"><b><i class="ph-bold ph-plus-circle"></i> ${POS_CART.length ? `Nueva ronda ${tableRounds.length + 1}` : 'Sin ronda pendiente'}</b><small>${POS_CART.length ? `${POS_CART.reduce((sum, item) => sum + Number(item.qty || 0), 0)} producto(s) por enviar` : 'Agrega productos para iniciar la siguiente ronda.'}</small></div>` : ''}
+      <div class="pos-cart-list">
         ${POS_CART.map((item) => {
           const ck = item._cartKey ? `data-cart-key="${esc(item._cartKey)}"` : '';
           const pid = `data-pos-dec="${item.id}" data-cart-key="${esc(item._cartKey||'')}"`;
@@ -2299,33 +3591,46 @@ function renderPosCart() {
         </div>
         ${cashField}
         ${mixedFields}
-        <div class="toggle-row pos-delivery-toggle">
+        ${tableAccount ? '' : `<div class="toggle-row pos-delivery-toggle">
           <div class="t-info"><i class="ph-bold ph-moped"></i><div><b>Entrega a domicilio</b><span>Cobra envío y registra el pedido como domicilio</span></div></div>
           <label class="switch"><input type="checkbox" id="posDeliveryToggle" ${POS_IS_DELIVERY ? 'checked' : ''} /><span class="track"></span></label>
-        </div>
+        </div>`}
         ${POS_IS_DELIVERY ? `<div class="field">
           <label><i class="ph-bold ph-currency-circle-dollar"></i> Costo de envío</label>
           <input type="number" id="posDeliveryFee" step="0.01" min="0" value="${esc(String(POS_DELIVERY_FEE || ''))}" placeholder="0.00" />
           <div class="hint">Se suma al total y suma al turno en el rubro domicilios.</div>
         </div>` : ''}
         <div class="field">
-          <label><i class="ph-bold ph-note"></i> Nota de venta</label>
-          <textarea id="posSaleNotes" rows="2" placeholder="${POS_IS_DELIVERY ? 'Dirección, referencia de entrega...' : 'Mesa 4, venta rápida, pedido interno...'}">${esc(POS_PAYMENT_FORM.notes || '')}</textarea>
+          <label><i class="ph-bold ph-note"></i> ${tableAccount ? 'Nota de la ronda' : 'Nota de venta'}</label>
+          <textarea id="posSaleNotes" rows="2" placeholder="${tableAccount ? 'Ej. Sin cebolla, término medio...' : POS_IS_DELIVERY ? 'Dirección, referencia de entrega...' : 'Mesa 4, venta rápida, pedido interno...'}">${esc(POS_PAYMENT_FORM.notes || '')}</textarea>
         </div>
         <div style="display:flex;gap:10px;flex-wrap:wrap">
-          <button class="btn btn-primary" type="submit" ${submitDisabled}><i class="ph-bold ph-check-circle"></i> Cobrar venta</button>
-          <button class="btn btn-ghost" type="button" id="posClearCart"><i class="ph-bold ph-broom"></i> Vaciar ticket</button>
-          <button class="btn btn-ghost" type="button" id="posPrintTicket"><i class="ph-bold ph-printer"></i> Imprimir ticket</button>
+          <button class="btn btn-primary" type="submit" ${submitDisabled}><i class="ph-bold ph-check-circle"></i> ${tableAccount ? 'Cerrar y cobrar cuenta' : 'Cobrar venta'}</button>
+          ${tableAccount ? `<button class="btn btn-ghost" type="button" id="posSaveTable" ${POS_CART.length ? '' : 'disabled'}><i class="ph-bold ph-paper-plane-tilt"></i> Enviar ronda e imprimir</button>` : ''}
+          <button class="btn btn-ghost" type="button" id="posClearCart"><i class="ph-bold ${tableAccount ? 'ph-arrow-left' : 'ph-broom'}"></i> ${tableAccount ? 'Salir de mesa' : 'Vaciar ticket'}</button>
+          ${tableAccount ? '' : '<button class="btn btn-ghost" type="button" id="posPrintTicket"><i class="ph-bold ph-printer"></i> Imprimir ticket</button>'}
         </div>
         ${sessionHint}
       </form>`
-    : emptyHTML('ph-shopping-cart', 'Sin productos en el ticket', 'Toca productos del catálogo para agregarlos a la venta.');
+    : `${roundHistoryHtml}${emptyHTML('ph-shopping-cart', tableAccount ? `Mesa ${tableNumber} sin productos` : 'Sin productos en el ticket', 'Toca productos del catálogo para agregar la primera ronda.')}`;
+  const tableContext = tableAccount ? `
+    <div class="pos-table-context">
+      <div class="pos-table-context-head">
+        <div><b><i class="ph-bold ph-fork-knife"></i> Mesa ${esc(String(tableNumber || ''))}</b><small>Mesero: ${esc(tableAccount.waiter_name || '—')} · La cuenta se acumula hasta cobrarla.</small></div>
+        <button class="btn btn-ghost btn-icon" type="button" id="posExitTable" title="Salir de la mesa"><i class="ph-bold ph-x"></i></button>
+      </div>
+    </div>` : '';
   el.innerHTML = `
-    <h3><i class="ph-bold ph-shopping-cart"></i> Ticket actual</h3>
+    <h3><i class="ph-bold ${tableAccount ? 'ph-fork-knife' : 'ph-shopping-cart'}"></i> ${tableAccount ? `Cuenta mesa ${esc(String(tableNumber || ''))}` : 'Ticket actual'}</h3>
+    ${tableContext}
     ${cartHtml}`;
 
   document.querySelectorAll('.pos-dec-btn').forEach((button) => button.addEventListener('click', () => updatePosQty(button.dataset.pid, -1, button.dataset.cartKey || null)));
   document.querySelectorAll('.pos-inc-btn').forEach((button) => button.addEventListener('click', () => updatePosQty(button.dataset.pid, 1, button.dataset.cartKey || null)));
+  document.querySelectorAll('[data-print-table-round]').forEach((button) => button.addEventListener('click', () => {
+    const round = tableRounds.find((item) => Number(item.id) === Number(button.dataset.printTableRound));
+    printTableRoundTicket(round, tableAccount, tableAccount.total);
+  }));
   document.querySelectorAll('[data-pos-method]').forEach((button) =>
     button.addEventListener('click', () => {
       POS_PAYMENT_METHOD = button.dataset.posMethod;
@@ -2335,7 +3640,9 @@ function renderPosCart() {
       renderPosCart();
     })
   );
-  $('#posClearCart')?.addEventListener('click', clearPosCart);
+  $('#posClearCart')?.addEventListener('click', tableAccount ? exitPosTableAccount : clearPosCart);
+  $('#posExitTable')?.addEventListener('click', exitPosTableAccount);
+  $('#posSaveTable')?.addEventListener('click', () => sendActiveTableRound().catch((err) => toast(err.message, true)));
   $('#posPrintTicket')?.addEventListener('click', printPosTicket);
   $('#posCashReceived')?.addEventListener('input', (e) => {
     POS_PAYMENT_FORM.cashReceived = e.target.value;
@@ -2380,18 +3687,6 @@ function renderPosCart() {
     e.preventDefault();
     try {
       const payload = {
-        items: POS_CART.map((item) => ({
-          productId: item.id,
-          qty: item.qty,
-          name: item.name,
-          price: Number(item.price),
-          cartKey: item._cartKey || null,
-          variantId: item.variantId || null,
-          variantName: item.variantName || null,
-          modifiers: Array.isArray(item.modifiers) ? item.modifiers : [],
-          modifiersLabel: item.modifiersLabel || '',
-          modifiersExtraPrice: Number(item.modifiersExtraPrice || 0),
-        })),
         paymentMethod: POS_PAYMENT_METHOD,
         payments: {
           cash: Number($('#posMixCash')?.value || 0),
@@ -2403,13 +3698,21 @@ function renderPosCart() {
         isDelivery: POS_IS_DELIVERY,
         deliveryFee: POS_IS_DELIVERY ? Number($('#posDeliveryFee')?.value || 0) : 0,
       };
-      const result = await api('/api/pos/sales', {
+      if (!tableAccount) payload.items = posCartPayload();
+      let checkoutAccount = tableAccount;
+      if (tableAccount && POS_CART.length) {
+        const roundResult = await sendActiveTableRound({ silent: true });
+        checkoutAccount = roundResult.account;
+      }
+      const endpoint = checkoutAccount ? `/api/pos/table-accounts/${checkoutAccount.id}/checkout` : '/api/pos/sales';
+      const result = await api(endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
       });
       LAST_POS_SALE = result?.sale || null;
-      toast('Venta registrada en punto de venta');
+      toast(checkoutAccount ? `Cuenta de mesa ${tableNumber} cerrada` : 'Venta registrada en punto de venta');
+      POS_TABLE_ACCOUNT = null;
       clearPosCart();
       setTimeout(() => {
         if (LAST_POS_SALE) printPosTicket();
@@ -2761,6 +4064,7 @@ function openPosCloseModal() {
     tickets: 0,
   };
   const delivery = totals.delivery || { tickets: 0, total: 0, fees: 0 };
+  const tableSummary = totals.tables || { closedCount: 0, closedTotal: 0, openCount: 0, openTotal: 0, closed: [], open: [] };
   $('#posCloseSummary').innerHTML = `
     <div class="pos-close-groups">
       <div class="pos-close-group neutral">
@@ -2790,6 +4094,16 @@ function openPosCloseModal() {
           <div class="pos-mini-stat tone-green"><span>Costo envíos</span><b>${fmtMoney(delivery.fees || 0)}</b></div>
           <div class="pos-mini-stat tone-ink"><span>Cobrado efectivo</span><b>${fmtMoney(totals.collected?.cash || 0)}</b></div>
         </div>
+      </div>
+      <div class="pos-close-group payment">
+        <h4><i class="ph-bold ph-fork-knife"></i> Mesas del turno</h4>
+        <div class="pos-close-grid">
+          <div class="pos-mini-stat tone-green"><span>Mesas cerradas</span><b>${Number(tableSummary.closedCount || 0)}</b></div>
+          <div class="pos-mini-stat tone-blue"><span>Total mesas cerradas</span><b>${fmtMoney(tableSummary.closedTotal || 0)}</b></div>
+          <div class="pos-mini-stat ${tableSummary.openCount ? 'tone-red' : 'tone-ink'}"><span>Mesas abiertas</span><b>${Number(tableSummary.openCount || 0)}</b></div>
+          <div class="pos-mini-stat tone-amber"><span>Consumo aún abierto</span><b>${fmtMoney(tableSummary.openTotal || 0)}</b></div>
+        </div>
+        ${tableSummary.openCount ? `<div class="hint" style="margin-top:9px;color:var(--red)"><i class="ph-bold ph-warning"></i> Permanecerán abiertas: ${tableSummary.open.map((row) => `Mesa ${esc(String(row.table_number))} (${esc(row.waiter_name || 'sin mesero')})`).join(', ')}.</div>` : ''}
       </div>
       <div class="pos-close-group income">
         <h4><i class="ph-bold ph-trend-up"></i> Entradas</h4>
@@ -2830,6 +4144,24 @@ $('#posMovementKinds')?.addEventListener('click', (e) => {
 
 $('#posMovementCancel')?.addEventListener('click', () => $('#posMovementModal').classList.remove('show'));
 $('#posCloseCancel')?.addEventListener('click', () => $('#posCloseModal').classList.remove('show'));
+$('#posTablesClose')?.addEventListener('click', () => $('#posTablesModal').classList.remove('show'));
+$('#posTableOpenCancel')?.addEventListener('click', () => $('#posTableOpenModal').classList.remove('show'));
+$('#posTableOpenForm')?.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  try {
+    const tableId = Number($('#posTableOpenId')?.value || 0);
+    const result = await api(`/api/pos/tables/${tableId}/open`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ waiterName: $('#posTableWaiterName')?.value || '' }),
+    });
+    $('#posTableOpenModal').classList.remove('show');
+    await loadPos();
+    selectPosTableAccount(result.account);
+  } catch (err) {
+    toast(err.message, true);
+  }
+});
 $('#posSalesHistoryClose')?.addEventListener('click', () => $('#posSalesHistoryModal').classList.remove('show'));
 $('#posChatbotQueueClose')?.addEventListener('click', () => $('#posChatbotQueueModal').classList.remove('show'));
 $('#posChatbotQueueRefresh')?.addEventListener('click', () => {
@@ -2949,6 +4281,7 @@ $('#posCloseFormModal')?.addEventListener('submit', async (e) => {
         notes: $('#posClosingNoteModal').value,
       }),
     });
+    POS_TABLE_ACCOUNT = null;
     clearPosCart();
     $('#posCloseModal').classList.remove('show');
     toast(`Caja cerrada. Diferencia: ${fmtMoney(result.differenceAmount)}`);
@@ -3976,7 +5309,7 @@ $('#aiProductImport')?.addEventListener('click', async () => {
   }
 });
 
-[$('#prodModal'), $('#aiProductModal'), $('#catModal'), $('#confirmModal'), $('#branchModal'), $('#cashierModal'), $('#posMovementModal'), $('#posCloseModal'), $('#posSalesHistoryModal'), $('#posPaymentEditModal'), $('#orderCancelReasonModal'), $('#posProductConfigModal')].forEach((m) =>
+[$('#prodModal'), $('#aiProductModal'), $('#catModal'), $('#confirmModal'), $('#branchModal'), $('#cashierModal'), $('#posTablesModal'), $('#posTableOpenModal'), $('#posMovementModal'), $('#posCloseModal'), $('#posSalesHistoryModal'), $('#posPaymentEditModal'), $('#orderCancelReasonModal'), $('#posProductConfigModal')].forEach((m) =>
   m && m.addEventListener('click', (e) => {
     if (e.target === m) m.classList.remove('show');
   })
@@ -4165,15 +5498,18 @@ function fitDeliveryZonesBounds() {
 }
 
 function setChatbotSubtab(tab) {
-  CHATBOT_SUBTAB = tab === 'delivery' || tab === 'upsell' ? tab : 'flow';
+  CHATBOT_SUBTAB = ['delivery', 'upsell', 'tables'].includes(tab) ? tab : 'flow';
   const isDelivery = CHATBOT_SUBTAB === 'delivery';
   const isUpsell = CHATBOT_SUBTAB === 'upsell';
+  const isTables = CHATBOT_SUBTAB === 'tables';
   $('#chatbotTabFlow')?.classList.toggle('active', CHATBOT_SUBTAB === 'flow');
   $('#chatbotTabDelivery')?.classList.toggle('active', isDelivery);
   $('#chatbotTabUpsell')?.classList.toggle('active', isUpsell);
+  $('#chatbotTabTables')?.classList.toggle('active', isTables);
   $('#chatbotFlowPanel').hidden = CHATBOT_SUBTAB !== 'flow';
   $('#chatbotDeliveryPanel').hidden = !isDelivery;
   $('#chatbotUpsellPanel').hidden = !isUpsell;
+  $('#chatbotTablesPanel').hidden = !isTables;
   if (isDelivery) {
     ensureDeliveryZoneMap();
     setTimeout(() => {
@@ -4181,6 +5517,162 @@ function setChatbotSubtab(tab) {
       fitDeliveryZonesBounds();
     }, 80);
   }
+  if (isTables) loadTablesConfig().catch((err) => toast(err.message, true));
+}
+
+function currentTablesConfigBranch() {
+  return Number($('#tablesConfigBranch')?.value || 0);
+}
+
+function tablesForConfigBranch() {
+  const branchId = currentTablesConfigBranch();
+  return TABLES_CONFIG.filter((table) => Number(table.branchId || 0) === branchId);
+}
+
+async function loadTablesConfig() {
+  const data = await api('/api/pos/tables/config');
+  TABLES_CONFIG = Array.isArray(data.tables) ? data.tables : [];
+  TABLES_CONFIG_BRANCHES = Array.isArray(data.branches) ? data.branches : [];
+  const select = $('#tablesConfigBranch');
+  if (select) {
+    const current = String(select.value || '0');
+    select.innerHTML = ['<option value="0">Todas / general</option>', ...TABLES_CONFIG_BRANCHES.map((branch) => `<option value="${branch.id}">${esc(branch.name)}</option>`)].join('');
+    select.value = TABLES_CONFIG_BRANCHES.some((branch) => String(branch.id) === current) ? current : '0';
+  }
+  renderTablesConfig();
+}
+
+function createTableConfigDraft(tableNumber, branchId, index = 0, total = 1) {
+  const columns = Math.max(2, Math.ceil(Math.sqrt(total)));
+  const row = Math.floor(index / columns);
+  const col = index % columns;
+  const rows = Math.max(1, Math.ceil(total / columns));
+  return {
+    id: `new_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+    tableNumber,
+    label: `Mesa ${tableNumber}`,
+    branchId,
+    positionX: Math.round(10 + (col * 80) / Math.max(1, columns - 1)),
+    positionY: Math.round(12 + (row * 76) / Math.max(1, rows - 1)),
+    shape: 'round',
+    enabled: true,
+  };
+}
+
+function renderTablesConfig() {
+  renderTablesConfigLayout();
+  renderTablesConfigList();
+}
+
+function renderTablesConfigLayout() {
+  const host = $('#tablesConfigLayout');
+  if (!host) return;
+  const tables = tablesForConfigBranch();
+  host.innerHTML = tables.length ? tables.map((table) => `
+    <button type="button" class="table-config-node ${esc(table.shape || 'round')} ${table.enabled ? '' : 'disabled'} ${String(TABLES_CONFIG_SELECTED_ID) === String(table.id) ? 'selected' : ''}"
+      data-table-config-node="${esc(String(table.id))}" style="--x:${Number(table.positionX || 50)}%;--y:${Number(table.positionY || 50)}%">
+      <b>${esc(table.label || `Mesa ${table.tableNumber}`)}</b><small>#${table.tableNumber} · ${table.enabled ? 'Habilitada' : 'Deshabilitada'}</small>
+    </button>`).join('') : emptyHTML('ph-fork-knife', 'Sin mesas en esta sucursal', 'Genera la cantidad de mesas que utiliza el restaurante.');
+  host.querySelectorAll('[data-table-config-node]').forEach((node) => {
+    const id = node.dataset.tableConfigNode;
+    let moved = false;
+    node.addEventListener('pointerdown', (event) => {
+      if (event.button !== 0) return;
+      moved = false;
+      node.setPointerCapture(event.pointerId);
+      node.classList.add('dragging');
+    });
+    node.addEventListener('pointermove', (event) => {
+      if (!node.hasPointerCapture(event.pointerId)) return;
+      const rect = host.getBoundingClientRect();
+      const x = Math.max(5, Math.min(95, ((event.clientX - rect.left) / rect.width) * 100));
+      const y = Math.max(7, Math.min(93, ((event.clientY - rect.top) / rect.height) * 100));
+      const table = TABLES_CONFIG.find((item) => String(item.id) === id);
+      if (!table) return;
+      table.positionX = Math.round(x);
+      table.positionY = Math.round(y);
+      node.style.setProperty('--x', `${table.positionX}%`);
+      node.style.setProperty('--y', `${table.positionY}%`);
+      moved = true;
+    });
+    node.addEventListener('pointerup', (event) => {
+      if (node.hasPointerCapture(event.pointerId)) node.releasePointerCapture(event.pointerId);
+      node.classList.remove('dragging');
+      TABLES_CONFIG_SELECTED_ID = id;
+      if (!moved) renderTablesConfig();
+    });
+  });
+}
+
+function renderTablesConfigList() {
+  const host = $('#tablesConfigList');
+  if (!host) return;
+  const tables = tablesForConfigBranch();
+  const enabled = tables.filter((table) => table.enabled).length;
+  $('#tablesConfigSummary').textContent = `${tables.length} mesas · ${enabled} habilitadas`;
+  $('#tablesConfigCount').value = String(enabled || 1);
+  host.innerHTML = tables.length ? `<table><thead><tr><th>Mesa</th><th>Nombre visible</th><th>Forma</th><th>Mostrar en POS</th><th></th></tr></thead><tbody>${tables.map((table) => `
+    <tr data-table-config-row="${esc(String(table.id))}">
+      <td><input type="number" min="1" max="999" value="${table.tableNumber}" data-table-field="number" style="width:84px" /></td>
+      <td><input type="text" maxlength="40" value="${esc(table.label || '')}" data-table-field="label" /></td>
+      <td><select data-table-field="shape"><option value="round" ${table.shape === 'round' ? 'selected' : ''}>Redonda</option><option value="square" ${table.shape === 'square' ? 'selected' : ''}>Cuadrada</option><option value="rectangle" ${table.shape === 'rectangle' ? 'selected' : ''}>Rectangular</option></select></td>
+      <td><label class="switch"><input type="checkbox" data-table-field="enabled" ${table.enabled ? 'checked' : ''} /><span class="track"></span></label></td>
+      <td style="text-align:right"><button class="btn btn-danger btn-icon" type="button" data-table-delete="${esc(String(table.id))}" title="Eliminar"><i class="ph-bold ph-trash"></i></button></td>
+    </tr>`).join('')}</tbody></table>` : emptyHTML('ph-list-numbers', 'Sin mesas', 'Usa Generar mesas para comenzar.');
+  host.querySelectorAll('[data-table-config-row]').forEach((row) => {
+    const table = TABLES_CONFIG.find((item) => String(item.id) === row.dataset.tableConfigRow);
+    if (!table) return;
+    row.querySelector('[data-table-field="number"]').addEventListener('input', (event) => { table.tableNumber = Number(event.target.value || 0); renderTablesConfigLayout(); });
+    row.querySelector('[data-table-field="label"]').addEventListener('input', (event) => { table.label = event.target.value; renderTablesConfigLayout(); });
+    row.querySelector('[data-table-field="shape"]').addEventListener('change', (event) => { table.shape = event.target.value; renderTablesConfigLayout(); });
+    row.querySelector('[data-table-field="enabled"]').addEventListener('change', (event) => { table.enabled = event.target.checked; renderTablesConfigLayout(); $('#tablesConfigSummary').textContent = `${tables.length} mesas · ${tables.filter((item) => item.enabled).length} habilitadas`; });
+  });
+  host.querySelectorAll('[data-table-delete]').forEach((button) => button.addEventListener('click', async () => {
+    const id = button.dataset.tableDelete;
+    const table = TABLES_CONFIG.find((item) => String(item.id) === id);
+    if (!table) return;
+    if (Number.isInteger(Number(table.id)) && Number(table.id) > 0) {
+      try {
+        await api(`/api/pos/tables/config/${table.id}`, { method: 'DELETE' });
+      } catch (err) {
+        return toast(err.message, true);
+      }
+    }
+    TABLES_CONFIG = TABLES_CONFIG.filter((item) => String(item.id) !== id);
+    renderTablesConfig();
+  }));
+}
+
+function generateTablesConfig() {
+  const branchId = currentTablesConfigBranch();
+  const count = Math.max(1, Math.min(200, Number($('#tablesConfigCount')?.value || 1)));
+  const current = tablesForConfigBranch();
+  const used = new Set(current.map((table) => Number(table.tableNumber)));
+  current.forEach((table, index) => { table.enabled = index < count; });
+  if (current.length < count) {
+    let next = 1;
+    for (let i = current.length; i < count; i += 1) {
+      while (used.has(next)) next += 1;
+      const draft = createTableConfigDraft(next, branchId, i, count);
+      used.add(next);
+      TABLES_CONFIG.push(draft);
+      next += 1;
+    }
+  } else if (current.length > count) {
+    toast('Las mesas excedentes se conservaron deshabilitadas para no perder su historial');
+  }
+  renderTablesConfig();
+}
+
+async function saveTablesConfig() {
+  const tables = TABLES_CONFIG.map((table) => ({
+    id: Number.isInteger(Number(table.id)) ? Number(table.id) : null,
+    tableNumber: Number(table.tableNumber), label: table.label || '', branchId: Number(table.branchId || 0),
+    positionX: Number(table.positionX || 50), positionY: Number(table.positionY || 50), shape: table.shape || 'round', enabled: Boolean(table.enabled),
+  }));
+  await api('/api/pos/tables/config', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ tables }) });
+  toast('Distribución de mesas guardada');
+  await loadTablesConfig();
 }
 
 function normalizeInfoUrl(raw) {
@@ -4747,6 +6239,19 @@ function initDeliveryZoneModuleEvents() {
   $('#chatbotTabFlow')?.addEventListener('click', () => setChatbotSubtab('flow'));
   $('#chatbotTabDelivery')?.addEventListener('click', () => setChatbotSubtab('delivery'));
   $('#chatbotTabUpsell')?.addEventListener('click', () => setChatbotSubtab('upsell'));
+  $('#chatbotTabTables')?.addEventListener('click', () => setChatbotSubtab('tables'));
+  $('#tablesConfigBranch')?.addEventListener('change', renderTablesConfig);
+  $('#tablesConfigGenerate')?.addEventListener('click', generateTablesConfig);
+  $('#tablesConfigAdd')?.addEventListener('click', () => {
+    const branchId = currentTablesConfigBranch();
+    const current = tablesForConfigBranch();
+    const used = new Set(current.map((table) => Number(table.tableNumber)));
+    let next = 1;
+    while (used.has(next)) next += 1;
+    TABLES_CONFIG.push(createTableConfigDraft(next, branchId, current.length, current.length + 1));
+    renderTablesConfig();
+  });
+  $('#tablesConfigSave')?.addEventListener('click', () => saveTablesConfig().catch((err) => toast(err.message, true)));
 
   $('#deliveryStartDraw')?.addEventListener('click', () => {
     const next = !DELIVERY_DRAW_ACTIVE;
@@ -5082,6 +6587,61 @@ $('#cashierForm')?.addEventListener('submit', async (e) => {
 
 /* ===== Mi negocio ===== */
 const PALETTE = ['#ff6b35', '#e11d48', '#d97706', '#16a34a', '#0891b2', '#2563eb', '#7c3aed', '#db2777', '#171c2e'];
+let BANK_ACCOUNTS = [];
+
+function readBankAccountInputs() {
+  return [...document.querySelectorAll('.bank-account-card')].map((card) => ({
+    bankName: card.querySelector('[data-bank-field="bankName"]').value.trim(),
+    holderName: card.querySelector('[data-bank-field="holderName"]').value.trim(),
+    identifierType: card.querySelector('[data-bank-field="identifierType"]').value,
+    identifier: card.querySelector('[data-bank-field="identifier"]').value.trim(),
+  }));
+}
+
+function renderBankAccounts() {
+  const list = $('#bankAccountsList');
+  if (!list) return;
+  if (!BANK_ACCOUNTS.length) {
+    list.innerHTML = '<div class="bank-account-empty"><i class="ph-bold ph-bank"></i> Agrega la cuenta que usarán tus clientes para transferir.</div>';
+    return;
+  }
+  list.innerHTML = BANK_ACCOUNTS.map((account, index) => `
+    <article class="bank-account-card" data-bank-account="${index}">
+      <div class="bank-account-card-head">
+        <b>Cuenta bancaria ${index + 1}</b>
+        <button class="btn btn-danger btn-icon bank-account-remove" type="button" data-remove-bank="${index}" title="Eliminar cuenta" aria-label="Eliminar cuenta ${index + 1}">
+          <i class="ph-bold ph-trash"></i>
+        </button>
+      </div>
+      <div class="bank-account-fields">
+        <div class="field">
+          <label>Nombre del banco</label>
+          <input type="text" data-bank-field="bankName" maxlength="80" value="${esc(account.bankName || '')}" placeholder="Ej. BBVA" />
+        </div>
+        <div class="field">
+          <label>Nombre del titular</label>
+          <input type="text" data-bank-field="holderName" maxlength="100" value="${esc(account.holderName || '')}" placeholder="Persona o razón social" />
+        </div>
+        <div class="field">
+          <label>Tipo de dato</label>
+          <select data-bank-field="identifierType">
+            <option value="account" ${account.identifierType === 'account' ? 'selected' : ''}>Número de cuenta</option>
+            <option value="clabe" ${account.identifierType === 'clabe' ? 'selected' : ''}>CLABE interbancaria</option>
+            <option value="card" ${account.identifierType === 'card' ? 'selected' : ''}>Número de tarjeta</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>Número</label>
+          <input type="text" inputmode="numeric" data-bank-field="identifier" maxlength="50" value="${esc(account.identifier || '')}" placeholder="Ingresa el número completo" />
+        </div>
+      </div>
+    </article>`).join('');
+}
+
+function syncBankAccountsVisibility() {
+  const enabled = $('#cfgChatPayDeliveryTransfer').checked || $('#cfgChatPayPickupTransfer').checked;
+  $('#cfgBankAccountsPanel').hidden = !enabled;
+}
 
 function renderSwatches() {
   const current = $('#cfgColor').value;
@@ -5114,6 +6674,14 @@ function fillConfigForm() {
   $('#cfgChatPayPickupCash').checked = (SETTINGS.chatbot_payment_pickup_cash || '1') === '1';
   $('#cfgChatPayPickupTransfer').checked = (SETTINGS.chatbot_payment_pickup_transfer || '0') === '1';
   $('#cfgChatPayPickupCard').checked = (SETTINGS.chatbot_payment_pickup_card || '0') === '1';
+  try {
+    const parsedAccounts = JSON.parse(SETTINGS.chatbot_bank_accounts_json || '[]');
+    BANK_ACCOUNTS = Array.isArray(parsedAccounts) ? parsedAccounts : [];
+  } catch {
+    BANK_ACCOUNTS = [];
+  }
+  renderBankAccounts();
+  syncBankAccountsVisibility();
   $('#cfgPosChatIntegration').checked = (SETTINGS.chatbot_pos_integration_enabled || '0') === '1';
   $('#cfgTicketWidth').value = String(Number(SETTINGS.ticket_width_mm || 80));
   $('#cfgTicketFont').value = String(Number(SETTINGS.ticket_font_size_px || 14));
@@ -5129,6 +6697,24 @@ function fillConfigForm() {
 $('#cfgLogo').addEventListener('change', () => {
   const f = $('#cfgLogo').files[0];
   if (f) $('#logoPreview').innerHTML = `<img src="${URL.createObjectURL(f)}" alt="" />`;
+});
+$('#addBankAccountBtn')?.addEventListener('click', () => {
+  BANK_ACCOUNTS = readBankAccountInputs();
+  if (BANK_ACCOUNTS.length >= 10) return toast('Puedes configurar hasta 10 cuentas bancarias', true);
+  BANK_ACCOUNTS.push({ bankName: '', holderName: '', identifierType: 'clabe', identifier: '' });
+  renderBankAccounts();
+  const cards = document.querySelectorAll('.bank-account-card');
+  cards[cards.length - 1]?.querySelector('input')?.focus();
+});
+$('#bankAccountsList')?.addEventListener('click', (event) => {
+  const button = event.target.closest('[data-remove-bank]');
+  if (!button) return;
+  BANK_ACCOUNTS = readBankAccountInputs();
+  BANK_ACCOUNTS.splice(Number(button.dataset.removeBank), 1);
+  renderBankAccounts();
+});
+[$('#cfgChatPayDeliveryTransfer'), $('#cfgChatPayPickupTransfer')].forEach((checkbox) => {
+  checkbox?.addEventListener('change', syncBankAccountsVisibility);
 });
 $('#configForm').addEventListener('submit', async (e) => {
   e.preventDefault();
@@ -5157,6 +6743,14 @@ $('#contactForm').addEventListener('submit', async (e) => {
   if (pickupEnabled && !hasPickupPayment) {
     return toast('Activa al menos un medio de pago para recoger en sucursal', true);
   }
+  const transferEnabled = $('#cfgChatPayDeliveryTransfer').checked || $('#cfgChatPayPickupTransfer').checked;
+  BANK_ACCOUNTS = readBankAccountInputs();
+  if (transferEnabled && !BANK_ACCOUNTS.length) {
+    return toast('Agrega al menos una cuenta para recibir transferencias', true);
+  }
+  if (BANK_ACCOUNTS.some((account) => !account.bankName || !account.holderName || !account.identifierType || !account.identifier)) {
+    return toast('Completa todos los datos de cada cuenta bancaria', true);
+  }
   const fd = new FormData();
   fd.append('address', $('#cfgAddress').value);
   fd.append('hours', $('#cfgHours').value);
@@ -5167,9 +6761,10 @@ $('#contactForm').addEventListener('submit', async (e) => {
   fd.append('chatbot_payment_pickup_cash', $('#cfgChatPayPickupCash').checked ? '1' : '0');
   fd.append('chatbot_payment_pickup_transfer', $('#cfgChatPayPickupTransfer').checked ? '1' : '0');
   fd.append('chatbot_payment_pickup_card', $('#cfgChatPayPickupCard').checked ? '1' : '0');
+  fd.append('chatbot_bank_accounts_json', JSON.stringify(BANK_ACCOUNTS));
   fd.append('chatbot_pos_integration_enabled', $('#cfgPosChatIntegration').checked ? '1' : '0');
   await api('/api/settings', { method: 'PUT', body: fd });
-  toast('Datos de contacto guardados');
+  toast('Cuentas y medios de pago guardados');
   SETTINGS = await api('/api/settings');
   fillConfigForm();
 });
@@ -5626,6 +7221,8 @@ let INV_START_DATE = '';
 let INV_END_DATE = '';
 let INV_SORT_KEY = 'product_name';
 let INV_SORT_DIR = 'asc';
+let INV_BRANCH = 'all';
+let INV_BRANCHES = [];
 
 const INV_PERIOD_HINTS = {
   all: 'Mostrando acumulado desde el ultimo corte (fisico real a inicial).',
@@ -5659,9 +7256,16 @@ async function loadInventarios() {
       params.set('startDate', INV_START_DATE);
       params.set('endDate', INV_END_DATE);
     }
+    params.set('branch', INV_BRANCH);
     const path = params.toString() ? `/api/inventory?${params.toString()}` : '/api/inventory';
     const payload = await api(path);
     INV_DATA = Array.isArray(payload) ? payload : (payload.rows || []);
+    INV_BRANCHES = payload.branches || INV_BRANCHES;
+    const branchSelect = $('#invBranchFilter');
+    if (branchSelect) {
+      branchSelect.innerHTML = '<option value="all">Global · todas las sucursales</option>' + INV_BRANCHES.map((row)=>`<option value="${row.id}">${esc(row.name)}${row.active?'':' · Inactiva'}</option>`).join('');
+      branchSelect.value = INV_BRANCH;
+    }
     INV_PRODUCTS = INV_DATA.map((r) => ({ id: r.product_id, name: r.product_name }));
     if (INV_PAGE < 1) INV_PAGE = 1;
     renderInvTable();
@@ -5752,7 +7356,7 @@ function renderInvTable() {
   syncInvPager(totalPages);
 
   if (!rows.length) {
-    tbody.innerHTML = `<tr><td colspan="9" class="empty-cell">Sin resultados</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="11" class="empty-cell">Sin resultados</td></tr>`;
     return;
   }
   tbody.innerHTML = rowsPage.map((r) => {
@@ -5766,6 +7370,8 @@ function renderInvTable() {
         <button class="inv-init-btn btn-link-plain" data-pid="${r.product_id}" title="Editar inventario inicial">${invFmt(r.initial_stock)}</button>
       </td>
       <td class="num inv-col-entrada">${invFmt(r.entradas)}</td>
+      <td class="num inv-col-compras">${invFmt(r.compras || 0)}</td>
+      <td class="num">${Number(r.traslados||0)>0?'+':''}${invFmt(r.traslados||0)}</td>
       <td class="num inv-col-merma">${invFmt(r.mermas)}</td>
       <td class="num inv-col-ventas">${invFmt(r.ventas)}</td>
       <td class="num inv-col-sistema"><b>${invFmt(r.fisico_sistema)}</b></td>
@@ -5897,12 +7503,17 @@ function bindInvPeriodControls() {
 function updateInvPeriodHint() {
   const hint = $('#invPeriodHint');
   if (!hint) return;
+  const scope = INV_BRANCH === 'all' ? 'Global consolidado' : (INV_BRANCHES.find((row)=>String(row.id)===String(INV_BRANCH))?.name || 'Sucursal');
   if (INV_PERIOD === 'custom' && INV_START_DATE && INV_END_DATE) {
-    hint.textContent = `Mostrando del ${INV_START_DATE} al ${INV_END_DATE}.`;
+    hint.textContent = `${scope} · mostrando del ${INV_START_DATE} al ${INV_END_DATE}.`;
     return;
   }
-  hint.textContent = INV_PERIOD_HINTS[INV_PERIOD] || INV_PERIOD_HINTS.all;
+  hint.textContent = `${scope} · ${INV_PERIOD_HINTS[INV_PERIOD] || INV_PERIOD_HINTS.all}`;
 }
+
+$('#invBranchFilter')?.addEventListener('change', async (event) => {
+  INV_BRANCH = String(event.target.value || 'all'); INV_PAGE = 1; await loadInventarios();
+});
 
 function buildInvPeriodPayload() {
   const payload = {};
@@ -5919,10 +7530,10 @@ async function applyRealToInitial(productId = null, options = {}) {
   const closureNote = String(options.closureNote || '').trim();
   const isSingle = Number(productId) > 0;
   const title = isSingle
-    ? 'Aplicar físico real a inventario inicial'
+    ? (INV_BRANCH==='all'?'Aplicar físico real a inventario inicial':'Aplicar conteo al stock de sucursal')
     : (logAdjustment ? 'Cierre de periodo con ajuste auditable' : 'Aplicar físico real a inicial (global)');
   const msg = isSingle
-    ? 'Se actualizará el inventario inicial del producto con su último físico real. ¿Continuar?'
+    ? (INV_BRANCH==='all'?'Se actualizará el inventario inicial del producto con su último físico real. ¿Continuar?':'Se ajustará la existencia de esta sucursal al último conteo físico y se guardará en auditoría. ¿Continuar?')
     : (logAdjustment
       ? 'Se aplicará físico real a inventario inicial de todos los productos con conteo y se guardará una bitácora auditable del cierre. ¿Continuar?'
       : 'Se actualizará el inventario inicial de todos los productos con su último físico real. ¿Continuar?');
@@ -5933,6 +7544,7 @@ async function applyRealToInitial(productId = null, options = {}) {
       ...(isSingle ? { product_id: Number(productId) } : {}),
       ...buildInvPeriodPayload(),
     };
+    if (INV_BRANCH !== 'all') payload.branch_id = Number(INV_BRANCH);
     if (logAdjustment) {
       payload.logAdjustment = true;
       payload.closure_note = closureNote || `Cierre de ${INV_PERIOD === 'all' ? 'acumulado general' : INV_PERIOD}`;
@@ -6014,6 +7626,15 @@ function buildInvMovProductSelect() {
     INV_PRODUCTS.map((p) => `<option value="${p.id}">${esc(p.name)}</option>`).join('');
 }
 
+function invSelectedBranchId() {
+  const selected = INV_BRANCHES.find((row)=>String(row.id)===String(INV_BRANCH));
+  if (selected?.active) return Number(selected.id);
+  return Number(INV_BRANCHES.find((row)=>row.active)?.id || 0);
+}
+function invBranchOptions(selected = invSelectedBranchId()) {
+  return INV_BRANCHES.filter((row)=>row.active).map((row)=>`<option value="${row.id}" ${Number(row.id)===Number(selected)?'selected':''}>${esc(row.name)}</option>`).join('');
+}
+
 function buildInvMovHistFilter() {
   const sel = $('#invMovHistFilter');
   if (!sel) return;
@@ -6023,6 +7644,8 @@ function buildInvMovHistFilter() {
 
 /* ── Modal: inventario inicial ── */
 function openInvInitModal(productId) {
+  if (INV_BRANCH === 'all') return toast('Selecciona una sucursal para editar su inventario inicial', true);
+  if (!INV_BRANCHES.find((row)=>String(row.id)===String(INV_BRANCH))?.active) return toast('La sucursal inactiva sólo está disponible para consulta histórica', true);
   const row = INV_DATA.find((r) => r.product_id === productId);
   if (!row) return;
   $('#invInitProductId').value = productId;
@@ -6030,6 +7653,8 @@ function openInvInitModal(productId) {
   $('#invInitStock').value = row.initial_stock ?? 0;
   $('#invInitUnit').value = row.unit || 'pcs';
   $('#invInitNotes').value = '';
+  $('#invInitBranch').innerHTML = invBranchOptions();
+  $('#invInitBranch').disabled = true;
   openModal('invInitModal');
 }
 
@@ -6044,6 +7669,7 @@ $('#invInitForm')?.addEventListener('submit', async (e) => {
         initial_stock: Number($('#invInitStock').value),
         unit: $('#invInitUnit').value,
         notes: $('#invInitNotes').value,
+        branch_id: Number($('#invInitBranch').value),
       }),
     });
     closeModal('invInitModal');
@@ -7737,6 +9363,10 @@ function openInvMovModal(type, productId = null) {
   $('#invMovType').value = type;
   $('#invMovQty').value = '';
   $('#invMovNotes').value = '';
+  $('#invMovUnitCost').value = '';
+  $('#invMovUnitCostField').hidden = type !== 'entrada';
+  $('#invMovUnitCost').required = type === 'entrada';
+  $('#invMovBranch').innerHTML = invBranchOptions();
   const btn = $('#invMovSave');
   if (btn) {
     btn.className = `btn ${type === 'entrada' ? 'btn-primary' : 'btn-danger'}`;
@@ -7758,6 +9388,8 @@ $('#invMovForm')?.addEventListener('submit', async (e) => {
   if (!pid) { toast('Selecciona un producto', true); return; }
   const qty = Number($('#invMovQty').value);
   if (!qty || qty <= 0) { toast('Cantidad debe ser mayor a 0', true); return; }
+  const unitCost = $('#invMovType').value === 'entrada' ? Number($('#invMovUnitCost').value) : null;
+  if ($('#invMovType').value === 'entrada' && (!Number.isFinite(unitCost) || unitCost < 0)) { toast('Ingresa el costo unitario de la entrada', true); return; }
   try {
     await api('/api/inventory/movements', {
       method: 'POST',
@@ -7766,7 +9398,9 @@ $('#invMovForm')?.addEventListener('submit', async (e) => {
         product_id: pid,
         type: $('#invMovType').value,
         quantity: qty,
+        unit_cost: unitCost,
         notes: $('#invMovNotes').value,
+        branch_id: Number($('#invMovBranch').value),
       }),
     });
     closeModal('invMovModal');
@@ -7867,6 +9501,9 @@ function renderInvCountPage() {
 }
 
 function openInvCountModal() {
+  if (INV_BRANCH !== 'all' && !INV_BRANCHES.find((row)=>String(row.id)===String(INV_BRANCH))?.active) {
+    return toast('La sucursal inactiva sólo está disponible para consulta histórica', true);
+  }
   INV_COUNT_PAGE = 1;
   INV_COUNT_SEARCH = '';
   INV_COUNT_VALUES.clear();
@@ -7912,7 +9549,7 @@ $('#invCountSave')?.addEventListener('click', async () => {
     await Promise.all(counts.map((c) => api('/api/inventory/count', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(c),
+        body: JSON.stringify({ ...c, branch_id: INV_BRANCH !== 'all' ? Number(INV_BRANCH) : null }),
     })));
     closeModal('invCountModal');
     await loadInventarios();
@@ -7938,7 +9575,8 @@ async function loadInvMovHist() {
   const sel = $('#invMovHistFilter');
   const pid = sel ? Number(sel.value) : 0;
   const params = new URLSearchParams();
-  if (pid) params.set('product_id', String(pid));
+    if (pid) params.set('product_id', String(pid));
+    if (INV_BRANCH !== 'all') params.set('branch', INV_BRANCH);
   if (INV_PERIOD !== 'all') params.set('period', INV_PERIOD);
   if (INV_PERIOD === 'custom' && INV_START_DATE && INV_END_DATE) {
     params.set('startDate', INV_START_DATE);
@@ -7953,15 +9591,18 @@ async function loadInvMovHist() {
     if (!wrap) return;
     if (!rows.length) { wrap.innerHTML = '<p class="empty-cell" style="padding:16px">Sin movimientos registrados</p>'; return; }
     wrap.innerHTML = `<table class="inv-table">
-      <thead><tr><th>Producto</th><th>Tipo</th><th class="num">Cantidad</th><th>Notas</th><th>Usuario</th><th>Fecha</th><th></th></tr></thead>
+      <thead><tr><th>Producto</th><th>Tipo</th><th>Sucursal</th><th class="num">Cantidad</th><th class="num">Costo unitario</th><th class="num">Costo total</th><th>Notas</th><th>Usuario</th><th>Fecha</th><th></th></tr></thead>
       <tbody>${rows.map((m) => `<tr>
         <td>${esc(m.product_name)}</td>
-        <td><span class="inv-type-badge inv-type-${m.type}">${m.type === 'entrada' ? '⬇ Entrada' : '⚠ Merma'}</span></td>
+        <td><span class="inv-type-badge inv-type-${m.type}">${m.source_type === 'purchase' ? '🛒 Compra' : m.type === 'entrada' ? '⬇ Entrada' : '⚠ Merma'}</span></td>
+        <td>${esc(m.branch_name || '—')}</td>
         <td class="num">${invFmt(m.quantity)}</td>
+        <td class="num">${m.type === 'entrada' ? fmtMoney(m.unit_cost || 0) : '—'}</td>
+        <td class="num">${m.type === 'entrada' ? fmtMoney(m.total_cost || 0) : '—'}</td>
         <td>${esc(m.notes || '—')}</td>
         <td>${esc(m.created_by || '—')}</td>
         <td style="white-space:nowrap">${esc(m.created_at)}</td>
-        <td><button class="btn btn-ghost btn-sm inv-del-mov" data-id="${m.id}" title="Eliminar"><i class="ph-bold ph-trash"></i></button></td>
+        <td>${m.source_type === 'purchase' ? '<i class="ph-bold ph-lock" title="Movimiento auditado"></i>' : `<button class="btn btn-ghost btn-sm inv-del-mov" data-id="${m.id}" title="Eliminar"><i class="ph-bold ph-trash"></i></button>`}</td>
       </tr>`).join('')}</tbody>
     </table>`;
     wrap.querySelectorAll('.inv-del-mov').forEach((btn) => {
@@ -8033,6 +9674,7 @@ $('#invExportRun')?.addEventListener('click', async () => {
       params.set('startDate', INV_START_DATE);
       params.set('endDate', INV_END_DATE);
     }
+    params.set('branch', INV_BRANCH);
     const exportPath = params.toString() ? `/api/inventory/export?${params.toString()}` : '/api/inventory/export';
     const data = await api(exportPath);
     let summary = data.summary || [];
@@ -8063,11 +9705,11 @@ function exportInvCSV(summary, movements, opts) {
   if (opts.includeSummary) {
     lines.push(`Reporte de Inventario — ${now}`);
     lines.push('');
-    lines.push(['Producto','Unidad','Inv. Inicial','Entradas','Mermas','Ventas','Físico Sistema','Físico Real','Diferencia'].map(csvEscape).join(','));
+    lines.push(['Producto','Unidad','Inv. Inicial','Entradas','Compras','Traslados','Mermas','Ventas','Físico Sistema','Físico Real','Diferencia'].map(csvEscape).join(','));
     for (const r of summary) {
       lines.push([
         r.product_name, r.unit ?? 'pcs',
-        r.initial_stock, r.entradas, r.mermas, r.ventas,
+        r.initial_stock, r.entradas, r.compras || 0, r.traslados || 0, r.mermas, r.ventas,
         r.fisico_sistema, r.fisico_real ?? '', r.diferencia ?? '',
       ].map(csvEscape).join(','));
     }
@@ -8079,7 +9721,7 @@ function exportInvCSV(summary, movements, opts) {
     lines.push(['Producto','Tipo','Cantidad','Notas','Usuario','Fecha'].map(csvEscape).join(','));
     for (const m of movements) {
       lines.push([
-        m.product_name, m.type, m.quantity, m.notes || '', m.created_by || '', m.created_at,
+        m.product_name, m.source_type === 'purchase' ? 'compra' : m.type, m.quantity, m.notes || '', m.created_by || '', m.created_at,
       ].map(csvEscape).join(','));
     }
   }
@@ -8102,7 +9744,7 @@ function exportInvPDF(summary, movements, opts) {
     <h2>Resumen de Inventario</h2>
     <table>
       <thead><tr>
-        <th>Producto</th><th>Unidad</th><th>Ini.</th><th>Entradas</th>
+        <th>Producto</th><th>Unidad</th><th>Ini.</th><th>Entradas</th><th>Compras</th><th>Traslados</th>
         <th>Mermas</th><th>Ventas</th><th>F. Sistema</th><th>F. Real</th><th>Diferencia</th>
       </tr></thead>
       <tbody>${summary.map((r) => {
@@ -8112,6 +9754,8 @@ function exportInvPDF(summary, movements, opts) {
           <td>${r.unit ?? 'pcs'}</td>
           <td>${r.initial_stock}</td>
           <td>${r.entradas}</td>
+          <td>${r.compras || 0}</td>
+          <td>${r.traslados || 0}</td>
           <td>${r.mermas}</td>
           <td>${r.ventas}</td>
           <td><b>${r.fisico_sistema}</b></td>
@@ -8127,7 +9771,7 @@ function exportInvPDF(summary, movements, opts) {
       <thead><tr><th>Producto</th><th>Tipo</th><th>Cantidad</th><th>Notas</th><th>Usuario</th><th>Fecha</th></tr></thead>
       <tbody>${movements.map((m) => `<tr>
         <td>${m.product_name}</td>
-        <td style="color:${m.type === 'entrada' ? '#16a34a' : '#dc2626'}">${m.type}</td>
+        <td style="color:${m.type === 'entrada' ? '#16a34a' : '#dc2626'}">${m.source_type === 'purchase' ? 'compra' : m.type}</td>
         <td>${m.quantity}</td>
         <td>${m.notes || '—'}</td>
         <td>${m.created_by || '—'}</td>

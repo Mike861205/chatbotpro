@@ -1,10 +1,13 @@
 const express = require('express');
 const { requireAuth, requireOwner } = require('../middleware/auth');
 const { decrypt } = require('../utils/crypto');
+const { ensurePurchasingSchema } = require('../utils/purchasing');
+const { ensureBranchStockSchema, initializeBranchStock, applyBranchSaleStock, restoreBranchSaleStock } = require('../utils/branchStock');
 
 const router = express.Router();
 router.use(requireAuth);
 router.use(requireOwner);
+router.use(async (req,res,next)=>{try{await ensurePurchasingSchema(req.tdb);await ensureBranchStockSchema(req.tdb);await initializeBranchStock(req.tdb,req.user?.username||'system');next();}catch(error){next(error);}});
 
 const STATUSES = ['pendiente', 'confirmado', 'preparando', 'enviado', 'entregado', 'cancelado'];
 
@@ -79,13 +82,13 @@ router.patch('/:id', async (req, res, next) => {
     if (status === 'cancelado') {
       const note = String(cancel_note || '').trim();
       if (note.length < 3) return res.status(400).json({ error: 'Escribe un motivo de cancelación válido' });
-      const r = await req.tdb.run('UPDATE {s}.orders SET status = $1, cancel_note = $2 WHERE id = $3', [status, note.slice(0, 280), req.params.id]);
-      if (!r.rowCount) return res.status(404).json({ error: 'Pedido no encontrado' });
+      const changed=await req.tdb.tx(async tx=>{const order=await tx.get('SELECT id,status,items,service_branch_id,pickup_branch_id,branch_stock_applied FROM {s}.orders WHERE id=$1 FOR UPDATE',[req.params.id]);if(!order)return false;if(order.status!=='cancelado'&&Number(order.branch_stock_applied))await restoreBranchSaleStock(tx,order.service_branch_id||order.pickup_branch_id,order.items);await tx.run('UPDATE {s}.orders SET status=$1,cancel_note=$2,branch_stock_applied=0 WHERE id=$3',[status,note.slice(0,280),req.params.id]);return true;});
+      if (!changed) return res.status(404).json({ error: 'Pedido no encontrado' });
       return res.json({ ok: true });
     }
 
-    const r = await req.tdb.run('UPDATE {s}.orders SET status = $1, cancel_note = NULL WHERE id = $2', [status, req.params.id]);
-    if (!r.rowCount) return res.status(404).json({ error: 'Pedido no encontrado' });
+    const changed=await req.tdb.tx(async tx=>{const order=await tx.get('SELECT id,status,items,service_branch_id,pickup_branch_id,branch_stock_applied FROM {s}.orders WHERE id=$1 FOR UPDATE',[req.params.id]);if(!order)return false;let applied=Number(order.branch_stock_applied);if(order.status==='cancelado'&&!applied&&await applyBranchSaleStock(tx,order.service_branch_id||order.pickup_branch_id,order.items))applied=1;await tx.run('UPDATE {s}.orders SET status=$1,cancel_note=NULL,branch_stock_applied=$2 WHERE id=$3',[status,applied,req.params.id]);return true;});
+    if (!changed) return res.status(404).json({ error: 'Pedido no encontrado' });
     res.json({ ok: true });
   } catch (e) { next(e); }
 });

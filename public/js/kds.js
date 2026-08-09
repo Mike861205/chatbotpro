@@ -96,16 +96,20 @@
         ? ['ready', 'ph-check-circle', 'Marcar listo']
         : ['completed', 'ph-hand-palm', 'Entregar / retirar'];
     const back = ticket.status === 'preparing' ? 'pending' : ticket.status === 'ready' ? 'preparing' : '';
-    const channelLabel = ticket.channel === 'pos' ? 'Punto de venta' : 'Chatbot';
+    const channelLabel = ticket.channel === 'table_round' ? 'Mesa' : ticket.channel === 'pos' ? 'Punto de venta' : 'Chatbot';
+    const ticketLabel = ticket.channel === 'table_round'
+      ? `Mesa ${ticket.tableNumber} · Ronda ${ticket.roundNumber}`
+      : `#${ticket.id}`;
     const otherNames = ticket.otherItems.map((item) => `${item.qty || 1}× ${item.name || 'Producto'}`).join(' · ');
     const routeNames = ticket.routedAreas.map((area) => area.name).join(' + ');
     return `<article class="kds-ticket ${urgent ? 'urgent' : ''}" data-ticket="${ticket.id}" style="--ticket-color:${esc(payload.area.color)}">
       <div class="ticket-head">
-        <div class="ticket-number">#${ticket.id}<span class="ticket-channel">${channelLabel}</span></div>
+        <div class="ticket-number">${esc(ticketLabel)}<span class="ticket-channel">${channelLabel}</span></div>
         <div class="ticket-time"><b>${timeLabel(ticket.createdAt)}</b><small class="${urgent ? 'late' : ''}">hace ${age} min</small></div>
       </div>
       <div class="ticket-meta">
         ${ticket.customerName ? `<span><i class="ph-bold ph-user"></i> ${esc(ticket.customerName)}</span>` : ''}
+        ${ticket.waiterName ? `<span><i class="ph-bold ph-identification-badge"></i> Mesero: ${esc(ticket.waiterName)}</span>` : ''}
         ${ticket.branchName ? `<span><i class="ph-bold ph-storefront"></i> ${esc(ticket.branchName)}</span>` : ''}
         <span><i class="ph-bold ${ticket.delivery === 'domicilio' ? 'ph-scooter' : 'ph-shopping-bag-open'}"></i> ${esc(ticket.delivery || 'mostrador')}</span>
         ${ticket.isMixed ? `<span class="mixed-badge"><i class="ph-bold ph-arrows-split"></i> Mixto: ${esc(routeNames || 'varias áreas')}</span>` : ''}
@@ -198,10 +202,13 @@
       const data = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(data.error || 'No se pudo actualizar la comanda');
       const ticket = payload?.tickets.find((item) => Number(item.id) === Number(orderId));
+      const ticketLabel = ticket?.channel === 'table_round'
+        ? `Mesa ${ticket.tableNumber} · Ronda ${ticket.roundNumber}`
+        : `Pedido #${orderId}`;
       if (ticket) ticket.status = status;
       if (status === 'completed' && payload) payload.tickets = payload.tickets.filter((item) => Number(item.id) !== Number(orderId));
       render();
-      toast(status === 'ready' ? `Pedido #${orderId} listo` : status === 'completed' ? `Pedido #${orderId} retirado` : 'Comanda actualizada');
+      toast(status === 'ready' ? `${ticketLabel} lista` : status === 'completed' ? `${ticketLabel} retirada` : 'Comanda actualizada');
       refresh();
     } catch (error) {
       button.disabled = false;

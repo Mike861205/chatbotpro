@@ -10,7 +10,7 @@
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/bold/style.css" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/fill/style.css" />
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-  <link rel="stylesheet" href="/static/css/styles.css?v=20260808kds" />
+  <link rel="stylesheet" href="/static/css/styles.css?v=20260809purchasecosts" />
   <link rel="icon" type="image/svg+xml" href="/static/favicon.svg" />
   <link rel="icon" type="image/png" href="/static/chatbotpro100.png" />
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
@@ -37,8 +37,12 @@
         <a href="#clientes" data-view="clientes" data-color="blue"><span class="nav-ic"><i class="ph-fill ph-users-three"></i></span><span>Clientes</span></a>
         <a href="#pos" data-view="pos" data-color="emerald"><span class="nav-ic"><i class="ph-fill ph-cash-register"></i></span><span>Punto de venta</span></a>
         <a href="#kds" data-view="kds" data-color="orange"><span class="nav-ic"><i class="ph-fill ph-monitor-play"></i></span><span>Pantallas KDS</span></a>
+        <a href="#ventas" data-view="ventas" data-color="blue"><span class="nav-ic"><i class="ph-fill ph-chart-line-up"></i></span><span>Ventas</span></a>
         <a href="#productos" data-view="productos" data-color="rose"><span class="nav-ic"><i class="ph-fill ph-bowl-food"></i></span><span>Productos</span></a>
+        <a href="#costos" data-view="costos" data-color="amber"><span class="nav-ic"><i class="ph-fill ph-coins"></i></span><span>Costo de ventas</span></a>
         <a href="#inventarios" data-view="inventarios" data-color="teal"><span class="nav-ic"><i class="ph-fill ph-package"></i></span><span>Inventarios</span></a>
+        <a href="#stock-sucursales" data-view="stock-sucursales" data-color="cyan"><span class="nav-ic"><i class="ph-fill ph-buildings"></i></span><span>Stock por sucursal</span></a>
+        <a href="#compras" data-view="compras" data-color="blue"><span class="nav-ic"><i class="ph-fill ph-shopping-cart-simple"></i></span><span>Compras</span></a>
         <div class="nav-label nav-label-empleados"><i class="ph-fill ph-users"></i> Empleados</div>
         <a href="#empleados" data-view="empleados" data-color="fuchsia"><span class="nav-ic"><i class="ph-fill ph-identification-badge"></i></span><span>Productividad</span></a>
         <div class="nav-label nav-label-chatbot"><i class="ph-fill ph-chat-circle-dots"></i> Chatbot</div>
@@ -257,6 +261,101 @@
         <div class="kds-area-grid" id="kdsAreaGrid"></div>
       </section>
 
+      <!-- ──────── Ventas ──────── -->
+      <section class="section" id="view-ventas">
+        <div class="sales-report-hero">
+          <div>
+            <span class="sales-report-kicker"><i class="ph-bold ph-chart-line-up"></i> Inteligencia de ventas</span>
+            <h2>Consulta tus ventas por día o por mes</h2>
+            <p>Compara el resultado global de todas tus sucursales o analiza una ubicación específica.</p>
+          </div>
+          <div class="segmented sales-report-tabs" id="salesReportTabs">
+            <button type="button" class="on" data-sales-mode="daily"><i class="ph-bold ph-calendar-dots"></i> Calendario diario</button>
+            <button type="button" data-sales-mode="monthly"><i class="ph-bold ph-chart-bar"></i> Resumen mensual</button>
+          </div>
+        </div>
+
+        <div class="card sales-report-filters">
+          <div class="field sales-report-branch-field">
+            <label for="salesBranchFilter">Sucursal</label>
+            <select id="salesBranchFilter"><option value="all">Todas las sucursales</option></select>
+          </div>
+          <div class="sales-period-control" id="salesDailyControls">
+            <button class="btn btn-ghost sales-period-arrow" type="button" id="salesPrevMonthBtn" aria-label="Mes anterior"><i class="ph-bold ph-caret-left"></i></button>
+            <div class="field">
+              <label for="salesMonthFilter">Mes y año</label>
+              <input type="month" id="salesMonthFilter" />
+            </div>
+            <button class="btn btn-ghost sales-period-arrow" type="button" id="salesNextMonthBtn" aria-label="Mes siguiente"><i class="ph-bold ph-caret-right"></i></button>
+          </div>
+          <div class="sales-period-control" id="salesMonthlyControls" hidden>
+            <button class="btn btn-ghost sales-period-arrow" type="button" id="salesPrevYearBtn" aria-label="Año anterior"><i class="ph-bold ph-caret-left"></i></button>
+            <div class="field">
+              <label for="salesYearFilter">Año</label>
+              <input type="number" id="salesYearFilter" min="2000" max="2100" inputmode="numeric" />
+            </div>
+            <button class="btn btn-ghost sales-period-arrow" type="button" id="salesNextYearBtn" aria-label="Año siguiente"><i class="ph-bold ph-caret-right"></i></button>
+          </div>
+          <button class="btn btn-primary sales-refresh-btn" type="button" id="salesRefreshBtn"><i class="ph-bold ph-arrows-clockwise"></i> Actualizar</button>
+        </div>
+
+        <div class="card sales-detail-toolbar">
+          <div class="sales-detail-toolbar-copy"><i class="ph-bold ph-file-text"></i><div><b>Detalle y exportación</b><span>Consulta, imprime o descarga cualquier periodo.</span></div></div>
+          <div class="segmented" id="salesDetailQuickRange">
+            <button type="button" class="on" data-sales-range="day">Hoy</button>
+            <button type="button" data-sales-range="week">Semana</button>
+            <button type="button" data-sales-range="month">Mes</button>
+            <button type="button" data-sales-range="custom">Rango</button>
+          </div>
+          <div class="sales-detail-dates">
+            <div class="field"><label>Desde</label><input type="date" id="salesDetailStartDate" /></div>
+            <div class="field"><label>Hasta</label><input type="date" id="salesDetailEndDate" /></div>
+          </div>
+          <div class="sales-detail-actions">
+            <button class="btn btn-primary" type="button" id="salesDetailViewBtn"><i class="ph-bold ph-eye"></i> Ver detalle</button>
+            <button class="btn btn-ghost" type="button" id="salesDetailPdfBtn"><i class="ph-bold ph-file-pdf"></i> PDF</button>
+            <button class="btn btn-ghost" type="button" id="salesDetailExcelBtn"><i class="ph-bold ph-file-xls"></i> Excel</button>
+          </div>
+        </div>
+
+        <div class="sales-report-stats" id="salesReportStats"></div>
+
+        <div id="salesDailyPanel">
+          <div class="card sales-calendar-card">
+            <div class="sales-panel-heading">
+            <div><h3><i class="ph-bold ph-calendar-dots"></i> <span id="salesCalendarTitle">Ventas del mes</span></h3><p>Cada día muestra el importe vendido y el número de ventas registradas.</p></div>
+              <span class="sales-scope-badge" id="salesDailyScope">Todas las sucursales</span>
+            </div>
+            <div class="sales-calendar-weekdays" aria-hidden="true">
+              <span>Dom</span><span>Lun</span><span>Mar</span><span>Mié</span><span>Jue</span><span>Vie</span><span>Sáb</span>
+            </div>
+            <div class="sales-calendar-grid" id="salesCalendarGrid"></div>
+          </div>
+
+          <div class="grid-2 sales-report-lower-grid">
+            <div class="card sales-chart-card">
+              <h3><i class="ph-bold ph-trend-up"></i> Tendencia diaria</h3>
+              <div class="sales-chart-wrap"><canvas id="salesDailyChart"></canvas></div>
+            </div>
+            <div class="card">
+              <h3><i class="ph-bold ph-storefront"></i> Ventas por sucursal</h3>
+              <div class="table-wrap" id="salesBranchBreakdown"></div>
+            </div>
+          </div>
+        </div>
+
+        <div id="salesMonthlyPanel" hidden>
+          <div class="card sales-chart-card">
+            <div class="sales-panel-heading">
+              <div><h3><i class="ph-bold ph-chart-bar"></i> <span id="salesMonthlyTitle">Ventas por mes</span></h3><p>Resultado acumulado de enero a diciembre.</p></div>
+              <span class="sales-scope-badge" id="salesMonthlyScope">Todas las sucursales</span>
+            </div>
+            <div class="sales-chart-wrap sales-chart-wrap-year"><canvas id="salesMonthlyChart"></canvas></div>
+          </div>
+          <div class="sales-month-grid" id="salesMonthGrid"></div>
+        </div>
+      </section>
+
       <section class="section" id="view-productos">
         <div class="prod-toolbar">
           <div class="chips" id="catChips"></div>
@@ -274,6 +373,57 @@
         <div class="prod-grid" id="prodGrid"></div>
       </section>
 
+      <!-- ──────── Costo de ventas ──────── -->
+      <section class="section" id="view-costos">
+        <div class="costing-hero">
+          <div>
+            <span class="costing-kicker"><i class="ph-bold ph-coins"></i> Rentabilidad real</span>
+            <h2>Costos, precios y utilidad en un solo lugar</h2>
+            <p>Captura el costo unitario y el precio de venta. Las entradas de inventario actualizarán el costo promedio y cada venta conservará el costo que tenía al cobrarse.</p>
+          </div>
+          <div class="segmented" id="costingTabs">
+            <button type="button" class="on" data-costing-tab="products"><i class="ph-bold ph-package"></i> Productos</button>
+            <button type="button" data-costing-tab="expenses"><i class="ph-bold ph-receipt"></i> Gastos</button>
+          </div>
+        </div>
+
+        <div id="costingProductsPanel">
+          <div class="costing-stats" id="costingStats"></div>
+          <div class="card costing-toolbar">
+            <div class="inv-search-wrap costing-search"><i class="ph-bold ph-magnifying-glass"></i><input id="costingSearch" type="text" placeholder="Buscar producto…" autocomplete="off" /></div>
+            <div class="field"><label for="costingCategory">Categoría</label><select id="costingCategory"><option value="all">Todas las categorías</option></select></div>
+            <div class="segmented" id="costingSort"><button type="button" class="on" data-cost-sort="alphabetical">A–Z</button><button type="button" data-cost-sort="category">Por categoría</button></div>
+            <button class="btn btn-primary" id="costingSaveBtn" type="button"><i class="ph-bold ph-floppy-disk"></i> Guardar cambios</button>
+          </div>
+          <div class="card costing-table-card">
+            <div class="costing-table-help"><i class="ph-bold ph-info"></i> Escribe directamente sobre cada fila. El margen se calcula y el producto se guarda automáticamente.</div>
+            <div class="table-wrap"><table class="costing-table"><thead><tr><th>Producto</th><th>Categoría</th><th>Costo unitario</th><th>Precio de venta</th><th>Utilidad unitaria</th><th>Margen</th><th>Estado</th></tr></thead><tbody id="costingProductsTbody"></tbody></table></div>
+            <div class="costing-save-footer"><span id="costingPendingLabel">Sin cambios pendientes</span><button class="btn btn-primary" id="costingSaveBottomBtn" type="button"><i class="ph-bold ph-floppy-disk"></i> Guardar cambios</button></div>
+          </div>
+        </div>
+
+        <div id="costingExpensesPanel" hidden>
+          <div class="card costing-expense-form-card">
+            <div class="sales-panel-heading"><div><h3><i class="ph-bold ph-plus-circle"></i> Registrar gasto</h3><p>Los gastos se descuentan de la utilidad de la sucursal en el reporte de Ventas.</p></div></div>
+            <form id="costingExpenseForm" class="costing-expense-form">
+              <div class="field"><label>Sucursal</label><select id="costingExpenseBranch"><option value="general">Sin sucursal</option></select></div>
+              <div class="field"><label>Fecha</label><input type="date" id="costingExpenseDate" required /></div>
+              <div class="field"><label>Concepto</label><input type="text" id="costingExpenseConcept" maxlength="120" placeholder="Ej. Gas, renta, insumos" required /></div>
+              <div class="field"><label>Monto</label><input type="number" id="costingExpenseAmount" min="0.01" step="0.01" placeholder="0.00" required /></div>
+              <div class="field costing-expense-notes"><label>Notas</label><input type="text" id="costingExpenseNotes" maxlength="240" placeholder="Opcional" /></div>
+              <button class="btn btn-primary" type="submit"><i class="ph-bold ph-plus-circle"></i> Agregar gasto</button>
+            </form>
+          </div>
+          <div class="card costing-expense-history">
+            <div class="costing-expense-history-head">
+              <div><h3><i class="ph-bold ph-clock-counter-clockwise"></i> Gastos del periodo</h3><p id="costingExpenseTotal">Total: $0.00</p></div>
+              <div class="costing-expense-filters"><input type="month" id="costingExpenseMonth" /><select id="costingExpenseFilterBranch"><option value="all">Todas las sucursales</option><option value="general">Sin sucursal</option></select><button class="btn btn-ghost" id="costingExpenseRefresh" type="button"><i class="ph-bold ph-arrows-clockwise"></i></button></div>
+            </div>
+            <div class="table-wrap" id="costingExpensesTable"></div>
+          </div>
+        </div>
+      </section>
+
       <!-- ──────── Inventarios ──────── -->
       <section class="section" id="view-inventarios">
         <div class="inv-toolbar">
@@ -281,6 +431,7 @@
             <i class="ph-bold ph-magnifying-glass"></i>
             <input type="text" id="invSearch" placeholder="Buscar producto…" autocomplete="off" />
           </div>
+          <div class="field inv-branch-filter"><label for="invBranchFilter">Sucursal</label><select id="invBranchFilter"><option value="all">Global · todas</option></select></div>
           <div class="segmented inv-periods" id="invPeriodFilters" aria-label="Filtro por periodo">
             <button type="button" class="on" data-inv-period="all">General</button>
             <button type="button" data-inv-period="today">Hoy</button>
@@ -318,6 +469,8 @@
                 <th class="inv-sortable" data-inv-sort="product_name">Producto</th>
                 <th class="num inv-sortable" data-inv-sort="initial_stock">Inv. Inicial</th>
                 <th class="num inv-col-entrada inv-sortable" data-inv-sort="entradas">Entradas</th>
+                <th class="num inv-col-compras inv-sortable" data-inv-sort="compras">Compras</th>
+                <th class="num inv-sortable" data-inv-sort="traslados">Traslados</th>
                 <th class="num inv-col-merma inv-sortable" data-inv-sort="mermas">Mermas</th>
                 <th class="num inv-col-ventas inv-sortable" data-inv-sort="ventas">Ventas</th>
                 <th class="num inv-col-sistema inv-sortable" data-inv-sort="fisico_sistema">Físico Sistema</th>
@@ -328,6 +481,56 @@
             </thead>
             <tbody id="invTbody"></tbody>
           </table>
+        </div>
+      </section>
+
+      <!-- ──────── Stock por sucursal ──────── -->
+      <section class="section" id="view-stock-sucursales">
+        <div class="branch-stock-hero">
+          <div><span class="purchase-kicker"><i class="ph-bold ph-buildings"></i> Existencias consolidadas</span><h2>Stock por sucursal</h2><p>Compara cada ubicación. La columna global siempre es la suma de las sucursales y los ajustes quedan auditados.</p></div>
+          <button class="btn btn-primary" id="branchStockRefresh" type="button"><i class="ph-bold ph-arrows-clockwise"></i> Actualizar</button>
+        </div>
+        <div class="branch-stock-summary" id="branchStockSummary"></div>
+        <div class="card branch-stock-toolbar">
+          <div class="inv-search-wrap"><i class="ph-bold ph-magnifying-glass"></i><input id="branchStockSearch" placeholder="Buscar producto…" /></div>
+          <div class="field"><label>Sucursal</label><select id="branchStockBranch"><option value="all">Todas las sucursales</option></select></div>
+          <div class="field"><label>Categoría</label><select id="branchStockCategory"><option value="all">Todas</option></select></div>
+          <div class="field branch-stock-page-size"><label>Productos por página</label><select id="branchStockPageSize"><option value="10">10</option><option value="20">20</option><option value="50">50</option><option value="100">100</option></select></div>
+          <label class="purchase-active-check"><input type="checkbox" id="branchStockOnlyAvailable" /> Sólo con existencia</label>
+          <button class="btn btn-ghost" id="branchStockAuditBtn" type="button"><i class="ph-bold ph-shield-check"></i> Auditoría</button>
+        </div>
+        <div class="card branch-stock-results"><div class="table-wrap" id="branchStockMatrix"></div><div class="branch-stock-pager" id="branchStockPager"><span id="branchStockRange">0 productos</span><div><button class="btn btn-ghost btn-sm" id="branchStockPrev" type="button" aria-label="Página anterior"><i class="ph-bold ph-caret-left"></i> Anterior</button><strong id="branchStockPageInfo">1 / 1</strong><button class="btn btn-ghost btn-sm" id="branchStockNext" type="button" aria-label="Página siguiente">Siguiente <i class="ph-bold ph-caret-right"></i></button></div></div></div>
+      </section>
+
+      <!-- ──────── Compras ──────── -->
+      <section class="section" id="view-compras">
+        <div class="purchase-hero">
+          <div><span class="purchase-kicker"><i class="ph-bold ph-shopping-cart-simple"></i> Abastecimiento auditable</span><h2>Compras, proveedores y traslados</h2><p>Recibe órdenes en inventario, actualiza costos promedio y controla existencias entre sucursales con una bitácora completa.</p></div>
+          <div class="segmented" id="purchaseTabs"><button class="on" data-purchase-tab="dashboard" type="button">Resumen</button><button data-purchase-tab="orders" type="button">Órdenes</button><button data-purchase-tab="suppliers" type="button">Proveedores</button><button data-purchase-tab="transfers" type="button">Traslados</button></div>
+        </div>
+
+        <div id="purchaseDashboardPanel">
+          <div class="card purchase-report-toolbar">
+            <div class="segmented" id="purchasePeriodTabs"><button class="on" data-purchase-period="day" type="button">Hoy</button><button data-purchase-period="week" type="button">Semana</button><button data-purchase-period="month" type="button">Mes</button><button data-purchase-period="custom" type="button">Rango</button></div>
+            <div class="field"><label>Desde</label><input type="date" id="purchaseStartDate" /></div><div class="field"><label>Hasta</label><input type="date" id="purchaseEndDate" /></div>
+            <div class="field"><label>Sucursal</label><select id="purchaseReportBranch"><option value="all">Todas</option></select></div>
+            <button class="btn btn-primary" id="purchaseApplyReport" type="button"><i class="ph-bold ph-funnel"></i> Aplicar</button>
+          </div>
+          <div class="purchase-stats" id="purchaseStats"></div>
+          <div class="grid-2 purchase-report-grid"><div class="card"><h3><i class="ph-bold ph-chart-bar"></i> Compras recibidas por fecha</h3><div class="purchase-chart-wrap"><canvas id="purchaseChart"></canvas></div></div><div class="card"><h3><i class="ph-bold ph-package"></i> Productos comprados</h3><div class="table-wrap" id="purchaseProductsReport"></div></div></div>
+        </div>
+
+        <div id="purchaseOrdersPanel" hidden>
+          <div class="card purchase-list-toolbar"><div><h3>Órdenes de compra</h3><p>Solo al recibir una orden se agregan sus unidades al inventario.</p></div><div class="purchase-list-actions"><select id="purchaseOrderStatus"><option value="">Todos los estados</option><option value="ordered">Pendientes</option><option value="received">Recibidas</option><option value="cancelled">Canceladas</option></select><button class="btn btn-ghost" id="purchaseRefreshOrders" type="button"><i class="ph-bold ph-arrows-clockwise"></i></button><button class="btn btn-primary" id="purchaseNewOrder" type="button"><i class="ph-bold ph-plus-circle"></i> Nueva orden</button></div></div>
+          <div class="card"><div class="table-wrap" id="purchaseOrdersTable"></div></div>
+        </div>
+        <div id="purchaseSuppliersPanel" hidden>
+          <div class="card purchase-list-toolbar"><div><h3>Proveedores</h3><p>Directorio de contactos y datos fiscales.</p></div><button class="btn btn-primary" id="purchaseNewSupplier" type="button"><i class="ph-bold ph-plus-circle"></i> Nuevo proveedor</button></div>
+          <div class="card"><div class="table-wrap" id="purchaseSuppliersTable"></div></div>
+        </div>
+        <div id="purchaseTransfersPanel" hidden>
+          <div class="card purchase-list-toolbar"><div><h3>Traslados entre sucursales</h3><p>Descuenta del origen y suma en el destino dentro de una sola operación.</p></div><button class="btn btn-primary" id="purchaseNewTransfer" type="button"><i class="ph-bold ph-arrows-left-right"></i> Nuevo traslado</button></div>
+          <div class="card"><div class="table-wrap" id="purchaseTransfersTable"></div></div>
         </div>
       </section>
 
@@ -471,6 +674,7 @@
           <button type="button" class="active" id="chatbotTabFlow"><i class="ph-bold ph-chats-circle"></i> Flujo del chatbot</button>
           <button type="button" id="chatbotTabDelivery"><i class="ph-bold ph-truck"></i> Servicio a domicilio</button>
           <button type="button" id="chatbotTabUpsell"><i class="ph-bold ph-rocket-launch"></i> Ofrecimiento inteligente</button>
+          <button type="button" id="chatbotTabTables"><i class="ph-bold ph-fork-knife"></i> Mesas</button>
         </div>
 
         <div id="chatbotFlowPanel">
@@ -651,6 +855,39 @@
             <div id="upsellOffersList" class="upsell-offers-list" style="margin-top:12px"></div>
           </div>
         </div>
+
+        <div id="chatbotTablesPanel" hidden>
+          <div class="card">
+            <div class="table-config-head">
+              <div>
+                <h3><i class="ph-bold ph-fork-knife"></i> Configuración de mesas</h3>
+                <div class="hint">Crea las mesas del restaurante, habilita solo las que usas y arrástralas para representar la distribución real.</div>
+              </div>
+              <button class="btn btn-primary" type="button" id="tablesConfigSave"><i class="ph-bold ph-floppy-disk"></i> Guardar distribución</button>
+            </div>
+            <div class="table-config-toolbar">
+              <div class="field">
+                <label><i class="ph-bold ph-storefront"></i> Sucursal</label>
+                <select id="tablesConfigBranch"><option value="0">Todas / general</option></select>
+              </div>
+              <div class="field">
+                <label><i class="ph-bold ph-hash"></i> Número de mesas</label>
+                <input type="number" id="tablesConfigCount" min="1" max="200" value="10" />
+              </div>
+              <button class="btn btn-ghost" type="button" id="tablesConfigGenerate"><i class="ph-bold ph-magic-wand"></i> Generar mesas</button>
+              <button class="btn btn-ghost" type="button" id="tablesConfigAdd"><i class="ph-bold ph-plus-circle"></i> Agregar una</button>
+            </div>
+            <div class="table-layout-editor" id="tablesConfigLayout" aria-label="Distribución de mesas"></div>
+            <div class="hint" style="margin-top:10px"><i class="ph-bold ph-cursor-click"></i> Arrastra cada mesa para acomodarla. Haz clic en una mesa para editar su nombre, forma y estado.</div>
+          </div>
+          <div class="card" style="margin-top:16px">
+            <div class="table-config-head">
+              <h3><i class="ph-bold ph-list-numbers"></i> Detalle de mesas</h3>
+              <span class="hint" id="tablesConfigSummary">0 mesas</span>
+            </div>
+            <div class="table-wrap" id="tablesConfigList"></div>
+          </div>
+        </div>
       </section>
 
       <!-- ──────── Mi negocio ──────── -->
@@ -745,13 +982,30 @@
                     <label class="pay-method-chip"><input type="checkbox" id="cfgChatPayPickupCard" /> <span><i class="ph-bold ph-credit-card"></i> Tarjeta</span></label>
                   </div>
                 </div>
+                <section class="bank-accounts-panel" id="cfgBankAccountsPanel" hidden>
+                  <div class="bank-accounts-head">
+                    <div>
+                      <b><i class="ph-bold ph-bank"></i> Cuentas para transferencias</b>
+                      <span>Estos datos aparecerán en el chatbot al elegir Transferencia.</span>
+                    </div>
+                    <button class="btn btn-ghost" type="button" id="addBankAccountBtn">
+                      <i class="ph-bold ph-plus"></i> Agregar cuenta
+                    </button>
+                  </div>
+                  <div class="bank-accounts-list" id="bankAccountsList"></div>
+                </section>
+                <div class="bank-accounts-save-row">
+                  <button class="btn btn-primary" type="submit" id="savePaymentAccountsBtn">
+                    <i class="ph-bold ph-floppy-disk"></i> Guardar cuentas y medios de pago
+                  </button>
+                  <span class="hint">Guarda aquí los cambios realizados en tus cuentas bancarias y métodos de pago.</span>
+                </div>
                 <div class="hint">El chatbot mostrará solo estas opciones al cliente según el tipo de entrega que elija.</div>
               </div>
               <div class="toggle-row" style="margin-top:12px">
                 <div class="t-info"><i class="ph-bold ph-cash-register"></i><div><b>Integrar pedidos de chatbot al punto de venta</b><span>Permite al cajero importar pedidos chatbot al ticket para cobrarlos y sumarlos al corte de caja.</span></div></div>
                 <label class="switch"><input type="checkbox" id="cfgPosChatIntegration" /><span class="track"></span></label>
               </div>
-              <button class="btn btn-primary" type="submit"><i class="ph-bold ph-floppy-disk"></i> Guardar</button>
             </form>
             <hr style="margin:18px 0;border:none;border-top:1px solid var(--line)" />
             <h3 style="margin-bottom:14px"><i class="ph-bold ph-printer"></i> Impresión de tickets</h3>
@@ -953,6 +1207,32 @@
     </main>
   </div>
 
+  <!-- Modal: detalle financiero de ventas -->
+  <div class="modal-bg" id="salesDetailModal">
+    <div class="modal sales-detail-modal">
+      <div class="sales-detail-modal-head">
+        <div><span class="sales-report-kicker"><i class="ph-bold ph-chart-line-up"></i> Detalle financiero</span><h3 id="salesDetailModalTitle">Detalle de ventas</h3><p id="salesDetailModalSubtitle"></p></div>
+        <button class="modal-close" type="button" id="salesDetailCloseBtn" aria-label="Cerrar"><i class="ph-bold ph-x"></i></button>
+      </div>
+      <div class="sales-detail-modal-actions">
+        <button class="btn btn-ghost" type="button" id="salesDetailPrintBtn"><i class="ph-bold ph-printer"></i> Imprimir</button>
+        <button class="btn btn-ghost" type="button" id="salesDetailModalPdfBtn"><i class="ph-bold ph-file-pdf"></i> Descargar PDF</button>
+        <button class="btn btn-ghost" type="button" id="salesDetailModalExcelBtn"><i class="ph-bold ph-file-xls"></i> Descargar Excel</button>
+      </div>
+      <div id="salesDetailContent"></div>
+    </div>
+  </div>
+
+  <div class="modal-bg" id="purchaseSupplierModal"><div class="modal" style="max-width:720px"><h3><i class="ph-bold ph-truck"></i> <span id="purchaseSupplierModalTitle">Nuevo proveedor</span></h3><form id="purchaseSupplierForm"><input type="hidden" id="purchaseSupplierId" /><div class="row-2"><div class="field"><label>Nombre *</label><input id="purchaseSupplierName" required maxlength="120" /></div><div class="field"><label>RFC / identificación fiscal</label><input id="purchaseSupplierTaxId" maxlength="30" /></div><div class="field"><label>Contacto</label><input id="purchaseSupplierContact" maxlength="100" /></div><div class="field"><label>Teléfono</label><input id="purchaseSupplierPhone" maxlength="30" /></div><div class="field"><label>Correo</label><input id="purchaseSupplierEmail" type="email" maxlength="120" /></div><div class="field"><label>Dirección</label><input id="purchaseSupplierAddress" maxlength="220" /></div></div><div class="field"><label>Notas</label><input id="purchaseSupplierNotes" maxlength="300" /></div><label class="purchase-active-check"><input id="purchaseSupplierActive" type="checkbox" checked /> Proveedor activo</label><div class="modal-actions"><button class="btn btn-ghost" type="button" onclick="closeModal('purchaseSupplierModal')">Cancelar</button><button class="btn btn-primary" type="submit"><i class="ph-bold ph-floppy-disk"></i> Guardar proveedor</button></div></form></div></div>
+
+  <div class="modal-bg" id="purchaseOrderModal"><div class="modal purchase-order-modal"><h3><i class="ph-bold ph-shopping-cart-simple"></i> Nueva orden de compra</h3><form id="purchaseOrderForm"><div class="purchase-order-head-fields"><div class="field"><label>Proveedor *</label><select id="purchaseOrderSupplier" required></select></div><div class="field"><label>Sucursal receptora *</label><select id="purchaseOrderBranch" required></select></div><div class="field"><label>Fecha de orden *</label><input type="date" id="purchaseOrderDate" required /></div><div class="field"><label>Entrega esperada</label><input type="date" id="purchaseExpectedDate" /></div></div><div class="purchase-items-head"><div><b>Productos de la orden</b><span>El costo configurado se carga automáticamente; puedes modificarlo para esta compra y se promediará al recibirla.</span></div><button class="btn btn-ghost btn-sm" type="button" id="purchaseAddOrderItem"><i class="ph-bold ph-plus"></i> Producto</button></div><div class="purchase-item-columns" aria-hidden="true"><span>Producto</span><span>Cantidad</span><span>Costo unitario</span><span>Importe</span><span></span></div><div id="purchaseOrderItems"></div><div class="purchase-order-total">Total de la orden <strong id="purchaseOrderTotal">$0.00</strong></div><div class="field"><label>Notas</label><input id="purchaseOrderNotes" maxlength="300" placeholder="Condiciones, factura, referencia…" /></div><div class="modal-actions"><button class="btn btn-ghost" type="button" onclick="closeModal('purchaseOrderModal')">Cancelar</button><button class="btn btn-primary" type="submit"><i class="ph-bold ph-check-circle"></i> Crear orden</button></div></form></div></div>
+
+  <div class="modal-bg" id="purchaseTransferModal"><div class="modal purchase-order-modal"><h3><i class="ph-bold ph-arrows-left-right"></i> Nuevo traslado</h3><form id="purchaseTransferForm"><div class="row-2"><div class="field"><label>Sucursal origen *</label><select id="purchaseTransferFrom" required></select></div><div class="field"><label>Sucursal destino *</label><select id="purchaseTransferTo" required></select></div></div><div class="purchase-items-head"><div><b>Productos a trasladar</b><span>La existencia debe estar disponible en la sucursal origen.</span></div><button class="btn btn-ghost btn-sm" type="button" id="purchaseAddTransferItem"><i class="ph-bold ph-plus"></i> Producto</button></div><div id="purchaseTransferItems"></div><div class="field"><label>Notas</label><input id="purchaseTransferNotes" maxlength="300" /></div><div class="modal-actions"><button class="btn btn-ghost" type="button" onclick="closeModal('purchaseTransferModal')">Cancelar</button><button class="btn btn-primary" type="submit"><i class="ph-bold ph-arrows-left-right"></i> Completar traslado</button></div></form></div></div>
+  <div class="modal-bg" id="purchaseAuditModal"><div class="modal" style="max-width:760px"><div class="sales-detail-modal-head" style="position:static;padding:0 0 14px"><div><span class="purchase-kicker"><i class="ph-bold ph-shield-check"></i> Auditoría</span><h3 id="purchaseAuditTitle">Bitácora</h3></div><button class="modal-close" type="button" onclick="closeModal('purchaseAuditModal')"><i class="ph-bold ph-x"></i></button></div><div id="purchaseAuditContent"></div></div></div>
+
+  <div class="modal-bg" id="branchStockAdjustModal"><div class="modal" style="max-width:520px"><h3><i class="ph-bold ph-scales"></i> Ajustar stock de sucursal</h3><form id="branchStockAdjustForm"><input type="hidden" id="branchStockAdjustProduct" /><input type="hidden" id="branchStockAdjustBranch" /><div class="branch-stock-adjust-context" id="branchStockAdjustContext"></div><div class="field"><label>Existencia física correcta *</label><input id="branchStockAdjustQuantity" type="number" min="0" step="0.0001" required /></div><div class="field"><label>Motivo del ajuste *</label><input id="branchStockAdjustReason" maxlength="240" required placeholder="Ej. Conteo físico, corrección de captura…" /></div><div class="modal-actions"><button class="btn btn-ghost" type="button" onclick="closeModal('branchStockAdjustModal')">Cancelar</button><button class="btn btn-primary" type="submit"><i class="ph-bold ph-shield-check"></i> Guardar ajuste</button></div></form></div></div>
+  <div class="modal-bg" id="branchStockAuditModal"><div class="modal" style="max-width:820px"><div class="sales-detail-modal-head" style="position:static;padding:0 0 14px"><div><span class="purchase-kicker"><i class="ph-bold ph-shield-check"></i> Auditoría</span><h3>Movimientos de stock por sucursal</h3></div><button class="modal-close" type="button" onclick="closeModal('branchStockAuditModal')"><i class="ph-bold ph-x"></i></button></div><div id="branchStockAuditContent"></div></div></div>
+
   <!-- ════════ Modales Inventario ════════ -->
 
   <!-- Modal: Inventario inicial del producto -->
@@ -965,6 +1245,7 @@
           <label><i class="ph-bold ph-tag"></i> Producto</label>
           <input type="text" id="invInitProductName" readonly />
         </div>
+        <div class="field"><label><i class="ph-bold ph-storefront"></i> Sucursal</label><select id="invInitBranch" required></select></div>
         <div class="row-2">
           <div class="field">
             <label><i class="ph-bold ph-hash"></i> Stock inicial *</label>
@@ -997,6 +1278,7 @@
           <label><i class="ph-bold ph-tag"></i> Producto *</label>
           <select id="invMovProduct" required><option value="">Selecciona…</option></select>
         </div>
+        <div class="field"><label><i class="ph-bold ph-storefront"></i> Sucursal *</label><select id="invMovBranch" required></select></div>
         <div class="row-2">
           <div class="field">
             <label><i class="ph-bold ph-hash"></i> Cantidad *</label>
@@ -1006,6 +1288,11 @@
             <label><i class="ph-bold ph-note-pencil"></i> Notas</label>
             <input type="text" id="invMovNotes" placeholder="Opcional" maxlength="200" />
           </div>
+        </div>
+        <div class="field" id="invMovUnitCostField">
+          <label><i class="ph-bold ph-currency-dollar"></i> Costo unitario de esta entrada *</label>
+          <input type="number" id="invMovUnitCost" min="0" step="0.0001" placeholder="0.00" />
+          <div class="hint">Se calculará automáticamente el nuevo costo promedio del producto.</div>
         </div>
         <div class="modal-actions">
           <button type="button" class="btn btn-ghost" id="invMovCancel">Cancelar</button>
@@ -1085,7 +1372,7 @@
       <div class="field">
         <label><i class="ph-bold ph-list-checks"></i> Secciones a exportar</label>
         <div class="inv-export-checks">
-          <label class="inv-check-row"><input type="checkbox" id="invExpSummary" checked /><span><b>Resumen de inventario</b> — inv. inicial, entradas, mermas, ventas, físico sistema, físico real, diferencia</span></label>
+          <label class="inv-check-row"><input type="checkbox" id="invExpSummary" checked /><span><b>Resumen de inventario</b> — inv. inicial, entradas, compras, mermas, ventas, físico sistema, físico real, diferencia</span></label>
           <label class="inv-check-row"><input type="checkbox" id="invExpMovements" /><span><b>Detalle de movimientos</b> — cada entrada y merma registrada con fecha y usuario</span></label>
           <label class="inv-check-row"><input type="checkbox" id="invExpOnlyDiff" /><span><b>Solo productos con diferencia</b> — filtra solo productos donde físico real ≠ físico sistema</span></label>
         </div>
@@ -1425,6 +1712,42 @@
         <button type="button" class="btn btn-ghost" id="deliveryHelpClose">Cerrar</button>
         <button type="button" class="btn btn-primary" id="deliveryHelpStart"><i class="ph-bold ph-play"></i> Entendido, iniciar dibujo</button>
       </div>
+    </div>
+  </div>
+
+  <!-- ════════ Modal operación de mesas ════════ -->
+  <div class="modal-bg" id="posTablesModal">
+    <div class="modal pos-tables-modal">
+      <div class="pos-tables-head">
+        <div>
+          <h3><i class="ph-bold ph-fork-knife"></i> Mesas del restaurante</h3>
+          <div class="hint">Selecciona una mesa libre para abrirla o una ocupada para continuar agregando consumos.</div>
+        </div>
+        <button type="button" class="btn btn-ghost" id="posTablesClose"><i class="ph-bold ph-x"></i> Cerrar</button>
+      </div>
+      <div class="pos-table-legend">
+        <span><i class="free"></i> Libre</span>
+        <span><i class="busy"></i> Cuenta abierta</span>
+        <span id="posTablesCounts">0 mesas</span>
+      </div>
+      <div class="pos-table-layout" id="posTablesLayout"></div>
+    </div>
+  </div>
+
+  <div class="modal-bg" id="posTableOpenModal">
+    <div class="modal" style="max-width:460px">
+      <h3><i class="ph-bold ph-user-plus"></i> Abrir <span id="posTableOpenTitle">mesa</span></h3>
+      <form id="posTableOpenForm">
+        <input type="hidden" id="posTableOpenId" />
+        <div class="field">
+          <label><i class="ph-bold ph-identification-badge"></i> Nombre del mesero</label>
+          <input type="text" id="posTableWaiterName" maxlength="80" required placeholder="Ej. Alejandro" />
+        </div>
+        <div class="modal-actions">
+          <button type="button" class="btn btn-ghost" id="posTableOpenCancel">Cancelar</button>
+          <button type="submit" class="btn btn-primary"><i class="ph-bold ph-door-open"></i> Abrir mesa</button>
+        </div>
+      </form>
     </div>
   </div>
 
@@ -1866,6 +2189,6 @@
     </div>
   </div>
 
-  <script src="/static/js/app.js?v=20260808kds"></script>
+  <script src="/static/js/app.js?v=20260809purchasecosts"></script>
 </body>
 </html>

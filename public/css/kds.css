@@ -82,7 +82,7 @@ main { padding: 18px clamp(12px, 1.8vw, 28px) 34px; }
 @keyframes ticketIn { from { opacity: 0; transform: translateY(5px); } }
 @keyframes urgentPulse { 50% { opacity: .45; } }
 .ticket-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; padding: 13px 13px 10px 16px; border-bottom: 1px solid var(--line); }
-.ticket-number { display: flex; align-items: center; gap: 8px; font-size: 20px; font-weight: 800; }
+.ticket-number { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 20px; font-weight: 800; }
 .ticket-channel { display: inline-flex; align-items: center; min-height: 21px; padding: 3px 7px; border-radius: 6px; color: #b8c5d8; background: rgba(255,255,255,.07); font-size: 9px; letter-spacing: .06em; text-transform: uppercase; }
 .ticket-time { text-align: right; }
 .ticket-time b { display: block; font-size: 14px; font-variant-numeric: tabular-nums; }
