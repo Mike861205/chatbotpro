@@ -192,10 +192,6 @@ async function ensureSuperAdminSeed() {
   if (!/^[a-z0-9._-]{3,60}$/.test(username)) {
     throw new Error('SUPERADMIN_USERNAME debe tener de 3 a 60 caracteres seguros');
   }
-  if (process.env.NODE_ENV === 'production' && envPassword.length < 12) {
-    throw new Error('SUPERADMIN_PASSWORD debe configurarse con al menos 12 caracteres en producción');
-  }
-
   if (envPassword) {
     if (envPassword.length < 12 || envPassword.length > 128) {
       throw new Error('SUPERADMIN_PASSWORD debe tener entre 12 y 128 caracteres');
@@ -215,7 +211,16 @@ async function ensureSuperAdminSeed() {
   }
 
   const existing = await q('SELECT id FROM superadmin_users LIMIT 1');
-  if (existing.rows.length) return;
+  if (existing.rows.length) {
+    // Compatibilidad segura con instalaciones existentes: la credencial ya está
+    // almacenada como hash bcrypt en Neon y no debe reemplazarse en cada deploy.
+    console.log('[superadmin] Se conserva la cuenta administrativa existente');
+    return;
+  }
+
+  if (process.env.NODE_ENV === 'production') {
+    throw new Error('SUPERADMIN_PASSWORD debe configurarse con al menos 12 caracteres para crear la cuenta inicial');
+  }
 
   const generated = crypto.randomBytes(9).toString('base64url');
   const password = generated;

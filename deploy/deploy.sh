@@ -62,13 +62,17 @@ for required_key in DATABASE_URL JWT_SECRET SUPERADMIN_JWT_SECRET DATA_ENCRYPTIO
     exit 1
   fi
 done
-if ! grep -Eq '^SUPERADMIN_USERNAME=[a-zA-Z0-9._-]{3,60}$' .env.production; then
+if grep -q '^SUPERADMIN_USERNAME=' .env.production && ! grep -Eq '^SUPERADMIN_USERNAME=[a-zA-Z0-9._-]{3,60}$' .env.production; then
   echo "ERROR: SUPERADMIN_USERNAME falta o no es válido en .env.production"
   exit 1
 fi
-if ! grep -Eq '^SUPERADMIN_PASSWORD=.{12,128}$' .env.production; then
+if grep -Eq '^SUPERADMIN_PASSWORD=.+' .env.production && ! grep -Eq '^SUPERADMIN_PASSWORD=.{12,128}$' .env.production; then
   echo "ERROR: SUPERADMIN_PASSWORD debe tener entre 12 y 128 caracteres"
   exit 1
+fi
+if ! grep -Eq '^SUPERADMIN_PASSWORD=.+' .env.production; then
+  echo "SUPERADMIN_PASSWORD no definido: se conservará la cuenta existente en Neon."
+  echo "En una instalación nueva la aplicación exigirá una contraseña inicial robusta."
 fi
 
 if grep -q '^PORT=' .env.production; then
