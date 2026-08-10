@@ -28,9 +28,7 @@ if [ "__FORCE_DEPLOY__" = "1" ]; then
   git reset --hard "origin/__BRANCH__"
   git clean -fd
 else
-  # Evita command substitution dentro del comando SSH: PowerShell puede quitar
-  # esas comillas al construir la llamada nativa y convertir una comprobación
-  # limpia en `[ -n ]`, que el shell remoto considera verdadera.
+  # Se comprueban por separado cambios rastreados, preparados y archivos nuevos.
   if ! git diff --quiet --ignore-submodules -- || \
      ! git diff --cached --quiet --ignore-submodules -- || \
      git ls-files --others --exclude-standard | grep -q .; then
@@ -65,6 +63,8 @@ exit 1
 '@
 $forceDeployValue = if ($Force) { "1" } else { "0" }
 $remoteCmd = $remoteCmd.Replace('__APP_DIR__', $AppDir).Replace('__BRANCH__', $Branch).Replace('__PM2_APP__', $Pm2App).Replace('__HEALTH_URL__', $HealthUrl).Replace('__FORCE_DEPLOY__', $forceDeployValue)
+$remoteCmdLf = $remoteCmd.Replace("`r`n", "`n")
+$remoteCmdBase64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($remoteCmdLf))
 
 $sshArgs = @(
   "-p", "$Port",
@@ -75,7 +75,9 @@ $sshArgs = @(
 if ($IdentityFile -and $IdentityFile.Trim().Length -gt 0) {
   $sshArgs += @("-i", $IdentityFile)
 }
-$sshArgs += @("$User@$RemoteHost", $remoteCmd)
+# El script viaja en Base64 porque el paso directo como argumento de un proceso
+# nativo en Windows puede eliminar comillas y reinterpretar caracteres como >.
+$sshArgs += @("$User@$RemoteHost", "printf %s $remoteCmdBase64 | base64 -d | bash")
 
 Write-Host "Running remote deploy on ${User}@${RemoteHost}:$Port ..." -ForegroundColor Cyan
 & ssh @sshArgs
