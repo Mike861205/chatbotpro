@@ -28,7 +28,12 @@ if [ "__FORCE_DEPLOY__" = "1" ]; then
   git reset --hard "origin/__BRANCH__"
   git clean -fd
 else
-  if [ -n "$(git status --porcelain)" ]; then
+  # Evita command substitution dentro del comando SSH: PowerShell puede quitar
+  # esas comillas al construir la llamada nativa y convertir una comprobación
+  # limpia en `[ -n ]`, que el shell remoto considera verdadera.
+  if ! git diff --quiet --ignore-submodules -- || \
+     ! git diff --cached --quiet --ignore-submodules -- || \
+     git ls-files --others --exclude-standard | grep -q .; then
     echo 'ERROR: el servidor tiene cambios locales. Revisa los archivos o activa Forzar.' >&2
     git status --short >&2
     exit 2
