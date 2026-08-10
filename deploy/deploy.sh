@@ -49,25 +49,42 @@ else
   npm install --omit=dev
 fi
 
-echo "==> 7) .env.production con PORT=$PORT"
+echo "==> 7) Validar .env.production"
 if [ ! -f .env.production ]; then
-  cat > .env.production <<EOF
-PORT=$PORT
-NODE_ENV=production
-DATABASE_URL=postgresql://neondb_owner:npg_QGEBe4HZVsu5@ep-icy-bird-ap93d3hr-pooler.c-7.us-east-1.aws.neon.tech/neondb?sslmode=require
-OPENAI_API_KEY=
-JWT_SECRET=a7df2485049d8f22f5aff84ffbe23d044d04bb1639a2788a9e1fe4bdf82ba43c
-DATA_ENCRYPTION_KEY=d8c60d7b421bc583c8a1af1ea504c27d4c66cea075be8368336e55b13ad7779b
-EOF
+  echo "ERROR: crea $APP_DIR/.env.production con secretos nuevos antes de desplegar."
+  echo "Usa .env.example como guía; nunca guardes credenciales dentro del repositorio."
+  exit 1
+fi
+
+for required_key in DATABASE_URL JWT_SECRET SUPERADMIN_JWT_SECRET DATA_ENCRYPTION_KEY; do
+  if ! grep -Eq "^${required_key}=.{32,}$" .env.production; then
+    echo "ERROR: ${required_key} falta o es demasiado corto en .env.production"
+    exit 1
+  fi
+done
+if ! grep -Eq '^SUPERADMIN_USERNAME=[a-zA-Z0-9._-]{3,60}$' .env.production; then
+  echo "ERROR: SUPERADMIN_USERNAME falta o no es válido en .env.production"
+  exit 1
+fi
+if ! grep -Eq '^SUPERADMIN_PASSWORD=.{12,128}$' .env.production; then
+  echo "ERROR: SUPERADMIN_PASSWORD debe tener entre 12 y 128 caracteres"
+  exit 1
+fi
+
+if grep -q '^PORT=' .env.production; then
+  sed -i "s/^PORT=.*/PORT=$PORT/" .env.production
 else
-  if grep -q '^PORT=' .env.production; then
-    sed -i "s/^PORT=.*/PORT=$PORT/" .env.production
-  else
-    echo "PORT=$PORT" >> .env.production
-  fi
-  if ! grep -q '^NODE_ENV=' .env.production; then
-    echo "NODE_ENV=production" >> .env.production
-  fi
+  echo "PORT=$PORT" >> .env.production
+fi
+if grep -q '^NODE_ENV=' .env.production; then
+  sed -i 's/^NODE_ENV=.*/NODE_ENV=production/' .env.production
+else
+  echo "NODE_ENV=production" >> .env.production
+fi
+if grep -q '^HOST=' .env.production; then
+  sed -i 's/^HOST=.*/HOST=127.0.0.1/' .env.production
+else
+  echo "HOST=127.0.0.1" >> .env.production
 fi
 chmod 600 .env.production
 

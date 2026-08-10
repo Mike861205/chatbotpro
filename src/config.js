@@ -31,6 +31,9 @@ function ensureSecret(name, bytes = 32) {
     process.env[name] = val;
     console.log(`[config] Secreto ${name} generado y guardado en ${selectedEnvFile}`);
   }
+  if (String(process.env[name]).trim().length < 32) {
+    throw new Error(`${name} debe tener al menos 32 caracteres`);
+  }
   return process.env[name];
 }
 
@@ -65,12 +68,15 @@ const UPLOADS_DIR = path.join(ROOT, 'uploads');
 
 module.exports = {
   PORT: process.env.PORT || 3000,
+  HOST: String(process.env.HOST || (process.env.NODE_ENV === 'production' ? '127.0.0.1' : '0.0.0.0')).trim(),
   JWT_SECRET: ensureSecret('JWT_SECRET'),
+  SUPERADMIN_JWT_SECRET: ensureSecret('SUPERADMIN_JWT_SECRET'),
   ENCRYPTION_KEY: ensureSecret('DATA_ENCRYPTION_KEY'),
-  DEMO_LOGIN_ENABLED: envEnabled('DEMO_LOGIN_ENABLED', true),
+  DEMO_LOGIN_ENABLED: envEnabled('DEMO_LOGIN_ENABLED', false),
   DEMO_USERNAME: String(process.env.DEMO_USERNAME || 'demo').trim().toLowerCase(),
-  DEMO_PASSWORD: String(process.env.DEMO_PASSWORD || 'demo'),
+  DEMO_PASSWORD: String(process.env.DEMO_PASSWORD || ''),
   DEMO_TENANT_SLUG: String(process.env.DEMO_TENANT_SLUG || '').trim().toLowerCase(),
+  PG_SSL_REJECT_UNAUTHORIZED: envEnabled('PG_SSL_REJECT_UNAUTHORIZED', true),
   OPENAI_API_KEY: (process.env.OPENAI_API_KEY || '').trim(),
   DATABASE_URL: (() => {
     const url = (process.env.DATABASE_URL || '').trim();
@@ -79,7 +85,11 @@ module.exports = {
       process.exit(1);
     }
     // pg no entiende channel_binding; lo quitamos si viene en la URL
-    return url.replace(/[?&]channel_binding=[^&]*/i, '');
+    let cleanUrl = url.replace(/[?&]channel_binding=[^&]*/i, '');
+    if (envEnabled('PG_SSL_REJECT_UNAUTHORIZED', true)) {
+      cleanUrl = cleanUrl.replace(/([?&]sslmode=)require(?=&|$)/i, '$1verify-full');
+    }
+    return cleanUrl;
   })(),
   ROOT,
   DATA_DIR,

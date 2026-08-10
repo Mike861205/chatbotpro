@@ -4,13 +4,20 @@ const config = require('../config');
 const { q, tdb, initTenantDefaults } = require('../db');
 const { encrypt, decrypt, lookupHash } = require('../utils/crypto');
 const { signToken, setAuthCookie, clearAuthCookie, requireAuth } = require('../middleware/auth');
+const { createRateLimiter } = require('../middleware/security');
 
 const router = express.Router();
 
 const SLUG_RE = /^[a-z0-9](?:[a-z0-9-]{1,38}[a-z0-9])?$/;
+const USERNAME_RE = /^[a-z0-9._-]{3,60}$/;
 const RESERVED = new Set(['api', 'app', 'login', 'register', 'admin', 'uploads', 'c', 'static']);
 const SUPPORT_WHATSAPP = '526241370820';
 const SUPPORT_MESSAGE = 'tengo suspendiedo mi servicio y quiero realizar mi pago para activarlo';
+const authAttemptLimiter = createRateLimiter({
+  windowMs: 15 * 60 * 1000,
+  max: 12,
+  message: 'Demasiados intentos de acceso. Espera 15 minutos.',
+});
 
 function supportWhatsappUrl() {
   return `https://wa.me/${SUPPORT_WHATSAPP}?text=${encodeURIComponent(SUPPORT_MESSAGE)}`;
@@ -21,14 +28,14 @@ function normalizePhone(raw) {
   return digits.length >= 10 && digits.length <= 15 ? digits : '';
 }
 
-function normalizeLeadText(raw) {
-  return String(raw || '').trim().replace(/\s+/g, ' ');
+function normalizeLeadText(raw, maxLength = 120) {
+  return String(raw || '').trim().replace(/\s+/g, ' ').slice(0, maxLength);
 }
 
 async function saveDemoLead({ contactName, phone, businessGiro, sourcePage, tenantSlug }) {
-  const cleanName = normalizeLeadText(contactName);
+  const cleanName = normalizeLeadText(contactName, 120);
   const cleanPhone = normalizePhone(phone);
-  const cleanGiro = normalizeLeadText(businessGiro);
+  const cleanGiro = normalizeLeadText(businessGiro, 120);
   const cleanSource = ['landing', 'login'].includes(String(sourcePage || '').trim().toLowerCase())
     ? String(sourcePage).trim().toLowerCase()
     : 'landing';
@@ -72,32 +79,31 @@ async function saveDemoLead({ contactName, phone, businessGiro, sourcePage, tena
 function getDemoCredentials() {
   return {
     username: String(config.DEMO_USERNAME || 'demo').trim().toLowerCase() || 'demo',
-    password: String(config.DEMO_PASSWORD || 'demo') || 'demo',
+    password: String(config.DEMO_PASSWORD || ''),
     tenantSlug: String(config.DEMO_TENANT_SLUG || '').trim().toLowerCase(),
   };
 }
 
+function isSecureDemoConfigured() {
+  const { password, tenantSlug } = getDemoCredentials();
+  return Boolean(config.DEMO_LOGIN_ENABLED && SLUG_RE.test(tenantSlug) && password.length >= 12 && password.toLowerCase() !== 'demo');
+}
+
 async function resolveDemoTenant(preferredSlug) {
   const slug = String(preferredSlug || '').trim().toLowerCase();
-  if (slug) {
-    const bySlug = await q('SELECT * FROM tenants WHERE slug = $1 LIMIT 1', [slug]);
-    return bySlug.rows[0] || null;
-  }
-  const firstActive = await q(
-    `SELECT *
-     FROM tenants
-     WHERE account_status = 'active'
-       AND billing_status <> 'suspended'
-     ORDER BY id ASC
-     LIMIT 1`
-  );
-  return firstActive.rows[0] || null;
+  if (!slug || !SLUG_RE.test(slug)) return null;
+  const bySlug = await q('SELECT * FROM tenants WHERE slug = $1 LIMIT 1', [slug]);
+  return bySlug.rows[0] || null;
 }
 
 async function ensureDemoUser(username, password, tenant) {
-  const found = await q('SELECT * FROM users WHERE lower(username) = $1 LIMIT 1', [username]);
+  const found = await q('SELECT * FROM users WHERE tenant_id = $1 AND lower(username) = $2 LIMIT 1', [tenant.id, username]);
   const existing = found.rows[0];
   if (existing) return existing;
+  const conflict = await q('SELECT id FROM users WHERE lower(username) = $1 LIMIT 1', [username]);
+  if (conflict.rows[0]) {
+    throw Object.assign(new Error('El usuario demo está asignado a otro negocio'), { status: 503 });
+  }
   const hash = await bcrypt.hash(password, 12);
   const created = await q(
     `INSERT INTO users (tenant_id, username, password_hash, role, display_name, active)
@@ -109,7 +115,7 @@ async function ensureDemoUser(username, password, tenant) {
 }
 
 // Registro de un nuevo negocio (tenant) + usuario dueño
-router.post('/register', async (req, res, next) => {
+router.post('/register', authAttemptLimiter, async (req, res, next) => {
   try {
     const { ownerName, phone, businessName, slug, username, password } = req.body || {};
     if (!ownerName || !phone || !businessName || !slug || !username || !password) {
@@ -121,21 +127,27 @@ router.post('/register', async (req, res, next) => {
     }
     const cleanSlug = String(slug).trim().toLowerCase();
     const cleanUser = String(username).trim().toLowerCase();
+    const cleanOwnerName = normalizeLeadText(ownerName, 120);
+    const cleanBusinessName = normalizeLeadText(businessName, 160);
+    const cleanPassword = String(password || '');
+    if (!cleanOwnerName || !cleanBusinessName || !USERNAME_RE.test(cleanUser)) {
+      return res.status(400).json({ error: 'Revisa nombre, negocio y usuario (3 a 60 caracteres)' });
+    }
     if (!SLUG_RE.test(cleanSlug) || RESERVED.has(cleanSlug)) {
       return res.status(400).json({ error: 'El slug debe tener 3-40 caracteres: letras minúsculas, números y guiones' });
     }
-    if (String(password).length < 8) {
-      return res.status(400).json({ error: 'La contraseña debe tener al menos 8 caracteres' });
+    if (cleanPassword.length < 8 || cleanPassword.length > 128) {
+      return res.status(400).json({ error: 'La contraseña debe tener entre 8 y 128 caracteres' });
     }
     const dupSlug = await q('SELECT 1 FROM tenants WHERE slug = $1', [cleanSlug]);
     if (dupSlug.rows.length) return res.status(409).json({ error: 'Ese slug ya está registrado, elige otro' });
     const dupUser = await q('SELECT 1 FROM users WHERE lower(username) = $1', [cleanUser]);
     if (dupUser.rows.length) return res.status(409).json({ error: 'Ese usuario ya existe' });
 
-    const passwordHash = await bcrypt.hash(password, 12);
+    const passwordHash = await bcrypt.hash(cleanPassword, 12);
     const t = await q(
       'INSERT INTO tenants (slug, business_name, owner_name, phone_enc) VALUES ($1, $2, $3, $4) RETURNING *',
-      [cleanSlug, businessName.trim(), ownerName.trim(), encrypt(cleanPhone)]
+      [cleanSlug, cleanBusinessName, cleanOwnerName, encrypt(cleanPhone)]
     );
     const tenant = t.rows[0];
     const u = await q(
@@ -144,7 +156,7 @@ router.post('/register', async (req, res, next) => {
     );
 
     // Crea el SCHEMA AISLADO del tenant en Neon con valores por defecto
-    await initTenantDefaults(cleanSlug, businessName.trim());
+    await initTenantDefaults(cleanSlug, cleanBusinessName);
 
     setAuthCookie(res, signToken(u.rows[0], tenant), 'owner');
     res.json({ ok: true, slug: cleanSlug });
@@ -153,13 +165,18 @@ router.post('/register', async (req, res, next) => {
   }
 });
 
-router.post('/login', async (req, res, next) => {
+router.post('/login', authAttemptLimiter, async (req, res, next) => {
   try {
     const { username, password } = req.body || {};
     if (!username || !password) return res.status(400).json({ error: 'Usuario y contraseña requeridos' });
-    const u = await q('SELECT * FROM users WHERE lower(username) = $1', [String(username).trim().toLowerCase()]);
+    const cleanUsername = String(username).trim().toLowerCase();
+    const cleanPassword = String(password);
+    if (!USERNAME_RE.test(cleanUsername) || cleanPassword.length > 128) {
+      return res.status(401).json({ error: 'Usuario o contraseña incorrectos' });
+    }
+    const u = await q('SELECT * FROM users WHERE lower(username) = $1', [cleanUsername]);
     const user = u.rows[0];
-    if (!user || !(await bcrypt.compare(password, user.password_hash))) {
+    if (!user || !(await bcrypt.compare(cleanPassword, user.password_hash))) {
       return res.status(401).json({ error: 'Usuario o contraseña incorrectos' });
     }
     if (!Number(user.active)) {
@@ -186,8 +203,16 @@ router.post('/login', async (req, res, next) => {
   }
 });
 
-router.post('/demo-login', async (req, res, next) => {
+router.get('/demo-status', (req, res) => {
+  res.json({ enabled: isSecureDemoConfigured() });
+});
+
+router.post('/demo-login', authAttemptLimiter, async (req, res, next) => {
   try {
+    if (!isSecureDemoConfigured()) {
+      return res.status(404).json({ error: 'Acceso demo no disponible' });
+    }
+
     const body = req.body || {};
     const contactName = body.contactName ?? body.name ?? body.ownerName;
     const phone = body.phone ?? body.contactPhone;
@@ -209,11 +234,10 @@ router.post('/demo-login', async (req, res, next) => {
       throw e;
     }
 
-    if (!config.DEMO_LOGIN_ENABLED) {
-      return res.status(404).json({ error: 'Acceso demo no disponible' });
-    }
-
     const { username: demoUsername, password: demoPassword, tenantSlug: demoTenantSlug } = getDemoCredentials();
+    if (!demoTenantSlug || demoPassword.length < 12 || demoPassword.toLowerCase() === 'demo') {
+      return res.status(503).json({ error: 'El acceso demo no está configurado de forma segura' });
+    }
 
     const targetTenant = await resolveDemoTenant(demoTenantSlug);
     if (!targetTenant) {
@@ -237,11 +261,8 @@ router.post('/demo-login', async (req, res, next) => {
       targetTenant
     );
 
-    // Si el usuario demo ya existía con otra contraseña, la forzamos a demo para acceso rápido.
     if (!(await bcrypt.compare(demoPassword, user.password_hash))) {
-      const newHash = await bcrypt.hash(demoPassword, 12);
-      const updated = await q('UPDATE users SET password_hash = $2, active = 1 WHERE id = $1 RETURNING *', [user.id, newHash]);
-      user = updated.rows[0] || user;
+      return res.status(503).json({ error: 'Las credenciales del usuario demo no coinciden con la configuración' });
     }
 
     if (!Number(user.active)) {
@@ -311,7 +332,7 @@ router.get('/cashier-info/:slug', async (req, res, next) => {
   }
 });
 
-router.post('/cashier-login', async (req, res, next) => {
+router.post('/cashier-login', authAttemptLimiter, async (req, res, next) => {
   try {
     const cashierSlug = String(req.body?.cashierSlug || '').trim().toLowerCase();
     const password = String(req.body?.password || '');
@@ -343,7 +364,8 @@ router.post('/cashier-login', async (req, res, next) => {
     // Usamos ids correctos: uid del usuario y tid del tenant (evita conflicto de columna id en join)
     setAuthCookie(res, signToken(
       { id: row.uid, username: row.username },
-      { id: row.tid, slug: row.tenant_slug }
+      { id: row.tid, slug: row.tenant_slug },
+      'cashier'
     ), 'cashier');
     res.json({ ok: true, redirectTo: '/app#pos' });
   } catch (e) {

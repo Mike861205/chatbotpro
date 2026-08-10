@@ -7,6 +7,7 @@ const { q, tdb, getSuperAdminSetting, setSuperAdminSetting, refreshTenantBilling
 const { encrypt, decrypt } = require('../utils/crypto');
 const { createImageUpload, deleteManagedUpload, optimizeUploadedImage, safeUnlink } = require('../utils/uploads');
 const { signToken, setAuthCookie } = require('../middleware/auth');
+const { createRateLimiter } = require('../middleware/security');
 const {
   signSuperAdminToken,
   setSuperAdminCookie,
@@ -15,6 +16,11 @@ const {
 } = require('../middleware/superadmin');
 
 const router = express.Router();
+const superadminLoginLimiter = createRateLimiter({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  message: 'Demasiados intentos de acceso administrativo.',
+});
 
 function normalizePhone(raw) {
   const digits = String(raw || '').replace(/\D/g, '');
@@ -184,7 +190,7 @@ async function getGitDeployStatus() {
 
 const uploadSuperadminLogo = createImageUpload({
   scopeResolver: () => 'superadmin',
-  allowedMimePattern: /^image\/(png|jpe?g|webp|svg\+xml)$/i,
+  allowedMimePattern: /^image\/(png|jpe?g|webp|gif)$/i,
   tempPrefix: 'logo_superadmin',
 });
 
@@ -268,15 +274,20 @@ async function getTenantOwnerUser(tenantId) {
   return row.rows[0] || null;
 }
 
-router.post('/login', async (req, res, next) => {
+router.post('/login', superadminLoginLimiter, async (req, res, next) => {
   try {
     const { username, password } = req.body || {};
     if (!username || !password) {
       return res.status(400).json({ error: 'Usuario y contraseña requeridos' });
     }
-    const found = await q('SELECT * FROM superadmin_users WHERE lower(username) = $1', [String(username).trim().toLowerCase()]);
+    const cleanUsername = String(username).trim().toLowerCase();
+    const cleanPassword = String(password);
+    if (!/^[a-z0-9._-]{3,60}$/.test(cleanUsername) || cleanPassword.length > 128) {
+      return res.status(401).json({ error: 'Credenciales de superadmin inválidas' });
+    }
+    const found = await q('SELECT * FROM superadmin_users WHERE lower(username) = $1', [cleanUsername]);
     const user = found.rows[0];
-    if (!user || !user.active || !(await bcrypt.compare(password, user.password_hash))) {
+    if (!user || !user.active || !(await bcrypt.compare(cleanPassword, user.password_hash))) {
       return res.status(401).json({ error: 'Credenciales de superadmin inválidas' });
     }
     setSuperAdminCookie(res, signSuperAdminToken(user));

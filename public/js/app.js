@@ -20,6 +20,8 @@ let COSTING_TAB = 'products';
 let COSTING_SORT = 'alphabetical';
 let COSTING_CATEGORY = 'all';
 let COSTING_SEARCH = '';
+let COSTING_VIEW = 'table';
+let COSTING_EXPORT_FORMAT = 'pdf';
 let COSTING_EXPENSE_BRANCH = 'all';
 let COSTING_EXPENSE_YEAR = new Date().getFullYear();
 let COSTING_EXPENSE_MONTH = new Date().getMonth() + 1;
@@ -34,6 +36,9 @@ let PURCHASE_TAB = 'dashboard';
 let PURCHASE_PERIOD = 'day';
 let PURCHASE_ORDER_ITEMS = [];
 let PURCHASE_TRANSFER_ITEMS = [];
+let PURCHASE_TRANSFER_STOCK = null;
+let PURCHASE_TRANSFER_STOCK_LOADING = false;
+let PURCHASE_TRANSFER_STOCK_REQUEST = 0;
 let BRANCH_STOCK_DATA = { branches: [], summaries: [], rows: [] };
 let BRANCH_STOCK_SEARCH = '';
 let BRANCH_STOCK_CATEGORY = 'all';
@@ -121,6 +126,32 @@ let ORDER_ALERT_BOOTSTRAPPED = false;
 let ORDER_ALERT_AUDIO_CTX = null;
 
 const $ = (s) => document.querySelector(s);
+function enhanceResponsiveTables(root = document) {
+  root.querySelectorAll?.('.table-wrap table:not(.branch-stock-table)').forEach((table) => {
+    const headings = [...table.querySelectorAll('thead th')].map((cell) => cell.textContent.trim());
+    if (headings.length < 4) return;
+    table.classList.add('mobile-card-table');
+    table.querySelectorAll('tbody tr').forEach((row) => {
+      [...row.children].forEach((cell, index) => {
+        if (cell.tagName === 'TD' && !cell.hasAttribute('colspan')) cell.dataset.label = headings[index] || '';
+      });
+    });
+  });
+}
+
+let responsiveTableFrame = 0;
+function scheduleResponsiveTableEnhancement() {
+  if (responsiveTableFrame) return;
+  responsiveTableFrame = requestAnimationFrame(() => {
+    responsiveTableFrame = 0;
+    enhanceResponsiveTables();
+  });
+}
+
+if (document.body) {
+  new MutationObserver(scheduleResponsiveTableEnhancement).observe(document.body, { childList: true, subtree: true });
+  scheduleResponsiveTableEnhancement();
+}
 const fmtMoney = (n, c) =>
   new Intl.NumberFormat('es-MX', { style: 'currency', currency: c || (SETTINGS && SETTINGS.currency) || 'MXN' }).format(n || 0);
 
@@ -1232,7 +1263,7 @@ function costingMarginTone(margin) {
 function renderCostingStats() {
   const host = $('#costingStats');
   if (!host) return;
-  const rows = [...COSTING_DRAFT.values()];
+  const rows = costingFilteredProducts().map((product) => COSTING_DRAFT.get(Number(product.id)) || product);
   const configured = rows.filter((row) => Number(row.unitCost) > 0).length;
   const losses = rows.filter((row) => costingMetrics(row).margin < 0).length;
   const positive = rows.map(costingMetrics).filter((row) => row.salePrice > 0);
@@ -1334,35 +1365,39 @@ function updateCostingRow(rowElement, productId) {
   }
 }
 
-function renderCostingProducts() {
-  const tbody = $('#costingProductsTbody');
-  if (!tbody) return;
-  const rows = costingFilteredProducts();
-  if (!rows.length) {
-    tbody.innerHTML = '<tr><td colspan="7"><div class="empty-cell">No hay productos para este filtro.</div></td></tr>';
-    return;
-  }
-  tbody.innerHTML = rows.map((product) => {
-    const draft = COSTING_DRAFT.get(Number(product.id)) || product;
-    const metrics = costingMetrics(draft);
-    const tone = costingMarginTone(metrics.margin);
-    return `<tr data-cost-product="${product.id}" class="${COSTING_DIRTY.has(Number(product.id)) ? 'is-dirty' : ''}">
-      <td><b>${esc(product.name)}</b>${product.active ? '' : '<small class="costing-inactive">Inactivo</small>'}</td>
-      <td><span class="costing-category-pill">${esc(product.categoryName)}</span></td>
-      <td><div class="costing-money-input"><span>$</span><input type="number" min="0" step="0.0001" data-cost-field="unitCost" value="${metrics.unitCost}" /></div></td>
-      <td><div class="costing-money-input"><span>$</span><input type="number" min="0" step="0.01" data-cost-field="salePrice" value="${metrics.salePrice}" /></div></td>
-      <td><strong class="costing-profit-value ${tone}">${fmtMoney(metrics.margin)}</strong></td>
-      <td><strong class="costing-margin-value ${tone}">${metrics.marginPercent.toFixed(1)}%</strong></td>
-      <td>${metrics.unitCost > 0 ? '<span class="costing-status ready"><i class="ph-fill ph-check-circle"></i> Configurado</span>' : '<span class="costing-status pending"><i class="ph-fill ph-clock"></i> Falta costo</span>'}</td>
-    </tr>`;
-  }).join('');
+function costingStatusHtml(metrics) {
+  return metrics.unitCost > 0
+    ? '<span class="costing-status ready"><i class="ph-fill ph-check-circle"></i> Configurado</span>'
+    : '<span class="costing-status pending"><i class="ph-fill ph-clock"></i> Falta costo</span>';
+}
 
-  tbody.querySelectorAll('[data-cost-field]').forEach((input) => {
+function costingProductCardHtml(product) {
+  const draft = COSTING_DRAFT.get(Number(product.id)) || product;
+  const metrics = costingMetrics(draft);
+  const tone = costingMarginTone(metrics.margin);
+  return `<article class="card costing-product-card ${COSTING_DIRTY.has(Number(product.id)) ? 'is-dirty' : ''}" data-cost-product="${product.id}">
+    <div class="costing-product-card-head">
+      <div><span class="costing-category-pill">${esc(product.categoryName)}</span><h4>${esc(product.name)}</h4>${product.active ? '' : '<small class="costing-inactive">Producto inactivo</small>'}</div>
+      ${costingStatusHtml(metrics)}
+    </div>
+    <div class="costing-card-inputs">
+      <label><span>Costo unitario</span><div class="costing-money-input"><span>$</span><input type="number" min="0" step="0.0001" inputmode="decimal" data-cost-field="unitCost" aria-label="Costo unitario de ${esc(product.name)}" value="${metrics.unitCost}" /></div></label>
+      <label><span>Precio de venta</span><div class="costing-money-input"><span>$</span><input type="number" min="0" step="0.01" inputmode="decimal" data-cost-field="salePrice" aria-label="Precio de venta de ${esc(product.name)}" value="${metrics.salePrice}" /></div></label>
+    </div>
+    <div class="costing-card-metrics">
+      <div><span>Utilidad unitaria</span><strong class="costing-profit-value ${tone}">${fmtMoney(metrics.margin)}</strong></div>
+      <div><span>Margen</span><strong class="costing-margin-value ${tone}">${metrics.marginPercent.toFixed(1)}%</strong></div>
+    </div>
+  </article>`;
+}
+
+function bindCostingInputs(host) {
+  host?.querySelectorAll('[data-cost-field]').forEach((input) => {
     input.addEventListener('input', () => {
       const rowElement = input.closest('[data-cost-product]');
-      const id = Number(rowElement.dataset.costProduct);
+      const id = Number(rowElement?.dataset.costProduct);
       const draft = COSTING_DRAFT.get(id);
-      if (!draft) return;
+      if (!rowElement || !draft) return;
       draft[input.dataset.costField] = Math.max(0, Number(input.value) || 0);
       COSTING_DIRTY.add(id);
       persistCostingLocalDraft();
@@ -1377,6 +1412,192 @@ function renderCostingProducts() {
       }, 900));
     });
   });
+}
+
+function syncCostingViewButtons() {
+  document.querySelectorAll('#costingView [data-cost-view]').forEach((button) => button.classList.toggle('on', button.dataset.costView === COSTING_VIEW));
+}
+
+function renderCostingProducts() {
+  const tbody = $('#costingProductsTbody');
+  const cards = $('#costingProductCards');
+  const tableCard = $('#costingTableCard');
+  const categoryHead = $('#costingCategoryHead');
+  if (!tbody || !cards || !tableCard || !categoryHead) return;
+  const rows = costingFilteredProducts();
+  const useCards = COSTING_VIEW === 'cards';
+  cards.hidden = !useCards;
+  categoryHead.hidden = !useCards;
+  tableCard.hidden = useCards;
+  syncCostingViewButtons();
+
+  const selectedCategory = COSTING_DATA.categories.find((row) => String(row.id) === COSTING_CATEGORY);
+  $('#costingCategoryTitle').textContent = selectedCategory?.name || 'Todos los productos';
+  $('#costingCategoryCount').textContent = `${rows.length} producto${rows.length === 1 ? '' : 's'}`;
+
+  if (useCards) {
+    cards.innerHTML = rows.length
+      ? rows.map(costingProductCardHtml).join('')
+      : '<div class="card costing-product-empty"><i class="ph-bold ph-package"></i><b>No hay productos para este filtro</b><span>Prueba con otra categoría o búsqueda.</span></div>';
+    bindCostingInputs(cards);
+    renderCostingStats();
+    return;
+  }
+
+  tbody.innerHTML = rows.length ? rows.map((product) => {
+    const draft = COSTING_DRAFT.get(Number(product.id)) || product;
+    const metrics = costingMetrics(draft);
+    const tone = costingMarginTone(metrics.margin);
+    return `<tr data-cost-product="${product.id}" class="${COSTING_DIRTY.has(Number(product.id)) ? 'is-dirty' : ''}">
+      <td><b>${esc(product.name)}</b>${product.active ? '' : '<small class="costing-inactive">Inactivo</small>'}</td>
+      <td><span class="costing-category-pill">${esc(product.categoryName)}</span></td>
+      <td><div class="costing-money-input"><span>$</span><input type="number" min="0" step="0.0001" inputmode="decimal" data-cost-field="unitCost" aria-label="Costo unitario de ${esc(product.name)}" value="${metrics.unitCost}" /></div></td>
+      <td><div class="costing-money-input"><span>$</span><input type="number" min="0" step="0.01" inputmode="decimal" data-cost-field="salePrice" aria-label="Precio de venta de ${esc(product.name)}" value="${metrics.salePrice}" /></div></td>
+      <td><strong class="costing-profit-value ${tone}">${fmtMoney(metrics.margin)}</strong></td>
+      <td><strong class="costing-margin-value ${tone}">${metrics.marginPercent.toFixed(1)}%</strong></td>
+      <td>${costingStatusHtml(metrics)}</td>
+    </tr>`;
+  }).join('') : '<tr><td colspan="7"><div class="empty-cell">No hay productos para este filtro.</div></td></tr>';
+  bindCostingInputs(tbody);
+  renderCostingStats();
+}
+
+const COSTING_EXPORT_COLUMNS = [
+  { key: 'name', label: 'Producto', width: 30, pdf: (row) => row.name },
+  { key: 'categoryName', label: 'Categoría', width: 20, pdf: (row) => row.categoryName },
+  { key: 'unitCost', label: 'Costo unitario', width: 16, pdf: (row) => fmtMoney(row.unitCost) },
+  { key: 'salePrice', label: 'Precio de venta', width: 16, pdf: (row) => fmtMoney(row.salePrice) },
+  { key: 'margin', label: 'Utilidad unitaria', width: 18, pdf: (row) => fmtMoney(row.margin) },
+  { key: 'marginPercent', label: 'Margen %', width: 13, pdf: (row) => `${row.marginPercent.toFixed(1)}%` },
+  { key: 'status', label: 'Estado', width: 16, pdf: (row) => row.status },
+  { key: 'active', label: 'Producto activo', width: 16, pdf: (row) => row.active },
+];
+
+function costingExportRows() {
+  return costingFilteredProducts().map((product) => {
+    const draft = COSTING_DRAFT.get(Number(product.id)) || product;
+    const metrics = costingMetrics(draft);
+    return {
+      name: product.name,
+      categoryName: product.categoryName,
+      unitCost: metrics.unitCost,
+      salePrice: metrics.salePrice,
+      margin: metrics.margin,
+      marginPercent: metrics.marginPercent,
+      status: metrics.unitCost > 0 ? 'Configurado' : 'Falta costo',
+      active: product.active ? 'Sí' : 'No',
+    };
+  });
+}
+
+function costingExportScopeLabel(rows = costingExportRows()) {
+  const selectedCategory = COSTING_DATA.categories.find((row) => String(row.id) === COSTING_CATEGORY);
+  const parts = [selectedCategory?.name || 'Todas las categorías', `${rows.length} producto${rows.length === 1 ? '' : 's'}`];
+  if (COSTING_SEARCH.trim()) parts.push(`búsqueda: “${COSTING_SEARCH.trim()}”`);
+  return parts.join(' · ');
+}
+
+function costingExportFileBase() {
+  const selectedCategory = COSTING_DATA.categories.find((row) => String(row.id) === COSTING_CATEGORY);
+  const category = (selectedCategory?.name || 'todas-las-categorias')
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+  return `costo_ventas_${category || 'categoria'}_${getLocalIsoDate()}`;
+}
+
+function selectedCostingExportColumns() {
+  const selected = new Set([...document.querySelectorAll('#costingExportFields input:checked')].map((input) => input.value));
+  return COSTING_EXPORT_COLUMNS.filter((column) => selected.has(column.key));
+}
+
+function syncCostingExportToggle() {
+  const inputs = [...document.querySelectorAll('#costingExportFields input')];
+  const allSelected = inputs.length > 0 && inputs.every((input) => input.checked);
+  const button = $('#costingExportToggle');
+  if (button) button.textContent = allSelected ? 'Limpiar selección' : 'Seleccionar todas';
+}
+
+function openCostingExportModal(format = 'pdf') {
+  const rows = costingExportRows();
+  if (!rows.length) return toast('No hay productos visibles para exportar', true);
+  COSTING_EXPORT_FORMAT = format === 'excel' ? 'excel' : 'pdf';
+  const host = $('#costingExportFields');
+  if (!host.dataset.ready) {
+    host.innerHTML = COSTING_EXPORT_COLUMNS.map((column) => `<label><input type="checkbox" value="${column.key}" checked /><span><i class="ph-bold ph-check"></i>${esc(column.label)}</span></label>`).join('');
+    host.dataset.ready = 'true';
+    host.addEventListener('change', syncCostingExportToggle);
+  }
+  $('#costingExportScope').textContent = costingExportScopeLabel(rows);
+  $('#costingExportPdf').classList.toggle('btn-primary', COSTING_EXPORT_FORMAT === 'pdf');
+  $('#costingExportPdf').classList.toggle('btn-ghost', COSTING_EXPORT_FORMAT !== 'pdf');
+  $('#costingExportExcel').classList.toggle('btn-primary', COSTING_EXPORT_FORMAT === 'excel');
+  $('#costingExportExcel').classList.toggle('btn-ghost', COSTING_EXPORT_FORMAT !== 'excel');
+  syncCostingExportToggle();
+  openModal('costingExportModal');
+}
+
+function exportCostingExcel() {
+  const rows = costingExportRows();
+  const columns = selectedCostingExportColumns();
+  if (!columns.length) return toast('Selecciona al menos una columna', true);
+  if (!rows.length) return toast('No hay productos visibles para exportar', true);
+  if (!globalThis.XLSX) return toast('No se pudo preparar el archivo Excel', true);
+
+  const workbook = XLSX.utils.book_new();
+  const summary = XLSX.utils.aoa_to_sheet([
+    ['Reporte', 'Costo de ventas'],
+    ['Negocio', ME?.tenant?.businessName || SETTINGS?.business_name || 'Negocio'],
+    ['Filtro', costingExportScopeLabel(rows)],
+    ['Generado', new Date().toLocaleString('es-MX')],
+  ]);
+  const data = rows.map((row) => Object.fromEntries(columns.map((column) => [column.label, row[column.key]])));
+  const sheet = XLSX.utils.json_to_sheet(data);
+  sheet['!cols'] = columns.map((column) => ({ wch: column.width }));
+  XLSX.utils.book_append_sheet(workbook, summary, 'Resumen');
+  XLSX.utils.book_append_sheet(workbook, sheet, 'Productos');
+  XLSX.writeFile(workbook, `${costingExportFileBase()}.xlsx`);
+  closeModal('costingExportModal');
+  toast(`Excel exportado con ${rows.length} producto${rows.length === 1 ? '' : 's'}`);
+}
+
+function exportCostingPdf() {
+  const rows = costingExportRows();
+  const columns = selectedCostingExportColumns();
+  if (!columns.length) return toast('Selecciona al menos una columna', true);
+  if (!rows.length) return toast('No hay productos visibles para exportar', true);
+  if (!globalThis.jspdf?.jsPDF) return toast('No se pudo preparar el archivo PDF', true);
+
+  const orientation = columns.length > 4 ? 'landscape' : 'portrait';
+  const doc = new globalThis.jspdf.jsPDF({ orientation, unit: 'mm', format: 'letter' });
+  const businessName = ME?.tenant?.businessName || SETTINGS?.business_name || 'Negocio';
+  doc.setFontSize(16);
+  doc.setTextColor(15, 23, 42);
+  doc.text(String(businessName), 14, 15);
+  doc.setFontSize(11);
+  doc.text('Reporte de costo de ventas', 14, 21);
+  doc.setFontSize(8);
+  doc.setTextColor(100, 116, 139);
+  doc.text(costingExportScopeLabel(rows), 14, 27);
+  doc.text(`Generado: ${new Date().toLocaleString('es-MX')}`, 14, 32);
+  doc.autoTable({
+    startY: 37,
+    theme: 'striped',
+    head: [columns.map((column) => column.label)],
+    body: rows.map((row) => columns.map((column) => column.pdf(row))),
+    styles: { fontSize: columns.length > 6 ? 6.5 : 8, cellPadding: 2.2, overflow: 'linebreak' },
+    headStyles: { fillColor: [234, 88, 12], textColor: 255, fontStyle: 'bold' },
+    alternateRowStyles: { fillColor: [248, 250, 252] },
+    margin: { left: 14, right: 14, bottom: 13 },
+  });
+  const pages = doc.internal.getNumberOfPages();
+  for (let page = 1; page <= pages; page += 1) {
+    doc.setPage(page);
+    doc.setFontSize(7);
+    doc.setTextColor(100, 116, 139);
+    doc.text(`Página ${page} de ${pages}`, doc.internal.pageSize.getWidth() - 14, doc.internal.pageSize.getHeight() - 7, { align: 'right' });
+  }
+  doc.save(`${costingExportFileBase()}.pdf`);
+  closeModal('costingExportModal');
+  toast(`PDF exportado con ${rows.length} producto${rows.length === 1 ? '' : 's'}`);
 }
 
 async function persistCostingProducts(options = {}) {
@@ -1492,10 +1713,31 @@ document.querySelectorAll('#costingSort [data-cost-sort]').forEach((button) => b
   document.querySelectorAll('#costingSort [data-cost-sort]').forEach((row) => row.classList.toggle('on', row.dataset.costSort === COSTING_SORT));
   renderCostingProducts();
 }));
+document.querySelectorAll('#costingView [data-cost-view]').forEach((button) => button.addEventListener('click', () => {
+  COSTING_VIEW = button.dataset.costView === 'cards' ? 'cards' : 'table';
+  renderCostingProducts();
+}));
 $('#costingSearch')?.addEventListener('input', (event) => { COSTING_SEARCH = event.target.value; renderCostingProducts(); });
-$('#costingCategory')?.addEventListener('change', (event) => { COSTING_CATEGORY = event.target.value; renderCostingProducts(); });
+$('#costingCategory')?.addEventListener('change', (event) => {
+  COSTING_CATEGORY = event.target.value;
+  COSTING_VIEW = 'cards';
+  renderCostingProducts();
+});
 $('#costingSaveBtn')?.addEventListener('click', saveCostingProducts);
 $('#costingSaveBottomBtn')?.addEventListener('click', saveCostingProducts);
+$('#costingPdfBtn')?.addEventListener('click', () => openCostingExportModal('pdf'));
+$('#costingExcelBtn')?.addEventListener('click', () => openCostingExportModal('excel'));
+$('#costingExportPdf')?.addEventListener('click', exportCostingPdf);
+$('#costingExportExcel')?.addEventListener('click', exportCostingExcel);
+$('#costingExportClose')?.addEventListener('click', () => closeModal('costingExportModal'));
+$('#costingExportCancel')?.addEventListener('click', () => closeModal('costingExportModal'));
+$('#costingExportToggle')?.addEventListener('click', () => {
+  const inputs = [...document.querySelectorAll('#costingExportFields input')];
+  const shouldSelect = !inputs.length || !inputs.every((input) => input.checked);
+  inputs.forEach((input) => { input.checked = shouldSelect; });
+  syncCostingExportToggle();
+});
+$('#costingExportModal')?.addEventListener('click', (event) => { if (event.target === event.currentTarget) closeModal('costingExportModal'); });
 $('#costingExpenseForm')?.addEventListener('submit', async (event) => {
   event.preventDefault();
   try {
@@ -1710,17 +1952,247 @@ function renderPurchaseOrderItems(){
 function openPurchaseOrder(){if(!PURCHASE_DATA.suppliers.some(row=>row.active))return toast('Primero registra un proveedor activo',true);if(!PURCHASE_DATA.branches.some(row=>row.active))return toast('Primero configura una sucursal',true);PURCHASE_ORDER_ITEMS=[newPurchaseOrderItem()];$('#purchaseOrderSupplier').innerHTML=purchaseSupplierOptions();$('#purchaseOrderBranch').innerHTML=purchaseBranchOptions();$('#purchaseOrderDate').value=getLocalIsoDate();$('#purchaseExpectedDate').value='';$('#purchaseOrderNotes').value='';renderPurchaseOrderItems();openModal('purchaseOrderModal');}
 
 function newPurchaseTransferItem(){return{productId:'',quantity:1};}
-function renderPurchaseTransferItems(){const host=$('#purchaseTransferItems'),from=$('#purchaseTransferFrom').value;host.innerHTML=PURCHASE_TRANSFER_ITEMS.map((item,index)=>`<div class="purchase-item-row transfer" data-index="${index}"><select data-pt-field="productId">${purchaseProductOptions(item.productId)}</select><input data-pt-field="quantity" type="number" min="0.0001" step="0.0001" value="${item.quantity}" placeholder="Cantidad"><span>Disponible: <b>${item.productId?purchaseStock(from,item.productId):0}</b></span><button type="button" class="btn btn-ghost btn-sm purchase-remove-item"><i class="ph-bold ph-trash"></i></button></div>`).join('');host.querySelectorAll('[data-pt-field]').forEach(input=>input.addEventListener('change',()=>{const index=Number(input.closest('[data-index]').dataset.index);PURCHASE_TRANSFER_ITEMS[index][input.dataset.ptField]=input.dataset.ptField==='productId'?input.value:Number(input.value)||0;renderPurchaseTransferItems();}));host.querySelectorAll('.purchase-remove-item').forEach(button=>button.addEventListener('click',()=>{PURCHASE_TRANSFER_ITEMS.splice(Number(button.closest('[data-index]').dataset.index),1);renderPurchaseTransferItems();}));}
-function openPurchaseTransfer(){if(PURCHASE_DATA.branches.filter(row=>row.active).length<2)return toast('Configura al menos dos sucursales',true);PURCHASE_TRANSFER_ITEMS=[newPurchaseTransferItem()];$('#purchaseTransferFrom').innerHTML=purchaseBranchOptions();$('#purchaseTransferTo').innerHTML=purchaseBranchOptions();$('#purchaseTransferNotes').value='';renderPurchaseTransferItems();openModal('purchaseTransferModal');}
+
+function purchaseTransferRound(value) {
+  return Number((Number(value) || 0).toFixed(4));
+}
+
+function purchaseTransferStockRow(productId) {
+  return PURCHASE_TRANSFER_STOCK?.products?.find((row) => Number(row.productId) === Number(productId)) || null;
+}
+
+function purchaseTransferProductOptions(selected = '', currentIndex = -1) {
+  const selectedElsewhere = new Set(PURCHASE_TRANSFER_ITEMS
+    .filter((item, index) => index !== currentIndex && item.productId)
+    .map((item) => String(item.productId)));
+  const products = PURCHASE_TRANSFER_STOCK?.products || PURCHASE_DATA.products.map((product) => ({
+    productId: product.id,
+    productName: product.name,
+    availableFrom: Math.max(0, purchaseStock($('#purchaseTransferFrom').value, product.id)),
+  }));
+  return `<option value="">Selecciona producto…</option>${products.map((product) => {
+    const id = String(product.productId);
+    const isSelected = id === String(selected);
+    const disabled = selectedElsewhere.has(id) && !isSelected;
+    return `<option value="${product.productId}" ${isSelected ? 'selected' : ''} ${disabled ? 'disabled' : ''}>${esc(product.productName)} · origen ${invFmt(product.availableFrom)}</option>`;
+  }).join('')}`;
+}
+
+function purchaseTransferItemMetrics(item) {
+  const stock = purchaseTransferStockRow(item.productId);
+  const quantity = Math.max(0, purchaseTransferRound(item.quantity));
+  const fromCurrent = purchaseTransferRound(stock?.fromQuantity || 0);
+  const available = Math.max(0, purchaseTransferRound(stock?.availableFrom || 0));
+  const toCurrent = purchaseTransferRound(stock?.toQuantity || 0);
+  return {
+    stock,
+    quantity,
+    fromCurrent,
+    available,
+    toCurrent,
+    fromAfter: purchaseTransferRound(fromCurrent - quantity),
+    toAfter: purchaseTransferRound(toCurrent + quantity),
+    insufficient: Boolean(item.productId) && quantity > available,
+  };
+}
+
+function purchaseTransferMetricsHtml(item) {
+  if (!item.productId) return '<div class="purchase-transfer-empty-metric"><i class="ph-bold ph-package"></i> Selecciona un producto para consultar ambas existencias.</div>';
+  const metrics = purchaseTransferItemMetrics(item);
+  return `<div class="purchase-transfer-flow ${metrics.insufficient ? 'is-insufficient' : ''}">
+    <div class="origin"><small>Origen actual</small><b>${invFmt(metrics.fromCurrent)}</b><span>Quedará ${invFmt(metrics.fromAfter)}</span></div>
+    <i class="ph-bold ph-arrow-right"></i>
+    <div class="destination"><small>Destino actual</small><b>${invFmt(metrics.toCurrent)}</b><span>Quedará ${invFmt(metrics.toAfter)}</span></div>
+    ${metrics.insufficient ? `<em><i class="ph-bold ph-warning"></i> Sólo hay ${invFmt(metrics.available)} disponibles</em>` : ''}
+  </div>`;
+}
+
+function updatePurchaseTransferValidity() {
+  const fromId = Number($('#purchaseTransferFrom').value);
+  const toId = Number($('#purchaseTransferTo').value);
+  const snapshotIsCurrent = Number(PURCHASE_TRANSFER_STOCK?.from?.id) === fromId && Number(PURCHASE_TRANSFER_STOCK?.to?.id) === toId;
+  const productIds = PURCHASE_TRANSFER_ITEMS.map((item) => String(item.productId || '')).filter(Boolean);
+  const uniqueProducts = new Set(productIds).size === productIds.length;
+  const itemsValid = PURCHASE_TRANSFER_ITEMS.length > 0 && PURCHASE_TRANSFER_ITEMS.every((item) => {
+    const metrics = purchaseTransferItemMetrics(item);
+    return Boolean(item.productId) && metrics.quantity > 0 && !metrics.insufficient;
+  });
+  const valid = !PURCHASE_TRANSFER_STOCK_LOADING && snapshotIsCurrent && fromId !== toId && uniqueProducts && itemsValid;
+  const submit = $('#purchaseTransferSubmit');
+  const refresh = $('#purchaseTransferRefresh');
+  if (submit) submit.disabled = !valid;
+  if (refresh) refresh.disabled = PURCHASE_TRANSFER_STOCK_LOADING || !fromId || !toId || fromId === toId;
+  return valid;
+}
+
+function updatePurchaseTransferRow(index) {
+  const item = PURCHASE_TRANSFER_ITEMS[index];
+  const row = document.querySelector(`#purchaseTransferItems [data-index="${index}"]`);
+  if (!item || !row) return;
+  const metrics = purchaseTransferItemMetrics(item);
+  row.classList.toggle('is-insufficient', metrics.insufficient);
+  const metricHost = row.querySelector('[data-pt-stock-metrics]');
+  if (metricHost) metricHost.innerHTML = purchaseTransferMetricsHtml(item);
+  updatePurchaseTransferValidity();
+}
+
+function renderPurchaseTransferSummary() {
+  const host = $('#purchaseTransferStockSummary');
+  if (!host) return;
+  const fromId = Number($('#purchaseTransferFrom').value);
+  const toId = Number($('#purchaseTransferTo').value);
+  if (!fromId || !toId || fromId === toId) {
+    host.innerHTML = '<div class="purchase-transfer-message warning"><i class="ph-bold ph-warning-circle"></i><span>Selecciona dos sucursales diferentes para consultar su inventario real.</span></div>';
+    return;
+  }
+  if (PURCHASE_TRANSFER_STOCK_LOADING) {
+    host.innerHTML = '<div class="purchase-transfer-message loading"><span class="spinner"></span><span>Consultando existencias actuales de ambas sucursales…</span></div>';
+    return;
+  }
+  if (PURCHASE_TRANSFER_STOCK?.error) {
+    host.innerHTML = `<div class="purchase-transfer-message danger"><i class="ph-bold ph-warning-circle"></i><span>${esc(PURCHASE_TRANSFER_STOCK.error)}</span></div>`;
+    return;
+  }
+  const data = PURCHASE_TRANSFER_STOCK;
+  if (!data?.from || !data?.to) {
+    host.innerHTML = '<div class="purchase-transfer-message"><i class="ph-bold ph-info"></i><span>Selecciona las sucursales para cargar sus existencias.</span></div>';
+    return;
+  }
+  const updatedAt = new Date(data.generatedAt).toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  host.innerHTML = `<div class="purchase-transfer-branch origin"><i class="ph-bold ph-storefront"></i><div><small>Origen · inventario actual</small><b>${esc(data.from.name)}</b><span>${invFmt(data.from.totalUnits)} unidades · ${data.from.productsWithStock} productos con existencia</span></div></div>
+    <i class="ph-bold ph-arrow-right purchase-transfer-summary-arrow"></i>
+    <div class="purchase-transfer-branch destination"><i class="ph-bold ph-warehouse"></i><div><small>Destino · inventario actual</small><b>${esc(data.to.name)}</b><span>${invFmt(data.to.totalUnits)} unidades · ${data.to.productsWithStock} productos con existencia</span></div></div>
+    <div class="purchase-transfer-freshness"><i class="ph-bold ph-clock"></i> Actualizado ${esc(updatedAt)}</div>`;
+}
+
+function renderPurchaseTransferItems() {
+  const host = $('#purchaseTransferItems');
+  host.innerHTML = PURCHASE_TRANSFER_ITEMS.map((item,index) => {
+    const metrics = purchaseTransferItemMetrics(item);
+    return `<div class="purchase-item-row transfer ${metrics.insufficient ? 'is-insufficient' : ''}" data-index="${index}">
+      <div class="purchase-item-field" data-label="Producto"><select data-pt-field="productId" aria-label="Producto a trasladar">${purchaseTransferProductOptions(item.productId,index)}</select></div>
+      <div class="purchase-item-field" data-label="Cantidad"><input data-pt-field="quantity" aria-label="Cantidad a trasladar" inputmode="decimal" type="number" min="0.0001" ${item.productId ? `max="${metrics.available}"` : ''} step="0.0001" value="${item.quantity}" placeholder="Cantidad"></div>
+      <div class="purchase-transfer-row-metrics" data-pt-stock-metrics>${purchaseTransferMetricsHtml(item)}</div>
+      <button type="button" class="btn btn-ghost btn-sm purchase-remove-item" aria-label="Eliminar producto"><i class="ph-bold ph-trash"></i></button>
+    </div>`;
+  }).join('');
+  host.querySelectorAll('[data-pt-field="productId"]').forEach((select) => select.addEventListener('change', () => {
+    const index = Number(select.closest('[data-index]').dataset.index);
+    PURCHASE_TRANSFER_ITEMS[index].productId = select.value;
+    renderPurchaseTransferItems();
+  }));
+  host.querySelectorAll('[data-pt-field="quantity"]').forEach((input) => input.addEventListener('input', () => {
+    const index = Number(input.closest('[data-index]').dataset.index);
+    PURCHASE_TRANSFER_ITEMS[index].quantity = Math.max(0, Number(input.value) || 0);
+    updatePurchaseTransferRow(index);
+  }));
+  host.querySelectorAll('.purchase-remove-item').forEach((button) => button.addEventListener('click', () => {
+    PURCHASE_TRANSFER_ITEMS.splice(Number(button.closest('[data-index]').dataset.index), 1);
+    renderPurchaseTransferItems();
+  }));
+  updatePurchaseTransferValidity();
+}
+
+async function loadPurchaseTransferStock(options = {}) {
+  const fromId = Number($('#purchaseTransferFrom').value);
+  const toId = Number($('#purchaseTransferTo').value);
+  const requestId = ++PURCHASE_TRANSFER_STOCK_REQUEST;
+  if (!fromId || !toId || fromId === toId) {
+    PURCHASE_TRANSFER_STOCK = null;
+    PURCHASE_TRANSFER_STOCK_LOADING = false;
+    renderPurchaseTransferSummary();
+    renderPurchaseTransferItems();
+    return false;
+  }
+  PURCHASE_TRANSFER_STOCK = null;
+  PURCHASE_TRANSFER_STOCK_LOADING = true;
+  renderPurchaseTransferSummary();
+  renderPurchaseTransferItems();
+  try {
+    const query = new URLSearchParams({ fromBranchId: String(fromId), toBranchId: String(toId), refresh: String(Date.now()) });
+    const data = await api(`/api/purchases/transfer-stock?${query}`);
+    if (requestId !== PURCHASE_TRANSFER_STOCK_REQUEST) return false;
+    PURCHASE_TRANSFER_STOCK = data;
+    const selectedBranches = new Set([fromId, toId]);
+    PURCHASE_DATA.branchStock = PURCHASE_DATA.branchStock.filter((row) => !selectedBranches.has(Number(row.branchId)));
+    data.products.forEach((product) => {
+      PURCHASE_DATA.branchStock.push({ branchId: fromId, productId: product.productId, quantity: product.fromQuantity });
+      PURCHASE_DATA.branchStock.push({ branchId: toId, productId: product.productId, quantity: product.toQuantity });
+    });
+    return true;
+  } catch (error) {
+    if (requestId !== PURCHASE_TRANSFER_STOCK_REQUEST) return false;
+    PURCHASE_TRANSFER_STOCK = { error: error.message || 'No se pudo consultar el inventario actual' };
+    if (!options.quiet) toast(PURCHASE_TRANSFER_STOCK.error, true);
+    return false;
+  } finally {
+    if (requestId === PURCHASE_TRANSFER_STOCK_REQUEST) {
+      PURCHASE_TRANSFER_STOCK_LOADING = false;
+      renderPurchaseTransferSummary();
+      renderPurchaseTransferItems();
+    }
+  }
+}
+
+function normalizePurchaseTransferBranches(changed) {
+  const from = $('#purchaseTransferFrom');
+  const to = $('#purchaseTransferTo');
+  if (!from.value || !to.value || from.value !== to.value) return;
+  const alternatives = PURCHASE_DATA.branches.filter((row) => row.active && String(row.id) !== (changed === 'from' ? from.value : to.value));
+  if (!alternatives.length) return;
+  if (changed === 'from') to.value = String(alternatives[0].id);
+  else from.value = String(alternatives[0].id);
+}
+
+function openPurchaseTransfer() {
+  const branches = PURCHASE_DATA.branches.filter((row) => row.active);
+  if (branches.length < 2) return toast('Configura al menos dos sucursales', true);
+  PURCHASE_TRANSFER_ITEMS = [newPurchaseTransferItem()];
+  PURCHASE_TRANSFER_STOCK = null;
+  $('#purchaseTransferFrom').innerHTML = purchaseBranchOptions();
+  $('#purchaseTransferTo').innerHTML = purchaseBranchOptions();
+  $('#purchaseTransferFrom').value = String(branches[0].id);
+  $('#purchaseTransferTo').value = String(branches[1].id);
+  $('#purchaseTransferNotes').value = '';
+  renderPurchaseTransferSummary();
+  renderPurchaseTransferItems();
+  openModal('purchaseTransferModal');
+  loadPurchaseTransferStock();
+}
 
 document.querySelectorAll('#purchaseTabs [data-purchase-tab]').forEach(button=>button.addEventListener('click',()=>setPurchaseTab(button.dataset.purchaseTab)));
 document.querySelectorAll('#purchasePeriodTabs [data-purchase-period]').forEach(button=>button.addEventListener('click',()=>purchaseSetPeriod(button.dataset.purchasePeriod)));
 $('#purchaseStartDate')?.addEventListener('change',()=>purchaseSetPeriod('custom'));$('#purchaseEndDate')?.addEventListener('change',()=>purchaseSetPeriod('custom'));$('#purchaseApplyReport')?.addEventListener('click',loadPurchaseReport);$('#purchaseReportBranch')?.addEventListener('change',loadPurchaseReport);
 $('#purchaseOrderStatus')?.addEventListener('change',loadPurchaseOrders);$('#purchaseRefreshOrders')?.addEventListener('click',loadPurchaseOrders);$('#purchaseNewOrder')?.addEventListener('click',openPurchaseOrder);$('#purchaseNewSupplier')?.addEventListener('click',()=>openPurchaseSupplier());$('#purchaseNewTransfer')?.addEventListener('click',openPurchaseTransfer);
-$('#purchaseAddOrderItem')?.addEventListener('click',()=>{PURCHASE_ORDER_ITEMS.push(newPurchaseOrderItem());renderPurchaseOrderItems();});$('#purchaseAddTransferItem')?.addEventListener('click',()=>{PURCHASE_TRANSFER_ITEMS.push(newPurchaseTransferItem());renderPurchaseTransferItems();});$('#purchaseTransferFrom')?.addEventListener('change',renderPurchaseTransferItems);
+$('#purchaseAddOrderItem')?.addEventListener('click',()=>{PURCHASE_ORDER_ITEMS.push(newPurchaseOrderItem());renderPurchaseOrderItems();});
+$('#purchaseAddTransferItem')?.addEventListener('click',()=>{PURCHASE_TRANSFER_ITEMS.push(newPurchaseTransferItem());renderPurchaseTransferItems();});
+$('#purchaseTransferFrom')?.addEventListener('change',()=>{normalizePurchaseTransferBranches('from');loadPurchaseTransferStock();});
+$('#purchaseTransferTo')?.addEventListener('change',()=>{normalizePurchaseTransferBranches('to');loadPurchaseTransferStock();});
+$('#purchaseTransferRefresh')?.addEventListener('click',()=>loadPurchaseTransferStock());
 $('#purchaseSupplierForm')?.addEventListener('submit',async event=>{event.preventDefault();const id=Number($('#purchaseSupplierId').value);const body={name:$('#purchaseSupplierName').value,taxId:$('#purchaseSupplierTaxId').value,contactName:$('#purchaseSupplierContact').value,phone:$('#purchaseSupplierPhone').value,email:$('#purchaseSupplierEmail').value,address:$('#purchaseSupplierAddress').value,notes:$('#purchaseSupplierNotes').value,active:$('#purchaseSupplierActive').checked};try{await api(id?`/api/purchases/suppliers/${id}`:'/api/purchases/suppliers',{method:id?'PUT':'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});closeModal('purchaseSupplierModal');PURCHASE_DATA=await api('/api/purchases/bootstrap');renderPurchaseSuppliers();toast('Proveedor guardado');}catch(error){toast(error.message,true);}});
 $('#purchaseOrderForm')?.addEventListener('submit',async event=>{event.preventDefault();try{await api('/api/purchases/orders',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({supplierId:Number($('#purchaseOrderSupplier').value),branchId:Number($('#purchaseOrderBranch').value),orderDate:$('#purchaseOrderDate').value,expectedDate:$('#purchaseExpectedDate').value,notes:$('#purchaseOrderNotes').value,items:PURCHASE_ORDER_ITEMS.map(item=>({productId:Number(item.productId),quantity:Number(item.quantity),unitCost:Number(item.unitCost)}))})});closeModal('purchaseOrderModal');setPurchaseTab('orders');toast('Orden de compra creada');}catch(error){toast(error.message,true);}});
-$('#purchaseTransferForm')?.addEventListener('submit',async event=>{event.preventDefault();try{await api('/api/purchases/transfers',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({fromBranchId:Number($('#purchaseTransferFrom').value),toBranchId:Number($('#purchaseTransferTo').value),notes:$('#purchaseTransferNotes').value,items:PURCHASE_TRANSFER_ITEMS.map(item=>({productId:Number(item.productId),quantity:Number(item.quantity)}))})});closeModal('purchaseTransferModal');PURCHASE_DATA=await api('/api/purchases/bootstrap');await loadPurchaseTransfers();toast('Traslado completado');}catch(error){toast(error.message,true);}});
+$('#purchaseTransferForm')?.addEventListener('submit',async event=>{
+  event.preventDefault();
+  if(!updatePurchaseTransferValidity())return toast('Revisa las sucursales, productos y existencias disponibles',true);
+  const submit=$('#purchaseTransferSubmit');
+  const original=submit.innerHTML;
+  submit.disabled=true;
+  submit.innerHTML='<span class="spinner"></span> Trasladando…';
+  try{
+    const result=await api('/api/purchases/transfers',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({fromBranchId:Number($('#purchaseTransferFrom').value),toBranchId:Number($('#purchaseTransferTo').value),notes:$('#purchaseTransferNotes').value,items:PURCHASE_TRANSFER_ITEMS.map(item=>({productId:Number(item.productId),quantity:Number(item.quantity)}))})});
+    closeModal('purchaseTransferModal');
+    PURCHASE_DATA=await api('/api/purchases/bootstrap');
+    await loadPurchaseTransfers();
+    if(BRANCH_STOCK_DATA.rows.length)loadBranchStock();
+    toast(`${result.transferNumber}: inventario descontado de ${result.fromBranch} y sumado a ${result.toBranch}`);
+  }catch(error){
+    toast(error.message,true);
+    await loadPurchaseTransferStock({quiet:true});
+  }finally{
+    submit.innerHTML=original;
+    updatePurchaseTransferValidity();
+  }
+});
 
 function emptyHTML(icon, title, msg) {
   return `<div class="empty"><i class="ph ${icon}"></i><b>${title}</b><p>${msg}</p></div>`;
@@ -7719,6 +8191,7 @@ function empInitChartToggle(bodyId, storageKey, iconId, labelId) {
 
 /* ── Estado ── */
 let EMP_EMPLOYEES = [];
+let EMP_BRANCHES = [];
 let EMP_METRICS = [];
 let EMP_SCHEMES = [];
 let EMP_ASSIGNMENTS = [];
@@ -8196,11 +8669,12 @@ function empInitPeriodSelectors() {
 async function empLoadAll() {
   const { year, month } = empCurrentPeriod();
   try {
-    [EMP_EMPLOYEES, EMP_METRICS, EMP_SCHEMES, EMP_ASSIGNMENTS] = await Promise.all([
+    [EMP_EMPLOYEES, EMP_METRICS, EMP_SCHEMES, EMP_ASSIGNMENTS, EMP_BRANCHES] = await Promise.all([
       api('/api/employees'),
       api('/api/employees/metrics'),
       api('/api/employees/commission-schemes'),
       api('/api/employees/commission-assignments'),
+      api('/api/branches'),
     ]);
     [EMP_RECORDS, EMP_COMMISSION_RECORDS] = await Promise.all([
       api(`/api/employees/productivity?year=${year}&month=${month}`),
@@ -8365,6 +8839,7 @@ function empRenderTeam() {
               <div class="emp-emp-card-name">${esc(emp.name)}</div>
               <div class="emp-emp-card-meta">${esc(emp.position || '—')}</div>
               ${emp.department ? `<div class="emp-emp-card-dept">${esc(emp.department)}</div>` : ''}
+              <div class="emp-emp-card-branch"><i class="ph-bold ph-storefront"></i> ${esc(emp.branch_name || 'Sin sucursal asignada')}</div>
             </div>
           </div>
         </div>
@@ -8446,6 +8921,7 @@ function empRenderRecords() {
             <div>
               <b>${esc(emp.name)}</b>
               ${emp.position ? `<span class="emp-record-emp-pos">${esc(emp.position)}</span>` : ''}
+              <span class="emp-record-emp-branch"><i class="ph-bold ph-storefront"></i> ${esc(emp.branch_name || 'Sin sucursal')}</span>
             </div>
           </div>
           <div class="emp-record-metrics-grid">
@@ -8627,14 +9103,14 @@ async function empSyncSales(metricId, empId) {
     const data = await api('/api/employees/productivity/sync-sales', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ metric_id: metricId, year, month }),
+      body: JSON.stringify({ metric_id: metricId, employee_id: empId, year, month }),
     });
     const input = document.querySelector(`input.emp-record-input[data-emp="${empId}"][data-metric="${metricId}"]`);
     if (input) {
       input.value = data.total_sales;
       await empSaveRecord(input, 'sync_sales');
     }
-    toast(`Ventas del sistema importadas: ${empFmt(data.total_sales)} (${data.order_count} pedido${data.order_count !== 1 ? 's' : ''})`);
+    toast(`Ventas de ${data.branch_name}: ${empFmt(data.total_sales)} (${data.order_count} pedido${data.order_count !== 1 ? 's' : ''})`);
   } catch (err) {
     toast(err.message || 'Error al sincronizar ventas', true);
   }
@@ -8866,8 +9342,15 @@ function empRenderAssignTable() {
 }
 
 /* ── Modales: Empleado ── */
+function empBranchOptions(selected = '') {
+  const selectedId = String(selected || '');
+  const rows = EMP_BRANCHES.filter((branch) => branch.active || String(branch.id) === selectedId);
+  return '<option value="">Selecciona una sucursal…</option>' + rows.map((branch) => `<option value="${branch.id}" ${String(branch.id) === selectedId ? 'selected' : ''}>${esc(branch.name)}${branch.active ? '' : ' · Inactiva'}</option>`).join('');
+}
+
 function empOpenEmployeeModal(id) {
-  const emp = id ? EMP_EMPLOYEES.find((e) => e.id === id) : null;
+  if (!id && !EMP_BRANCHES.some((branch) => branch.active)) return toast('Primero crea o activa una sucursal para asignar al empleado', true);
+  const emp = id ? EMP_EMPLOYEES.find((e) => Number(e.id) === Number(id)) : null;
   $('#empEmpId').value = emp ? emp.id : '';
   $('#empEmployeeModalTitle').innerHTML = emp
     ? '<i class="ph-bold ph-user-gear"></i> Editar empleado'
@@ -8879,6 +9362,8 @@ function empOpenEmployeeModal(id) {
   $('#empEmpSalary').value = emp?.salary_base || '';
   $('#empEmpPhone').value = emp?.phone || '';
   $('#empEmpEmail').value = emp?.email || '';
+  $('#empEmpBranch').innerHTML = empBranchOptions(emp?.branch_id);
+  $('#empEmpBranch').value = emp?.branch_id ? String(emp.branch_id) : '';
   $('#empEmpNotes').value = emp?.notes || '';
   const color = emp?.avatar_color || '#6c47ff';
   $('#empEmpColor').value = color;
@@ -8906,6 +9391,7 @@ $('#empEmployeeForm')?.addEventListener('submit', async (e) => {
     salary_base: $('#empEmpSalary').value || 0,
     phone: $('#empEmpPhone').value,
     email: $('#empEmpEmail').value,
+    branch_id: Number($('#empEmpBranch').value),
     notes: $('#empEmpNotes').value,
     avatar_color: $('#empEmpColor').value || '#6c47ff',
   };
@@ -8947,16 +9433,24 @@ const EMP_METRIC_PRESETS = {
   },
 };
 
+function empNormalizeMetricSource(value) {
+  const source = String(value || '').trim().toLowerCase();
+  if (source === 'system_sales' || source === 'system' || source === 'sales') return 'system_sales';
+  if (['both', 'mixed', 'mixta', 'system_manual', 'system+manual'].includes(source)) return 'both';
+  return 'manual';
+}
+
 function empFillMetricForm(preset) {
   if (!preset) return;
-  if (preset.name) $('#empMetricName').value = preset.name;
-  if (preset.unit) $('#empMetricUnit').value = preset.unit;
-  if (preset.target !== undefined) $('#empMetricTarget').value = preset.target;
-  if (preset.weight !== undefined) $('#empMetricWeight').value = preset.weight;
-  if (preset.source) $('#empMetricSource').value = preset.source;
-  if (preset.higher_is_better !== undefined) $('#empMetricHigher').value = preset.higher_is_better;
-  if (preset.period_type) $('#empMetricPeriodType').value = preset.period_type;
-  if (preset.aggregation) $('#empMetricAggregation').value = preset.aggregation;
+  const has = (key) => Object.prototype.hasOwnProperty.call(preset, key);
+  if (has('name')) $('#empMetricName').value = preset.name ?? '';
+  if (has('unit')) $('#empMetricUnit').value = preset.unit ?? '';
+  if (has('target')) $('#empMetricTarget').value = preset.target ?? 100;
+  if (has('weight')) $('#empMetricWeight').value = preset.weight ?? 1;
+  if (has('source')) $('#empMetricSource').value = empNormalizeMetricSource(preset.source);
+  if (has('higher_is_better')) $('#empMetricHigher').value = Number(preset.higher_is_better) === 0 ? '0' : '1';
+  if (has('period_type')) $('#empMetricPeriodType').value = ['monthly','biweekly','weekly','daily'].includes(preset.period_type) ? preset.period_type : 'monthly';
+  if (has('aggregation')) $('#empMetricAggregation').value = preset.aggregation === 'avg' ? 'avg' : 'sum';
   empUpdateAggWrap();
 }
 
@@ -8978,22 +9472,26 @@ document.querySelectorAll('.emp-preset-btn').forEach((btn) => {
 $('#empMetricPeriodType')?.addEventListener('change', empUpdateAggWrap);
 
 function empOpenMetricModal(id) {
-  const m = id ? EMP_METRICS.find((x) => x.id === id) : null;
+  const m = id ? EMP_METRICS.find((x) => Number(x.id) === Number(id)) : null;
   $('#empMetricId').value = m ? m.id : '';
   $('#empMetricModalTitle').innerHTML = m
     ? '<i class="ph-bold ph-pencil"></i> Editar métrica'
     : '<i class="ph-bold ph-sliders"></i> Nueva métrica';
   document.querySelectorAll('.emp-preset-btn').forEach((b) => b.classList.remove('active'));
-  empFillMetricForm({
-    name: m?.name || '',
-    unit: m?.unit || '',
-    target: m?.target ?? 100,
-    weight: m?.weight ?? 1,
-    source: m?.source || 'manual',
-    higher_is_better: m?.higher_is_better !== 0 ? '1' : '0',
-    period_type: m?.period_type || 'monthly',
-    aggregation: m?.aggregation || 'sum',
-  });
+  const values = m ? {
+    name: m.name,
+    unit: m.unit,
+    target: m.target,
+    weight: m.weight,
+    source: m.source,
+    higher_is_better: m.higher_is_better,
+    period_type: m.period_type,
+    aggregation: m.aggregation,
+  } : {
+    name: '', unit: '', target: 100, weight: 1, source: 'manual',
+    higher_is_better: 1, period_type: 'monthly', aggregation: 'sum',
+  };
+  empFillMetricForm(values);
   openModal('empMetricModal');
 }
 globalThis.empOpenMetricModal = empOpenMetricModal;
@@ -9003,12 +9501,14 @@ $('#empAddMetricBtn')?.addEventListener('click', () => empOpenMetricModal());
 $('#empMetricForm')?.addEventListener('submit', async (e) => {
   e.preventDefault();
   const id = $('#empMetricId').value;
+  const target = Number($('#empMetricTarget').value);
+  const weight = Number($('#empMetricWeight').value);
   const body = {
     name: $('#empMetricName').value,
     unit: $('#empMetricUnit').value,
-    target: parseFloat($('#empMetricTarget').value) || 100,
-    weight: parseFloat($('#empMetricWeight').value) || 1,
-    source: $('#empMetricSource').value,
+    target: Number.isFinite(target) ? target : 100,
+    weight: Number.isFinite(weight) ? weight : 1,
+    source: empNormalizeMetricSource($('#empMetricSource').value),
     higher_is_better: $('#empMetricHigher').value === '1' ? 1 : 0,
     period_type: $('#empMetricPeriodType').value || 'monthly',
     aggregation: $('#empMetricAggregation').value || 'sum',

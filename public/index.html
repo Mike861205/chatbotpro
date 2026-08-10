@@ -2,7 +2,7 @@
 <html lang="es">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
   <title>ChatBotPro — Pedidos por chatbot para tu restaurante</title>
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/regular/style.css" />
@@ -96,6 +96,11 @@
   </a>
   <script>
     const demoBtn = document.getElementById('demoBtn');
+    demoBtn.hidden = true;
+    fetch('/api/auth/demo-status')
+      .then((res) => res.ok ? res.json() : { enabled: false })
+      .then((data) => { demoBtn.hidden = !data.enabled; })
+      .catch(() => { demoBtn.hidden = true; });
     const demoErr = document.getElementById('demoError');
     const demoErrMsg = document.getElementById('demoErrorMsg');
     const demoLeadModal = document.getElementById('demoLeadModal');

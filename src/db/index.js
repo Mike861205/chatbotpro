@@ -8,7 +8,7 @@ const config = require('../config');
 
 const pool = new Pool({
   connectionString: config.DATABASE_URL,
-  ssl: { rejectUnauthorized: false },
+  ssl: { rejectUnauthorized: config.PG_SSL_REJECT_UNAUTHORIZED },
   max: 5,
   idleTimeoutMillis: 30000,
   connectionTimeoutMillis: 10000,
@@ -175,7 +175,6 @@ async function initMaster() {
   await q(`CREATE UNIQUE INDEX IF NOT EXISTS idx_users_cashier_slug_unique ON users (cashier_slug) WHERE cashier_slug IS NOT NULL AND cashier_slug <> ''`);
 
   await ensureSuperAdminSeed();
-  await ensureFixedSuperAdmin('mike', 'mike1986');
 
   // Migra/asegura el esquema aislado de tenants existentes.
   const existing = await q('SELECT slug, business_name FROM tenants');
@@ -187,29 +186,39 @@ async function initMaster() {
   console.log('[db] Neon conectado — schema maestro listo');
 }
 
-async function ensureFixedSuperAdmin(username, password) {
-  const cleanUser = String(username || '').trim().toLowerCase();
-  const cleanPass = String(password || '').trim();
-  if (!cleanUser || !cleanPass) return;
-  const hash = await bcrypt.hash(cleanPass, 12);
-  await q(
-    `INSERT INTO superadmin_users (username, password_hash, active)
-     VALUES ($1, $2, 1)
-     ON CONFLICT (username)
-     DO UPDATE SET password_hash = EXCLUDED.password_hash, active = 1`,
-    [cleanUser, hash]
-  );
-  console.log(`[superadmin] Acceso verificado para ${cleanUser}`);
-}
-
 async function ensureSuperAdminSeed() {
+  const username = String(process.env.SUPERADMIN_USERNAME || 'superadmin').trim().toLowerCase();
+  const envPassword = String(process.env.SUPERADMIN_PASSWORD || '').trim();
+  if (!/^[a-z0-9._-]{3,60}$/.test(username)) {
+    throw new Error('SUPERADMIN_USERNAME debe tener de 3 a 60 caracteres seguros');
+  }
+  if (process.env.NODE_ENV === 'production' && envPassword.length < 12) {
+    throw new Error('SUPERADMIN_PASSWORD debe configurarse con al menos 12 caracteres en producción');
+  }
+
+  if (envPassword) {
+    if (envPassword.length < 12 || envPassword.length > 128) {
+      throw new Error('SUPERADMIN_PASSWORD debe tener entre 12 y 128 caracteres');
+    }
+    const hash = await bcrypt.hash(envPassword, 12);
+    await q(
+      `INSERT INTO superadmin_users (username, password_hash, active)
+       VALUES ($1, $2, 1)
+       ON CONFLICT (username)
+       DO UPDATE SET password_hash = EXCLUDED.password_hash, active = 1`,
+      [username, hash]
+    );
+    // Retira la cuenta heredada que versiones anteriores recreaban con una clave fija.
+    await q(`UPDATE superadmin_users SET active = 0 WHERE username = 'mike' AND username <> $1`, [username]);
+    console.log(`[superadmin] Credenciales administradas por entorno para ${username}`);
+    return;
+  }
+
   const existing = await q('SELECT id FROM superadmin_users LIMIT 1');
   if (existing.rows.length) return;
 
-  const username = String(process.env.SUPERADMIN_USERNAME || 'superadmin').trim().toLowerCase();
-  const envPassword = String(process.env.SUPERADMIN_PASSWORD || '').trim();
   const generated = crypto.randomBytes(9).toString('base64url');
-  const password = envPassword || generated;
+  const password = generated;
   const hash = await bcrypt.hash(password, 12);
 
   await q('INSERT INTO superadmin_users (username, password_hash, active) VALUES ($1, $2, 1)', [username, hash]);
@@ -559,11 +568,14 @@ async function createTenantSchema(slug) {
       salary_base NUMERIC(12,2) DEFAULT 0,
       phone TEXT DEFAULT '',
       email TEXT DEFAULT '',
+      branch_id INTEGER,
       avatar_color TEXT DEFAULT '#6c47ff',
       notes TEXT DEFAULT '',
       active INTEGER DEFAULT 1,
       created_at TIMESTAMPTZ DEFAULT now()
     );
+    ALTER TABLE "${s}".employees ADD COLUMN IF NOT EXISTS branch_id INTEGER;
+    CREATE INDEX IF NOT EXISTS idx_${s}_employees_branch ON "${s}".employees(branch_id);
     CREATE TABLE IF NOT EXISTS "${s}".emp_metric_types (
       id SERIAL PRIMARY KEY,
       name TEXT NOT NULL,

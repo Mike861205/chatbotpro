@@ -2,17 +2,21 @@ const fs = require('fs');
 const path = require('path');
 const multer = require('multer');
 const sharp = require('sharp');
+const crypto = require('node:crypto');
 const config = require('../config');
 
 const fsPromises = fs.promises;
-const SPECIAL_MIME_TYPES = new Set(['image/gif', 'image/svg+xml']);
 
 function randomSuffix() {
-  return Math.random().toString(36).slice(2, 8);
+  return crypto.randomBytes(12).toString('hex');
 }
 
 function ensureScopedUploadsDir(scope) {
-  const dir = path.join(config.UPLOADS_DIR, scope);
+  const cleanScope = String(scope || '').trim().toLowerCase();
+  if (!/^[a-z0-9_-]{1,64}$/.test(cleanScope)) {
+    throw Object.assign(new Error('Destino de archivo no permitido'), { status: 400 });
+  }
+  const dir = path.join(config.UPLOADS_DIR, cleanScope);
   fs.mkdirSync(dir, { recursive: true });
   return dir;
 }
@@ -27,15 +31,26 @@ function createImageUpload({ scopeResolver, allowedMimePattern, tempPrefix }) {
       }
     },
     filename: (req, file, cb) => {
-      const ext = path.extname(file.originalname || '').toLowerCase() || '.bin';
-      cb(null, `tmp_${tempPrefix}_${Date.now()}_${randomSuffix()}${ext}`);
+      cb(null, `tmp_${tempPrefix}_${Date.now()}_${randomSuffix()}.upload`);
     },
   });
 
   return multer({
     storage,
-    limits: { fileSize: 8 * 1024 * 1024 },
-    fileFilter: (req, file, cb) => cb(null, allowedMimePattern.test(file.mimetype)),
+    limits: {
+      fileSize: 8 * 1024 * 1024,
+      files: 1,
+      fields: 50,
+      parts: 51,
+      fieldSize: 512 * 1024,
+    },
+    fileFilter: (req, file, cb) => {
+      if (allowedMimePattern.test(String(file.mimetype || ''))) return cb(null, true);
+      return cb(Object.assign(new Error('Formato de imagen no permitido'), {
+        code: 'UNSUPPORTED_FILE_TYPE',
+        status: 415,
+      }));
+    },
   });
 }
 
@@ -43,15 +58,7 @@ async function optimizeUploadedImage(file, { scope, outputPrefix, maxWidth = 160
   if (!file) return null;
 
   const dir = ensureScopedUploadsDir(scope);
-  const ext = path.extname(file.originalname || '').toLowerCase() || '.img';
   const baseName = `${outputPrefix}_${Date.now()}_${randomSuffix()}`;
-
-  if (SPECIAL_MIME_TYPES.has(file.mimetype)) {
-    const finalName = `${baseName}${ext}`;
-    const finalPath = path.join(dir, finalName);
-    await fsPromises.rename(file.path, finalPath);
-    return `/uploads/${scope}/${finalName}`;
-  }
 
   const finalName = `${baseName}.webp`;
   const finalPath = path.join(dir, finalName);

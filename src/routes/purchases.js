@@ -2,6 +2,7 @@ const express = require('express');
 const { requireAuth, requireOwner } = require('../middleware/auth');
 const { ensureCostingSchema, money, preciseCost } = require('../utils/costing');
 const { ensurePurchasingSchema, writePurchaseAudit } = require('../utils/purchasing');
+const { ensureBranchStockSchema, initializeBranchStock, n } = require('../utils/branchStock');
 
 const router = express.Router();
 router.use(requireAuth);
@@ -10,6 +11,8 @@ router.use(async (req, res, next) => {
   try {
     await ensureCostingSchema(req.tdb);
     await ensurePurchasingSchema(req.tdb);
+    await ensureBranchStockSchema(req.tdb);
+    await initializeBranchStock(req.tdb, req.user?.username || 'system');
     next();
   } catch (error) { next(error); }
 });
@@ -20,6 +23,10 @@ const validDate = (value) => /^\d{4}-\d{2}-\d{2}$/.test(String(value || '')) ? S
 
 function badRequest(message) {
   return Object.assign(new Error(message), { statusCode: 400 });
+}
+
+function conflict(message) {
+  return Object.assign(new Error(message), { statusCode: 409 });
 }
 
 function serializeOrder(row, items = []) {
@@ -211,16 +218,143 @@ router.post('/orders/:id/cancel',async(req,res,next)=>{
   try{const id=Number(req.params.id);const order=await req.tdb.get(`UPDATE {s}.purchase_orders SET status='cancelled',cancelled_by=$1,cancelled_at=now(),updated_at=now() WHERE id=$2 AND status='ordered' RETURNING id,order_number`,[req.user.username,id]);if(!order)return res.status(409).json({error:'La orden ya fue recibida, cancelada o no existe'});await writePurchaseAudit(req.tdb,'purchase_order',id,'cancelled',{reason:safe(req.body?.reason,200)},req.user.username);res.json({ok:true});}catch(error){next(error);}
 });
 
+router.get('/transfer-stock', async (req, res, next) => {
+  try {
+    res.set('Cache-Control', 'no-store');
+    const fromId = Number(req.query.fromBranchId);
+    const toId = Number(req.query.toBranchId);
+    if (!Number.isInteger(fromId) || fromId <= 0 || !Number.isInteger(toId) || toId <= 0 || fromId === toId) return res.status(400).json({ error: 'Selecciona sucursales de origen y destino diferentes' });
+
+    const branches = await req.tdb.all(
+      'SELECT id,name FROM {s}.branches WHERE id=ANY($1::int[]) AND active=1 ORDER BY id',
+      [[fromId, toId]]
+    );
+    const from = branches.find((row) => Number(row.id) === fromId);
+    const to = branches.find((row) => Number(row.id) === toId);
+    if (!from || !to) return res.status(404).json({ error: 'Una sucursal ya no está disponible' });
+
+    const products = await req.tdb.all(
+      `SELECT p.id,p.name,COALESCE(c.name,'Sin categoría') AS category_name,
+              COALESCE(source.quantity,0)::float AS from_quantity,
+              COALESCE(destination.quantity,0)::float AS to_quantity
+       FROM {s}.products p
+       LEFT JOIN {s}.categories c ON c.id=p.category_id
+       LEFT JOIN {s}.branch_inventory source ON source.product_id=p.id AND source.branch_id=$1
+       LEFT JOIN {s}.branch_inventory destination ON destination.product_id=p.id AND destination.branch_id=$2
+       WHERE p.active=1
+       ORDER BY p.name`,
+      [fromId, toId]
+    );
+    const rows = products.map((row) => ({
+      productId: Number(row.id),
+      productName: row.name,
+      categoryName: row.category_name,
+      fromQuantity: n(row.from_quantity),
+      availableFrom: Math.max(0, n(row.from_quantity)),
+      toQuantity: n(row.to_quantity),
+    }));
+    const summaryFor = (key) => ({
+      totalUnits: n(rows.reduce((sum, row) => sum + row[key], 0)),
+      productsWithStock: rows.filter((row) => row[key] > 0).length,
+    });
+    res.json({
+      generatedAt: new Date().toISOString(),
+      from: { id: fromId, name: from.name, ...summaryFor('fromQuantity') },
+      to: { id: toId, name: to.name, ...summaryFor('toQuantity') },
+      products: rows,
+    });
+  } catch (error) { next(error); }
+});
+
 router.get('/transfers',async(req,res,next)=>{
   try{const rows=await req.tdb.all(`SELECT it.*,to_char(it.created_at AT TIME ZONE '${TZ}','DD/MM/YYYY HH24:MI') AS created_at FROM {s}.inventory_transfers it ORDER BY it.id DESC LIMIT 300`);const ids=rows.map(r=>Number(r.id));const itemRows=ids.length?await req.tdb.all(`SELECT * FROM {s}.inventory_transfer_items WHERE transfer_id=ANY($1::int[]) ORDER BY id`,[ids]):[];const map=new Map();for(const item of itemRows){if(!map.has(Number(item.transfer_id)))map.set(Number(item.transfer_id),[]);map.get(Number(item.transfer_id)).push({productId:Number(item.product_id),productName:item.product_name,quantity:Number(item.quantity)});}res.json(rows.map(row=>({...row,id:Number(row.id),from_branch_id:Number(row.from_branch_id),to_branch_id:Number(row.to_branch_id),items:map.get(Number(row.id))||[]})));}catch(error){next(error);}
 });
 
-router.post('/transfers',async(req,res,next)=>{
-  try{const fromId=Number(req.body?.fromBranchId),toId=Number(req.body?.toBranchId),input=Array.isArray(req.body?.items)?req.body.items:[];if(!fromId||!toId||fromId===toId||!input.length)return res.status(400).json({error:'Selecciona sucursales diferentes y al menos un producto'});
-    const result=await req.tdb.tx(async tx=>{const branches=await tx.all('SELECT id,name FROM {s}.branches WHERE id=ANY($1::int[]) AND active=1',[[fromId,toId]]);const from=branches.find(b=>Number(b.id)===fromId),to=branches.find(b=>Number(b.id)===toId);if(!from||!to)throw badRequest('Una sucursal no está disponible');const ids=[...new Set(input.map(r=>Number(r.productId)).filter(Boolean))];const products=await tx.all('SELECT id,name FROM {s}.products WHERE id=ANY($1::int[])',[ids]);const pmap=new Map(products.map(p=>[Number(p.id),p]));const grouped=new Map();for(const row of input){const p=pmap.get(Number(row.productId)),qty=Number(row.quantity);if(!p||!Number.isFinite(qty)||qty<=0)throw badRequest('Revisa los productos y cantidades del traslado');const current=grouped.get(Number(p.id))||{productId:Number(p.id),productName:p.name,quantity:0};current.quantity=Number((current.quantity+qty).toFixed(4));grouped.set(Number(p.id),current);}const items=[...grouped.values()];for(const item of items){const stock=await tx.get('SELECT quantity::float AS quantity FROM {s}.branch_inventory WHERE branch_id=$1 AND product_id=$2 FOR UPDATE',[fromId,item.productId]);if(Number(stock?.quantity||0)<item.quantity)throw badRequest(`Existencia insuficiente de ${item.productName} en ${from.name}`);}
-      const transfer=await tx.get(`INSERT INTO {s}.inventory_transfers (from_branch_id,from_branch_name,to_branch_id,to_branch_name,notes,created_by) VALUES ($1,$2,$3,$4,$5,$6) RETURNING id,created_at`,[fromId,from.name,toId,to.name,safe(req.body?.notes,300),req.user.username]);const number=`TR-${new Date().toISOString().slice(0,10).replaceAll('-','')}-${String(transfer.id).padStart(5,'0')}`;await tx.run('UPDATE {s}.inventory_transfers SET transfer_number=$1 WHERE id=$2',[number,transfer.id]);for(const item of items){await tx.run('UPDATE {s}.branch_inventory SET quantity=quantity-$1,updated_at=now() WHERE branch_id=$2 AND product_id=$3',[item.quantity,fromId,item.productId]);await tx.run(`INSERT INTO {s}.branch_inventory (branch_id,product_id,quantity,initial_quantity,baseline_started_at,updated_at) VALUES ($1,$2,$3,0,now(),now()) ON CONFLICT(branch_id,product_id) DO UPDATE SET quantity={s}.branch_inventory.quantity+EXCLUDED.quantity,updated_at=now()`,[toId,item.productId,item.quantity]);await tx.run('INSERT INTO {s}.inventory_transfer_items (transfer_id,product_id,product_name,quantity) VALUES ($1,$2,$3,$4)',[transfer.id,item.productId,item.productName,item.quantity]);}
-      await writePurchaseAudit(tx,'transfer',transfer.id,'completed',{transferNumber:number,from:from.name,to:to.name,items},req.user.username);return{id:Number(transfer.id),transferNumber:number};});res.json({ok:true,...result});
-  }catch(error){if(error.statusCode)return res.status(error.statusCode).json({error:error.message});next(error);}
+router.post('/transfers', async (req, res, next) => {
+  try {
+    const fromId = Number(req.body?.fromBranchId);
+    const toId = Number(req.body?.toBranchId);
+    const input = Array.isArray(req.body?.items) ? req.body.items : [];
+    if (!Number.isInteger(fromId) || fromId <= 0 || !Number.isInteger(toId) || toId <= 0 || fromId === toId || !input.length) return res.status(400).json({ error: 'Selecciona sucursales diferentes y al menos un producto' });
+    if (input.length > 500) return res.status(400).json({ error: 'Sólo puedes trasladar hasta 500 productos por operación' });
+
+    const result = await req.tdb.tx(async (tx) => {
+      const branches = await tx.all('SELECT id,name FROM {s}.branches WHERE id=ANY($1::int[]) AND active=1', [[fromId, toId]]);
+      const from = branches.find((branch) => Number(branch.id) === fromId);
+      const to = branches.find((branch) => Number(branch.id) === toId);
+      if (!from || !to) throw badRequest('Una sucursal no está disponible');
+
+      const ids = [...new Set(input.map((row) => Number(row.productId)).filter((id) => Number.isInteger(id) && id > 0))];
+      const products = await tx.all('SELECT id,name FROM {s}.products WHERE id=ANY($1::int[]) AND active=1', [ids]);
+      const productMap = new Map(products.map((product) => [Number(product.id), product]));
+      const grouped = new Map();
+      for (const row of input) {
+        const product = productMap.get(Number(row.productId));
+        const rawQuantity = Number(row.quantity);
+        const quantity = n(rawQuantity);
+        if (!product || !Number.isFinite(rawQuantity) || quantity <= 0 || quantity > 9999999999) throw badRequest('Revisa los productos y cantidades del traslado');
+        const current = grouped.get(Number(product.id)) || { productId: Number(product.id), productName: product.name, quantity: 0 };
+        current.quantity = n(current.quantity + quantity);
+        if (current.quantity > 9999999999) throw badRequest(`La cantidad de ${product.name} excede el máximo permitido`);
+        grouped.set(Number(product.id), current);
+      }
+      const items = [...grouped.values()].sort((a, b) => a.productId - b.productId);
+      if (!items.length) throw badRequest('Agrega al menos un producto válido');
+
+      const [firstBranchId, secondBranchId] = [fromId, toId].sort((a, b) => a - b);
+      for (const item of items) {
+        await tx.run(
+          `INSERT INTO {s}.branch_inventory (branch_id,product_id,quantity,initial_quantity,baseline_started_at,updated_at)
+           VALUES ($1,$2,0,0,now(),now()),($3,$2,0,0,now(),now())
+           ON CONFLICT(branch_id,product_id) DO NOTHING`,
+          [firstBranchId, item.productId, secondBranchId]
+        );
+      }
+      const stockRows = await tx.all(
+        `SELECT branch_id,product_id,quantity::float AS quantity
+         FROM {s}.branch_inventory
+         WHERE branch_id=ANY($1::int[]) AND product_id=ANY($2::int[])
+         ORDER BY branch_id,product_id
+         FOR UPDATE`,
+        [[fromId, toId], items.map((item) => item.productId)]
+      );
+      const stockMap = new Map(stockRows.map((row) => [`${row.branch_id}:${row.product_id}`, n(row.quantity)]));
+      const movements = items.map((item) => {
+        const fromBefore = stockMap.get(`${fromId}:${item.productId}`) || 0;
+        const toBefore = stockMap.get(`${toId}:${item.productId}`) || 0;
+        if (fromBefore < item.quantity) throw conflict(`Existencia actual insuficiente de ${item.productName} en ${from.name}. Disponible: ${Math.max(0, fromBefore)}`);
+        return {
+          ...item,
+          fromBefore,
+          fromAfter: n(fromBefore - item.quantity),
+          toBefore,
+          toAfter: n(toBefore + item.quantity),
+        };
+      });
+
+      const transfer = await tx.get(
+        `INSERT INTO {s}.inventory_transfers (from_branch_id,from_branch_name,to_branch_id,to_branch_name,notes,created_by)
+         VALUES ($1,$2,$3,$4,$5,$6) RETURNING id,created_at`,
+        [fromId, from.name, toId, to.name, safe(req.body?.notes, 300), req.user.username]
+      );
+      const number = `TR-${new Date().toISOString().slice(0, 10).replaceAll('-', '')}-${String(transfer.id).padStart(5, '0')}`;
+      await tx.run('UPDATE {s}.inventory_transfers SET transfer_number=$1 WHERE id=$2', [number, transfer.id]);
+      for (const item of movements) {
+        await tx.run('UPDATE {s}.branch_inventory SET quantity=$1,updated_at=now() WHERE branch_id=$2 AND product_id=$3', [item.fromAfter, fromId, item.productId]);
+        await tx.run('UPDATE {s}.branch_inventory SET quantity=$1,updated_at=now() WHERE branch_id=$2 AND product_id=$3', [item.toAfter, toId, item.productId]);
+        await tx.run(
+          'INSERT INTO {s}.inventory_transfer_items (transfer_id,product_id,product_name,quantity) VALUES ($1,$2,$3,$4)',
+          [transfer.id, item.productId, item.productName, item.quantity]
+        );
+      }
+      await writePurchaseAudit(tx, 'transfer', transfer.id, 'completed', { transferNumber: number, from: from.name, to: to.name, items: movements }, req.user.username);
+      return { id: Number(transfer.id), transferNumber: number, fromBranch: from.name, toBranch: to.name, items: movements };
+    });
+    res.json({ ok: true, ...result });
+  } catch (error) {
+    if (error.statusCode) return res.status(error.statusCode).json({ error: error.message });
+    next(error);
+  }
 });
 
 router.get('/report',async(req,res,next)=>{

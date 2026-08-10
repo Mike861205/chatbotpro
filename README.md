@@ -31,7 +31,7 @@ npm start
 - SuperAdmin: http://localhost:3000/superadmin/login
 - Chatbot público: http://localhost:3000/<tu-slug>
 
-Requiere `DATABASE_URL` (cadena de conexión de Neon) en `.env`. Los secretos (`JWT_SECRET`, `DATA_ENCRYPTION_KEY`) se generan automáticamente en el primer arranque. Para usar IA puedes dejar `OPENAI_API_KEY` como fallback en `.env` o configurarla desde SuperAdmin. También puedes definir `SUPERADMIN_USERNAME` y `SUPERADMIN_PASSWORD` para crear el usuario inicial de plataforma.
+Requiere `DATABASE_URL` (cadena de conexión de Neon) en `.env`. Los secretos (`JWT_SECRET`, `SUPERADMIN_JWT_SECRET`, `DATA_ENCRYPTION_KEY`) se generan automáticamente en desarrollo. En producción configura valores únicos de al menos 32 caracteres y define `SUPERADMIN_USERNAME` y una `SUPERADMIN_PASSWORD` de al menos 12 caracteres. Para usar IA puedes dejar `OPENAI_API_KEY` como fallback o configurarla desde SuperAdmin.
 
 ### Acceso demo desde login
 
@@ -39,13 +39,14 @@ Puedes habilitar el botón **Ver demo del panel** en `/login` configurando estas
 
 - `DEMO_LOGIN_ENABLED=true`
 - `DEMO_USERNAME=demo`
-- `DEMO_PASSWORD=demo`
-- `DEMO_TENANT_SLUG=slug-demo` (opcional, recomendado)
+- `DEMO_PASSWORD=<clave aleatoria de al menos 12 caracteres>`
+- `DEMO_TENANT_SLUG=slug-demo` (obligatorio; debe ser un negocio exclusivo para pruebas)
 
 Comportamiento por defecto:
 
-- Si no defines variables, el sistema usa `demo/demo`.
-- Si el usuario demo no existe, se crea automáticamente en un tenant activo la primera vez que se presiona el botón demo.
+- Si la configuración segura no está completa, el botón demo permanece oculto y el endpoint queda desactivado.
+- El sistema nunca selecciona automáticamente el primer negocio activo. Si el usuario demo no existe, sólo se crea dentro del tenant indicado explícitamente.
+- Si el usuario ya existe, su contraseña no se sobrescribe automáticamente.
 
 ## 🍳 Pantallas KDS por área de preparación
 

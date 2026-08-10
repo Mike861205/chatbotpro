@@ -10,6 +10,11 @@ const router = express.Router();
 router.use(requireAuth);
 router.use(requireOwner);
 
+function requireNumericId(req, res, next) {
+  if (!/^\d+$/.test(String(req.params.id || ''))) return res.status(404).json({ error: 'Registro no encontrado' });
+  next();
+}
+
 /* ─────────────────────────────────────────────
    Helpers
 ───────────────────────────────────────────── */
@@ -26,6 +31,18 @@ function sanitizeStr(v, max = 200) {
 function safeNum(v, fallback = 0) {
   const n = Number(v);
   return isFinite(n) ? n : fallback;
+}
+
+function metricSource(v) {
+  const source = String(v || '').trim().toLowerCase();
+  if (source === 'system_sales' || source === 'system' || source === 'sales') return 'system_sales';
+  if (['both', 'mixed', 'mixta', 'system_manual', 'system+manual'].includes(source)) return 'both';
+  return 'manual';
+}
+
+function positiveInt(v) {
+  const n = Number(v);
+  return Number.isInteger(n) && n > 0 ? n : 0;
 }
 
 function safeMonth(v) {
@@ -70,9 +87,12 @@ async function ensureProductivityHistoryInfra(req) {
 router.get('/', async (req, res, next) => {
   try {
     const rows = await req.tdb.all(
-      `SELECT id, name, position, department, hire_date, salary_base::float,
-              phone, email, avatar_color, notes, active, created_at
-       FROM {s}.employees ORDER BY name ASC`
+      `SELECT e.id, e.name, e.position, e.department, e.hire_date, e.salary_base::float,
+              e.phone, e.email, e.branch_id, b.name AS branch_name,
+              e.avatar_color, e.notes, e.active, e.created_at
+       FROM {s}.employees e
+       LEFT JOIN {s}.branches b ON b.id=e.branch_id
+       ORDER BY e.name ASC`
     );
     res.json(rows);
   } catch (e) { next(e); }
@@ -81,11 +101,15 @@ router.get('/', async (req, res, next) => {
 router.post('/', async (req, res, next) => {
   try {
     const { name, position, department, hire_date, salary_base, phone, email, notes, avatar_color } = req.body || {};
+    const branchId = positiveInt(req.body?.branch_id);
     if (!sanitizeStr(name)) return res.status(400).json({ error: 'El nombre del empleado es obligatorio' });
+    if (!branchId) return res.status(400).json({ error: 'Selecciona la sucursal asignada al empleado' });
+    const branch = await req.tdb.get('SELECT id,name FROM {s}.branches WHERE id=$1 AND active=1', [branchId]);
+    if (!branch) return res.status(400).json({ error: 'La sucursal seleccionada no está disponible' });
 
     const row = await req.tdb.get(
-      `INSERT INTO {s}.employees (name, position, department, hire_date, salary_base, phone, email, avatar_color, notes)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id`,
+      `INSERT INTO {s}.employees (name, position, department, hire_date, salary_base, phone, email, branch_id, avatar_color, notes)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING id`,
       [
         sanitizeStr(name, 120),
         sanitizeStr(position, 100),
@@ -94,58 +118,12 @@ router.post('/', async (req, res, next) => {
         safeNum(salary_base),
         sanitizeStr(phone, 30),
         sanitizeStr(email, 100),
+        branchId,
         sanitizeStr(avatar_color, 20) || randColor(),
         sanitizeStr(notes, 500),
       ]
     );
     res.json({ id: row.id });
-  } catch (e) { next(e); }
-});
-
-router.get('/:id(\\d+)', async (req, res, next) => {
-  try {
-    const row = await req.tdb.get(
-      `SELECT id, name, position, department, hire_date, salary_base::float,
-              phone, email, avatar_color, notes, active
-       FROM {s}.employees WHERE id = $1`,
-      [req.params.id]
-    );
-    if (!row) return res.status(404).json({ error: 'Empleado no encontrado' });
-    res.json(row);
-  } catch (e) { next(e); }
-});
-
-router.put('/:id(\\d+)', async (req, res, next) => {
-  try {
-    const { name, position, department, hire_date, salary_base, phone, email, notes, avatar_color, active } = req.body || {};
-    if (!sanitizeStr(name)) return res.status(400).json({ error: 'El nombre del empleado es obligatorio' });
-
-    await req.tdb.run(
-      `UPDATE {s}.employees SET name=$1, position=$2, department=$3, hire_date=$4,
-              salary_base=$5, phone=$6, email=$7, avatar_color=$8, notes=$9, active=$10
-       WHERE id=$11`,
-      [
-        sanitizeStr(name, 120),
-        sanitizeStr(position, 100),
-        sanitizeStr(department, 100),
-        hire_date || null,
-        safeNum(salary_base),
-        sanitizeStr(phone, 30),
-        sanitizeStr(email, 100),
-        sanitizeStr(avatar_color, 20) || randColor(),
-        sanitizeStr(notes, 500),
-        active === 0 || active === '0' ? 0 : 1,
-        req.params.id,
-      ]
-    );
-    res.json({ ok: true });
-  } catch (e) { next(e); }
-});
-
-router.delete('/:id(\\d+)', async (req, res, next) => {
-  try {
-    await req.tdb.run('UPDATE {s}.employees SET active=0 WHERE id=$1', [req.params.id]);
-    res.json({ ok: true });
   } catch (e) { next(e); }
 });
 
@@ -159,7 +137,7 @@ router.get('/metrics', async (req, res, next) => {
               higher_is_better, active, sort, period_type, aggregation
        FROM {s}.emp_metric_types ORDER BY sort ASC, id ASC`
     );
-    res.json(rows);
+    res.json(rows.map((row) => ({ ...row, source: metricSource(row.source) })));
   } catch (e) { next(e); }
 });
 
@@ -170,7 +148,7 @@ router.post('/metrics', async (req, res, next) => {
 
     const rawKey = sanitizeStr(key || name, 50)
       .toLowerCase().replace(/[^a-z0-9]/g, '_').replace(/__+/g, '_').slice(0, 40);
-    const sourceOk = ['manual', 'system_sales', 'both'].includes(source) ? source : 'manual';
+    const sourceOk = metricSource(source);
     const periodOk = ['monthly', 'biweekly', 'weekly', 'daily'].includes(period_type) ? period_type : 'monthly';
     const aggOk = ['sum', 'avg'].includes(aggregation) ? aggregation : 'sum';
 
@@ -193,30 +171,44 @@ router.post('/metrics', async (req, res, next) => {
   } catch (e) { next(e); }
 });
 
-router.put('/metrics/:id(\\d+)', async (req, res, next) => {
+router.put('/metrics/:id', requireNumericId, async (req, res, next) => {
   try {
-    const { name, source, unit, target, weight, higher_is_better, active, sort, period_type, aggregation } = req.body || {};
-    const sourceOk = ['manual', 'system_sales', 'both'].includes(source) ? source : 'manual';
-    const periodOk = ['monthly', 'biweekly', 'weekly', 'daily'].includes(period_type) ? period_type : 'monthly';
-    const aggOk = ['sum', 'avg'].includes(aggregation) ? aggregation : 'sum';
+    const body = req.body || {};
+    const current = await req.tdb.get('SELECT * FROM {s}.emp_metric_types WHERE id=$1', [req.params.id]);
+    if (!current) return res.status(404).json({ error: 'Métrica no encontrada' });
+    const has = (key) => Object.prototype.hasOwnProperty.call(body, key);
+    const name = has('name') ? sanitizeStr(body.name, 100) : current.name;
+    if (!name) return res.status(400).json({ error: 'El nombre de la métrica es obligatorio' });
+    const sourceOk = has('source') ? metricSource(body.source) : metricSource(current.source);
+    const periodCandidate = has('period_type') ? body.period_type : current.period_type;
+    const aggregationCandidate = has('aggregation') ? body.aggregation : current.aggregation;
+    const periodOk = ['monthly', 'biweekly', 'weekly', 'daily'].includes(periodCandidate) ? periodCandidate : 'monthly';
+    const aggOk = ['sum', 'avg'].includes(aggregationCandidate) ? aggregationCandidate : 'sum';
+    const unit = has('unit') ? sanitizeStr(body.unit, 20) : current.unit;
+    const target = has('target') ? safeNum(body.target, Number(current.target || 100)) : Number(current.target || 0);
+    const weight = has('weight') ? safeNum(body.weight, Number(current.weight || 1)) : Number(current.weight || 1);
+    const higher = has('higher_is_better')
+      ? !(body.higher_is_better === false || body.higher_is_better === 0 || body.higher_is_better === '0')
+      : Number(current.higher_is_better) !== 0;
+    const active = has('active') ? !(body.active === false || body.active === 0 || body.active === '0') : Number(current.active) !== 0;
+    const sort = has('sort') ? safeNum(body.sort, Number(current.sort || 0)) : Number(current.sort || 0);
 
     await req.tdb.run(
       `UPDATE {s}.emp_metric_types SET name=$1, source=$2, unit=$3, target=$4,
               weight=$5, higher_is_better=$6, active=$7, sort=$8, period_type=$9, aggregation=$10
-       WHERE id=$11`,
+      WHERE id=$11`,
       [
-        sanitizeStr(name, 100), sourceOk, sanitizeStr(unit, 20),
-        safeNum(target, 100), safeNum(weight, 1),
-        higher_is_better === false || higher_is_better === 0 || higher_is_better === '0' ? 0 : 1,
-        active === 0 || active === '0' ? 0 : 1,
-        safeNum(sort, 0), periodOk, aggOk, req.params.id,
+        name, sourceOk, unit, target, weight,
+        higher ? 1 : 0,
+        active ? 1 : 0,
+        sort, periodOk, aggOk, req.params.id,
       ]
     );
     res.json({ ok: true });
   } catch (e) { next(e); }
 });
 
-router.delete('/metrics/:id(\\d+)', async (req, res, next) => {
+router.delete('/metrics/:id', requireNumericId, async (req, res, next) => {
   try {
     await req.tdb.run('UPDATE {s}.emp_metric_types SET active=0 WHERE id=$1', [req.params.id]);
     res.json({ ok: true });
@@ -251,7 +243,7 @@ router.post('/commission-schemes', async (req, res, next) => {
   } catch (e) { next(e); }
 });
 
-router.put('/commission-schemes/:id(\\d+)', async (req, res, next) => {
+router.put('/commission-schemes/:id', requireNumericId, async (req, res, next) => {
   try {
     const { name, type, config, description, active } = req.body || {};
     const typeOk = ['percentage', 'fixed', 'tiered', 'productivity_bonus'].includes(type) ? type : 'percentage';
@@ -304,7 +296,7 @@ router.post('/commission-assignments', async (req, res, next) => {
   } catch (e) { next(e); }
 });
 
-router.delete('/commission-assignments/:id(\\d+)', async (req, res, next) => {
+router.delete('/commission-assignments/:id', requireNumericId, async (req, res, next) => {
   try {
     await req.tdb.run('DELETE FROM {s}.emp_commission_assignments WHERE id=$1', [req.params.id]);
     res.json({ ok: true });
@@ -577,19 +569,32 @@ router.get('/productivity/insights', async (req, res, next) => {
 /* Sincronizar ventas del sistema para una métrica tipo system_sales/both */
 router.post('/productivity/sync-sales', async (req, res, next) => {
   try {
-    const { metric_id, year, month } = req.body || {};
-    if (!metric_id) return res.status(400).json({ error: 'metric_id es obligatorio' });
+    const { metric_id, employee_id, year, month } = req.body || {};
+    const employeeId = positiveInt(employee_id);
+    if (!metric_id || !employeeId) return res.status(400).json({ error: 'Empleado y métrica son obligatorios' });
 
     const y = safeYear(year);
     const m = safeMonth(month);
 
     const metric = await req.tdb.get('SELECT * FROM {s}.emp_metric_types WHERE id=$1', [metric_id]);
     if (!metric) return res.status(404).json({ error: 'Métrica no encontrada' });
-    if (!['system_sales', 'both'].includes(metric.source)) {
+    if (!['system_sales', 'both'].includes(metricSource(metric.source))) {
       return res.status(400).json({ error: 'Esta métrica no usa ventas del sistema' });
     }
 
-    // Sumar todas las ventas NO canceladas del periodo (chatbot + POS)
+    const employee = await req.tdb.get(
+      `SELECT e.id,e.name,e.branch_id,b.name AS branch_name
+       FROM {s}.employees e
+       LEFT JOIN {s}.branches b ON b.id=e.branch_id
+       WHERE e.id=$1 AND e.active=1`,
+      [employeeId]
+    );
+    if (!employee) return res.status(404).json({ error: 'Empleado no encontrado o inactivo' });
+    if (!positiveInt(employee.branch_id) || !employee.branch_name) {
+      return res.status(409).json({ error: `Asigna una sucursal a ${employee.name} antes de importar ventas` });
+    }
+
+    // Sumar ventas POS y chatbot atribuidas exclusivamente a la sucursal del empleado.
     const totals = await req.tdb.get(
       `SELECT
          COALESCE(SUM(total),0)::float AS total,
@@ -597,13 +602,18 @@ router.post('/productivity/sync-sales', async (req, res, next) => {
        FROM {s}.orders
        WHERE status NOT IN ('cancelado')
          AND EXTRACT(YEAR FROM created_at AT TIME ZONE 'America/Mexico_City') = $1
-         AND EXTRACT(MONTH FROM created_at AT TIME ZONE 'America/Mexico_City') = $2`,
-      [y, m]
+         AND EXTRACT(MONTH FROM created_at AT TIME ZONE 'America/Mexico_City') = $2
+         AND COALESCE(service_branch_id,pickup_branch_id) = $3`,
+      [y, m, employee.branch_id]
     );
 
     res.json({
       total_sales: totals.total,
       order_count: totals.order_count,
+      employee_id: employeeId,
+      employee_name: employee.name,
+      branch_id: Number(employee.branch_id),
+      branch_name: employee.branch_name,
       year: y,
       month: m,
     });
@@ -787,7 +797,7 @@ router.post('/commission-records/calculate', async (req, res, next) => {
   } catch (e) { next(e); }
 });
 
-router.patch('/commission-records/:id(\\d+)/status', async (req, res, next) => {
+router.patch('/commission-records/:id/status', requireNumericId, async (req, res, next) => {
   try {
     const { status } = req.body || {};
     if (!['pending', 'approved', 'paid'].includes(status)) {
@@ -803,7 +813,7 @@ router.patch('/commission-records/:id(\\d+)/status', async (req, res, next) => {
 ═══════════════════════════════════════════ */
 
 // Reporte individual de un empleado
-router.get('/reports/individual/:id(\\d+)', async (req, res, next) => {
+router.get('/reports/individual/:id', requireNumericId, async (req, res, next) => {
   try {
     const { year } = req.query;
     const y = safeYear(year);
@@ -947,6 +957,53 @@ router.get('/reports/quick-stats', async (req, res, next) => {
       evaluated_count: commStats?.evaluated_count || 0,
       top_performer: topPerformer || null,
     });
+  } catch (e) { next(e); }
+});
+
+// Las rutas genéricas van al final para no capturar nombres como /metrics o /reports.
+router.get('/:id', requireNumericId, async (req, res, next) => {
+  try {
+    const row = await req.tdb.get(
+      `SELECT e.id, e.name, e.position, e.department, e.hire_date, e.salary_base::float,
+              e.phone, e.email, e.branch_id, b.name AS branch_name,
+              e.avatar_color, e.notes, e.active
+       FROM {s}.employees e
+       LEFT JOIN {s}.branches b ON b.id=e.branch_id
+       WHERE e.id = $1`,
+      [req.params.id]
+    );
+    if (!row) return res.status(404).json({ error: 'Empleado no encontrado' });
+    res.json(row);
+  } catch (e) { next(e); }
+});
+
+router.put('/:id', requireNumericId, async (req, res, next) => {
+  try {
+    const { name, position, department, hire_date, salary_base, phone, email, notes, avatar_color, active } = req.body || {};
+    const branchId = positiveInt(req.body?.branch_id);
+    if (!sanitizeStr(name)) return res.status(400).json({ error: 'El nombre del empleado es obligatorio' });
+    if (!branchId) return res.status(400).json({ error: 'Selecciona la sucursal asignada al empleado' });
+    const branch = await req.tdb.get('SELECT id,name FROM {s}.branches WHERE id=$1', [branchId]);
+    if (!branch) return res.status(400).json({ error: 'La sucursal seleccionada no existe' });
+    await req.tdb.run(
+      `UPDATE {s}.employees SET name=$1, position=$2, department=$3, hire_date=$4,
+              salary_base=$5, phone=$6, email=$7, branch_id=$8, avatar_color=$9, notes=$10, active=$11
+       WHERE id=$12`,
+      [
+        sanitizeStr(name, 120), sanitizeStr(position, 100), sanitizeStr(department, 100),
+        hire_date || null, safeNum(salary_base), sanitizeStr(phone, 30), sanitizeStr(email, 100),
+        branchId, sanitizeStr(avatar_color, 20) || randColor(), sanitizeStr(notes, 500),
+        active === 0 || active === '0' ? 0 : 1, req.params.id,
+      ]
+    );
+    res.json({ ok: true });
+  } catch (e) { next(e); }
+});
+
+router.delete('/:id', requireNumericId, async (req, res, next) => {
+  try {
+    await req.tdb.run('UPDATE {s}.employees SET active=0 WHERE id=$1', [req.params.id]);
+    res.json({ ok: true });
   } catch (e) { next(e); }
 });
 

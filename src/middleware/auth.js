@@ -13,11 +13,12 @@ function supportWhatsappUrl() {
   return `https://wa.me/${SUPPORT_WHATSAPP}?text=${encodeURIComponent(SUPPORT_MESSAGE)}`;
 }
 
-function signToken(user, tenant) {
+function signToken(user, tenant, scope = 'owner') {
+  const normalizedScope = normalizeScope(scope) || 'owner';
   return jwt.sign(
-    { uid: user.id, tid: tenant.id, slug: tenant.slug, username: user.username },
+    { uid: user.id, tid: tenant.id, slug: tenant.slug, username: user.username, typ: normalizedScope },
     config.JWT_SECRET,
-    { expiresIn: '7d' }
+    { expiresIn: '7d', issuer: 'chatbotpro', audience: `cbp:${normalizedScope}` }
   );
 }
 
@@ -38,6 +39,7 @@ function cookieOptions() {
     sameSite: 'lax',
     path: '/',
     secure: process.env.NODE_ENV === 'production',
+    priority: 'high',
     maxAge: 7 * 24 * 60 * 60 * 1000,
   };
 }
@@ -49,7 +51,12 @@ function setAuthCookie(res, token, scope = 'owner') {
 
 function clearAuthCookie(res, scope = 'all') {
   const normalized = normalizeScope(scope);
-  const clearOpts = { path: '/' };
+  const clearOpts = {
+    httpOnly: true,
+    sameSite: 'lax',
+    path: '/',
+    secure: process.env.NODE_ENV === 'production',
+  };
   if (!normalized || scope === 'all') {
     res.clearCookie(OWNER_COOKIE_NAME, clearOpts);
     res.clearCookie(CASHIER_COOKIE_NAME, clearOpts);
@@ -63,16 +70,27 @@ function clearAuthCookie(res, scope = 'all') {
 async function requireAuth(req, res, next) {
   const requestedScope = normalizeScope(req.get(AUTH_SCOPE_HEADER));
   let token = '';
+  let tokenScope = requestedScope;
   if (requestedScope === 'owner') {
-    token = req.cookies[OWNER_COOKIE_NAME] || req.cookies[COOKIE_NAME] || '';
+    token = req.cookies[OWNER_COOKIE_NAME] || '';
   } else if (requestedScope === 'cashier') {
-    token = req.cookies[CASHIER_COOKIE_NAME] || req.cookies[COOKIE_NAME] || '';
+    token = req.cookies[CASHIER_COOKIE_NAME] || '';
   } else {
-    token = req.cookies[OWNER_COOKIE_NAME] || req.cookies[CASHIER_COOKIE_NAME] || req.cookies[COOKIE_NAME] || '';
+    if (req.cookies[OWNER_COOKIE_NAME]) {
+      token = req.cookies[OWNER_COOKIE_NAME];
+      tokenScope = 'owner';
+    } else if (req.cookies[CASHIER_COOKIE_NAME]) {
+      token = req.cookies[CASHIER_COOKIE_NAME];
+      tokenScope = 'cashier';
+    }
   }
   if (!token) return res.status(401).json({ error: 'No autenticado' });
   try {
-    const payload = jwt.verify(token, config.JWT_SECRET);
+    const payload = jwt.verify(token, config.JWT_SECRET, {
+      issuer: 'chatbotpro',
+      audience: `cbp:${tokenScope}`,
+    });
+    if (payload.typ !== tokenScope) return res.status(401).json({ error: 'Sesión inválida o expirada' });
     const userResult = await q('SELECT * FROM users WHERE id = $1', [payload.uid]);
     const authUser = userResult.rows[0];
     if (!authUser || !Number(authUser.active)) {

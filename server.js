@@ -8,42 +8,35 @@ const config = require('./src/config');
 const { initMaster, refreshTenantBillingStatuses, q } = require('./src/db');
 const { setIo } = require('./src/notifications');
 const jwt = require('jsonwebtoken');
+const {
+  apiNoStore,
+  createRateLimiter,
+  requireSameOrigin,
+  securityHeaders,
+} = require('./src/middleware/security');
 
 const app = express();
 app.disable('x-powered-by');
+if (process.env.NODE_ENV === 'production') app.set('trust proxy', 1);
+app.use(securityHeaders());
+app.use('/api', requireSameOrigin);
 app.use(express.json({ limit: '1mb' }));
-app.use(express.urlencoded({ extended: true }));
+app.use(express.urlencoded({ extended: false, limit: '256kb' }));
 app.use(cookieParser());
 
-// Cabeceras básicas de seguridad
-app.use((req, res, next) => {
-  res.setHeader('X-Content-Type-Options', 'nosniff');
-  res.setHeader('X-Frame-Options', 'SAMEORIGIN');
-  res.setHeader('Referrer-Policy', 'same-origin');
-  next();
+const chatLimiter = createRateLimiter({
+  windowMs: 60 * 1000,
+  max: 90,
+  message: 'Demasiados mensajes. Espera un momento.',
 });
-
-// Rate limit sencillo en memoria para auth y chat
-const hits = new Map();
-function rateLimit(max, windowMs) {
-  return (req, res, next) => {
-    const key = `${req.ip}:${req.path}`;
-    const now = Date.now();
-    const entry = hits.get(key) || { count: 0, start: now };
-    if (now - entry.start > windowMs) {
-      entry.count = 0;
-      entry.start = now;
-    }
-    entry.count++;
-    hits.set(key, entry);
-    if (entry.count > max) return res.status(429).json({ error: 'Demasiadas solicitudes, intenta más tarde' });
-    next();
-  };
-}
 
 // Estáticos
 app.use('/static', express.static(path.join(__dirname, 'public')));
-app.use('/uploads', express.static(config.UPLOADS_DIR));
+app.use('/uploads', (req, res, next) => {
+  if (/\.svg(?:$|[?#])/i.test(req.url)) return res.status(404).end();
+  res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+  next();
+}, express.static(config.UPLOADS_DIR, { dotfiles: 'deny', fallthrough: true }));
 
 // Service Worker en raíz para que el scope cubra toda la app (necesario para PWA)
 app.get('/sw.js', (req, res) => {
@@ -53,7 +46,8 @@ app.get('/sw.js', (req, res) => {
 });
 
 // APIs
-app.use('/api/auth', rateLimit(30, 10 * 60 * 1000), require('./src/routes/auth'));
+app.use('/api', apiNoStore);
+app.use('/api/auth', require('./src/routes/auth'));
 app.use('/api/products', require('./src/routes/products'));
 app.use('/api/orders', require('./src/routes/orders'));
 app.use('/api/customers', require('./src/routes/customers'));
@@ -66,8 +60,8 @@ app.use('/api/settings', require('./src/routes/settings'));
 app.use('/api/branches', require('./src/routes/branches'));
 app.use('/api/cashiers', require('./src/routes/cashiers'));
 app.use('/api/pos', require('./src/routes/pos'));
-app.use('/api/chat', rateLimit(120, 60 * 1000), require('./src/routes/chatbot'));
-app.use('/api/superadmin', rateLimit(80, 10 * 60 * 1000), require('./src/routes/superadmin'));
+app.use('/api/chat', chatLimiter, require('./src/routes/chatbot'));
+app.use('/api/superadmin', require('./src/routes/superadmin'));
 app.use('/api/notifications', require('./src/routes/notifications'));
 app.use('/api/inventory', require('./src/routes/inventory'));
 app.use('/api/employees', require('./src/routes/employees'));
@@ -75,17 +69,19 @@ app.use('/api/kds', require('./src/routes/kds'));
 
 // Páginas
 const page = (name) => (req, res) => res.sendFile(path.join(__dirname, 'public', name));
+const validSlug = (req, res, next) => /^[a-z0-9-]{3,40}$/.test(String(req.params.slug || '')) ? next() : res.status(404).end();
+const validKdsToken = (req, res, next) => /^[A-Za-z0-9_-]{20,80}$/.test(String(req.params.token || '')) ? next() : res.status(404).end();
 app.get('/', page('index.html'));
 app.get('/login', page('login.html'));
 app.get('/register', page('register.html'));
 app.get('/app', page('app.html'));
 app.get('/notificaciones', page('notify.html'));
-app.get('/caja/:slug([a-z0-9-]{3,40})', page('cashier-login.html'));
-app.get('/kds/:slug([a-z0-9-]{3,40})/:token([A-Za-z0-9_-]{20,80})', page('kds.html'));
+app.get('/caja/:slug', validSlug, page('cashier-login.html'));
+app.get('/kds/:slug/:token', validSlug, validKdsToken, page('kds.html'));
 app.get('/superadmin/login', page('superadmin-login.html'));
 app.get('/superadmin', page('superadmin.html'));
-app.get('/c/:slug([a-z0-9-]{3,40})', page('chat.html'));
-app.get('/:slug([a-z0-9-]{3,40})', page('chat.html'));
+app.get('/c/:slug', validSlug, page('chat.html'));
+app.get('/:slug', validSlug, page('chat.html'));
 
 // Manejador central de errores (mensajes amigables, sin stack al cliente)
 app.use((err, req, res, next) => {
@@ -93,8 +89,21 @@ app.use((err, req, res, next) => {
     const msg =
       err.code === 'LIMIT_FILE_SIZE'
         ? 'La imagen es demasiado grande (máximo 8 MB). Usa una imagen más ligera.'
-        : `Error al subir el archivo: ${err.message}`;
+        : 'No se pudo procesar el archivo. Revisa su tamaño y formato.';
     return res.status(400).json({ error: msg });
+  }
+  if (err?.code === 'UNSUPPORTED_FILE_TYPE') {
+    return res.status(415).json({ error: 'Formato no permitido. Usa PNG, JPG, WEBP o GIF.' });
+  }
+  if (err?.type === 'entity.too.large') {
+    return res.status(413).json({ error: 'La solicitud excede el tamaño permitido' });
+  }
+  if (err instanceof SyntaxError && err?.type === 'entity.parse.failed') {
+    return res.status(400).json({ error: 'El contenido JSON no es válido' });
+  }
+  const status = Number(err?.status || err?.statusCode || 0);
+  if (status >= 400 && status < 500) {
+    return res.status(status).json({ error: String(err.message || 'Solicitud no válida').slice(0, 240) });
   }
   console.error('[error]', err);
   res.status(500).json({ error: 'Error interno del servidor' });
@@ -132,7 +141,6 @@ initMaster()
       try {
         const rawToken =
           socket.handshake.auth?.token ||
-          socket.handshake.query?.token ||
           (socket.handshake.headers.cookie || '')
             .split(';')
             .map(c => c.trim())
@@ -141,10 +149,13 @@ initMaster()
             .slice(1)
             .join('='); // reconstruye en caso de que el valor lleve '='
         if (!rawToken) return next(new Error('auth'));
-        const decoded = jwt.verify(rawToken, config.JWT_SECRET);
+        const decoded = jwt.verify(rawToken, config.JWT_SECRET, {
+          issuer: 'chatbotpro',
+          audience: 'cbp:owner',
+        });
         // El JWT usa 'slug' (no 'tenantSlug') y no incluye 'role'
         const tenantSlug = decoded?.slug;
-        if (!tenantSlug) return next(new Error('auth'));
+        if (!tenantSlug || decoded.typ !== 'owner') return next(new Error('auth'));
         // Verificar tenant activo y que el usuario sea owner
         const [{ rows: tRows }, { rows: uRows }] = await Promise.all([
           q('SELECT slug FROM tenants WHERE slug = $1 AND account_status = $2', [tenantSlug, 'active']),
@@ -169,7 +180,7 @@ initMaster()
 
     setIo(io);
 
-    httpServer.listen(config.PORT, () => {
+    httpServer.listen(config.PORT, config.HOST, () => {
       console.log(`\n🤖 ChatBotPro corriendo en http://localhost:${config.PORT}`);
       console.log(`   Panel:    http://localhost:${config.PORT}/login`);
       console.log(`   Registro: http://localhost:${config.PORT}/register`);

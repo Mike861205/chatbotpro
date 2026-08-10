@@ -8,7 +8,7 @@ router.use(requireAuth);
 
 const upload = createImageUpload({
   scopeResolver: (req) => req.tenant.slug,
-  allowedMimePattern: /^image\/(png|jpe?g|webp|svg\+xml)$/,
+  allowedMimePattern: /^image\/(png|jpe?g|webp|gif)$/,
   tempPrefix: 'logo',
 });
 

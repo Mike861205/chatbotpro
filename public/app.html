@@ -2,7 +2,7 @@
 <html lang="es">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
   <title>Panel — ChatBotPro</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
@@ -10,7 +10,7 @@
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/bold/style.css" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/fill/style.css" />
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-  <link rel="stylesheet" href="/static/css/styles.css?v=20260809purchasecosts" />
+  <link rel="stylesheet" href="/static/css/styles.css?v=20260809employeebranch" />
   <link rel="icon" type="image/svg+xml" href="/static/favicon.svg" />
   <link rel="icon" type="image/png" href="/static/chatbotpro100.png" />
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
@@ -393,9 +393,19 @@
             <div class="inv-search-wrap costing-search"><i class="ph-bold ph-magnifying-glass"></i><input id="costingSearch" type="text" placeholder="Buscar producto…" autocomplete="off" /></div>
             <div class="field"><label for="costingCategory">Categoría</label><select id="costingCategory"><option value="all">Todas las categorías</option></select></div>
             <div class="segmented" id="costingSort"><button type="button" class="on" data-cost-sort="alphabetical">A–Z</button><button type="button" data-cost-sort="category">Por categoría</button></div>
+            <div class="segmented costing-view-switch" id="costingView" aria-label="Vista de productos"><button type="button" data-cost-view="cards"><i class="ph-bold ph-squares-four"></i> Tarjetas</button><button type="button" class="on" data-cost-view="table"><i class="ph-bold ph-table"></i> Tabla</button></div>
+            <div class="costing-export-actions">
+              <button class="btn btn-ghost" id="costingPdfBtn" type="button"><i class="ph-bold ph-file-pdf"></i> PDF</button>
+              <button class="btn btn-ghost" id="costingExcelBtn" type="button"><i class="ph-bold ph-file-xls"></i> Excel</button>
+            </div>
             <button class="btn btn-primary" id="costingSaveBtn" type="button"><i class="ph-bold ph-floppy-disk"></i> Guardar cambios</button>
           </div>
-          <div class="card costing-table-card">
+          <div class="costing-category-head" id="costingCategoryHead" hidden>
+            <div><span>Productos de la categoría</span><h3 id="costingCategoryTitle">Todos los productos</h3></div>
+            <strong id="costingCategoryCount">0 productos</strong>
+          </div>
+          <div class="costing-product-grid" id="costingProductCards" hidden></div>
+          <div class="card costing-table-card" id="costingTableCard">
             <div class="costing-table-help"><i class="ph-bold ph-info"></i> Escribe directamente sobre cada fila. El margen se calcula y el producto se guarda automáticamente.</div>
             <div class="table-wrap"><table class="costing-table"><thead><tr><th>Producto</th><th>Categoría</th><th>Costo unitario</th><th>Precio de venta</th><th>Utilidad unitaria</th><th>Margen</th><th>Estado</th></tr></thead><tbody id="costingProductsTbody"></tbody></table></div>
             <div class="costing-save-footer"><span id="costingPendingLabel">Sin cambios pendientes</span><button class="btn btn-primary" id="costingSaveBottomBtn" type="button"><i class="ph-bold ph-floppy-disk"></i> Guardar cambios</button></div>
@@ -1207,6 +1217,24 @@
     </main>
   </div>
 
+  <!-- Modal: exportar costo de ventas -->
+  <div class="modal-bg" id="costingExportModal">
+    <div class="modal costing-export-modal">
+      <div class="costing-export-head">
+        <div><span><i class="ph-bold ph-export"></i> Exportación personalizada</span><h3>Exportar costo de ventas</h3><p id="costingExportScope">Se exportarán los productos visibles.</p></div>
+        <button class="modal-close" type="button" id="costingExportClose" aria-label="Cerrar"><i class="ph-bold ph-x"></i></button>
+      </div>
+      <div class="costing-export-select-head"><div><b>Elige la información</b><small>Marca las columnas que deseas incluir en el archivo.</small></div><button class="btn btn-ghost btn-sm" type="button" id="costingExportToggle">Seleccionar todas</button></div>
+      <div class="costing-export-fields" id="costingExportFields"></div>
+      <div class="costing-export-note"><i class="ph-bold ph-funnel"></i><span>El archivo respetará la categoría, búsqueda y orden que tienes visibles. También incluirá cambios pendientes de guardar.</span></div>
+      <div class="modal-actions costing-export-footer">
+        <button class="btn btn-ghost" type="button" id="costingExportCancel">Cancelar</button>
+        <button class="btn btn-ghost" type="button" id="costingExportPdf"><i class="ph-bold ph-file-pdf"></i> Descargar PDF</button>
+        <button class="btn btn-primary" type="button" id="costingExportExcel"><i class="ph-bold ph-file-xls"></i> Descargar Excel</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Modal: detalle financiero de ventas -->
   <div class="modal-bg" id="salesDetailModal">
     <div class="modal sales-detail-modal">
@@ -1227,7 +1255,19 @@
 
   <div class="modal-bg" id="purchaseOrderModal"><div class="modal purchase-order-modal"><h3><i class="ph-bold ph-shopping-cart-simple"></i> Nueva orden de compra</h3><form id="purchaseOrderForm"><div class="purchase-order-head-fields"><div class="field"><label>Proveedor *</label><select id="purchaseOrderSupplier" required></select></div><div class="field"><label>Sucursal receptora *</label><select id="purchaseOrderBranch" required></select></div><div class="field"><label>Fecha de orden *</label><input type="date" id="purchaseOrderDate" required /></div><div class="field"><label>Entrega esperada</label><input type="date" id="purchaseExpectedDate" /></div></div><div class="purchase-items-head"><div><b>Productos de la orden</b><span>El costo configurado se carga automáticamente; puedes modificarlo para esta compra y se promediará al recibirla.</span></div><button class="btn btn-ghost btn-sm" type="button" id="purchaseAddOrderItem"><i class="ph-bold ph-plus"></i> Producto</button></div><div class="purchase-item-columns" aria-hidden="true"><span>Producto</span><span>Cantidad</span><span>Costo unitario</span><span>Importe</span><span></span></div><div id="purchaseOrderItems"></div><div class="purchase-order-total">Total de la orden <strong id="purchaseOrderTotal">$0.00</strong></div><div class="field"><label>Notas</label><input id="purchaseOrderNotes" maxlength="300" placeholder="Condiciones, factura, referencia…" /></div><div class="modal-actions"><button class="btn btn-ghost" type="button" onclick="closeModal('purchaseOrderModal')">Cancelar</button><button class="btn btn-primary" type="submit"><i class="ph-bold ph-check-circle"></i> Crear orden</button></div></form></div></div>
 
-  <div class="modal-bg" id="purchaseTransferModal"><div class="modal purchase-order-modal"><h3><i class="ph-bold ph-arrows-left-right"></i> Nuevo traslado</h3><form id="purchaseTransferForm"><div class="row-2"><div class="field"><label>Sucursal origen *</label><select id="purchaseTransferFrom" required></select></div><div class="field"><label>Sucursal destino *</label><select id="purchaseTransferTo" required></select></div></div><div class="purchase-items-head"><div><b>Productos a trasladar</b><span>La existencia debe estar disponible en la sucursal origen.</span></div><button class="btn btn-ghost btn-sm" type="button" id="purchaseAddTransferItem"><i class="ph-bold ph-plus"></i> Producto</button></div><div id="purchaseTransferItems"></div><div class="field"><label>Notas</label><input id="purchaseTransferNotes" maxlength="300" /></div><div class="modal-actions"><button class="btn btn-ghost" type="button" onclick="closeModal('purchaseTransferModal')">Cancelar</button><button class="btn btn-primary" type="submit"><i class="ph-bold ph-arrows-left-right"></i> Completar traslado</button></div></form></div></div>
+  <div class="modal-bg" id="purchaseTransferModal">
+    <div class="modal purchase-order-modal purchase-transfer-modal">
+      <div class="purchase-transfer-title"><div><span><i class="ph-bold ph-arrows-left-right"></i> Movimiento de inventario</span><h3>Nuevo traslado</h3></div><button class="modal-close" type="button" onclick="closeModal('purchaseTransferModal')" aria-label="Cerrar"><i class="ph-bold ph-x"></i></button></div>
+      <form id="purchaseTransferForm">
+        <div class="row-2"><div class="field"><label>Sucursal origen *</label><select id="purchaseTransferFrom" required></select></div><div class="field"><label>Sucursal destino *</label><select id="purchaseTransferTo" required></select></div></div>
+        <div class="purchase-transfer-summary" id="purchaseTransferStockSummary" aria-live="polite"></div>
+        <div class="purchase-items-head"><div><b>Productos a trasladar</b><span>Las existencias se consultan en tiempo real y se validan nuevamente al confirmar.</span></div><button class="btn btn-ghost btn-sm" type="button" id="purchaseAddTransferItem"><i class="ph-bold ph-plus"></i> Producto</button></div>
+        <div id="purchaseTransferItems"></div>
+        <div class="field"><label>Notas</label><input id="purchaseTransferNotes" maxlength="300" /></div>
+        <div class="modal-actions"><button class="btn btn-ghost" type="button" onclick="closeModal('purchaseTransferModal')">Cancelar</button><button class="btn btn-ghost" type="button" id="purchaseTransferRefresh"><i class="ph-bold ph-arrows-clockwise"></i> Actualizar inventario</button><button class="btn btn-primary" id="purchaseTransferSubmit" type="submit"><i class="ph-bold ph-arrows-left-right"></i> Completar traslado</button></div>
+      </form>
+    </div>
+  </div>
   <div class="modal-bg" id="purchaseAuditModal"><div class="modal" style="max-width:760px"><div class="sales-detail-modal-head" style="position:static;padding:0 0 14px"><div><span class="purchase-kicker"><i class="ph-bold ph-shield-check"></i> Auditoría</span><h3 id="purchaseAuditTitle">Bitácora</h3></div><button class="modal-close" type="button" onclick="closeModal('purchaseAuditModal')"><i class="ph-bold ph-x"></i></button></div><div id="purchaseAuditContent"></div></div></div>
 
   <div class="modal-bg" id="branchStockAdjustModal"><div class="modal" style="max-width:520px"><h3><i class="ph-bold ph-scales"></i> Ajustar stock de sucursal</h3><form id="branchStockAdjustForm"><input type="hidden" id="branchStockAdjustProduct" /><input type="hidden" id="branchStockAdjustBranch" /><div class="branch-stock-adjust-context" id="branchStockAdjustContext"></div><div class="field"><label>Existencia física correcta *</label><input id="branchStockAdjustQuantity" type="number" min="0" step="0.0001" required /></div><div class="field"><label>Motivo del ajuste *</label><input id="branchStockAdjustReason" maxlength="240" required placeholder="Ej. Conteo físico, corrección de captura…" /></div><div class="modal-actions"><button class="btn btn-ghost" type="button" onclick="closeModal('branchStockAdjustModal')">Cancelar</button><button class="btn btn-primary" type="submit"><i class="ph-bold ph-shield-check"></i> Guardar ajuste</button></div></form></div></div>
@@ -1998,7 +2038,10 @@
           <div class="field"><label>Sueldo base</label><input type="number" id="empEmpSalary" min="0" step="0.01" placeholder="0.00" /></div>
           <div class="field"><label>Teléfono</label><input type="tel" id="empEmpPhone" maxlength="30" /></div>
         </div>
-        <div class="field"><label>Correo electrónico</label><input type="email" id="empEmpEmail" maxlength="100" /></div>
+        <div class="row-2">
+          <div class="field"><label>Correo electrónico</label><input type="email" id="empEmpEmail" maxlength="100" /></div>
+          <div class="field"><label>Sucursal asignada *</label><select id="empEmpBranch" required><option value="">Selecciona una sucursal…</option></select><div class="hint">Las ventas del sistema se medirán únicamente desde esta sucursal.</div></div>
+        </div>
         <div class="field"><label>Color de avatar</label>
           <div class="emp-color-picker" id="empColorPicker">
             <span class="emp-color-dot" data-color="#6c47ff" style="background:#6c47ff"></span>
@@ -2093,6 +2136,7 @@
               <option value="system_sales">Sistema — se importa de las ventas del sistema</option>
               <option value="both">Mixta — sistema + ajuste manual</option>
             </select>
+            <div class="hint">Sistema y Mixta usan únicamente las ventas de la sucursal asignada a cada empleado.</div>
           </div>
           <div class="field">
             <label>Dirección del indicador</label>
@@ -2189,6 +2233,6 @@
     </div>
   </div>
 
-  <script src="/static/js/app.js?v=20260809purchasecosts"></script>
+  <script src="/static/js/app.js?v=20260809employeebranch"></script>
 </body>
 </html>
