@@ -130,8 +130,8 @@ async function applyBranchSaleStock(t, branchId, items) {
   if (!id || !(await isBranchStockInitialized(t))) return false;
   for (const [productId, quantity] of itemTotals(items)) {
     await t.run(`INSERT INTO {s}.branch_inventory(branch_id,product_id,quantity,initial_quantity,baseline_started_at,updated_at)
-      VALUES($1,$2,-$3,0,now(),now()) ON CONFLICT(branch_id,product_id) DO UPDATE
-      SET quantity={s}.branch_inventory.quantity-$3,updated_at=now()`, [id, productId, quantity]);
+      VALUES($1,$2,$3,0,now(),now()) ON CONFLICT(branch_id,product_id) DO UPDATE
+      SET quantity={s}.branch_inventory.quantity+EXCLUDED.quantity,updated_at=now()`, [id, productId, -quantity]);
   }
   return true;
 }

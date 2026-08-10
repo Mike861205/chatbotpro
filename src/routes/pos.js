@@ -525,12 +525,12 @@ function normalizePayment(method, paymentInput, total, cashReceivedInput) {
   let cashReceived = 0;
   let cashChange = 0;
 
-  if (!PAYMENT_METHODS.has(method)) throw new Error('Método de pago inválido');
+  if (!PAYMENT_METHODS.has(method)) throw badRequest('Método de pago inválido');
 
   if (method === 'cash') {
     breakdown.cash = n(total);
     cashReceived = Math.max(n(cashReceivedInput), n(total));
-    if (cashReceived < n(total)) throw new Error('El efectivo recibido no cubre el total');
+    if (cashReceived < n(total)) throw badRequest('El efectivo recibido no cubre el total');
     cashChange = n(cashReceived - total);
     return { method, breakdown, cashReceived, cashChange };
   }
@@ -550,11 +550,11 @@ function normalizePayment(method, paymentInput, total, cashReceivedInput) {
   breakdown.transfer = n(paymentInput?.transfer);
   const used = [breakdown.cash, breakdown.card, breakdown.transfer].filter((value) => value > 0).length;
   const paid = n(breakdown.cash + breakdown.card + breakdown.transfer);
-  if (used < 2) throw new Error('El pago mixto debe usar al menos dos medios de pago');
-  if (!sameMoney(paid, total)) throw new Error('La suma de pagos no coincide con el total de la venta');
+  if (used < 2) throw badRequest('El pago mixto debe usar al menos dos medios de pago');
+  if (!sameMoney(paid, total)) throw badRequest('La suma de pagos no coincide con el total de la venta');
   if (breakdown.cash > 0) {
     cashReceived = Math.max(n(cashReceivedInput), breakdown.cash);
-    if (cashReceived < breakdown.cash) throw new Error('El efectivo recibido no cubre la parte en efectivo');
+    if (cashReceived < breakdown.cash) throw badRequest('El efectivo recibido no cubre la parte en efectivo');
     cashChange = n(cashReceived - breakdown.cash);
   }
   return { method, breakdown, cashReceived, cashChange };
@@ -1298,62 +1298,78 @@ router.post('/movements', async (req, res, next) => {
 
 async function createPosSale(req, res, next) {
   try {
-    const session = await getOpenSession(req.tdb, userSessionContext(req.user));
-    if (!session) return res.status(400).json({ error: 'Abre una caja antes de registrar una venta' });
-    const saleItems = await normalizePosItems(req.tdb, req.body?.items);
-    const subtotal = n(saleItems.reduce((sum, item) => sum + item.price * item.qty, 0));
     const isDelivery = Boolean(req.body?.isDelivery);
     const deliveryFee = isDelivery ? Math.max(0, n(req.body?.deliveryFee)) : 0;
     const deliveryType = isDelivery ? 'domicilio' : 'mostrador';
-    const total = n(subtotal + deliveryFee);
-    const paymentMethod = String(req.body?.paymentMethod || '').trim();
-    const payment = normalizePayment(paymentMethod, req.body?.payments || {}, total, req.body?.cashReceived);
     const notes = String(req.body?.notes || '').trim().slice(0, 240);
-    const cogsTotal = itemsCost(saleItems);
-    const row = await req.tdb.get(
-      `INSERT INTO {s}.orders
-       (customer_id, items, subtotal, total, status, channel, delivery, notes, payment_method, payment_breakdown, cash_received, cash_change, pos_session_id, delivery_fee, service_branch_id, service_branch_name, cogs_total)
-       VALUES (NULL, $1, $2, $3, 'entregado', 'pos', $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
-       RETURNING id`,
-      [
-        JSON.stringify(saleItems),
+    const result = await req.tdb.tx(async (tx) => {
+      const session = await getOpenSession(tx, userSessionContext(req.user));
+      if (!session) throw badRequest('Abre una caja antes de registrar una venta');
+
+      const saleItems = await normalizePosItems(tx, req.body?.items);
+      const subtotal = n(saleItems.reduce((sum, item) => sum + item.price * item.qty, 0));
+      const total = n(subtotal + deliveryFee);
+      const paymentMethod = String(req.body?.paymentMethod || '').trim();
+      const payment = normalizePayment(paymentMethod, req.body?.payments || {}, total, req.body?.cashReceived);
+      const cogsTotal = itemsCost(saleItems);
+      const row = await tx.get(
+        `INSERT INTO {s}.orders
+         (customer_id, items, subtotal, total, status, channel, delivery, notes, payment_method, payment_breakdown, cash_received, cash_change, pos_session_id, delivery_fee, service_branch_id, service_branch_name, cogs_total)
+         VALUES (NULL, $1, $2, $3, 'entregado', 'pos', $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+         RETURNING id`,
+        [
+          JSON.stringify(saleItems),
+          subtotal,
+          total,
+          deliveryType,
+          notes,
+          payment.method,
+          JSON.stringify(payment.breakdown),
+          payment.cashReceived || null,
+          payment.cashChange || null,
+          session.id,
+          deliveryFee,
+          session.branch_id || null,
+          session.branch_name || null,
+          cogsTotal,
+        ]
+      );
+      if (await decrementBranchStockForSale(tx, session.branch_id, saleItems)) {
+        await tx.run('UPDATE {s}.orders SET branch_stock_applied=1 WHERE id=$1', [row.id]);
+      }
+      return {
+        row,
+        session,
+        saleItems,
         subtotal,
         total,
-        deliveryType,
-        notes,
-        payment.method,
-        JSON.stringify(payment.breakdown),
-        payment.cashReceived || null,
-        payment.cashChange || null,
-        session.id,
-        deliveryFee,
-        session.branch_id || null,
-        session.branch_name || null,
-        cogsTotal,
-      ]
-    );
-    if (await decrementBranchStockForSale(req.tdb, session.branch_id, saleItems)) await req.tdb.run('UPDATE {s}.orders SET branch_stock_applied=1 WHERE id=$1', [row.id]);
-    const totals = await getSessionTotals(req.tdb, session.id);
+        payment,
+        totals: await getSessionTotals(tx, session.id),
+        recentSales: await listRecentSales(tx, session.id),
+      };
+    });
+
     res.json({
       ok: true,
       sale: {
-        id: row.id,
-        subtotal,
+        id: result.row.id,
+        subtotal: result.subtotal,
         deliveryFee,
-        total,
-        items: saleItems,
-        paymentMethod: payment.method,
-        paymentBreakdown: payment.breakdown,
-        cashReceived: payment.cashReceived,
-        cashChange: payment.cashChange,
+        total: result.total,
+        items: result.saleItems,
+        paymentMethod: result.payment.method,
+        paymentBreakdown: result.payment.breakdown,
+        cashReceived: result.payment.cashReceived,
+        cashChange: result.payment.cashChange,
         notes,
       },
-      totals,
-      expectedCash: expectedCashForSession(session, totals),
-      recentSales: await listRecentSales(req.tdb, session.id),
+      totals: result.totals,
+      expectedCash: expectedCashForSession(result.session, result.totals),
+      recentSales: result.recentSales,
     });
   } catch (e) {
-    if (e.message) return res.status(400).json({ error: e.message });
+    if (e.statusCode === 400) return res.status(400).json({ error: e.message });
+    console.error('[pos][sale] error:', e?.message || e);
     next(e);
   }
 }
