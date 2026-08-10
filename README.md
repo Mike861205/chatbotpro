@@ -39,12 +39,12 @@ Puedes habilitar el botón **Ver demo del panel** en `/login` configurando estas
 
 - `DEMO_LOGIN_ENABLED=true`
 - `DEMO_USERNAME=demo`
-- `DEMO_PASSWORD=<clave aleatoria de al menos 12 caracteres>`
+- `DEMO_PASSWORD=<clave aleatoria de al menos 12 caracteres>` (opcional; si se omite, una cuenta demo nueva recibe una clave interna aleatoria)
 - `DEMO_TENANT_SLUG=slug-demo` (obligatorio; debe ser un negocio exclusivo para pruebas)
 
 Comportamiento por defecto:
 
-- Si la configuración segura no está completa, el botón demo permanece oculto y el endpoint queda desactivado.
+- Si `DEMO_LOGIN_ENABLED` o el tenant exclusivo no están configurados, el botón permanece oculto y el endpoint queda desactivado.
 - El sistema nunca selecciona automáticamente el primer negocio activo. Si el usuario demo no existe, sólo se crea dentro del tenant indicado explícitamente.
 - Si el usuario ya existe, su contraseña no se sobrescribe automáticamente.
 

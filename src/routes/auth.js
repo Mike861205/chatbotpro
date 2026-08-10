@@ -1,5 +1,6 @@
 const express = require('express');
 const bcrypt = require('bcryptjs');
+const crypto = require('node:crypto');
 const config = require('../config');
 const { q, tdb, initTenantDefaults } = require('../db');
 const { encrypt, decrypt, lookupHash } = require('../utils/crypto');
@@ -86,7 +87,8 @@ function getDemoCredentials() {
 
 function isSecureDemoConfigured() {
   const { password, tenantSlug } = getDemoCredentials();
-  return Boolean(config.DEMO_LOGIN_ENABLED && SLUG_RE.test(tenantSlug) && password.length >= 12 && password.toLowerCase() !== 'demo');
+  const optionalPasswordIsSafe = !password || (password.length >= 12 && password.toLowerCase() !== 'demo');
+  return Boolean(config.DEMO_LOGIN_ENABLED && SLUG_RE.test(tenantSlug) && optionalPasswordIsSafe);
 }
 
 async function resolveDemoTenant(preferredSlug) {
@@ -104,7 +106,11 @@ async function ensureDemoUser(username, password, tenant) {
   if (conflict.rows[0]) {
     throw Object.assign(new Error('El usuario demo está asignado a otro negocio'), { status: 503 });
   }
-  const hash = await bcrypt.hash(password, 12);
+  // La contraseña es interna: el visitante entra sólo mediante el formulario
+  // público de leads. Si no se configura una, se genera una aleatoria que no
+  // se muestra ni habilita un acceso convencional predecible.
+  const internalPassword = password || crypto.randomBytes(32).toString('base64url');
+  const hash = await bcrypt.hash(internalPassword, 12);
   const created = await q(
     `INSERT INTO users (tenant_id, username, password_hash, role, display_name, active)
      VALUES ($1, $2, $3, 'owner', $4, 1)
@@ -235,7 +241,7 @@ router.post('/demo-login', authAttemptLimiter, async (req, res, next) => {
     }
 
     const { username: demoUsername, password: demoPassword, tenantSlug: demoTenantSlug } = getDemoCredentials();
-    if (!demoTenantSlug || demoPassword.length < 12 || demoPassword.toLowerCase() === 'demo') {
+    if (!demoTenantSlug || (demoPassword && (demoPassword.length < 12 || demoPassword.toLowerCase() === 'demo'))) {
       return res.status(503).json({ error: 'El acceso demo no está configurado de forma segura' });
     }
 
@@ -261,7 +267,7 @@ router.post('/demo-login', authAttemptLimiter, async (req, res, next) => {
       targetTenant
     );
 
-    if (!(await bcrypt.compare(demoPassword, user.password_hash))) {
+    if (demoPassword && !(await bcrypt.compare(demoPassword, user.password_hash))) {
       return res.status(503).json({ error: 'Las credenciales del usuario demo no coinciden con la configuración' });
     }
 
