@@ -787,7 +787,7 @@ async function loadGitDeployStatus() {
   if (hint) {
     const git = payload?.git || {};
     const dirtyCount = Number(git.dirtyCount || 0);
-    hint.textContent = `Git: rama local ${git.currentBranch || '-'} | destino ${git.remote || 'origin'}/${git.branch || 'main'} | cambios pendientes ${dirtyCount}`;
+    hint.textContent = `Git: rama local ${git.currentBranch || '-'} | destino ${git.remote || 'origin'}/${git.branch || 'main'} | PM2 ${git.pm2App || 'chatbotpro'} | health ${git.healthUrl || 'http://127.0.0.1:3003/'} | cambios pendientes ${dirtyCount}`;
   }
   return payload;
 }

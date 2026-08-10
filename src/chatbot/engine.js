@@ -1234,6 +1234,15 @@ async function handleMessage(t, slug, sessionId, rawInput) {
 
   const reply = { messages: [], options: [], products: null, cart: null, order: null, bankAccounts: null };
   const lower = input.toLowerCase();
+  const finishIntents = new Set([
+    'seria todo',
+    'seria todo gracias',
+    'eso seria todo',
+    'eso seria todo gracias',
+    'finalizar pedido',
+    'finalizar mi pedido',
+  ]);
+  const checkoutRequested = lower === 'checkout' || finishIntents.has(normalizeSearchText(input));
 
   const attachBankAccounts = () => {
     if (!bankAccounts.length) return;
@@ -1347,19 +1356,17 @@ async function handleMessage(t, slug, sessionId, rawInput) {
   };
 
   const showPostSendOptions = () => {
+    state.step = 'start';
+    if (!state.cart.length) {
+      reply.messages.push('Tu carrito está vacío. ¿Deseas elegir productos del menú?');
+      reply.options = [{ label: labels.browseButton || '📋 Ver menú', value: 'menu' }];
+      return;
+    }
+    reply.messages.push('¿Deseas agregar más productos o finalizar tu pedido?');
     reply.options = [
-      { label: '➕ Agregar más', value: 'menu' },
-      { label: labels.checkoutButton, value: 'checkout' },
+      { label: '➕ Agregar más productos', value: 'menu' },
       { label: labels.cartButton, value: 'cart' },
-    ];
-  };
-
-  const askOrderNoteAfterSend = () => {
-    state.step = 'ask_order_note_after_send_choice';
-    reply.messages.push('¿Deseas agregar una nota a tu pedido?');
-    reply.options = [
-      { label: '✅ Sí', value: 'order_note_yes' },
-      { label: '❌ No', value: 'order_note_no' },
+      { label: labels.checkoutButton, value: 'checkout' },
     ];
   };
 
@@ -1506,11 +1513,11 @@ async function handleMessage(t, slug, sessionId, rawInput) {
       const summary = cartSummary(state.cart, currency, labels);
       reply.messages = [
         lines.length
-          ? `✅ Cantidades confirmadas al checkout:\n${lines.join('\n')}`
+          ? `✅ Productos agregados a tu pedido:\n${lines.join('\n')}`
           : 'No se pudo aplicar la selección.',
         summary,
       ];
-      askOrderNoteAfterSend();
+      showPostSendOptions();
       return finish();
     }
   }
@@ -1557,8 +1564,8 @@ async function handleMessage(t, slug, sessionId, rawInput) {
           reply.messages = [`🗑️ Quité *${prod.name}* de tu pedido.`, cartSummary(state.cart, currency, labels)];
           showPostSendOptions();
         } else {
-          reply.messages = [`✅ Agregado al checkout: *${finalQty}x ${prod.name}* = *${lineTotal}*.`, cartSummary(state.cart, currency, labels)];
-          askOrderNoteAfterSend();
+          reply.messages = [`✅ Agregado a tu pedido: *${finalQty}x ${prod.name}* = *${lineTotal}*.`, cartSummary(state.cart, currency, labels)];
+          showPostSendOptions();
         }
         return finish();
       }
@@ -1574,7 +1581,8 @@ async function handleMessage(t, slug, sessionId, rawInput) {
     }
     if (lower === 'order_note_no') {
       state.customer.orderNote = '';
-      continueCheckoutFlow();
+      reply.messages = ['Listo, continuamos sin nota.'];
+      showPostSendOptions();
       return finish();
     }
     reply.messages = ['Elige una opción para continuar:'];
@@ -1655,12 +1663,12 @@ async function handleMessage(t, slug, sessionId, rawInput) {
       else state.cart.push({ id: prod.id, name: prod.name, price: prod.price, qty: 1 });
       resetUpsellProgress();
 
-      state.step = 'choosing_product';
-      const menuReply = await showProducts(t, state, state.currentCategoryId, labels);
       const currentQty = state.cart.find((it) => it.id === prod.id && !it._cartKey)?.qty || 0;
-      reply.messages = [`✅ Llevas *${currentQty}x ${prod.name}* en tu pedido.`, ...menuReply.messages];
-      reply.products = menuReply.products;
-      reply.options = menuReply.options;
+      reply.messages = [
+        `✅ Llevas *${currentQty}x ${prod.name}* en tu pedido.`,
+        cartSummary(state.cart, currency, labels),
+      ];
+      showPostSendOptions();
       return finish();
     }
   }
@@ -1784,19 +1792,12 @@ async function handleMessage(t, slug, sessionId, rawInput) {
       resetUpsellProgress();
       const name = state.pendingProduct.name;
       state.pendingProduct = null;
-      state.step = 'start';
       reply.messages = [`¡Agregado! ${qty}x *${name}* 🎉\n\n${cartSummary(state.cart, currency, labels)}`];
-      reply.options = [
-        { label: '➕ Agregar más', value: 'menu' },
-        { label: labels.checkoutButton, value: 'checkout' },
-      ];
+      showPostSendOptions();
       return finish();
     }
     reply.messages = ['Puedes tocar el botón + del producto para agregar más unidades, o elegir "➕ Agregar más".'];
-    reply.options = [
-      { label: '➕ Agregar más', value: 'menu' },
-      { label: labels.checkoutButton, value: 'checkout' },
-    ];
+    showPostSendOptions();
     return finish();
   }
 
@@ -1919,10 +1920,19 @@ async function handleMessage(t, slug, sessionId, rawInput) {
   }
 
   // Checkout
-  if (lower === 'checkout') {
+  if (checkoutRequested) {
     if (!state.cart.length) {
       reply.messages = ['Tu carrito está vacío. ¡Mira nuestro menú! 😊'];
       reply.options = [{ label: '📋 Ver menú', value: 'menu' }];
+      return finish();
+    }
+
+    // La barra fija del carrito envía "checkout" incluso dentro del upsell.
+    // En ese estado equivale a "Sería todo" y debe cerrar los ofrecimientos.
+    if (state.step === 'upsell_offer') {
+      state.upsellDoneOfferIds = upsellOffers.map((offer) => String(offer.id));
+      state.upsellCurrentOfferId = '';
+      continueCheckoutFlowCore();
       return finish();
     }
 
@@ -1990,7 +2000,17 @@ async function handleMessage(t, slug, sessionId, rawInput) {
     if (lower.startsWith('upsell_next|')) {
       const offerId = String(lower.split('|')[1] || '').trim();
       markUpsellOfferDone(offerId);
-      continueCheckoutFlow();
+      const nextOffer = availableUpsellOffer();
+      if (nextOffer) {
+        state.step = 'upsell_offer';
+        state.upsellCurrentOfferId = nextOffer.id;
+        reply.messages = [nextOffer.question];
+        reply.options = upsellOptions(nextOffer);
+      } else {
+        state.step = 'upsell_offer';
+        reply.messages = ['Ya revisaste todos los ofrecimientos. Cuando estés listo, finaliza el upsell.'];
+        reply.options = [{ label: '✅ Sería todo, gracias.', value: 'upsell_continue' }];
+      }
       return finish();
     }
 
@@ -2012,19 +2032,34 @@ async function handleMessage(t, slug, sessionId, rawInput) {
       if (existing) existing.qty += 1;
       else state.cart.push({ id: product.id, name: product.name, price: product.price, qty: 1 });
 
-      markUpsellOfferDone(offerId);
       reply.messages = [
         `✅ Excelente elección: agregué *${product.name}* a tu pedido.`,
         cartSummary(state.cart, currency, labels),
       ];
-      const nextOffer = availableUpsellOffer();
-      if (nextOffer) {
+
+      const cartIds = new Set((state.cart || []).map((item) => Number(item.id)));
+      const remainingProducts = (offer.products || [])
+        .filter((item) => !cartIds.has(Number(item.id)))
+        .slice(0, 6);
+
+      if (remainingProducts.length) {
         state.step = 'upsell_offer';
-        state.upsellCurrentOfferId = nextOffer.id;
-        reply.messages.push(nextOffer.question);
-        reply.options = upsellOptions(nextOffer);
+        state.upsellCurrentOfferId = offer.id;
+        reply.messages.push('Puedes elegir otro producto de este ofrecimiento o continuar cuando quieras.');
+        reply.options = upsellOptions({ ...offer, products: remainingProducts });
       } else {
-        continueCheckoutFlowCore();
+        markUpsellOfferDone(offerId);
+        const nextOffer = availableUpsellOffer();
+        if (nextOffer) {
+          state.step = 'upsell_offer';
+          state.upsellCurrentOfferId = nextOffer.id;
+          reply.messages.push(nextOffer.question);
+          reply.options = upsellOptions(nextOffer);
+        } else {
+          state.step = 'upsell_offer';
+          reply.messages.push('Ya agregaste los productos disponibles del upsell.');
+          reply.options = [{ label: '✅ Sería todo, gracias.', value: 'upsell_continue' }];
+        }
       }
       return finish();
     }
@@ -2486,10 +2521,7 @@ async function handleMessage(t, slug, sessionId, rawInput) {
     else state.cart.push({ id: match.id, name: match.name, price: match.price, qty: 1 });
     resetUpsellProgress();
     reply.messages = [`¡Agregado! 1x *${match.name}* 🎉\n\n${cartSummary(state.cart, currency, labels)}`];
-    reply.options = [
-      { label: '➕ Agregar más', value: 'menu' },
-      { label: labels.checkoutButton, value: 'checkout' },
-    ];
+    showPostSendOptions();
     return finish();
   }
 

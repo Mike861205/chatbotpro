@@ -87,6 +87,9 @@ function getRemoteDeployArgs(force) {
   const user = String(process.env.DEPLOY_SSH_USER || '').trim();
   const appDir = String(process.env.DEPLOY_REMOTE_APP_DIR || '').trim();
   const identityFile = String(process.env.DEPLOY_SSH_IDENTITY_FILE || '').trim();
+  const branch = String(process.env.DEPLOY_GIT_BRANCH || 'main').trim() || 'main';
+  const pm2App = String(process.env.DEPLOY_PM2_APP || 'chatbotpro').trim() || 'chatbotpro';
+  const healthUrl = String(process.env.DEPLOY_HEALTH_URL || 'http://127.0.0.1:3003/').trim() || 'http://127.0.0.1:3003/';
   const portRaw = Number(process.env.DEPLOY_SSH_PORT || 0);
   const port = Number.isFinite(portRaw) && portRaw > 0 ? Math.floor(portRaw) : 0;
 
@@ -95,6 +98,9 @@ function getRemoteDeployArgs(force) {
   if (user) args.push('-User', user);
   if (port) args.push('-Port', String(port));
   if (appDir) args.push('-AppDir', appDir);
+  args.push('-Branch', branch);
+  args.push('-Pm2App', pm2App);
+  args.push('-HealthUrl', healthUrl);
   if (identityFile) args.push('-IdentityFile', identityFile);
   if (force) args.push('-Force');
   return args;
@@ -173,6 +179,8 @@ async function runGitAndDeploySequence({ commitMessage, forceDeploy, username })
 async function getGitDeployStatus() {
   const remote = String(process.env.DEPLOY_GIT_REMOTE || 'origin').trim() || 'origin';
   const branch = String(process.env.DEPLOY_GIT_BRANCH || 'main').trim() || 'main';
+  const pm2App = String(process.env.DEPLOY_PM2_APP || 'chatbotpro').trim() || 'chatbotpro';
+  const healthUrl = String(process.env.DEPLOY_HEALTH_URL || 'http://127.0.0.1:3003/').trim() || 'http://127.0.0.1:3003/';
   const branchResult = await spawnAndCapture('git', ['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: config.ROOT, captureToDeployLog: false });
   const statusResult = await spawnAndCapture('git', ['status', '--porcelain'], { cwd: config.ROOT, captureToDeployLog: false });
   const lines = String(statusResult.stdout || '')
@@ -182,6 +190,8 @@ async function getGitDeployStatus() {
   return {
     remote,
     branch,
+    pm2App,
+    healthUrl,
     currentBranch: String(branchResult.stdout || '').trim() || '(desconocida)',
     dirtyCount: lines.length,
     dirtyFiles: lines.slice(0, 50),
