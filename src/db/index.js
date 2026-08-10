@@ -609,6 +609,7 @@ async function createTenantSchema(slug) {
       updated_at TIMESTAMPTZ DEFAULT now()
     );
     ALTER TABLE "${s}".emp_productivity_records ADD COLUMN IF NOT EXISTS record_date DATE;
+    ALTER TABLE "${s}".emp_productivity_records ADD COLUMN IF NOT EXISTS input_source TEXT DEFAULT 'manual';
     ALTER TABLE "${s}".emp_metric_types ADD COLUMN IF NOT EXISTS period_type TEXT DEFAULT 'monthly';
     ALTER TABLE "${s}".emp_metric_types ADD COLUMN IF NOT EXISTS aggregation TEXT DEFAULT 'sum';
     DROP INDEX IF EXISTS "${s}".idx_${s}_emp_prod_uq;

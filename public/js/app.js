@@ -8256,11 +8256,16 @@ function empGetEmployeeInsightSummary(employeeId) {
 function empGetMetricMonthAggregate(employeeId, metric) {
   const rows = EMP_RECORDS.filter((r) => Number(r.employee_id) === Number(employeeId) && Number(r.metric_id) === Number(metric.id));
   if (!rows.length) return 0;
-  const values = rows.map((r) => Number(r.value || 0));
-  if ((metric.aggregation || 'sum') === 'avg') {
-    return values.reduce((s, v) => s + v, 0) / values.length;
-  }
-  return values.reduce((s, v) => s + v, 0);
+  const systemValue = rows.filter((r) => r.system_generated || r.input_source === 'system').reduce((sum, row) => sum + Number(row.value || 0), 0);
+  const manualValues = rows.filter((r) => !r.system_generated && r.input_source !== 'system').map((r) => Number(r.value || 0));
+  const manualValue = !manualValues.length
+    ? 0
+    : (metric.aggregation || 'sum') === 'avg'
+      ? manualValues.reduce((sum, value) => sum + value, 0) / manualValues.length
+      : manualValues.reduce((sum, value) => sum + value, 0);
+  if (metric.source === 'system_sales') return systemValue;
+  if (metric.source === 'both') return systemValue + manualValue;
+  return manualValue;
 }
 
 function empComputeEmployeeIndex(employeeId) {
@@ -8800,10 +8805,13 @@ function empRenderTeam() {
       const metricsHtml = activeMetrics.length
         ? activeMetrics.map((m) => {
             const insight = empGetInsight(emp.id, m.id);
-            const rec = empRecs.find((r) => r.metric_id === m.id);
-            const val = insight && insight.current_value !== null && insight.current_value !== undefined
+            const metricRows = empRecs.filter((r) => r.metric_id === m.id);
+            const hasMetricData = metricRows.length > 0;
+            const val = m.source !== 'manual'
+              ? empGetMetricMonthAggregate(emp.id, m)
+              : insight && insight.current_value !== null && insight.current_value !== undefined
               ? Number(insight.current_value)
-              : (rec ? Number(rec.value) : 0);
+              : empGetMetricMonthAggregate(emp.id, m);
             const target = Number(m.target) || 1;
             const barPct = m.higher_is_better !== 0
               ? Math.min(100, Math.round((val / target) * 100))
@@ -8811,7 +8819,7 @@ function empRenderTeam() {
             return `<div class="emp-metric-progress">
               <div class="emp-metric-progress-head">
                 <span>${esc(m.name)}</span>
-                <span class="emp-metric-progress-val">${val !== 0 || rec ? val + (m.unit ? '\u00a0' + esc(m.unit) : '') : '—'} ${empTrendBadge(insight)}</span>
+                <span class="emp-metric-progress-val">${val !== 0 || hasMetricData ? val + (m.unit ? '\u00a0' + esc(m.unit) : '') : '—'} ${empTrendBadge(insight)}</span>
               </div>
               <div class="emp-progress-track">
                 <div class="emp-progress-fill" style="width:${barPct}%;background:${color}80"></div>
@@ -8935,15 +8943,16 @@ function empRenderRecords() {
 
               // Para métricas mensuales: mostrar valor acumulado
               const allRecs = empRecs.filter((r) => r.metric_id === m.id);
+              const systemRecs = allRecs.filter((r) => r.system_generated || r.input_source === 'system');
+              const manualRecs = allRecs.filter((r) => !r.system_generated && r.input_source !== 'system');
 
               // Calcular valor acumulado del mes según aggregation
-              let currentVal = null;
-              if (allRecs.length > 0) {
-                const vals = allRecs.map((r) => Number(r.value));
-                currentVal = m.aggregation === 'avg'
-                  ? vals.reduce((s, v) => s + v, 0) / vals.length
-                  : vals.reduce((s, v) => s + v, 0);
-              }
+              const currentVal = allRecs.length ? empGetMetricMonthAggregate(emp.id, m) : null;
+              const manualVals = manualRecs.map((r) => Number(r.value));
+              const manualVal = !manualVals.length ? null : m.aggregation === 'avg'
+                ? manualVals.reduce((s, v) => s + v, 0) / manualVals.length
+                : manualVals.reduce((s, v) => s + v, 0);
+              const systemVal = systemRecs.reduce((sum, row) => sum + Number(row.value || 0), 0);
 
               const barPct = currentVal !== null && m.target
                 ? Math.min(100, Math.round((currentVal / Number(m.target)) * 100))
@@ -8973,7 +8982,7 @@ function empRenderRecords() {
                     class="emp-record-input" id="${inputId}"
                     data-emp="${emp.id}" data-metric="${m.id}"
                     data-monthly="${isMonthly ? '1' : '0'}"
-                    value="${isMonthly && currentVal !== null ? currentVal : ''}"
+                    value="${isMonthly && manualVal !== null ? manualVal : ''}"
                     placeholder="${canType ? '0' : 'automático'}"
                     ${canType ? '' : 'readonly'}
                     onkeydown="if(event.key==='Enter'){event.preventDefault();empSaveRecord(this)}"
@@ -8983,6 +8992,7 @@ function empRenderRecords() {
                     ${m.source !== 'manual' ? `<button class="btn btn-ghost btn-xs" onclick="empSyncSales(${m.id},${emp.id})" title="Importar del sistema"><i class="ph-bold ph-arrows-clockwise"></i></button>` : ''}
                   </div>
                 </div>
+                ${m.source !== 'manual' ? `<div class="hint" style="margin:7px 0 0"><i class="ph-bold ph-storefront"></i> Sistema: <b>${empFmt(systemVal)}</b>${m.source === 'both' ? ` · Total con ajuste: <b>${empFmt(currentVal || 0)}</b>` : ''}</div>` : ''}
                 ${barPct !== null ? `
                   <div class="emp-record-metric-prog">
                     <div class="emp-progress-track emp-progress-sm"><div class="emp-progress-fill" style="width:${barPct}%;background:${color}"></div></div>
@@ -9002,7 +9012,7 @@ function empRenderRecords() {
                     data-unit="${esc(m.unit || '')}"
                     data-higher="${m.higher_is_better !== 0 ? '1' : '0'}"
                     onclick="empToggleMetricEvidence(this)">
-                    <i class="ph-bold ph-clock-clockwise"></i> Evidencia del periodo (<span class="emp-rec-hist-count">${allRecs.length}</span>)
+                    <i class="ph-bold ph-clock-clockwise"></i> Evidencia manual (<span class="emp-rec-hist-count">${manualRecs.length}</span>)
                     <i class="ph-bold ph-caret-down emp-rec-hist-arrow"></i>
                   </div>
                   <div class="emp-rec-history-body" hidden></div>
@@ -9045,14 +9055,14 @@ async function empSaveRecord(input, source = 'manual') {
 
     // Actualizar cache local
     if (isMonthly) {
-      const idx = EMP_RECORDS.findIndex((r) => r.employee_id == empId && r.metric_id == metricId && !r.record_date);
-      if (idx >= 0) EMP_RECORDS[idx].value = value;
-      else EMP_RECORDS.push({ employee_id: Number(empId), metric_id: Number(metricId), value, record_date: null });
+      const idx = EMP_RECORDS.findIndex((r) => r.employee_id == empId && r.metric_id == metricId && !r.record_date && !r.system_generated && r.input_source !== 'system');
+      if (idx >= 0) { EMP_RECORDS[idx].value = value; EMP_RECORDS[idx].input_source = source; }
+      else EMP_RECORDS.push({ employee_id: Number(empId), metric_id: Number(metricId), value, record_date: null, input_source: source });
     } else {
       const rd = body.record_date;
       const idx = EMP_RECORDS.findIndex((r) => r.employee_id == empId && r.metric_id == metricId && r.record_date === rd);
-      if (idx >= 0) EMP_RECORDS[idx].value = value;
-      else EMP_RECORDS.push({ employee_id: Number(empId), metric_id: Number(metricId), value, record_date: rd });
+      if (idx >= 0) { EMP_RECORDS[idx].value = value; EMP_RECORDS[idx].input_source = source; }
+      else EMP_RECORDS.push({ employee_id: Number(empId), metric_id: Number(metricId), value, record_date: rd, input_source: source });
     }
 
     // Recalcular barra de progreso en la tarjeta
@@ -9105,11 +9115,7 @@ async function empSyncSales(metricId, empId) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ metric_id: metricId, employee_id: empId, year, month }),
     });
-    const input = document.querySelector(`input.emp-record-input[data-emp="${empId}"][data-metric="${metricId}"]`);
-    if (input) {
-      input.value = data.total_sales;
-      await empSaveRecord(input, 'sync_sales');
-    }
+    await empLoadAll();
     toast(`Ventas de ${data.branch_name}: ${empFmt(data.total_sales)} (${data.order_count} pedido${data.order_count !== 1 ? 's' : ''})`);
   } catch (err) {
     toast(err.message || 'Error al sincronizar ventas', true);

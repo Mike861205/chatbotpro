@@ -60,7 +60,91 @@ function shiftPeriod(year, month, offset) {
   return { year: d.getFullYear(), month: d.getMonth() + 1 };
 }
 
+async function systemSalesProductivityRows(t, year, month, employeeId = 0) {
+  const metrics = await t.all(
+    `SELECT id, name, source, unit, target::float, weight::float, higher_is_better, sort, period_type, aggregation
+     FROM {s}.emp_metric_types
+     WHERE active=1
+     ORDER BY sort ASC, id ASC`
+  );
+  const salesMetrics = metrics.filter((metric) => metricSource(metric.source) !== 'manual');
+  if (!salesMetrics.length) return [];
+
+  const params = [];
+  let employeeWhere = 'WHERE e.active=1';
+  if (positiveInt(employeeId)) {
+    params.push(positiveInt(employeeId));
+    employeeWhere += ` AND e.id=$${params.length}`;
+  }
+  const employees = await t.all(
+    `SELECT e.id, e.name, e.branch_id, b.name AS branch_name
+     FROM {s}.employees e
+     LEFT JOIN {s}.branches b ON b.id=e.branch_id
+     ${employeeWhere}
+     ORDER BY e.name`,
+    params
+  );
+
+  const sales = await t.all(
+    `SELECT COALESCE(service_branch_id,pickup_branch_id) AS branch_id,
+            COALESCE(SUM(total),0)::float AS total_sales,
+            COUNT(*)::int AS order_count
+     FROM {s}.orders
+     WHERE status!='cancelado'
+       AND EXTRACT(YEAR FROM created_at AT TIME ZONE 'America/Mexico_City')=$1
+       AND EXTRACT(MONTH FROM created_at AT TIME ZONE 'America/Mexico_City')=$2
+     GROUP BY COALESCE(service_branch_id,pickup_branch_id)`,
+    [year, month]
+  );
+  const salesByBranch = new Map(sales.map((row) => [Number(row.branch_id), row]));
+  const rows = [];
+  for (const employee of employees) {
+    const branchId = positiveInt(employee.branch_id);
+    if (!branchId) continue;
+    const branchSales = salesByBranch.get(branchId) || { total_sales: 0, order_count: 0 };
+    for (const metric of salesMetrics) {
+      rows.push({
+        id: `system-${employee.id}-${metric.id}-${year}-${month}`,
+        employee_id: Number(employee.id),
+        metric_id: Number(metric.id),
+        period_year: year,
+        period_month: month,
+        record_date: null,
+        value: Number(branchSales.total_sales || 0),
+        notes: `Ventas automáticas de ${employee.branch_name || 'sucursal asignada'}`,
+        recorded_by: 'system',
+        input_source: 'system',
+        updated_at: null,
+        employee_name: employee.name,
+        metric_name: metric.name,
+        unit: metric.unit,
+        target: Number(metric.target || 0),
+        weight: Number(metric.weight || 0),
+        source: metricSource(metric.source),
+        higher_is_better: metric.higher_is_better,
+        system_generated: true,
+        system_order_count: Number(branchSales.order_count || 0),
+        branch_id: branchId,
+        branch_name: employee.branch_name || '',
+      });
+    }
+  }
+  return rows;
+}
+
+function mergeSystemProductivityRows(storedRows, systemRows, metrics) {
+  const sourceByMetric = new Map(metrics.map((metric) => [Number(metric.id), metricSource(metric.source)]));
+  const manualRows = storedRows.filter((row) => {
+    const source = sourceByMetric.get(Number(row.metric_id)) || 'manual';
+    if (source === 'system_sales') return false;
+    if (source === 'both') return !['system', 'sync_sales'].includes(String(row.input_source || 'manual'));
+    return true;
+  });
+  return [...manualRows, ...systemRows];
+}
+
 async function ensureProductivityHistoryInfra(req) {
+  await req.tdb.run("ALTER TABLE {s}.emp_productivity_records ADD COLUMN IF NOT EXISTS input_source TEXT DEFAULT 'manual'");
   await req.tdb.run(
     `CREATE TABLE IF NOT EXISTS {s}.emp_productivity_history (
       id SERIAL PRIMARY KEY,
@@ -319,9 +403,10 @@ router.get('/productivity', async (req, res, next) => {
       where += ` AND r.employee_id=$${params.length}`;
     }
 
+    await ensureProductivityHistoryInfra(req);
     const rows = await req.tdb.all(
       `SELECT r.id, r.employee_id, r.metric_id, r.period_year, r.period_month,
-              r.value::float, r.notes, r.recorded_by, r.updated_at,
+              r.record_date, r.value::float, r.notes, r.recorded_by, r.input_source, r.updated_at,
               e.name AS employee_name, mt.name AS metric_name,
               mt.unit, mt.target::float, mt.weight::float, mt.source, mt.higher_is_better
        FROM {s}.emp_productivity_records r
@@ -331,7 +416,9 @@ router.get('/productivity', async (req, res, next) => {
        ORDER BY e.name ASC, mt.sort ASC`,
       params
     );
-    res.json(rows);
+    const metrics = await req.tdb.all('SELECT id,source FROM {s}.emp_metric_types WHERE active=1');
+    const systemRows = await systemSalesProductivityRows(req.tdb, y, m, employee_id);
+    res.json(mergeSystemProductivityRows(rows, systemRows, metrics));
   } catch (e) { next(e); }
 });
 
@@ -353,12 +440,13 @@ router.post('/productivity', async (req, res, next) => {
       const y = safeYear(year);
       const m = safeMonth(month);
       const row = await req.tdb.get(
-        `INSERT INTO {s}.emp_productivity_records (employee_id, metric_id, period_year, period_month, value, notes, recorded_by, updated_at)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,now())
+        `INSERT INTO {s}.emp_productivity_records (employee_id, metric_id, period_year, period_month, value, notes, recorded_by, input_source, updated_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,now())
          ON CONFLICT (employee_id, metric_id, period_year, period_month) WHERE record_date IS NULL
-         DO UPDATE SET value=EXCLUDED.value, notes=EXCLUDED.notes, recorded_by=EXCLUDED.recorded_by, updated_at=now()
+         DO UPDATE SET value=EXCLUDED.value, notes=EXCLUDED.notes, recorded_by=EXCLUDED.recorded_by,
+                       input_source=EXCLUDED.input_source, updated_at=now()
          RETURNING id`,
-        [employee_id, metric_id, y, m, safeNum(value), sanitizeStr(notes, 300), req.user?.username || 'owner']
+        [employee_id, metric_id, y, m, safeNum(value), sanitizeStr(notes, 300), req.user?.username || 'owner', source]
       );
 
       await req.tdb.run(
@@ -377,12 +465,13 @@ router.post('/productivity', async (req, res, next) => {
       const y2 = parseInt(parts[0], 10);
       const m2 = parseInt(parts[1], 10);
       const row = await req.tdb.get(
-        `INSERT INTO {s}.emp_productivity_records (employee_id, metric_id, period_year, period_month, record_date, value, notes, recorded_by, updated_at)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,now())
+        `INSERT INTO {s}.emp_productivity_records (employee_id, metric_id, period_year, period_month, record_date, value, notes, recorded_by, input_source, updated_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,now())
          ON CONFLICT (employee_id, metric_id, record_date) WHERE record_date IS NOT NULL
-         DO UPDATE SET value=EXCLUDED.value, notes=EXCLUDED.notes, recorded_by=EXCLUDED.recorded_by, updated_at=now()
+         DO UPDATE SET value=EXCLUDED.value, notes=EXCLUDED.notes, recorded_by=EXCLUDED.recorded_by,
+                       input_source=EXCLUDED.input_source, updated_at=now()
          RETURNING id`,
-        [employee_id, metric_id, y2, m2, validDate, safeNum(value), sanitizeStr(notes, 300), req.user?.username || 'owner']
+        [employee_id, metric_id, y2, m2, validDate, safeNum(value), sanitizeStr(notes, 300), req.user?.username || 'owner', source]
       );
 
       await req.tdb.run(
@@ -448,7 +537,7 @@ router.get('/productivity/insights', async (req, res, next) => {
        WHERE (r.period_year=$1 AND r.period_month=$2)
           OR (r.period_year=$3 AND r.period_month=$4)
           OR (r.period_year=$5 AND r.period_month=$6)
-       GROUP BY r.employee_id, r.metric_id, r.period_year, r.period_month`,
+       GROUP BY r.employee_id, r.metric_id, r.period_year, r.period_month, mt.aggregation`,
       [y, m, p1.year, p1.month, p2.year, p2.month]
     );
 
