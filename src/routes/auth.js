@@ -20,6 +20,24 @@ const authAttemptLimiter = createRateLimiter({
   message: 'Demasiados intentos de acceso. Espera 15 minutos.',
 });
 
+const TRACKABLE_MODULES = new Set([
+  'dashboard',
+  'pedidos',
+  'clientes',
+  'pos',
+  'kds',
+  'ventas',
+  'productos',
+  'costos',
+  'inventarios',
+  'stock-sucursales',
+  'compras',
+  'empleados',
+  'chatbot',
+  'config',
+  'suscripciones',
+]);
+
 function supportWhatsappUrl() {
   return `https://wa.me/${SUPPORT_WHATSAPP}?text=${encodeURIComponent(SUPPORT_MESSAGE)}`;
 }
@@ -225,8 +243,9 @@ router.post('/demo-login', authAttemptLimiter, async (req, res, next) => {
     const businessGiro = body.businessGiro ?? body.giro ?? body.businessType;
     const sourcePage = body.sourcePage ?? body.source ?? 'landing';
 
+    let demoLead;
     try {
-      await saveDemoLead({
+      demoLead = await saveDemoLead({
         contactName,
         phone,
         businessGiro,
@@ -293,8 +312,51 @@ router.post('/demo-login', authAttemptLimiter, async (req, res, next) => {
       });
     }
 
-    setAuthCookie(res, signToken(user, tenant), 'owner');
+    setAuthCookie(res, signToken(user, tenant, 'owner', { demoLeadId: demoLead?.id }), 'owner');
     res.json({ ok: true, slug: tenant.slug, demo: true });
+  } catch (e) {
+    next(e);
+  }
+});
+
+router.post('/module-usage', requireAuth, async (req, res, next) => {
+  try {
+    const moduleKey = String(req.body?.module || '').trim().toLowerCase();
+    if (!TRACKABLE_MODULES.has(moduleKey)) {
+      return res.status(400).json({ error: 'Módulo no válido' });
+    }
+
+    // Las sesiones abiertas desde SuperAdmin son soporte técnico y no deben
+    // contaminar las métricas reales de uso del tenant.
+    if (req.user.impersonated) return res.json({ ok: true, tracked: false });
+
+    const tenantId = Number(req.tenant.id);
+    const demoLeadId = Number(req.user.demoLeadId || 0);
+    let result;
+
+    if (Number.isInteger(demoLeadId) && demoLeadId > 0) {
+      result = await q(
+        `INSERT INTO module_usage (tenant_id, demo_lead_id, module_key, view_count, first_seen_at, last_seen_at)
+         SELECT $1, dl.id, $3, 1, now(), now()
+         FROM demo_leads dl
+         WHERE dl.id = $2
+         ON CONFLICT (demo_lead_id, module_key) WHERE demo_lead_id IS NOT NULL
+         DO UPDATE SET view_count = module_usage.view_count + 1, last_seen_at = now()
+         RETURNING view_count`,
+        [tenantId, demoLeadId, moduleKey]
+      );
+    } else {
+      result = await q(
+        `INSERT INTO module_usage (tenant_id, demo_lead_id, module_key, view_count, first_seen_at, last_seen_at)
+         VALUES ($1, NULL, $2, 1, now(), now())
+         ON CONFLICT (tenant_id, module_key) WHERE demo_lead_id IS NULL
+         DO UPDATE SET view_count = module_usage.view_count + 1, last_seen_at = now()
+         RETURNING view_count`,
+        [tenantId, moduleKey]
+      );
+    }
+
+    res.json({ ok: true, tracked: Boolean(result.rowCount), count: Number(result.rows[0]?.view_count || 0) });
   } catch (e) {
     next(e);
   }

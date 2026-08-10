@@ -3,7 +3,7 @@ const bcrypt = require('bcryptjs');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
 const config = require('../config');
-const { q, tdb, getSuperAdminSetting, setSuperAdminSetting, refreshTenantBillingStatuses } = require('../db');
+const { pool, q, tdb, schemaName, getSuperAdminSetting, setSuperAdminSetting, refreshTenantBillingStatuses } = require('../db');
 const { encrypt, decrypt } = require('../utils/crypto');
 const { createImageUpload, deleteManagedUpload, optimizeUploadedImage, safeUnlink } = require('../utils/uploads');
 const { signToken, setAuthCookie } = require('../middleware/auth');
@@ -426,11 +426,31 @@ router.get('/tenants', requireSuperAdmin, async (req, res, next) => {
         END AS mora_days,
         t.notes,
         t.created_at,
-        COALESCE(u.username, '') AS owner_username
+        COALESCE(u.username, '') AS owner_username,
+        COALESCE(usage_stats.module_count, 0)::int AS module_count,
+        COALESCE(usage_stats.module_views, 0)::int AS module_views,
+        usage_stats.module_last_seen,
+        COALESCE(usage_stats.modules, '[]'::json) AS modules
       FROM tenants t
       LEFT JOIN LATERAL (
         SELECT username FROM users WHERE tenant_id = t.id ORDER BY id ASC LIMIT 1
       ) u ON true
+      LEFT JOIN LATERAL (
+        SELECT
+          COUNT(*)::int AS module_count,
+          COALESCE(SUM(mu.view_count), 0)::int AS module_views,
+          MAX(mu.last_seen_at) AS module_last_seen,
+          json_agg(
+            json_build_object(
+              'key', mu.module_key,
+              'count', mu.view_count,
+              'firstSeenAt', mu.first_seen_at,
+              'lastSeenAt', mu.last_seen_at
+            ) ORDER BY mu.view_count DESC, mu.last_seen_at DESC
+          ) AS modules
+        FROM module_usage mu
+        WHERE mu.tenant_id = t.id AND mu.demo_lead_id IS NULL
+      ) usage_stats ON true
       ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
       ORDER BY t.created_at DESC
     `;
@@ -478,8 +498,28 @@ router.get('/demo-leads', requireSuperAdmin, async (req, res, next) => {
         dl.first_seen_at,
         dl.last_seen_at,
         dl.last_demo_tenant_slug,
-        dl.notes
+        dl.notes,
+        COALESCE(usage_stats.module_count, 0)::int AS module_count,
+        COALESCE(usage_stats.module_views, 0)::int AS module_views,
+        usage_stats.module_last_seen,
+        COALESCE(usage_stats.modules, '[]'::json) AS modules
       FROM demo_leads dl
+      LEFT JOIN LATERAL (
+        SELECT
+          COUNT(*)::int AS module_count,
+          COALESCE(SUM(mu.view_count), 0)::int AS module_views,
+          MAX(mu.last_seen_at) AS module_last_seen,
+          json_agg(
+            json_build_object(
+              'key', mu.module_key,
+              'count', mu.view_count,
+              'firstSeenAt', mu.first_seen_at,
+              'lastSeenAt', mu.last_seen_at
+            ) ORDER BY mu.view_count DESC, mu.last_seen_at DESC
+          ) AS modules
+        FROM module_usage mu
+        WHERE mu.demo_lead_id = dl.id
+      ) usage_stats ON true
       ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
       ORDER BY dl.last_seen_at DESC, dl.id DESC
     `;
@@ -497,6 +537,51 @@ router.get('/demo-leads', requireSuperAdmin, async (req, res, next) => {
     });
   } catch (e) {
     next(e);
+  }
+});
+
+router.delete('/demo-leads/:id', requireSuperAdmin, async (req, res, next) => {
+  try {
+    const leadId = Number(req.params.id);
+    if (!Number.isInteger(leadId) || leadId <= 0) return res.status(400).json({ error: 'Lead demo inválido' });
+    const deleted = await q('DELETE FROM demo_leads WHERE id = $1 RETURNING id, contact_name', [leadId]);
+    if (!deleted.rows[0]) return res.status(404).json({ error: 'Lead demo no encontrado' });
+    res.json({ ok: true, deleted: deleted.rows[0] });
+  } catch (e) {
+    next(e);
+  }
+});
+
+router.delete('/tenants/:id', requireSuperAdmin, async (req, res, next) => {
+  const tenantId = Number(req.params.id);
+  if (!Number.isInteger(tenantId) || tenantId <= 0) return res.status(400).json({ error: 'Tenant inválido' });
+
+  const client = await pool.connect();
+  let tenant = null;
+  try {
+    await client.query('BEGIN');
+    const found = await client.query('SELECT id, slug, business_name, logo FROM tenants WHERE id = $1 FOR UPDATE', [tenantId]);
+    tenant = found.rows[0] || null;
+    if (!tenant) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ error: 'Tenant no encontrado' });
+    }
+
+    await client.query('DELETE FROM tenant_payments WHERE tenant_id = $1', [tenantId]);
+    await client.query('DELETE FROM users WHERE tenant_id = $1', [tenantId]);
+    await client.query('DELETE FROM tenants WHERE id = $1', [tenantId]);
+    await client.query(`DROP SCHEMA IF EXISTS "${schemaName(tenant.slug)}" CASCADE`);
+    await client.query('COMMIT');
+
+    if (tenant.logo) {
+      try { await deleteManagedUpload(tenant.logo); } catch {}
+    }
+    res.json({ ok: true, deleted: { id: tenant.id, slug: tenant.slug, business_name: tenant.business_name } });
+  } catch (e) {
+    try { await client.query('ROLLBACK'); } catch {}
+    next(e);
+  } finally {
+    client.release();
   }
 });
 
@@ -622,7 +707,7 @@ router.post('/tenants/:id/access', requireSuperAdmin, async (req, res, next) => 
     const owner = await getTenantOwnerUser(tenantId);
     if (!owner) return res.status(404).json({ error: 'El tenant no tiene usuario de acceso' });
 
-    setAuthCookie(res, signToken(owner, tenant));
+    setAuthCookie(res, signToken(owner, tenant, 'owner', { impersonated: true }));
     res.json({ ok: true, redirect: '/app' });
   } catch (e) {
     next(e);

@@ -520,6 +520,19 @@ function resetMainScroll() {
   window.scrollTo(0, 0);
 }
 
+function trackModuleUsage(moduleKey) {
+  if (!ME || !VIEW_META[moduleKey]) return;
+  const headers = { 'Content-Type': 'application/json' };
+  const scope = getAuthScope();
+  if (scope) headers['x-cbp-auth-scope'] = scope;
+  fetch('/api/auth/module-usage', {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ module: moduleKey }),
+    keepalive: true,
+  }).catch(() => {});
+}
+
 function applyUserScopeUI() {
   const cashierMode = isCashierUser();
   document.body.classList.toggle('cashier-mode', cashierMode);
@@ -572,6 +585,7 @@ async function navigate(view) {
   resetMainScroll();
   closeSidebar();
   syncPosSortControlVisibility();
+  trackModuleUsage(nextView);
 
   const loader = VIEW_LOADERS[nextView];
   if (!loader) return;

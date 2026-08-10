@@ -262,6 +262,31 @@
       </div>
     </div>
   </div>
+
+  <div class="modal-bg" id="saModulesModal">
+    <div class="modal" style="max-width:720px">
+      <h3><i class="ph-bold ph-squares-four"></i> Uso de módulos</h3>
+      <p id="saModulesSubject" style="color:var(--ink-2);font-size:14px;margin:-10px 0 16px"></p>
+      <div id="saModulesSummary" class="module-usage-summary"></div>
+      <div id="saModulesDetail"></div>
+      <div class="modal-actions">
+        <button type="button" class="btn btn-primary" id="saModulesClose">Cerrar</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal-bg" id="saDeleteModal">
+    <div class="modal" style="max-width:520px;text-align:center">
+      <div class="sa-delete-icon"><i class="ph-bold ph-trash"></i></div>
+      <h3 style="justify-content:center">Eliminar registro</h3>
+      <p id="saDeleteMessage" style="color:var(--ink-2);font-size:14px;margin:-8px 0 10px"></p>
+      <div class="hint" id="saDeleteHint"></div>
+      <div class="modal-actions" style="justify-content:center">
+        <button type="button" class="btn btn-ghost" id="saDeleteCancel">Cancelar</button>
+        <button type="button" class="btn btn-danger" id="saDeleteConfirm"><i class="ph-bold ph-trash"></i> Sí, eliminar</button>
+      </div>
+    </div>
+  </div>
   <script src="/static/js/superadmin.js"></script>
 </body>
 </html>

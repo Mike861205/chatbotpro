@@ -7,6 +7,25 @@ let SA_SUSPEND_TENANT_ID = null;
 let SA_ACTIVATE_TENANT_ID = null;
 let SA_ACTIVATE_MODE = 'account';
 let SA_DEPLOY_POLL_TIMER = null;
+let SA_DELETE_TARGET = null;
+
+const SA_MODULE_LABELS = {
+  dashboard: 'Dashboard',
+  pedidos: 'Pedidos',
+  clientes: 'Clientes',
+  pos: 'Punto de venta',
+  kds: 'Pantallas KDS',
+  ventas: 'Ventas',
+  productos: 'Productos',
+  costos: 'Costo de ventas',
+  inventarios: 'Inventarios',
+  'stock-sucursales': 'Stock por sucursal',
+  compras: 'Compras',
+  empleados: 'Productividad',
+  chatbot: 'Mi chatbot',
+  config: 'Mi negocio',
+  suscripciones: 'Suscripciones',
+};
 
 const $ = (s) => document.querySelector(s);
 let SA_CLOCK_TIMER = null;
@@ -41,6 +60,32 @@ function fmtDate(v) {
   const d = new Date(v);
   if (Number.isNaN(d.getTime())) return '—';
   return d.toLocaleDateString('es-MX', { year: 'numeric', month: 'short', day: 'numeric' });
+}
+
+function fmtDateTime(v) {
+  if (!v) return '—';
+  const d = new Date(v);
+  if (Number.isNaN(d.getTime())) return '—';
+  return d.toLocaleString('es-MX', { dateStyle: 'medium', timeStyle: 'short' });
+}
+
+function usageModules(entity) {
+  if (Array.isArray(entity?.modules)) return entity.modules;
+  try {
+    const parsed = JSON.parse(entity?.modules || '[]');
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function moduleUsageButton(entity, type) {
+  const moduleCount = Number(entity?.module_count || 0);
+  const views = Number(entity?.module_views || 0);
+  return `<button type="button" class="module-usage-btn" data-sa-modules="${type}:${Number(entity.id)}">
+    <span><i class="ph-bold ph-squares-four"></i> <b>${moduleCount}</b> módulo${moduleCount === 1 ? '' : 's'}</span>
+    <small>${views} acceso${views === 1 ? '' : 's'}${entity?.module_last_seen ? ` · ${fmtDate(entity.module_last_seen)}` : ''}</small>
+  </button>`;
 }
 
 function normalizeLogoUrl(raw) {
@@ -259,7 +304,7 @@ function renderTenantTable() {
   }
 
   table.innerHTML = `<div class="table-wrap"><table><thead><tr>
-    <th>Tenant</th><th>Dueño</th><th>Registro</th><th>Cuenta</th><th>Pago</th><th>Plan</th><th>Vence</th><th>Acciones</th>
+    <th>Tenant</th><th>Dueño</th><th>Registro</th><th>Cuenta</th><th>Pago</th><th>Plan</th><th>Vence</th><th>Módulos</th><th>Acciones</th>
   </tr></thead><tbody>${filtered
     .map((t) => `<tr>
       <td><b>${esc(t.business_name)}</b><div class="meta">/${esc(t.slug)}</div></td>
@@ -269,6 +314,7 @@ function renderTenantTable() {
       <td>${statusChip('billing', t.billing_status)}</td>
       <td>${esc(t.plan_name || 'starter')}</td>
       <td>${fmtDate(t.billing_due_date)}</td>
+      <td>${moduleUsageButton(t, 'tenant')}</td>
       <td>
         <div style="display:flex;gap:6px;flex-wrap:wrap">
           <button type="button" class="btn btn-ghost" data-sa-access="${t.id}"><i class="ph-bold ph-sign-in"></i> Entrar</button>
@@ -278,6 +324,7 @@ function renderTenantTable() {
             <i class="ph-bold ${(t.account_status === 'active' && t.billing_status !== 'suspended') ? 'ph-pause-circle' : 'ph-play-circle'}"></i>
             ${(t.account_status === 'active' && t.billing_status !== 'suspended') ? 'Suspender' : 'Activar'}
           </button>
+          <button type="button" class="btn btn-danger" data-sa-delete-tenant="${t.id}"><i class="ph-bold ph-trash"></i> Eliminar</button>
         </div>
       </td>
     </tr>`)
@@ -294,6 +341,10 @@ function renderTenantTable() {
   });
   document.querySelectorAll('[data-sa-suspend]').forEach((btn) => {
     btn.addEventListener('click', () => toggleTenantSuspend(Number(btn.dataset.saSuspend)).catch((err) => toast(err.message, true)));
+  });
+  bindModuleUsageButtons();
+  document.querySelectorAll('[data-sa-delete-tenant]').forEach((btn) => {
+    btn.addEventListener('click', () => openDeleteModal('tenant', Number(btn.dataset.saDeleteTenant)));
   });
 }
 
@@ -338,7 +389,7 @@ function renderDemoLeadsTable() {
   }
 
   table.innerHTML = `<div class="table-wrap"><table><thead><tr>
-    <th>Nombre</th><th>Teléfono</th><th>Giro</th><th>Origen</th><th>Veces</th><th>Primera vez</th><th>Última vez</th><th>Contacto</th>
+    <th>Nombre</th><th>Teléfono</th><th>Giro</th><th>Origen</th><th>Veces</th><th>Primera vez</th><th>Última vez</th><th>Módulos</th><th>Acciones</th>
   </tr></thead><tbody>${filtered
     .map((lead) => {
       const digits = String(lead.phone || '').replace(/\D/g, '');
@@ -351,14 +402,106 @@ function renderDemoLeadsTable() {
         <td><b>${Number(lead.demo_count || 0)}</b></td>
         <td>${fmtDate(lead.first_seen_at)}</td>
         <td>${fmtDate(lead.last_seen_at)}</td>
+        <td>${moduleUsageButton(lead, 'lead')}</td>
         <td>
           <div style="display:flex;gap:6px;flex-wrap:wrap">
             ${waUrl ? `<a class="btn btn-ghost" href="${waUrl}" target="_blank" rel="noopener noreferrer"><i class="ph-bold ph-whatsapp-logo"></i> WhatsApp</a>` : ''}
+            <button type="button" class="btn btn-danger" data-sa-delete-lead="${lead.id}"><i class="ph-bold ph-trash"></i> Eliminar</button>
           </div>
         </td>
       </tr>`;
     })
     .join('')}</tbody></table></div>`;
+
+  bindModuleUsageButtons();
+  document.querySelectorAll('[data-sa-delete-lead]').forEach((btn) => {
+    btn.addEventListener('click', () => openDeleteModal('lead', Number(btn.dataset.saDeleteLead)));
+  });
+}
+
+function closeModulesModal() {
+  $('#saModulesModal')?.classList.remove('show');
+}
+
+function openModulesModal(type, id) {
+  const entity = type === 'tenant'
+    ? SA_TENANTS.find((item) => Number(item.id) === Number(id))
+    : SA_DEMO_LEADS.find((item) => Number(item.id) === Number(id));
+  if (!entity) return;
+
+  const modules = usageModules(entity);
+  const name = type === 'tenant' ? entity.business_name : entity.contact_name;
+  const totalViews = Number(entity.module_views || 0);
+  $('#saModulesSubject').textContent = `${type === 'tenant' ? 'Tenant' : 'Lead demo'}: ${name}`;
+  $('#saModulesSummary').innerHTML = `
+    <div><span>Módulos utilizados</span><b>${Number(entity.module_count || modules.length)}</b></div>
+    <div><span>Accesos totales</span><b>${totalViews}</b></div>
+    <div><span>Última actividad</span><b class="module-last-seen">${fmtDateTime(entity.module_last_seen)}</b></div>
+  `;
+
+  $('#saModulesDetail').innerHTML = modules.length
+    ? `<div class="table-wrap"><table class="module-detail-table"><thead><tr>
+        <th>Módulo</th><th>Veces que ingresó</th><th>Primera vez</th><th>Última vez</th>
+      </tr></thead><tbody>${modules.map((item) => `<tr>
+        <td><b>${esc(SA_MODULE_LABELS[item.key] || item.key)}</b></td>
+        <td><span class="tag ok">${Number(item.count || 0)} acceso${Number(item.count || 0) === 1 ? '' : 's'}</span></td>
+        <td>${fmtDateTime(item.firstSeenAt)}</td>
+        <td>${fmtDateTime(item.lastSeenAt)}</td>
+      </tr>`).join('')}</tbody></table></div>`
+    : '<div class="empty module-empty"><i class="ph ph-chart-bar"></i><b>Sin actividad registrada</b><p>Los accesos aparecerán aquí cuando ingrese a un módulo.</p></div>';
+
+  $('#saModulesModal')?.classList.add('show');
+}
+
+function bindModuleUsageButtons() {
+  document.querySelectorAll('[data-sa-modules]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const [type, id] = String(btn.dataset.saModules || '').split(':');
+      openModulesModal(type, Number(id));
+    });
+  });
+}
+
+function closeDeleteModal() {
+  $('#saDeleteModal')?.classList.remove('show');
+  SA_DELETE_TARGET = null;
+  const confirmBtn = $('#saDeleteConfirm');
+  if (confirmBtn) confirmBtn.disabled = false;
+}
+
+function openDeleteModal(type, id) {
+  const entity = type === 'tenant'
+    ? SA_TENANTS.find((item) => Number(item.id) === Number(id))
+    : SA_DEMO_LEADS.find((item) => Number(item.id) === Number(id));
+  if (!entity) return;
+
+  SA_DELETE_TARGET = { type, id: Number(id), name: type === 'tenant' ? entity.business_name : entity.contact_name };
+  $('#saDeleteMessage').textContent = `¿Seguro que deseas eliminar ${type === 'tenant' ? 'el tenant' : 'el lead demo'} “${SA_DELETE_TARGET.name}”?`;
+  $('#saDeleteHint').textContent = type === 'tenant'
+    ? 'Esta acción es permanente: elimina usuarios, pagos, métricas y todos los datos del negocio.'
+    : 'Esta acción es permanente y también elimina su historial de uso de módulos.';
+  $('#saDeleteModal')?.classList.add('show');
+}
+
+async function confirmDelete() {
+  const target = SA_DELETE_TARGET;
+  if (!target) return;
+  const confirmBtn = $('#saDeleteConfirm');
+  if (confirmBtn) confirmBtn.disabled = true;
+  try {
+    const endpoint = target.type === 'tenant'
+      ? `/api/superadmin/tenants/${target.id}`
+      : `/api/superadmin/demo-leads/${target.id}`;
+    await api(endpoint, { method: 'DELETE' });
+    const deletedLabel = target.type === 'tenant' ? 'Tenant eliminado' : 'Lead demo eliminado';
+    closeDeleteModal();
+    toast(deletedLabel);
+    if (target.type === 'tenant') await loadTenants();
+    else await loadDemoLeads();
+  } catch (err) {
+    if (confirmBtn) confirmBtn.disabled = false;
+    throw err;
+  }
 }
 
 async function loadDemoLeads() {
@@ -839,6 +982,18 @@ $('#saActivateConfirm')?.addEventListener('click', () => confirmActivateTenant()
 $('#saActivateModal')?.addEventListener('click', (e) => {
   if (e.target?.id === 'saActivateModal') closeActivateModal();
 });
+$('#saModulesClose')?.addEventListener('click', closeModulesModal);
+$('#saModulesModal')?.addEventListener('click', (e) => {
+  if (e.target?.id === 'saModulesModal') closeModulesModal();
+});
+$('#saDeleteCancel')?.addEventListener('click', closeDeleteModal);
+$('#saDeleteConfirm')?.addEventListener('click', () => confirmDelete().catch((err) => toast(err.message, true)));
+$('#saDeleteModal')?.addEventListener('click', (e) => {
+  if (e.target?.id === 'saDeleteModal') closeDeleteModal();
+});
 
-setView((location.hash || '#tenants').slice(1) === 'integrations' ? 'integrations' : 'tenants');
+const SA_INITIAL_VIEW = ['tenants', 'demo-leads', 'integrations'].includes((location.hash || '#tenants').slice(1))
+  ? (location.hash || '#tenants').slice(1)
+  : 'tenants';
+setView(SA_INITIAL_VIEW);
 boot();

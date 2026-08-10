@@ -144,6 +144,15 @@ async function initMaster() {
       created_by TEXT DEFAULT '',
       paid_at TIMESTAMPTZ DEFAULT now()
     );
+    CREATE TABLE IF NOT EXISTS module_usage (
+      id SERIAL PRIMARY KEY,
+      tenant_id INTEGER NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+      demo_lead_id INTEGER REFERENCES demo_leads(id) ON DELETE CASCADE,
+      module_key TEXT NOT NULL,
+      view_count INTEGER NOT NULL DEFAULT 1,
+      first_seen_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      last_seen_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
   `);
 
   await q(`ALTER TABLE tenants ADD COLUMN IF NOT EXISTS account_status TEXT DEFAULT 'active'`);
@@ -173,6 +182,10 @@ async function initMaster() {
   await q(`ALTER TABLE users ADD COLUMN IF NOT EXISTS cashier_slug TEXT`);
   await q(`ALTER TABLE users ADD COLUMN IF NOT EXISTS active INTEGER DEFAULT 1`);
   await q(`CREATE UNIQUE INDEX IF NOT EXISTS idx_users_cashier_slug_unique ON users (cashier_slug) WHERE cashier_slug IS NOT NULL AND cashier_slug <> ''`);
+  await q(`CREATE UNIQUE INDEX IF NOT EXISTS idx_module_usage_tenant_module ON module_usage (tenant_id, module_key) WHERE demo_lead_id IS NULL`);
+  await q(`CREATE UNIQUE INDEX IF NOT EXISTS idx_module_usage_lead_module ON module_usage (demo_lead_id, module_key) WHERE demo_lead_id IS NOT NULL`);
+  await q(`CREATE INDEX IF NOT EXISTS idx_module_usage_tenant_last_seen ON module_usage (tenant_id, last_seen_at DESC)`);
+  await q(`CREATE INDEX IF NOT EXISTS idx_module_usage_lead_last_seen ON module_usage (demo_lead_id, last_seen_at DESC) WHERE demo_lead_id IS NOT NULL`);
 
   await ensureSuperAdminSeed();
 

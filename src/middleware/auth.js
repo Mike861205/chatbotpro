@@ -13,10 +13,14 @@ function supportWhatsappUrl() {
   return `https://wa.me/${SUPPORT_WHATSAPP}?text=${encodeURIComponent(SUPPORT_MESSAGE)}`;
 }
 
-function signToken(user, tenant, scope = 'owner') {
+function signToken(user, tenant, scope = 'owner', context = {}) {
   const normalizedScope = normalizeScope(scope) || 'owner';
+  const demoLeadId = Number(context.demoLeadId || 0);
+  const extraClaims = {};
+  if (Number.isInteger(demoLeadId) && demoLeadId > 0) extraClaims.dlid = demoLeadId;
+  if (context.impersonated) extraClaims.imp = true;
   return jwt.sign(
-    { uid: user.id, tid: tenant.id, slug: tenant.slug, username: user.username, typ: normalizedScope },
+    { uid: user.id, tid: tenant.id, slug: tenant.slug, username: user.username, typ: normalizedScope, ...extraClaims },
     config.JWT_SECRET,
     { expiresIn: '7d', issuer: 'chatbotpro', audience: `cbp:${normalizedScope}` }
   );
@@ -128,6 +132,8 @@ async function requireAuth(req, res, next) {
       branchName,
       cashierSlug: authUser.cashier_slug || '',
       active: Number(authUser.active || 0),
+      demoLeadId: Number.isInteger(Number(payload.dlid)) && Number(payload.dlid) > 0 ? Number(payload.dlid) : null,
+      impersonated: payload.imp === true,
     };
     next();
   } catch (e) {
