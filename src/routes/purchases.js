@@ -187,6 +187,77 @@ router.get('/orders', async (req, res, next) => {
   } catch(error){next(error);}
 });
 
+router.put('/orders/:id', async (req, res, next) => {
+  try {
+    const id = Number(req.params.id);
+    const supplierId = Number(req.body?.supplierId); const branchId = Number(req.body?.branchId);
+    const orderDate = validDate(req.body?.orderDate); const expectedDate = validDate(req.body?.expectedDate) || null;
+    const inputItems = Array.isArray(req.body?.items) ? req.body.items : [];
+    if (!id || !supplierId || !branchId || !orderDate) return res.status(400).json({ error: 'Proveedor, sucursal y fecha son obligatorios' });
+    if (!inputItems.length) return res.status(400).json({ error: 'Agrega al menos un producto' });
+
+    const result = await req.tdb.tx(async (tx) => {
+      const existing = await tx.get('SELECT * FROM {s}.purchase_orders WHERE id=$1 FOR UPDATE', [id]);
+      if (!existing) throw Object.assign(new Error('Orden no encontrada'), { statusCode: 404 });
+      if (existing.status !== 'ordered') throw conflict('Sólo puedes editar órdenes pendientes que todavía no afectan inventario');
+      const supplier = await tx.get('SELECT id,name FROM {s}.suppliers WHERE id=$1', [supplierId]);
+      const branch = await tx.get('SELECT id,name FROM {s}.branches WHERE id=$1', [branchId]);
+      if (!supplier || !branch) throw badRequest('Proveedor o sucursal no disponible');
+      const ids = [...new Set(inputItems.map((row) => Number(row.productId)).filter(Boolean))];
+      const products = await tx.all('SELECT id,name FROM {s}.products WHERE id=ANY($1::int[]) AND active=1', [ids]);
+      const productMap = new Map(products.map((row) => [Number(row.id), row]));
+      const items = inputItems.map((row) => {
+        const product = productMap.get(Number(row.productId)); const quantity = Number(row.quantity); const unitCost = Number(row.unitCost);
+        if (!product || !Number.isFinite(quantity) || quantity <= 0 || !Number.isFinite(unitCost) || unitCost < 0) throw badRequest('Revisa productos, cantidades y costos de la orden');
+        return { productId: Number(product.id), productName: product.name, quantity: Number(quantity.toFixed(4)), unitCost: preciseCost(unitCost), lineTotal: money(quantity * unitCost) };
+      });
+      const total = money(items.reduce((sum, row) => sum + row.lineTotal, 0));
+      await tx.run(
+        `UPDATE {s}.purchase_orders
+         SET supplier_id=$1,supplier_name=$2,branch_id=$3,branch_name=$4,order_date=$5::date,
+             expected_date=$6::date,subtotal=$7,total=$7,notes=$8,updated_at=now()
+         WHERE id=$9`,
+        [supplier.id, supplier.name, branch.id, branch.name, orderDate, expectedDate, total, safe(req.body?.notes, 300), id]
+      );
+      await tx.run('DELETE FROM {s}.purchase_order_items WHERE purchase_order_id=$1', [id]);
+      for (const item of items) await tx.run(
+        `INSERT INTO {s}.purchase_order_items (purchase_order_id,product_id,product_name,quantity,unit_cost,line_total)
+         VALUES ($1,$2,$3,$4,$5,$6)`,
+        [id, item.productId, item.productName, item.quantity, item.unitCost, item.lineTotal]
+      );
+      await writePurchaseAudit(tx, 'purchase_order', id, 'updated', {
+        orderNumber: existing.order_number, supplier: supplier.name, branch: branch.name, total, items,
+      }, req.user.username);
+      return { orderNumber: existing.order_number };
+    });
+    res.json({ ok: true, ...result });
+  } catch (error) {
+    if (error.statusCode) return res.status(error.statusCode).json({ error: error.message });
+    next(error);
+  }
+});
+
+router.delete('/orders/:id', async (req, res, next) => {
+  try {
+    const id = Number(req.params.id);
+    const result = await req.tdb.tx(async (tx) => {
+      const order = await tx.get('SELECT id,order_number,status,total FROM {s}.purchase_orders WHERE id=$1 FOR UPDATE', [id]);
+      if (!order) throw Object.assign(new Error('Orden no encontrada'), { statusCode: 404 });
+      if (order.status === 'received') throw conflict('Una orden recibida no puede borrarse porque ya modificó inventario y costos');
+      await tx.run('DELETE FROM {s}.purchase_order_items WHERE purchase_order_id=$1', [id]);
+      await tx.run('DELETE FROM {s}.purchase_orders WHERE id=$1', [id]);
+      await writePurchaseAudit(tx, 'purchase_order', id, 'deleted', {
+        orderNumber: order.order_number, previousStatus: order.status, total: money(order.total),
+      }, req.user.username);
+      return { orderNumber: order.order_number };
+    });
+    res.json({ ok: true, ...result });
+  } catch (error) {
+    if (error.statusCode) return res.status(error.statusCode).json({ error: error.message });
+    next(error);
+  }
+});
+
 router.post('/orders/:id/receive', async (req,res,next)=>{
   try{
     const id=Number(req.params.id);

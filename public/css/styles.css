@@ -2295,11 +2295,13 @@ select.status-sel {
 /* ---------- Plans ---------- */
 .subs-plans {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 16px;
 }
 .plan-card {
   position: relative;
+  display: flex;
+  flex-direction: column;
   padding: 22px;
   border-radius: 22px;
   border: 1px solid var(--line);
@@ -2320,6 +2322,17 @@ select.status-sel {
   border-color: #ffcfac;
   box-shadow: 0 18px 40px rgba(255,107,53,.18);
 }
+.plan-annual {
+  z-index: 2;
+  background:
+    radial-gradient(430px 260px at 100% 0%, rgba(34,211,238,.28), transparent 70%),
+    linear-gradient(160deg, #ecfeff, #dff8ff 55%, #e6fffb);
+  border: 2px solid #22d3ee;
+  box-shadow: 0 22px 52px rgba(8,145,178,.28), 0 0 26px rgba(34,211,238,.22);
+  transform: translateY(-7px);
+}
+.plan-annual::before { content:''; position:absolute; inset:-2px 18% auto; height:4px; border-radius:999px; background:#67e8f9; box-shadow:0 0 16px #22d3ee,0 0 34px rgba(34,211,238,.8); }
+.plan-annual:hover { transform: translateY(-10px) scale(1.008); box-shadow:0 28px 62px rgba(8,145,178,.34),0 0 34px rgba(34,211,238,.32); }
 .plan-icon {
   width: 54px; height: 54px;
   display: inline-flex; align-items: center; justify-content: center;
@@ -2333,6 +2346,11 @@ select.status-sel {
   background: linear-gradient(135deg, #ff6b35, #f43f5e 70%, #a855f7);
   color: #fff;
   box-shadow: 0 12px 24px rgba(244,63,94,.36);
+}
+.plan-icon.annual {
+  background: linear-gradient(135deg, #0284c7, #0891b2 55%, #0f766e);
+  color: #fff;
+  box-shadow: 0 12px 24px rgba(8,145,178,.3);
 }
 .plan-compare-badge {
   position: absolute;
@@ -2386,6 +2404,19 @@ select.status-sel {
   background: linear-gradient(90deg, #ff6b35, #ef4444 45%, #a855f7);
   -webkit-background-clip: text; background-clip: text; color: transparent;
 }
+.plan-price.annual-price .amt {
+  background: linear-gradient(90deg, #0284c7, #0891b2 55%, #0f766e);
+  -webkit-background-clip: text; background-clip: text; color: transparent;
+}
+.annual-msi-highlight { margin-top:12px; padding:14px 15px; border:1px solid rgba(103,232,249,.7); border-radius:16px; background:linear-gradient(135deg,#082f49,#0e7490 58%,#0f766e); color:#fff; box-shadow:0 14px 30px rgba(8,145,178,.28),inset 0 0 22px rgba(34,211,238,.08); }
+.annual-msi-highlight>span { display:block; color:#cffafe; font-size:11px; font-weight:900; letter-spacing:.65px; text-transform:uppercase; }
+.annual-msi-highlight>div { display:flex; align-items:baseline; gap:4px; margin:4px 0 3px; }
+.annual-msi-highlight small { font-size:23px; font-weight:900; }
+.annual-msi-highlight strong { color:#fff; font-size:54px; line-height:1; letter-spacing:-2px; text-shadow:0 0 18px rgba(103,232,249,.75); }
+.annual-msi-highlight em { margin-left:4px; color:#ecfeff; font-size:13px; font-style:normal; font-weight:800; }
+.annual-msi-highlight>b { display:block; color:#a5f3fc; font-size:11px; line-height:1.4; }
+.plan-old.annual-saving { margin-top:9px; color:#075985; font-weight:800; }
+.plan-old.annual-saving b { color:#0f766e; }
 .plan-price .per {
   font-size: 14px; color: var(--ink-2); font-weight: 700; margin-left: 4px;
 }
@@ -2449,8 +2480,11 @@ select.status-sel {
   font-size: 11px; font-weight: 800; letter-spacing: 0.3px;
 }
 .plan-flag i { color: #fbbf24; }
+.plan-flag.annual { background: linear-gradient(135deg, #0369a1, #0f766e); }
+.plan-flag.annual i { color: #a7f3d0; }
 .plan-pay-trust {
-  margin-top: 16px;
+  margin-top: auto;
+  padding-top: 16px;
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
@@ -2475,6 +2509,10 @@ select.status-sel {
 .plan-pay-trust span:nth-child(1) i { color: #16a34a; }
 .plan-pay-trust span:nth-child(2) i { color: #2563eb; }
 .plan-pay-trust span:nth-child(3) i { color: #7c3aed; }
+.plan-pay-trust.annual span { border-color: rgba(14,165,233,.2); color: #075985; }
+.plan-pay-trust.annual span:nth-child(1) i { color: #0284c7; }
+.plan-pay-trust.annual span:nth-child(2) i { color: #0f766e; }
+.plan-pay-trust.annual span:nth-child(3) i { color: #0891b2; }
 .plan-pay-cta {
   width: 100%;
   margin-top: 16px;
@@ -2489,6 +2527,13 @@ select.status-sel {
   transform: translateY(-2px);
   box-shadow: 0 22px 38px rgba(239,68,68,.34), 0 0 0 1px rgba(255,255,255,.36) inset;
 }
+.plan-pay-cta.annual,
+.pay-cta.annual {
+  background: linear-gradient(135deg, #0284c7, #0891b2 55%, #0f766e);
+  box-shadow: 0 18px 34px rgba(8,145,178,.25), 0 0 0 1px rgba(255,255,255,.3) inset;
+}
+.plan-pay-cta.annual:hover,
+.pay-cta.annual:hover { box-shadow: 0 22px 38px rgba(8,145,178,.32), 0 0 0 1px rgba(255,255,255,.35) inset; }
 .plan-pay-foot {
   margin-top: 10px;
   display: inline-flex;
@@ -2502,6 +2547,26 @@ select.status-sel {
   color: #f97316;
   filter: drop-shadow(0 0 10px rgba(249,115,22,.45));
 }
+.plan-pay-foot.annual { color: #075985; }
+.plan-pay-foot.annual i { color: #0284c7; filter: drop-shadow(0 0 10px rgba(14,165,233,.35)); }
+.subs-currency-notice {
+  position: relative;
+  display: flex; align-items: center; gap: 17px;
+  margin-top: 20px; padding: 20px 23px;
+  border: 2px solid #22d3ee; border-radius: 19px;
+  background: radial-gradient(circle at 0 50%,rgba(34,211,238,.19),transparent 34%),linear-gradient(135deg,#071827,#082f49 55%,#0f3d46);
+  color: #fff;
+  box-shadow: 0 0 0 1px rgba(103,232,249,.15) inset,0 0 22px rgba(34,211,238,.38),0 18px 38px rgba(8,47,73,.26);
+  overflow: hidden;
+}
+.subs-currency-notice::after { content:''; position:absolute; inset:0; background:linear-gradient(110deg,transparent 25%,rgba(255,255,255,.08) 45%,transparent 65%); transform:translateX(-100%); animation:subsCurrencyGlow 4.5s ease-in-out infinite; pointer-events:none; }
+.subs-currency-notice>i { position:relative; z-index:1; flex:0 0 auto; color:#67e8f9; font-size:38px; filter:drop-shadow(0 0 12px rgba(34,211,238,.9)); }
+.subs-currency-notice>div { position:relative; z-index:1; }
+.subs-currency-notice b,.subs-currency-notice strong,.subs-currency-notice span { display:block; }
+.subs-currency-notice b { margin-bottom:4px; color:#a5f3fc; font-size:14px; font-weight:900; letter-spacing:.5px; text-transform:uppercase; }
+.subs-currency-notice strong { color:#fff; font-size:clamp(18px,2vw,25px); line-height:1.15; letter-spacing:.35px; text-shadow:0 0 10px #22d3ee,0 0 24px rgba(34,211,238,.72); }
+.subs-currency-notice span { margin-top:7px; color:#e0f2fe; font-size:14px; font-weight:650; line-height:1.55; }
+@keyframes subsCurrencyGlow { 0%,55%{transform:translateX(-100%)} 78%,100%{transform:translateX(100%)} }
 
 /* ---------- Benefits ---------- */
 .subs-benefits-card {
@@ -2727,6 +2792,7 @@ select.status-sel {
   box-shadow: 0 14px 30px rgba(79,70,229,.40);
 }
 .pay-cta:hover { transform: translateY(-2px); box-shadow: 0 18px 36px rgba(79,70,229,.45); }
+.pay-cta-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
 .pay-foot {
   display: inline-flex; align-items: center; gap: 6px;
   color: var(--ink-3); font-size: 12px; font-weight: 600;
@@ -2735,6 +2801,8 @@ select.status-sel {
 
 /* ---------- Responsive ---------- */
 @media (max-width: 980px) {
+  .subs-plans { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .plan-annual { grid-column: 1 / -1; }
   .subs-pay-card { grid-template-columns: 1fr; }
   .pay-left { padding: 14px; }
   .pay-visual { height: 230px; }
@@ -2745,12 +2813,17 @@ select.status-sel {
   .subs-hero-badge { width: 100%; flex-direction: row; justify-content: space-between; }
   .badge-off { font-size: 24px; }
   .subs-plans { grid-template-columns: 1fr; }
+  .plan-annual,.plan-annual:hover { grid-column: auto; transform: none; }
   .plan-price .amt { font-size: 44px; }
+  .annual-msi-highlight strong { font-size: 46px; }
+  .subs-currency-notice { align-items: flex-start; padding: 17px; }
+  .subs-currency-notice>i { font-size: 31px; }
   .benefits-grid { grid-template-columns: repeat(2, minmax(0,1fr)); }
   .trust-strip { grid-template-columns: 1fr 1fr; }
   .pay-visual { height: 210px; }
   .pay-card { width: 240px; height: 146px; }
   .pay-cta { width: 100%; }
+  .pay-cta-grid { grid-template-columns: 1fr; }
 }
 @media (max-width: 480px) {
   .benefits-grid { grid-template-columns: 1fr; }
@@ -6771,7 +6844,7 @@ kbd {
 .inv-branch-filter{min-width:210px;margin:0}.inv-branch-filter label{font-size:9px}
 .branch-stock-hero{display:flex;align-items:center;justify-content:space-between;gap:18px;margin-bottom:16px;padding:24px 27px;border:1px solid #a5f3fc;border-radius:20px;background:linear-gradient(135deg,#ecfeff,#f0fdfa 55%,#eff6ff)}
 .branch-stock-hero h2{margin:0 0 6px;color:var(--ink);font-size:27px}.branch-stock-hero p{margin:0;color:var(--muted);font-size:12px}
-.branch-stock-summary{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px;margin-bottom:16px}.branch-stock-card{display:flex;align-items:center;gap:12px;padding:17px}.branch-stock-card>i{display:grid;width:44px;height:44px;place-items:center;border-radius:13px;background:#ecfeff;color:#0891b2;font-size:21px}.branch-stock-card small,.branch-stock-card span{display:block;color:var(--muted);font-size:9px}.branch-stock-card small{font-weight:900;text-transform:uppercase}.branch-stock-card strong{display:block;margin:3px 0;color:var(--ink);font-size:18px}
+.branch-stock-summary{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px;margin-bottom:16px}.branch-stock-card{display:flex;align-items:flex-start;gap:12px;padding:17px}.branch-stock-card>i{display:grid;width:44px;height:44px;flex:0 0 44px;place-items:center;border-radius:13px;background:#ecfeff;color:#0891b2;font-size:21px}.branch-stock-card-body{min-width:0;flex:1}.branch-stock-card small,.branch-stock-card span{display:block;color:var(--muted);font-size:9px}.branch-stock-card small{font-weight:900;text-transform:uppercase}.branch-stock-card strong{display:block;margin:3px 0;color:var(--ink);font-size:18px}.branch-stock-card-metrics{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px;margin-top:12px}.branch-stock-card-metrics>div{min-width:0;padding:8px 9px;border:1px solid #e2e8f0;border-radius:10px;background:#f8fafc}.branch-stock-card-metrics span{margin-bottom:3px;font-size:8px;font-weight:800;text-transform:uppercase}.branch-stock-card-metrics b{display:block;color:#0f172a;font-size:12px;overflow-wrap:anywhere}.branch-stock-card-profit{position:relative;grid-column:1/-1;padding-right:58px!important}.branch-stock-card-profit em{position:absolute;top:50%;right:9px;translate:0 -50%;padding:4px 7px;border-radius:999px;font-size:10px;font-style:normal;font-weight:900}.branch-stock-card-profit.profit{border-color:#a7f3d0;background:#ecfdf5}.branch-stock-card-profit.profit b,.branch-stock-card-profit.profit em{color:#047857}.branch-stock-card-profit.profit em{background:#d1fae5}.branch-stock-card-profit.loss{border-color:#fecaca;background:#fef2f2}.branch-stock-card-profit.loss b,.branch-stock-card-profit.loss em{color:#b91c1c}.branch-stock-card-profit.loss em{background:#fee2e2}.branch-stock-card-profit.neutral em{background:#e2e8f0;color:#64748b}
 .branch-stock-toolbar{display:flex;align-items:flex-end;flex-wrap:wrap;gap:12px;margin-bottom:16px;padding:15px}.branch-stock-toolbar .inv-search-wrap{max-width:330px}.branch-stock-toolbar .field{min-width:190px;margin:0}.branch-stock-toolbar .branch-stock-page-size{min-width:150px}.branch-stock-toolbar .purchase-active-check{margin-left:auto}
 .branch-stock-table{min-width:900px}.branch-stock-table th:not(:first-child),.branch-stock-table td:not(:first-child){text-align:center}.branch-stock-table td small{display:block;margin-top:3px;color:var(--muted);font-size:9px}.branch-stock-cell{min-width:92px;padding:8px 12px;border:1px solid #a7f3d0;border-radius:10px;background:#ecfdf5;color:#047857;cursor:pointer}.branch-stock-cell b,.branch-stock-cell span{display:block}.branch-stock-cell b{font-size:15px}.branch-stock-cell span{margin-top:2px;font-size:8px;font-weight:800;text-transform:uppercase}.branch-stock-cell.empty{border-color:#e2e8f0;background:#f8fafc;color:#94a3b8}.branch-stock-global{color:#0f172a;font-size:16px}.branch-stock-adjust-context{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin:12px 0}.branch-stock-adjust-context>div{padding:10px;border:1px solid #e2e8f0;border-radius:10px;background:#f8fafc}.branch-stock-adjust-context small,.branch-stock-adjust-context b{display:block}.branch-stock-adjust-context small{color:var(--muted);font-size:8px;text-transform:uppercase}.branch-stock-adjust-context b{margin-top:4px;font-size:12px}
 .branch-stock-cell:disabled{cursor:not-allowed;opacity:.65}
@@ -6796,7 +6869,7 @@ kbd {
 .purchase-list-toolbar { display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:16px;padding:17px 20px; }
 .purchase-list-toolbar h3 { margin:0 0 4px; }
 .purchase-list-toolbar p { margin:0;color:var(--muted);font-size:11px; }
-.purchase-list-actions,.purchase-row-actions { display:flex;align-items:center;gap:7px; }
+.purchase-list-actions,.purchase-row-actions { display:flex;align-items:center;gap:7px; }.purchase-row-actions{flex-wrap:wrap;min-width:210px}.purchase-row-actions .btn{white-space:nowrap}.purchase-row-actions .btn-danger{border:1px solid #fecaca}
 .purchase-list-actions select { min-width:180px; }
 .purchase-status { display:inline-flex;padding:5px 9px;border-radius:999px;font-size:9px;font-weight:900;white-space:nowrap; }
 .purchase-status.ordered { background:#fff7ed;color:#c2410c; }.purchase-status.received { background:#ecfdf5;color:#047857; }.purchase-status.cancelled { background:#fef2f2;color:#dc2626; }

@@ -35,6 +35,7 @@ let PURCHASE_CHART = null;
 let PURCHASE_TAB = 'dashboard';
 let PURCHASE_PERIOD = 'day';
 let PURCHASE_ORDER_ITEMS = [];
+let PURCHASE_ORDER_EDIT_ID = null;
 let PURCHASE_TRANSFER_ITEMS = [];
 let PURCHASE_TRANSFER_STOCK = null;
 let PURCHASE_TRANSFER_STOCK_LOADING = false;
@@ -1806,7 +1807,23 @@ function renderBranchStock() {
   const selectedBranchId = BRANCH_STOCK_BRANCH === 'all' ? 0 : Number(BRANCH_STOCK_BRANCH);
   const visibleBranches = selectedBranchId ? data.branches.filter((row)=>Number(row.id)===selectedBranchId) : data.branches;
   const visibleSummaries = selectedBranchId ? data.summaries.filter((row)=>Number(row.branchId)===selectedBranchId) : data.summaries;
-  $('#branchStockSummary').innerHTML = visibleSummaries.map((row)=>`<div class="card branch-stock-card"><i class="ph-bold ph-storefront"></i><div><small>${esc(row.branchName)}${row.active?'':' · Inactiva'}</small><strong>${invFmt(row.totalUnits)} unidades</strong><span>${row.productsWithStock} productos · ${fmtMoney(row.stockValue)}</span></div></div>`).join('');
+  $('#branchStockSummary').innerHTML = visibleSummaries.map((row)=>{
+    const profit = Number(row.profitValue || 0);
+    const profitTone = profit < 0 ? 'loss' : profit > 0 ? 'profit' : 'neutral';
+    return `<div class="card branch-stock-card">
+      <i class="ph-bold ph-storefront"></i>
+      <div class="branch-stock-card-body">
+        <small>${esc(row.branchName)}${row.active?'':' · Inactiva'}</small>
+        <strong>${invFmt(row.totalUnits)} unidades</strong>
+        <span>${row.productsWithStock} productos con existencia</span>
+        <div class="branch-stock-card-metrics">
+          <div><span>Venta potencial</span><b>${fmtMoney(row.salesValue ?? row.stockValue)}</b></div>
+          <div><span>Costo de venta</span><b>${fmtMoney(row.costValue)}</b></div>
+          <div class="branch-stock-card-profit ${profitTone}"><span>Utilidad estimada</span><b>${fmtMoney(profit)}</b><em>${Number(row.profitPercent || 0).toFixed(1)}%</em></div>
+        </div>
+      </div>
+    </div>`;
+  }).join('');
   const query = BRANCH_STOCK_SEARCH.toLowerCase();
   const rows = data.rows.filter((row)=>{
     const scopedQuantity = selectedBranchId ? Number(row.locations.find((location)=>location.branchId===selectedBranchId)?.quantity || 0) : Number(row.globalQuantity || 0);
@@ -1854,10 +1871,10 @@ function purchaseSetPeriod(period) {
   document.querySelectorAll('#purchasePeriodTabs [data-purchase-period]').forEach((button) => button.classList.toggle('on', button.dataset.purchasePeriod === PURCHASE_PERIOD));
 }
 
-function purchaseBranchOptions(includeAll = false) {
-  return `${includeAll ? '<option value="all">Todas las sucursales</option>' : '<option value="">Selecciona…</option>'}${PURCHASE_DATA.branches.filter((row) => row.active).map((row) => `<option value="${row.id}">${esc(row.name)}</option>`).join('')}`;
+function purchaseBranchOptions(includeAll = false, selectedId = '') {
+  return `${includeAll ? '<option value="all">Todas las sucursales</option>' : '<option value="">Selecciona…</option>'}${PURCHASE_DATA.branches.filter((row) => row.active || String(row.id) === String(selectedId)).map((row) => `<option value="${row.id}">${esc(row.name)}${row.active ? '' : ' · Inactiva'}</option>`).join('')}`;
 }
-function purchaseSupplierOptions() { return `<option value="">Selecciona…</option>${PURCHASE_DATA.suppliers.filter((row) => row.active).map((row) => `<option value="${row.id}">${esc(row.name)}</option>`).join('')}`; }
+function purchaseSupplierOptions(selectedId = '') { return `<option value="">Selecciona…</option>${PURCHASE_DATA.suppliers.filter((row) => row.active || String(row.id) === String(selectedId)).map((row) => `<option value="${row.id}">${esc(row.name)}${row.active ? '' : ' · Inactivo'}</option>`).join('')}`; }
 function purchaseProductOptions(selected = '') { return `<option value="">Selecciona producto…</option>${PURCHASE_DATA.products.map((row) => `<option value="${row.id}" ${String(row.id) === String(selected) ? 'selected' : ''}>${esc(row.name)}</option>`).join('')}`; }
 function purchaseStock(branchId, productId) { return Number(PURCHASE_DATA.branchStock.find((row) => Number(row.branchId) === Number(branchId) && Number(row.productId) === Number(productId))?.quantity || 0); }
 
@@ -1898,19 +1915,42 @@ async function loadPurchaseReport() {
 async function loadPurchaseOrders() {
   try { const status=$('#purchaseOrderStatus').value; PURCHASE_ORDERS=await api(`/api/purchases/orders${status?`?status=${encodeURIComponent(status)}`:''}`); renderPurchaseOrders(); } catch(error){toast(error.message||'No se pudieron cargar las órdenes',true);}
 }
-function purchaseStatusBadge(status){const labels={ordered:'Pendiente',received:'Recibida',cancelled:'Cancelada'};return `<span class="purchase-status ${status}">${labels[status]||status}</span>`;}
-function renderPurchaseOrders(){const host=$('#purchaseOrdersTable');if(!PURCHASE_ORDERS.length){host.innerHTML=emptyHTML('ph-shopping-cart-simple','Sin órdenes de compra','Crea tu primera orden para comenzar.');return;}host.innerHTML=`<table><thead><tr><th>Orden</th><th>Proveedor</th><th>Sucursal</th><th>Productos</th><th>Total</th><th>Fecha</th><th>Estatus</th><th>Acciones</th></tr></thead><tbody>${PURCHASE_ORDERS.map(order=>`<tr><td><b>${esc(order.orderNumber)}</b><small>${esc(order.createdBy)}</small></td><td>${esc(order.supplierName)}</td><td>${esc(order.branchName)}</td><td>${order.items.map(item=>`${item.quantity} ${esc(item.productName)}`).join('<br>')}</td><td><b>${fmtMoney(order.total)}</b></td><td>${esc(order.orderDate)}${order.receivedAt?`<small>Recibida ${esc(order.receivedAt)}</small>`:''}</td><td>${purchaseStatusBadge(order.status)}</td><td><div class="purchase-row-actions">${order.status==='ordered'?`<button class="btn btn-primary btn-sm purchase-receive" data-id="${order.id}"><i class="ph-bold ph-package"></i> Recibir</button><button class="btn btn-ghost btn-sm purchase-cancel" data-id="${order.id}"><i class="ph-bold ph-x"></i></button>`:''}<button class="btn btn-ghost btn-sm purchase-audit" data-entity="purchase_order" data-id="${order.id}" data-title="${esc(order.orderNumber)}"><i class="ph-bold ph-shield-check"></i></button></div></td></tr>`).join('')}</tbody></table>`;
-  host.querySelectorAll('.purchase-receive').forEach(button=>button.addEventListener('click',async()=>{const order=PURCHASE_ORDERS.find(row=>row.id===Number(button.dataset.id));if(!await askConfirm('Recibir orden',`Se agregarán ${order.items.length} productos al inventario de ${order.branchName} y se actualizarán sus costos promedio.`))return;try{await api(`/api/purchases/orders/${order.id}/receive`,{method:'POST'});toast('Orden recibida e inventario actualizado');PURCHASE_DATA=await api('/api/purchases/bootstrap');await loadPurchaseOrders();await loadPurchaseReport();}catch(error){toast(error.message||'No se pudo recibir',true);}}));
-  host.querySelectorAll('.purchase-cancel').forEach(button=>button.addEventListener('click',async()=>{if(!await askConfirm('Cancelar orden','La orden quedará en la auditoría y no afectará inventario.'))return;try{await api(`/api/purchases/orders/${button.dataset.id}/cancel`,{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});await loadPurchaseOrders();toast('Orden cancelada');}catch(error){toast(error.message,true);}}));
-  bindPurchaseAuditButtons(host);
+function purchaseStatusLabel(status){return({ordered:'Pendiente',received:'Recibida',cancelled:'Cancelada'})[status]||String(status||'—');}
+function purchaseStatusBadge(status){return `<span class="purchase-status ${status}">${esc(purchaseStatusLabel(status))}</span>`;}
+
+function openPurchasePrintDocument(title, subtitle, content) {
+  const popup = window.open('', '_blank', 'width=900,height=760');
+  if (!popup) return toast('Permite las ventanas emergentes para imprimir', true);
+  const business = esc(ME?.tenant?.businessName || SETTINGS?.business_name || 'Negocio');
+  popup.document.open();
+  popup.document.write(`<!doctype html><html lang="es"><head><meta charset="utf-8"><title>${esc(title)}</title><style>
+    @page{margin:12mm}body{font-family:Arial,sans-serif;color:#111827;margin:0;font-size:12px}h1{margin:0;font-size:22px}h2{margin:4px 0 18px;font-size:15px;color:#475569}.meta{display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin-bottom:18px}.meta div{padding:9px;border:1px solid #dbe3ed;border-radius:8px}.meta small{display:block;margin-bottom:3px;color:#64748b;font-size:9px;font-weight:700;text-transform:uppercase}table{width:100%;border-collapse:collapse}th,td{padding:8px 6px;border-bottom:1px solid #dbe3ed;text-align:left}th{font-size:9px;text-transform:uppercase;background:#f1f5f9}.num{text-align:right}.total{margin-top:14px;text-align:right;font-size:17px}.notes{margin-top:16px;padding:10px;border:1px solid #cbd5e1;border-radius:8px}.footer{margin-top:24px;color:#64748b;font-size:9px}@media print{body{print-color-adjust:exact;-webkit-print-color-adjust:exact}}</style></head><body><h1>${business}</h1><h2>${esc(subtitle)}</h2>${content}<div class="footer">Documento generado desde ChatBotPro · ${esc(new Date().toLocaleString('es-MX'))}</div><script>window.onload=()=>{window.print();}</script></body></html>`);
+  popup.document.close();
 }
 
-function renderPurchaseSuppliers(){const host=$('#purchaseSuppliersTable');const rows=PURCHASE_DATA.suppliers;if(!rows.length){host.innerHTML=emptyHTML('ph-truck','Sin proveedores','Registra tu primer proveedor.');return;}host.innerHTML=`<table><thead><tr><th>Proveedor</th><th>Contacto</th><th>Teléfono</th><th>Correo</th><th>RFC</th><th>Estatus</th><th>Acciones</th></tr></thead><tbody>${rows.map(row=>`<tr><td><b>${esc(row.name)}</b><small>${esc(row.address||'')}</small></td><td>${esc(row.contact_name||'—')}</td><td>${esc(row.phone||'—')}</td><td>${esc(row.email||'—')}</td><td>${esc(row.tax_id||'—')}</td><td>${row.active?'<span class="purchase-status received">Activo</span>':'<span class="purchase-status cancelled">Inactivo</span>'}</td><td><div class="purchase-row-actions"><button class="btn btn-ghost btn-sm purchase-edit-supplier" data-id="${row.id}"><i class="ph-bold ph-pencil"></i></button>${row.active?`<button class="btn btn-ghost btn-sm purchase-disable-supplier" data-id="${row.id}"><i class="ph-bold ph-user-minus"></i></button>`:''}<button class="btn btn-ghost btn-sm purchase-audit" data-entity="supplier" data-id="${row.id}" data-title="${esc(row.name)}"><i class="ph-bold ph-shield-check"></i></button></div></td></tr>`).join('')}</tbody></table>`;host.querySelectorAll('.purchase-edit-supplier').forEach(button=>button.addEventListener('click',()=>openPurchaseSupplier(Number(button.dataset.id))));host.querySelectorAll('.purchase-disable-supplier').forEach(button=>button.addEventListener('click',async()=>{if(!await askConfirm('Desactivar proveedor','Sus órdenes anteriores se conservarán.'))return;await api(`/api/purchases/suppliers/${button.dataset.id}`,{method:'DELETE'});await loadPurchases();setPurchaseTab('suppliers');}));bindPurchaseAuditButtons(host);}
+function printPurchaseOrder(order) {
+  if (!order) return;
+  const rows = order.items.map((item) => `<tr><td>${esc(item.productName)}</td><td class="num">${esc(invFmt(item.quantity))}</td><td class="num">${esc(fmtMoney(item.unitCost))}</td><td class="num">${esc(fmtMoney(item.lineTotal))}</td></tr>`).join('');
+  openPurchasePrintDocument(order.orderNumber, `Orden de compra ${order.orderNumber}`, `<div class="meta"><div><small>Proveedor</small><b>${esc(order.supplierName)}</b></div><div><small>Sucursal receptora</small><b>${esc(order.branchName)}</b></div><div><small>Fecha de orden</small><b>${esc(order.orderDate)}</b></div><div><small>Entrega esperada</small><b>${esc(order.expectedDate || 'Sin fecha')}</b></div><div><small>Estatus</small><b>${esc(purchaseStatusLabel(order.status))}</b></div><div><small>Creada por</small><b>${esc(order.createdBy || '—')}</b></div></div><table><thead><tr><th>Producto</th><th class="num">Cantidad</th><th class="num">Costo unitario</th><th class="num">Importe</th></tr></thead><tbody>${rows}</tbody></table><div class="total"><b>Total: ${esc(fmtMoney(order.total))}</b></div>${order.notes ? `<div class="notes"><b>Notas:</b> ${esc(order.notes)}</div>` : ''}`);
+}
 
-async function loadPurchaseTransfers(){try{PURCHASE_TRANSFERS=await api('/api/purchases/transfers');const host=$('#purchaseTransfersTable');host.innerHTML=PURCHASE_TRANSFERS.length?`<table><thead><tr><th>Traslado</th><th>Origen</th><th>Destino</th><th>Productos</th><th>Usuario</th><th>Fecha</th><th></th></tr></thead><tbody>${PURCHASE_TRANSFERS.map(row=>`<tr><td><b>${esc(row.transfer_number)}</b></td><td>${esc(row.from_branch_name)}</td><td>${esc(row.to_branch_name)}</td><td>${row.items.map(item=>`${item.quantity} ${esc(item.productName)}`).join('<br>')}</td><td>${esc(row.created_by||'—')}</td><td>${esc(row.created_at)}</td><td><button class="btn btn-ghost btn-sm purchase-audit" data-entity="transfer" data-id="${row.id}" data-title="${esc(row.transfer_number)}"><i class="ph-bold ph-shield-check"></i></button></td></tr>`).join('')}</tbody></table>`:emptyHTML('ph-arrows-left-right','Sin traslados','Los movimientos entre sucursales aparecerán aquí.');bindPurchaseAuditButtons(host);}catch(error){toast(error.message||'No se cargaron los traslados',true);}}
+function printPurchaseTransfer(transfer) {
+  if (!transfer) return;
+  const rows = transfer.items.map((item) => `<tr><td>${esc(item.productName)}</td><td class="num">${esc(invFmt(item.quantity))}</td></tr>`).join('');
+  openPurchasePrintDocument(transfer.transfer_number, `Comprobante de traslado ${transfer.transfer_number}`, `<div class="meta"><div><small>Sucursal origen</small><b>${esc(transfer.from_branch_name)}</b></div><div><small>Sucursal destino</small><b>${esc(transfer.to_branch_name)}</b></div><div><small>Fecha</small><b>${esc(transfer.created_at)}</b></div><div><small>Realizado por</small><b>${esc(transfer.created_by || '—')}</b></div></div><table><thead><tr><th>Producto</th><th class="num">Cantidad trasladada</th></tr></thead><tbody>${rows}</tbody></table>${transfer.notes ? `<div class="notes"><b>Notas:</b> ${esc(transfer.notes)}</div>` : ''}`);
+}
 
-function bindPurchaseAuditButtons(host){host.querySelectorAll('.purchase-audit').forEach(button=>button.addEventListener('click',()=>openPurchaseAudit(button.dataset.entity,button.dataset.id,button.dataset.title)));}
-async function openPurchaseAudit(entity,id,title){try{const rows=await api(`/api/purchases/audit/${entity}/${id}`);$('#purchaseAuditTitle').textContent=`Bitácora · ${title}`;$('#purchaseAuditContent').innerHTML=rows.length?`<div class="purchase-audit-list">${rows.map(row=>`<article><i class="ph-bold ph-shield-check"></i><div><b>${esc(row.action)}</b><span>${esc(row.actor||'Sistema')} · ${esc(row.created_at)}</span><pre>${esc(JSON.stringify(row.payload,null,2))}</pre></div></article>`).join('')}</div>`:emptyHTML('ph-shield-check','Sin eventos','No hay movimientos auditados.');openModal('purchaseAuditModal');}catch(error){toast(error.message,true);}}
+function renderPurchaseOrders(){const host=$('#purchaseOrdersTable');if(!PURCHASE_ORDERS.length){host.innerHTML=emptyHTML('ph-shopping-cart-simple','Sin órdenes de compra','Crea tu primera orden para comenzar.');return;}host.innerHTML=`<table><thead><tr><th>Orden</th><th>Proveedor</th><th>Sucursal</th><th>Productos</th><th>Total</th><th>Fecha</th><th>Estatus</th><th>Acciones</th></tr></thead><tbody>${PURCHASE_ORDERS.map(order=>`<tr><td><b>${esc(order.orderNumber)}</b><small>${esc(order.createdBy)}</small></td><td>${esc(order.supplierName)}</td><td>${esc(order.branchName)}</td><td>${order.items.map(item=>`${item.quantity} ${esc(item.productName)}`).join('<br>')}</td><td><b>${fmtMoney(order.total)}</b></td><td>${esc(order.orderDate)}${order.receivedAt?`<small>Recibida ${esc(order.receivedAt)}</small>`:''}</td><td>${purchaseStatusBadge(order.status)}</td><td><div class="purchase-row-actions"><button class="btn btn-ghost btn-sm purchase-print-order" data-id="${order.id}"><i class="ph-bold ph-printer"></i> Imprimir</button>${order.status==='ordered'?`<button class="btn btn-ghost btn-sm purchase-edit-order" data-id="${order.id}"><i class="ph-bold ph-pencil-simple"></i> Editar</button><button class="btn btn-primary btn-sm purchase-receive" data-id="${order.id}"><i class="ph-bold ph-package"></i> Recibir</button><button class="btn btn-ghost btn-sm purchase-cancel" data-id="${order.id}"><i class="ph-bold ph-x-circle"></i> Cancelar</button>`:''}${order.status!=='received'?`<button class="btn btn-danger btn-sm purchase-delete-order" data-id="${order.id}"><i class="ph-bold ph-trash"></i> Borrar</button>`:''}</div></td></tr>`).join('')}</tbody></table>`;
+  host.querySelectorAll('.purchase-print-order').forEach(button=>button.addEventListener('click',()=>printPurchaseOrder(PURCHASE_ORDERS.find(row=>row.id===Number(button.dataset.id)))));
+  host.querySelectorAll('.purchase-edit-order').forEach(button=>button.addEventListener('click',()=>openPurchaseOrder(Number(button.dataset.id))));
+  host.querySelectorAll('.purchase-receive').forEach(button=>button.addEventListener('click',async()=>{const order=PURCHASE_ORDERS.find(row=>row.id===Number(button.dataset.id));if(!await askConfirm('Recibir orden',`Se agregarán ${order.items.length} productos al inventario de ${order.branchName} y se actualizarán sus costos promedio.`))return;try{await api(`/api/purchases/orders/${order.id}/receive`,{method:'POST'});toast('Orden recibida e inventario actualizado');PURCHASE_DATA=await api('/api/purchases/bootstrap');await loadPurchaseOrders();await loadPurchaseReport();}catch(error){toast(error.message||'No se pudo recibir',true);}}));
+  host.querySelectorAll('.purchase-cancel').forEach(button=>button.addEventListener('click',async()=>{if(!await askConfirm('Cancelar orden','La orden quedará en la auditoría y no afectará inventario.'))return;try{await api(`/api/purchases/orders/${button.dataset.id}/cancel`,{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});await loadPurchaseOrders();toast('Orden cancelada');}catch(error){toast(error.message,true);}}));
+  host.querySelectorAll('.purchase-delete-order').forEach(button=>button.addEventListener('click',async()=>{const order=PURCHASE_ORDERS.find(row=>row.id===Number(button.dataset.id));if(!order||!await askConfirm('Borrar orden',`Se eliminará definitivamente ${order.orderNumber}. Esta acción sólo está permitida porque la orden no ha afectado inventario.`))return;try{await api(`/api/purchases/orders/${order.id}`,{method:'DELETE'});await loadPurchaseOrders();toast('Orden eliminada');}catch(error){toast(error.message,true);}}));
+}
+
+function renderPurchaseSuppliers(){const host=$('#purchaseSuppliersTable');const rows=PURCHASE_DATA.suppliers;if(!rows.length){host.innerHTML=emptyHTML('ph-truck','Sin proveedores','Registra tu primer proveedor.');return;}host.innerHTML=`<table><thead><tr><th>Proveedor</th><th>Contacto</th><th>Teléfono</th><th>Correo</th><th>RFC</th><th>Estatus</th><th>Acciones</th></tr></thead><tbody>${rows.map(row=>`<tr><td><b>${esc(row.name)}</b><small>${esc(row.address||'')}</small></td><td>${esc(row.contact_name||'—')}</td><td>${esc(row.phone||'—')}</td><td>${esc(row.email||'—')}</td><td>${esc(row.tax_id||'—')}</td><td>${row.active?'<span class="purchase-status received">Activo</span>':'<span class="purchase-status cancelled">Inactivo</span>'}</td><td><div class="purchase-row-actions"><button class="btn btn-ghost btn-sm purchase-edit-supplier" data-id="${row.id}"><i class="ph-bold ph-pencil-simple"></i> Editar</button><button class="btn btn-ghost btn-sm purchase-toggle-supplier" data-id="${row.id}"><i class="ph-bold ${row.active?'ph-user-minus':'ph-user-plus'}"></i> ${row.active?'Desactivar':'Activar'}</button></div></td></tr>`).join('')}</tbody></table>`;host.querySelectorAll('.purchase-edit-supplier').forEach(button=>button.addEventListener('click',()=>openPurchaseSupplier(Number(button.dataset.id))));host.querySelectorAll('.purchase-toggle-supplier').forEach(button=>button.addEventListener('click',async()=>{const row=PURCHASE_DATA.suppliers.find(item=>Number(item.id)===Number(button.dataset.id));if(!row||!await askConfirm(row.active?'Desactivar proveedor':'Activar proveedor',row.active?'Ya no aparecerá al crear nuevas órdenes; sus registros anteriores se conservarán.':'Volverá a estar disponible para nuevas órdenes.'))return;try{await api(`/api/purchases/suppliers/${row.id}`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:row.name,taxId:row.tax_id,contactName:row.contact_name,phone:row.phone,email:row.email,address:row.address,notes:row.notes,active:!row.active})});PURCHASE_DATA=await api('/api/purchases/bootstrap');renderPurchaseSuppliers();toast(`Proveedor ${row.active?'desactivado':'activado'}`);}catch(error){toast(error.message,true);}}));}
+
+async function loadPurchaseTransfers(){try{PURCHASE_TRANSFERS=await api('/api/purchases/transfers');const host=$('#purchaseTransfersTable');host.innerHTML=PURCHASE_TRANSFERS.length?`<table><thead><tr><th>Traslado</th><th>Origen</th><th>Destino</th><th>Productos</th><th>Usuario</th><th>Fecha</th><th>Acciones</th></tr></thead><tbody>${PURCHASE_TRANSFERS.map(row=>`<tr><td><b>${esc(row.transfer_number)}</b></td><td>${esc(row.from_branch_name)}</td><td>${esc(row.to_branch_name)}</td><td>${row.items.map(item=>`${item.quantity} ${esc(item.productName)}`).join('<br>')}</td><td>${esc(row.created_by||'—')}</td><td>${esc(row.created_at)}</td><td><div class="purchase-row-actions"><button class="btn btn-ghost btn-sm purchase-print-transfer" data-id="${row.id}"><i class="ph-bold ph-printer"></i> Imprimir</button><button class="btn btn-ghost btn-sm purchase-repeat-transfer" data-id="${row.id}"><i class="ph-bold ph-arrows-clockwise"></i> Repetir</button></div></td></tr>`).join('')}</tbody></table>`:emptyHTML('ph-arrows-left-right','Sin traslados','Los movimientos entre sucursales aparecerán aquí.');host.querySelectorAll('.purchase-print-transfer').forEach(button=>button.addEventListener('click',()=>printPurchaseTransfer(PURCHASE_TRANSFERS.find(row=>row.id===Number(button.dataset.id)))));host.querySelectorAll('.purchase-repeat-transfer').forEach(button=>button.addEventListener('click',()=>openPurchaseTransfer(PURCHASE_TRANSFERS.find(row=>row.id===Number(button.dataset.id)))));}catch(error){toast(error.message||'No se cargaron los traslados',true);}}
 
 function openPurchaseSupplier(id=null){const row=PURCHASE_DATA.suppliers.find(item=>Number(item.id)===Number(id));$('#purchaseSupplierModalTitle').textContent=row?'Editar proveedor':'Nuevo proveedor';$('#purchaseSupplierId').value=row?.id||'';$('#purchaseSupplierName').value=row?.name||'';$('#purchaseSupplierTaxId').value=row?.tax_id||'';$('#purchaseSupplierContact').value=row?.contact_name||'';$('#purchaseSupplierPhone').value=row?.phone||'';$('#purchaseSupplierEmail').value=row?.email||'';$('#purchaseSupplierAddress').value=row?.address||'';$('#purchaseSupplierNotes').value=row?.notes||'';$('#purchaseSupplierActive').checked=row?Boolean(row.active):true;openModal('purchaseSupplierModal');}
 
@@ -1963,7 +2003,26 @@ function renderPurchaseOrderItems(){
   host.querySelectorAll('.purchase-remove-item').forEach(button=>button.addEventListener('click',()=>{PURCHASE_ORDER_ITEMS.splice(Number(button.closest('[data-index]').dataset.index),1);renderPurchaseOrderItems();}));
   updatePurchaseOrderTotal();
 }
-function openPurchaseOrder(){if(!PURCHASE_DATA.suppliers.some(row=>row.active))return toast('Primero registra un proveedor activo',true);if(!PURCHASE_DATA.branches.some(row=>row.active))return toast('Primero configura una sucursal',true);PURCHASE_ORDER_ITEMS=[newPurchaseOrderItem()];$('#purchaseOrderSupplier').innerHTML=purchaseSupplierOptions();$('#purchaseOrderBranch').innerHTML=purchaseBranchOptions();$('#purchaseOrderDate').value=getLocalIsoDate();$('#purchaseExpectedDate').value='';$('#purchaseOrderNotes').value='';renderPurchaseOrderItems();openModal('purchaseOrderModal');}
+function openPurchaseOrder(id=null){
+  const order=id?PURCHASE_ORDERS.find(row=>Number(row.id)===Number(id)):null;
+  if(id&&!order)return toast('No se encontró la orden',true);
+  if(order&&order.status!=='ordered')return toast('Sólo las órdenes pendientes se pueden editar',true);
+  if(!order&&!PURCHASE_DATA.suppliers.some(row=>row.active))return toast('Primero registra un proveedor activo',true);
+  if(!order&&!PURCHASE_DATA.branches.some(row=>row.active))return toast('Primero configura una sucursal',true);
+  PURCHASE_ORDER_EDIT_ID=order?.id||null;
+  PURCHASE_ORDER_ITEMS=order?order.items.map(item=>({key:`i${item.id||Date.now()}${Math.random()}`,productId:item.productId,quantity:item.quantity,unitCost:item.unitCost})):[newPurchaseOrderItem()];
+  $('#purchaseOrderModalTitle').textContent=order?`Editar ${order.orderNumber}`:'Nueva orden de compra';
+  $('#purchaseOrderSubmit').innerHTML=order?'<i class="ph-bold ph-floppy-disk"></i> Guardar cambios':'<i class="ph-bold ph-check-circle"></i> Crear orden';
+  $('#purchaseOrderSupplier').innerHTML=purchaseSupplierOptions(order?.supplierId);
+  $('#purchaseOrderBranch').innerHTML=purchaseBranchOptions(false,order?.branchId);
+  $('#purchaseOrderSupplier').value=order?.supplierId||'';
+  $('#purchaseOrderBranch').value=order?.branchId||'';
+  $('#purchaseOrderDate').value=order?.orderDate||getLocalIsoDate();
+  $('#purchaseExpectedDate').value=order?.expectedDate||'';
+  $('#purchaseOrderNotes').value=order?.notes||'';
+  renderPurchaseOrderItems();
+  openModal('purchaseOrderModal');
+}
 
 function newPurchaseTransferItem(){return{productId:'',quantity:1};}
 
@@ -2158,16 +2217,23 @@ function normalizePurchaseTransferBranches(changed) {
   else from.value = String(alternatives[0].id);
 }
 
-function openPurchaseTransfer() {
+function openPurchaseTransfer(source = null) {
   const branches = PURCHASE_DATA.branches.filter((row) => row.active);
   if (branches.length < 2) return toast('Configura al menos dos sucursales', true);
-  PURCHASE_TRANSFER_ITEMS = [newPurchaseTransferItem()];
+  const sourceFrom = Number(source?.from_branch_id);
+  const sourceTo = Number(source?.to_branch_id);
+  if (source && (!branches.some((row) => Number(row.id) === sourceFrom) || !branches.some((row) => Number(row.id) === sourceTo))) {
+    return toast('No se puede repetir: una de las sucursales ya no está activa', true);
+  }
+  PURCHASE_TRANSFER_ITEMS = source?.items?.length
+    ? source.items.map((item) => ({ productId: item.productId, quantity: item.quantity }))
+    : [newPurchaseTransferItem()];
   PURCHASE_TRANSFER_STOCK = null;
   $('#purchaseTransferFrom').innerHTML = purchaseBranchOptions();
   $('#purchaseTransferTo').innerHTML = purchaseBranchOptions();
-  $('#purchaseTransferFrom').value = String(branches[0].id);
-  $('#purchaseTransferTo').value = String(branches[1].id);
-  $('#purchaseTransferNotes').value = '';
+  $('#purchaseTransferFrom').value = String(source ? sourceFrom : branches[0].id);
+  $('#purchaseTransferTo').value = String(source ? sourceTo : branches[1].id);
+  $('#purchaseTransferNotes').value = source ? `Repetición de ${source.transfer_number}${source.notes ? ` · ${source.notes}` : ''}`.slice(0,300) : '';
   renderPurchaseTransferSummary();
   renderPurchaseTransferItems();
   openModal('purchaseTransferModal');
@@ -2177,14 +2243,14 @@ function openPurchaseTransfer() {
 document.querySelectorAll('#purchaseTabs [data-purchase-tab]').forEach(button=>button.addEventListener('click',()=>setPurchaseTab(button.dataset.purchaseTab)));
 document.querySelectorAll('#purchasePeriodTabs [data-purchase-period]').forEach(button=>button.addEventListener('click',()=>purchaseSetPeriod(button.dataset.purchasePeriod)));
 $('#purchaseStartDate')?.addEventListener('change',()=>purchaseSetPeriod('custom'));$('#purchaseEndDate')?.addEventListener('change',()=>purchaseSetPeriod('custom'));$('#purchaseApplyReport')?.addEventListener('click',loadPurchaseReport);$('#purchaseReportBranch')?.addEventListener('change',loadPurchaseReport);
-$('#purchaseOrderStatus')?.addEventListener('change',loadPurchaseOrders);$('#purchaseRefreshOrders')?.addEventListener('click',loadPurchaseOrders);$('#purchaseNewOrder')?.addEventListener('click',openPurchaseOrder);$('#purchaseNewSupplier')?.addEventListener('click',()=>openPurchaseSupplier());$('#purchaseNewTransfer')?.addEventListener('click',openPurchaseTransfer);
+$('#purchaseOrderStatus')?.addEventListener('change',loadPurchaseOrders);$('#purchaseRefreshOrders')?.addEventListener('click',loadPurchaseOrders);$('#purchaseNewOrder')?.addEventListener('click',()=>openPurchaseOrder());$('#purchaseNewSupplier')?.addEventListener('click',()=>openPurchaseSupplier());$('#purchaseNewTransfer')?.addEventListener('click',()=>openPurchaseTransfer());
 $('#purchaseAddOrderItem')?.addEventListener('click',()=>{PURCHASE_ORDER_ITEMS.push(newPurchaseOrderItem());renderPurchaseOrderItems();});
 $('#purchaseAddTransferItem')?.addEventListener('click',()=>{PURCHASE_TRANSFER_ITEMS.push(newPurchaseTransferItem());renderPurchaseTransferItems();});
 $('#purchaseTransferFrom')?.addEventListener('change',()=>{normalizePurchaseTransferBranches('from');loadPurchaseTransferStock();});
 $('#purchaseTransferTo')?.addEventListener('change',()=>{normalizePurchaseTransferBranches('to');loadPurchaseTransferStock();});
 $('#purchaseTransferRefresh')?.addEventListener('click',()=>loadPurchaseTransferStock());
 $('#purchaseSupplierForm')?.addEventListener('submit',async event=>{event.preventDefault();const id=Number($('#purchaseSupplierId').value);const body={name:$('#purchaseSupplierName').value,taxId:$('#purchaseSupplierTaxId').value,contactName:$('#purchaseSupplierContact').value,phone:$('#purchaseSupplierPhone').value,email:$('#purchaseSupplierEmail').value,address:$('#purchaseSupplierAddress').value,notes:$('#purchaseSupplierNotes').value,active:$('#purchaseSupplierActive').checked};try{await api(id?`/api/purchases/suppliers/${id}`:'/api/purchases/suppliers',{method:id?'PUT':'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});closeModal('purchaseSupplierModal');PURCHASE_DATA=await api('/api/purchases/bootstrap');renderPurchaseSuppliers();toast('Proveedor guardado');}catch(error){toast(error.message,true);}});
-$('#purchaseOrderForm')?.addEventListener('submit',async event=>{event.preventDefault();try{await api('/api/purchases/orders',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({supplierId:Number($('#purchaseOrderSupplier').value),branchId:Number($('#purchaseOrderBranch').value),orderDate:$('#purchaseOrderDate').value,expectedDate:$('#purchaseExpectedDate').value,notes:$('#purchaseOrderNotes').value,items:PURCHASE_ORDER_ITEMS.map(item=>({productId:Number(item.productId),quantity:Number(item.quantity),unitCost:Number(item.unitCost)}))})});closeModal('purchaseOrderModal');setPurchaseTab('orders');toast('Orden de compra creada');}catch(error){toast(error.message,true);}});
+$('#purchaseOrderForm')?.addEventListener('submit',async event=>{event.preventDefault();const editId=PURCHASE_ORDER_EDIT_ID;try{await api(editId?`/api/purchases/orders/${editId}`:'/api/purchases/orders',{method:editId?'PUT':'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({supplierId:Number($('#purchaseOrderSupplier').value),branchId:Number($('#purchaseOrderBranch').value),orderDate:$('#purchaseOrderDate').value,expectedDate:$('#purchaseExpectedDate').value,notes:$('#purchaseOrderNotes').value,items:PURCHASE_ORDER_ITEMS.map(item=>({productId:Number(item.productId),quantity:Number(item.quantity),unitCost:Number(item.unitCost)}))})});closeModal('purchaseOrderModal');PURCHASE_ORDER_EDIT_ID=null;setPurchaseTab('orders');toast(editId?'Orden actualizada':'Orden de compra creada');}catch(error){toast(error.message,true);}});
 $('#purchaseTransferForm')?.addEventListener('submit',async event=>{
   event.preventDefault();
   if(!updatePurchaseTransferValidity())return toast('Revisa las sucursales, productos y existencias disponibles',true);

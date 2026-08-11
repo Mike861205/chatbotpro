@@ -3,6 +3,7 @@ const { requireAuth, requireOwner } = require('../middleware/auth');
 const { ensureCostingSchema, money } = require('../utils/costing');
 const { ensurePurchasingSchema, writePurchaseAudit } = require('../utils/purchasing');
 const { ensureBranchStockSchema, initializeBranchStock, n } = require('../utils/branchStock');
+const { stockValuation } = require('../utils/stockValuation');
 
 const router = express.Router();
 router.use(requireAuth);
@@ -23,7 +24,7 @@ router.get('/', async (req, res, next) => {
     const [branches, products, stocks] = await Promise.all([
       req.tdb.all('SELECT id,name,active FROM {s}.branches ORDER BY active DESC,name'),
       req.tdb.all(`SELECT p.id,p.name,COALESCE(c.name,'Sin categoría') AS category_name,
-        COALESCE(p.unit_cost,0)::float AS unit_cost FROM {s}.products p
+        COALESCE(p.price,0)::float AS price, COALESCE(p.unit_cost,0)::float AS unit_cost FROM {s}.products p
         LEFT JOIN {s}.categories c ON c.id=p.category_id WHERE p.active=1 ORDER BY p.name`),
       req.tdb.all(`SELECT branch_id,product_id,quantity::float AS quantity,initial_quantity::float AS initial_quantity,
         baseline_started_at FROM {s}.branch_inventory`),
@@ -40,15 +41,22 @@ router.get('/', async (req, res, next) => {
       });
       return {
         productId: Number(product.id), productName: product.name, categoryName: product.category_name,
-        unitCost: Number(product.unit_cost || 0), globalQuantity: n(locations.reduce((sum, row) => sum + row.quantity, 0)), locations,
+        price: Number(product.price || 0), unitCost: Number(product.unit_cost || 0),
+        globalQuantity: n(locations.reduce((sum, row) => sum + row.quantity, 0)), locations,
       };
     });
     const summaries = stockBranches.map((branch) => {
       const locationRows = rows.map((row) => ({ row, stock: row.locations.find((item) => item.branchId === Number(branch.id)) }));
       const totalUnits = n(locationRows.reduce((sum, item) => sum + item.stock.quantity, 0));
-      const stockValue = money(locationRows.reduce((sum, item) => sum + item.stock.quantity * item.row.unitCost, 0));
+      const valuation = stockValuation(locationRows.map((item) => ({
+        quantity: item.stock.quantity,
+        salePrice: item.row.price,
+        unitCost: item.row.unitCost,
+      })));
       return {
-        branchId: Number(branch.id), branchName: branch.name, active: Number(branch.active), totalUnits, stockValue,
+        branchId: Number(branch.id), branchName: branch.name, active: Number(branch.active), totalUnits,
+        stockValue: valuation.salesValue,
+        ...valuation,
         productsWithStock: locationRows.filter((item) => item.stock.quantity > 0).length,
         productsOutOfStock: locationRows.filter((item) => item.stock.quantity <= 0).length,
       };
