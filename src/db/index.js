@@ -88,6 +88,8 @@ async function initMaster() {
       business_name TEXT NOT NULL,
       owner_name TEXT NOT NULL,
       phone_enc TEXT,
+      phone_country TEXT DEFAULT '',
+      phone_calling_code TEXT DEFAULT '',
       logo TEXT,
       primary_color TEXT DEFAULT '#ff6b35',
       account_status TEXT DEFAULT 'active',
@@ -102,6 +104,8 @@ async function initMaster() {
       contact_name TEXT NOT NULL,
       phone_enc TEXT NOT NULL,
       phone_hash TEXT UNIQUE NOT NULL,
+      phone_country TEXT DEFAULT '',
+      phone_calling_code TEXT DEFAULT '',
       business_giro TEXT NOT NULL,
       source_page TEXT DEFAULT 'landing',
       demo_count INTEGER DEFAULT 1,
@@ -160,9 +164,13 @@ async function initMaster() {
   await q(`ALTER TABLE tenants ADD COLUMN IF NOT EXISTS plan_name TEXT DEFAULT 'starter'`);
   await q(`ALTER TABLE tenants ADD COLUMN IF NOT EXISTS billing_due_date DATE`);
   await q(`ALTER TABLE tenants ADD COLUMN IF NOT EXISTS notes TEXT DEFAULT ''`);
+  await q(`ALTER TABLE tenants ADD COLUMN IF NOT EXISTS phone_country TEXT DEFAULT ''`);
+  await q(`ALTER TABLE tenants ADD COLUMN IF NOT EXISTS phone_calling_code TEXT DEFAULT ''`);
   await q(`ALTER TABLE demo_leads ADD COLUMN IF NOT EXISTS contact_name TEXT NOT NULL DEFAULT ''`);
   await q(`ALTER TABLE demo_leads ADD COLUMN IF NOT EXISTS phone_enc TEXT NOT NULL DEFAULT ''`);
   await q(`ALTER TABLE demo_leads ADD COLUMN IF NOT EXISTS phone_hash TEXT`);
+  await q(`ALTER TABLE demo_leads ADD COLUMN IF NOT EXISTS phone_country TEXT DEFAULT ''`);
+  await q(`ALTER TABLE demo_leads ADD COLUMN IF NOT EXISTS phone_calling_code TEXT DEFAULT ''`);
   await q(`ALTER TABLE demo_leads ADD COLUMN IF NOT EXISTS business_giro TEXT NOT NULL DEFAULT ''`);
   await q(`ALTER TABLE demo_leads ADD COLUMN IF NOT EXISTS source_page TEXT DEFAULT 'landing'`);
   await q(`ALTER TABLE demo_leads ADD COLUMN IF NOT EXISTS demo_count INTEGER DEFAULT 1`);
@@ -292,6 +300,7 @@ async function createTenantSchema(slug) {
       channel TEXT DEFAULT 'chatbot',
       delivery TEXT DEFAULT '',
       notes TEXT DEFAULT '',
+      order_notes TEXT DEFAULT '',
       created_at TIMESTAMPTZ DEFAULT now()
     );
     CREATE TABLE IF NOT EXISTS "${s}".pos_sessions (
@@ -433,6 +442,7 @@ async function createTenantSchema(slug) {
     ALTER TABLE "${s}".orders ADD COLUMN IF NOT EXISTS delivery_zone_name TEXT;
     ALTER TABLE "${s}".orders ADD COLUMN IF NOT EXISTS cancel_note TEXT;
     ALTER TABLE "${s}".orders ADD COLUMN IF NOT EXISTS payment_method TEXT DEFAULT '';
+    ALTER TABLE "${s}".orders ADD COLUMN IF NOT EXISTS order_notes TEXT DEFAULT '';
     ALTER TABLE "${s}".orders ADD COLUMN IF NOT EXISTS payment_breakdown TEXT;
     ALTER TABLE "${s}".orders ADD COLUMN IF NOT EXISTS cash_received NUMERIC(12,2);
     ALTER TABLE "${s}".orders ADD COLUMN IF NOT EXISTS cash_change NUMERIC(12,2);

@@ -55,6 +55,36 @@ function esc(v) {
   return String(v ?? '').replace(/[&<>"']/g, (m) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[m]));
 }
 
+function countryFlag(code) {
+  return String(code || '').toUpperCase().replace(/[A-Z]/g, (letter) =>
+    String.fromCodePoint(127397 + letter.charCodeAt(0))
+  );
+}
+
+async function copyPhone(value) {
+  const phone = String(value || '').trim();
+  if (!phone) return;
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(phone);
+  } else {
+    const input = document.createElement('textarea');
+    input.value = phone;
+    input.style.position = 'fixed';
+    input.style.opacity = '0';
+    document.body.appendChild(input);
+    input.select();
+    document.execCommand('copy');
+    input.remove();
+  }
+  toast(`Teléfono copiado: ${phone}`);
+}
+
+function bindPhoneActions() {
+  document.querySelectorAll('[data-sa-copy-phone]').forEach((button) => {
+    button.onclick = () => copyPhone(button.dataset.saCopyPhone).catch(() => toast('No se pudo copiar el teléfono', true));
+  });
+}
+
 function fmtDate(v) {
   if (!v) return '—';
   const d = new Date(v);
@@ -224,7 +254,7 @@ function getFilteredTenants() {
   return SA_TENANTS.filter((t) => {
     if (!matchesTenantFilter(t, SA_FILTER)) return false;
     if (!search) return true;
-    return [t.slug, t.business_name, t.owner_name, t.phone].join(' ').toLowerCase().includes(search);
+    return [t.slug, t.business_name, t.owner_name, t.phone, t.phone_country_name, t.phone_calling_code].join(' ').toLowerCase().includes(search);
   });
 }
 
@@ -306,9 +336,15 @@ function renderTenantTable() {
   table.innerHTML = `<div class="table-wrap"><table><thead><tr>
     <th>Tenant</th><th>Dueño</th><th>Registro</th><th>Cuenta</th><th>Pago</th><th>Plan</th><th>Vence</th><th>Módulos</th><th>Acciones</th>
   </tr></thead><tbody>${filtered
-    .map((t) => `<tr>
+    .map((t) => {
+      const waUrl = t.phone_valid && t.phone_digits ? `https://wa.me/${t.phone_digits}` : '';
+      const country = t.phone_country_name || t.phone_country || 'Sin país';
+      return `<tr>
       <td><b>${esc(t.business_name)}</b><div class="meta">/${esc(t.slug)}</div></td>
-      <td>${esc(t.owner_name)}<div class="meta">${esc(t.phone || '')}</div></td>
+      <td>${esc(t.owner_name)}
+        <div class="meta">${countryFlag(t.phone_country)} ${esc(country)} · Lada ${t.phone_calling_code ? `+${esc(t.phone_calling_code)}` : '—'}</div>
+        <div class="meta">${esc(t.phone || '—')}${t.phone && !t.phone_valid ? ' · Revisar número histórico' : ''}</div>
+      </td>
       <td>${fmtDate(t.created_at)}</td>
       <td>${statusChip('account', t.account_status)}</td>
       <td>${statusChip('billing', t.billing_status)}</td>
@@ -320,6 +356,8 @@ function renderTenantTable() {
           <button type="button" class="btn btn-ghost" data-sa-access="${t.id}"><i class="ph-bold ph-sign-in"></i> Entrar</button>
           <button type="button" class="btn btn-ghost" data-sa-password="${t.id}"><i class="ph-bold ph-key"></i> Password</button>
           <button type="button" class="btn btn-ghost" data-sa-payment="${t.id}"><i class="ph-bold ph-currency-circle-dollar"></i> Pago</button>
+          ${waUrl ? `<a class="btn btn-ghost" href="${waUrl}" target="_blank" rel="noopener noreferrer"><i class="ph-bold ph-whatsapp-logo"></i> WhatsApp</a>` : ''}
+          ${t.phone_valid && t.phone_e164 ? `<button type="button" class="btn btn-ghost" data-sa-copy-phone="${esc(t.phone_e164)}"><i class="ph-bold ph-copy"></i> Copiar</button>` : ''}
           <button type="button" class="btn ${(t.account_status === 'active' && t.billing_status !== 'suspended') ? 'btn-danger' : 'btn-primary'}" data-sa-suspend="${t.id}">
             <i class="ph-bold ${(t.account_status === 'active' && t.billing_status !== 'suspended') ? 'ph-pause-circle' : 'ph-play-circle'}"></i>
             ${(t.account_status === 'active' && t.billing_status !== 'suspended') ? 'Suspender' : 'Activar'}
@@ -327,7 +365,8 @@ function renderTenantTable() {
           <button type="button" class="btn btn-danger" data-sa-delete-tenant="${t.id}"><i class="ph-bold ph-trash"></i> Eliminar</button>
         </div>
       </td>
-    </tr>`)
+    </tr>`;
+    })
     .join('')}</tbody></table></div>`;
 
   document.querySelectorAll('[data-sa-access]').forEach((btn) => {
@@ -343,6 +382,7 @@ function renderTenantTable() {
     btn.addEventListener('click', () => toggleTenantSuspend(Number(btn.dataset.saSuspend)).catch((err) => toast(err.message, true)));
   });
   bindModuleUsageButtons();
+  bindPhoneActions();
   document.querySelectorAll('[data-sa-delete-tenant]').forEach((btn) => {
     btn.addEventListener('click', () => openDeleteModal('tenant', Number(btn.dataset.saDeleteTenant)));
   });
@@ -352,7 +392,7 @@ function getFilteredDemoLeads() {
   const search = String($('#saDemoLeadSearch')?.value || '').trim().toLowerCase();
   return SA_DEMO_LEADS.filter((lead) => {
     if (!search) return true;
-    return [lead.contact_name, lead.phone, lead.business_giro, lead.source_label, lead.last_demo_tenant_slug].join(' ').toLowerCase().includes(search);
+    return [lead.contact_name, lead.phone, lead.phone_country_name, lead.phone_calling_code, lead.business_giro, lead.source_label, lead.last_demo_tenant_slug].join(' ').toLowerCase().includes(search);
   });
 }
 
@@ -389,14 +429,15 @@ function renderDemoLeadsTable() {
   }
 
   table.innerHTML = `<div class="table-wrap"><table><thead><tr>
-    <th>Nombre</th><th>Teléfono</th><th>Giro</th><th>Origen</th><th>Veces</th><th>Primera vez</th><th>Última vez</th><th>Módulos</th><th>Acciones</th>
+    <th>Nombre</th><th>País</th><th>Lada / teléfono</th><th>Giro</th><th>Origen</th><th>Veces</th><th>Primera vez</th><th>Última vez</th><th>Módulos</th><th>Acciones</th>
   </tr></thead><tbody>${filtered
     .map((lead) => {
-      const digits = String(lead.phone || '').replace(/\D/g, '');
-      const waUrl = digits ? `https://wa.me/${digits}` : '';
+      const digits = String(lead.phone_digits || '').replace(/\D/g, '');
+      const waUrl = lead.phone_valid && digits ? `https://wa.me/${digits}` : '';
       return `<tr>
         <td><b>${esc(lead.contact_name)}</b><div class="meta">ID #${lead.id}</div></td>
-        <td>${digits ? esc(lead.phone) : '—'}</td>
+        <td>${countryFlag(lead.phone_country)} ${esc(lead.phone_country_name || lead.phone_country || '—')}</td>
+        <td><b>${lead.phone_calling_code ? `+${esc(lead.phone_calling_code)}` : '—'}</b><div class="meta">${digits ? esc(lead.phone) : '—'}${lead.phone && !lead.phone_valid ? ' · Revisar número histórico' : ''}</div></td>
         <td>${esc(lead.business_giro)}</td>
         <td><span class="tag">${esc(lead.source_label || 'Landing')}</span></td>
         <td><b>${Number(lead.demo_count || 0)}</b></td>
@@ -406,6 +447,7 @@ function renderDemoLeadsTable() {
         <td>
           <div style="display:flex;gap:6px;flex-wrap:wrap">
             ${waUrl ? `<a class="btn btn-ghost" href="${waUrl}" target="_blank" rel="noopener noreferrer"><i class="ph-bold ph-whatsapp-logo"></i> WhatsApp</a>` : ''}
+            ${lead.phone_valid && lead.phone_e164 ? `<button type="button" class="btn btn-ghost" data-sa-copy-phone="${esc(lead.phone_e164)}"><i class="ph-bold ph-copy"></i> Copiar</button>` : ''}
             <button type="button" class="btn btn-danger" data-sa-delete-lead="${lead.id}"><i class="ph-bold ph-trash"></i> Eliminar</button>
           </div>
         </td>
@@ -414,6 +456,7 @@ function renderDemoLeadsTable() {
     .join('')}</tbody></table></div>`;
 
   bindModuleUsageButtons();
+  bindPhoneActions();
   document.querySelectorAll('[data-sa-delete-lead]').forEach((btn) => {
     btn.addEventListener('click', () => openDeleteModal('lead', Number(btn.dataset.saDeleteLead)));
   });

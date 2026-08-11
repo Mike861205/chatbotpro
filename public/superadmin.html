@@ -68,7 +68,7 @@
               <button type="button" data-status="mora">En mora</button>
               <button type="button" data-status="inactive">Inactivos</button>
             </div>
-            <input id="saTenantSearch" type="search" placeholder="Buscar por negocio, slug o dueño" style="max-width:320px" />
+            <input id="saTenantSearch" type="search" placeholder="Buscar por negocio, país, lada o teléfono" style="max-width:360px" />
             <button type="button" class="btn btn-primary" id="saReloadTenants"><i class="ph-bold ph-arrows-clockwise"></i> Actualizar</button>
           </div>
           <div id="saTenantsTable"></div>
@@ -80,7 +80,7 @@
           <div class="demo-hero-copy">
             <span class="demo-hero-kicker"><i class="ph-bold ph-rocket-launch"></i> Leads demo</span>
             <h3>Contactos que quieren probar el sistema</h3>
-            <p>Visualiza nombres, teléfonos y giro de negocio para dar seguimiento comercial y convertir demos en ventas.</p>
+            <p>Visualiza nombres, país, lada, teléfono y giro de negocio para dar seguimiento comercial por WhatsApp.</p>
           </div>
           <button type="button" class="btn btn-ghost demo-hero-refresh" id="saReloadDemoLeads"><i class="ph-bold ph-arrows-clockwise"></i> Actualizar</button>
         </div>
@@ -90,14 +90,14 @@
             <h3><i class="ph-bold ph-chart-pie-slice"></i> Resumen vivo</h3>
             <span class="hint">Origen, actividad y ritmo de los leads demo</span>
           </div>
-          <p class="hint" style="margin-top:-4px;margin-bottom:12px">Contactos que dejaron nombre, teléfono y giro del negocio al abrir el demo.</p>
+          <p class="hint" style="margin-top:-4px;margin-bottom:12px">Contactos con teléfono internacional validado según el país y la lada seleccionados.</p>
           <div id="saDemoLeadSummary" class="pos-close-grid"></div>
         </div>
 
         <div class="card" style="padding:16px">
           <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:12px">
             <label for="saDemoLeadSearch" style="position:absolute;left:-9999px;width:1px;height:1px;overflow:hidden">Buscar leads demo</label>
-            <input id="saDemoLeadSearch" type="search" placeholder="Buscar por nombre, teléfono, giro o origen" style="max-width:340px" />
+            <input id="saDemoLeadSearch" type="search" placeholder="Buscar por nombre, país, lada, teléfono o giro" style="max-width:380px" />
           </div>
           <div id="saDemoLeadsTable"></div>
         </div>

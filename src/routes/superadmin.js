@@ -8,6 +8,7 @@ const { encrypt, decrypt } = require('../utils/crypto');
 const { createImageUpload, deleteManagedUpload, optimizeUploadedImage, safeUnlink } = require('../utils/uploads');
 const { signToken, setAuthCookie } = require('../middleware/auth');
 const { createRateLimiter } = require('../middleware/security');
+const { describeStoredPhone, normalizeInternationalPhone } = require('../utils/phone');
 const {
   signSuperAdminToken,
   setSuperAdminCookie,
@@ -21,11 +22,6 @@ const superadminLoginLimiter = createRateLimiter({
   max: 10,
   message: 'Demasiados intentos de acceso administrativo.',
 });
-
-function normalizePhone(raw) {
-  const digits = String(raw || '').replace(/\D/g, '');
-  return digits.length >= 10 && digits.length <= 15 ? digits : '';
-}
 
 const deployState = {
   running: false,
@@ -420,6 +416,8 @@ router.get('/tenants', requireSuperAdmin, async (req, res, next) => {
         t.business_name,
         t.owner_name,
         t.phone_enc,
+        t.phone_country,
+        t.phone_calling_code,
         t.logo,
         t.primary_color,
         t.account_status,
@@ -466,11 +464,20 @@ router.get('/tenants', requireSuperAdmin, async (req, res, next) => {
     `;
 
     const rows = await q(sql, values);
-    const mapped = rows.rows.map((row) => ({
+    const mapped = rows.rows.map((row) => {
+      const phone = describeStoredPhone(decrypt(row.phone_enc) || '', row.phone_country, row.phone_calling_code);
+      return {
         ...row,
-        phone: decrypt(row.phone_enc) || '',
+        phone: phone.international,
+        phone_e164: phone.e164,
+        phone_digits: phone.digits,
+        phone_valid: phone.valid,
+        phone_country: phone.country,
+        phone_country_name: phone.countryName,
+        phone_calling_code: phone.callingCode,
         due_alert: Number(row.days_to_due) >= 0 && Number(row.days_to_due) <= 5,
-      }));
+      };
+    });
 
     res.json({
       tenants: mapped,
@@ -502,6 +509,8 @@ router.get('/demo-leads', requireSuperAdmin, async (req, res, next) => {
         dl.id,
         dl.contact_name,
         dl.phone_enc,
+        dl.phone_country,
+        dl.phone_calling_code,
         dl.business_giro,
         dl.source_page,
         dl.demo_count,
@@ -535,11 +544,20 @@ router.get('/demo-leads', requireSuperAdmin, async (req, res, next) => {
     `;
 
     const rows = await q(sql, values);
-    const mapped = rows.rows.map((row) => ({
-      ...row,
-      phone: decrypt(row.phone_enc) || '',
-      source_label: String(row.source_page || '').toLowerCase() === 'login' ? 'Login' : 'Landing',
-    }));
+    const mapped = rows.rows.map((row) => {
+      const phone = describeStoredPhone(decrypt(row.phone_enc) || '', row.phone_country, row.phone_calling_code);
+      return {
+        ...row,
+        phone: phone.international,
+        phone_e164: phone.e164,
+        phone_digits: phone.digits,
+        phone_valid: phone.valid,
+        phone_country: phone.country,
+        phone_country_name: phone.countryName,
+        phone_calling_code: phone.callingCode,
+        source_label: String(row.source_page || '').toLowerCase() === 'login' ? 'Login' : 'Landing',
+      };
+    });
 
     res.json({
       demoLeads: mapped,
@@ -637,7 +655,17 @@ router.get('/tenants/:id/stats', requireSuperAdmin, async (req, res, next) => {
         slug: tenant.slug,
         business_name: tenant.business_name,
         owner_name: tenant.owner_name,
-        phone: decrypt(tenant.phone_enc) || '',
+        ...(() => {
+          const phone = describeStoredPhone(decrypt(tenant.phone_enc) || '', tenant.phone_country, tenant.phone_calling_code);
+          return {
+            phone: phone.international,
+            phone_e164: phone.e164,
+            phone_valid: phone.valid,
+            phone_country: phone.country,
+            phone_country_name: phone.countryName,
+            phone_calling_code: phone.callingCode,
+          };
+        })(),
         primary_color: tenant.primary_color || '#ff6b35',
         account_status: tenant.account_status,
         billing_status: tenant.billing_status,
@@ -675,9 +703,10 @@ router.patch('/tenants/:id', requireSuperAdmin, async (req, res, next) => {
     if (body.business_name !== undefined) push('business_name', String(body.business_name || '').trim());
     if (body.owner_name !== undefined) push('owner_name', String(body.owner_name || '').trim());
     if (body.phone !== undefined) {
-      const cleanPhone = normalizePhone(body.phone);
-      if (!cleanPhone) return res.status(400).json({ error: 'Telefono invalido: debe tener de 10 a 15 digitos' });
-      push('phone_enc', encrypt(cleanPhone));
+      const phone = normalizeInternationalPhone(body.phone, body.phone_country || body.phoneCountry);
+      push('phone_enc', encrypt(phone.e164));
+      push('phone_country', phone.country);
+      push('phone_calling_code', phone.callingCode);
     }
     if (body.primary_color !== undefined && /^#[0-9a-fA-F]{6}$/.test(String(body.primary_color || ''))) {
       push('primary_color', String(body.primary_color));

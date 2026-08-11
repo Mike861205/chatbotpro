@@ -8,7 +8,7 @@
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/regular/style.css" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/bold/style.css" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/fill/style.css" />
-  <link rel="stylesheet" href="/static/css/styles.css" />
+  <link rel="stylesheet" href="/static/css/styles.css?v=20260811-3" />
   <link rel="icon" type="image/svg+xml" href="/static/favicon.svg" />
   <link rel="icon" type="image/png" href="/static/chatbotpro100.png" />
 </head>
@@ -65,8 +65,19 @@
               <input type="text" id="ownerName" required />
             </div>
             <div class="field">
-              <label><i class="ph-bold ph-phone"></i> Teléfono *</label>
-              <input type="tel" id="phone" placeholder="10 dígitos" inputmode="tel" autocomplete="tel" required minlength="10" maxlength="18" pattern="[0-9\s()+\-]{10,18}" title="Ingresa un teléfono válido de 10 a 15 dígitos" />
+              <label for="phoneCountry"><i class="ph-bold ph-magnifying-glass"></i> Buscar país o lada *</label>
+              <select id="phoneCountry" required><option value="">Cargando países…</option></select>
+            </div>
+          </div>
+          <div class="row-2">
+            <div class="field">
+              <label for="phoneCallingCode"><i class="ph-bold ph-hash"></i> Lada internacional</label>
+              <input type="text" id="phoneCallingCode" readonly aria-readonly="true" />
+            </div>
+            <div class="field">
+              <label for="phone"><i class="ph-bold ph-phone"></i> Número de teléfono *</label>
+              <input type="tel" id="phone" placeholder="Número sin lada" inputmode="tel" autocomplete="tel-national" required maxlength="30" />
+              <div class="hint">Validaremos la longitud y lada del país seleccionado.</div>
             </div>
           </div>
           <div class="field">
@@ -98,7 +109,10 @@
     <i class="ph-fill ph-whatsapp-logo"></i>
     <span class="wa-txt"><b>¿Dudas para tu registro?</b><small>Te ayudo aquí</small></span>
   </a>
+  <script src="/static/js/phone-input.js?v=20260811-3"></script>
   <script>
+    CBPPhoneInput.setup({ countryId: 'phoneCountry', callingCodeId: 'phoneCallingCode', phoneId: 'phone' })
+      .catch(() => { document.getElementById('errorMsg').textContent = 'No se pudo cargar la lista de países. Recarga la página.'; document.getElementById('error').classList.add('show'); });
     const slugInput = document.getElementById('slug');
     const bizInput = document.getElementById('businessName');
     const slugify = (s) => s.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '')
@@ -120,16 +134,14 @@
       const btn = document.getElementById('btn');
       btn.disabled = true;
       try {
-        const phoneDigits = document.getElementById('phone').value.replace(/\D/g, '');
-        if (phoneDigits.length < 10 || phoneDigits.length > 15) {
-          throw new Error('Ingresa un teléfono válido de 10 a 15 dígitos');
-        }
+        const phoneData = CBPPhoneInput.values({ countryId: 'phoneCountry', phoneId: 'phone' });
         const res = await fetch('/api/auth/register', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             ownerName: document.getElementById('ownerName').value,
-            phone: phoneDigits,
+            phone: phoneData.phone,
+            phoneCountry: phoneData.phoneCountry,
             businessName: bizInput.value,
             slug: slugInput.value,
             username: document.getElementById('username').value,

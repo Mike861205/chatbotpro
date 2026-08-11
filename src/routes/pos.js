@@ -2,6 +2,7 @@ const express = require('express');
 const { requireAuth, requireOwner } = require('../middleware/auth');
 const { getSetting } = require('../db');
 const { decrypt } = require('../utils/crypto');
+const { operationalOrderNote } = require('../utils/orderNotes');
 const { ensureCostingSchema, itemsCost, preciseCost } = require('../utils/costing');
 const { ensurePurchasingSchema } = require('../utils/purchasing');
 const { ensureBranchStockSchema, initializeBranchStock, applyBranchSaleStock, restoreBranchSaleStock } = require('../utils/branchStock');
@@ -332,7 +333,7 @@ function paymentBreakdownForMethod(method, total) {
 
 async function loadChatbotOrderForImport(t, orderId) {
   return t.get(
-    `SELECT o.id, o.customer_id, o.items, o.total::float AS total, o.status, o.channel, o.delivery, o.notes,
+    `SELECT o.id, o.customer_id, o.items, o.total::float AS total, o.status, o.channel, o.delivery, o.notes, o.order_notes,
             o.payment_method, o.pickup_branch_name, o.customer_location_text, o.customer_location_resolved,
             o.delivery_fee::float AS delivery_fee, o.delivery_zone_name, o.service_branch_id, o.service_branch_name,o.branch_stock_applied,
             to_char(o.created_at AT TIME ZONE '${TZ}', 'DD Mon YYYY, HH24:MI') AS created_at,
@@ -360,7 +361,8 @@ function chatbotSummaryNote(order) {
   if (order.delivery === 'domicilio' && Number(order.delivery_fee || 0) > 0) {
     parts.push(`Envío: ${n(order.delivery_fee)}${order.delivery_zone_name ? ` (${order.delivery_zone_name})` : ''}`);
   }
-  if (order.notes) parts.push(`Nota cliente: ${order.notes}`);
+  const orderNote = operationalOrderNote(order);
+  if (orderNote) parts.push(`Nota del pedido: ${orderNote}`);
   return parts.join('\n');
 }
 
@@ -374,7 +376,7 @@ async function listRecentSales(t, sessionId = null) {
   params.push(15);
   const rows = await t.all(
     `SELECT id, total::float AS total, status, payment_method, payment_breakdown, cash_received::float AS cash_received,
-            cash_change::float AS cash_change, notes, items, table_account_id, table_number, waiter_name,
+            cash_change::float AS cash_change, COALESCE(NULLIF(order_notes, ''), notes) AS notes, items, table_account_id, table_number, waiter_name,
             to_char(created_at AT TIME ZONE '${TZ}', 'DD Mon YYYY, HH24:MI') AS created_at
      FROM {s}.orders
      ${where}
@@ -452,7 +454,7 @@ async function listSalesHistoryPage(t, options = {}) {
 
   const rows = await t.all(
     `SELECT id, total::float AS total, status, payment_method, payment_breakdown, cash_received::float AS cash_received,
-            cash_change::float AS cash_change, notes, items, table_account_id, table_number, waiter_name,
+            cash_change::float AS cash_change, COALESCE(NULLIF(order_notes, ''), notes) AS notes, items, table_account_id, table_number, waiter_name,
             to_char(created_at AT TIME ZONE '${TZ}', 'DD Mon YYYY, HH24:MI') AS created_at
      FROM {s}.orders
      ${whereSql}
@@ -892,12 +894,12 @@ router.post('/table-accounts/:id/checkout', async (req, res, next) => {
         `INSERT INTO {s}.orders
          (customer_id, items, subtotal, total, status, channel, delivery, notes, payment_method, payment_breakdown,
           cash_received, cash_change, pos_session_id, delivery_fee, service_branch_id, service_branch_name,
-          table_account_id, table_number, waiter_name, cogs_total)
-         VALUES (NULL, $1, $2, $2, 'entregado', 'pos', 'mesa', $3, $4, $5, $6, $7, $8, 0, $9, $10, $11, $12, $13, $14)
+          table_account_id, table_number, waiter_name, cogs_total, order_notes)
+         VALUES (NULL, $1, $2, $2, 'entregado', 'pos', 'mesa', $3, $4, $5, $6, $7, $8, 0, $9, $10, $11, $12, $13, $14, $15)
          RETURNING id`,
         [JSON.stringify(items), subtotal, notes, payment.method, JSON.stringify(payment.breakdown), payment.cashReceived || null,
           payment.cashChange || null, session.id, session.branch_id || null, session.branch_name || null,
-          account.id, account.table_number, waiterName, cogsTotal]
+          account.id, account.table_number, waiterName, cogsTotal, userNote]
       );
       if (await decrementBranchStockForSale(tx, session.branch_id, items)) await tx.run('UPDATE {s}.orders SET branch_stock_applied=1 WHERE id=$1', [saleRow.id]);
       await tx.run(
@@ -907,7 +909,7 @@ router.post('/table-accounts/:id/checkout', async (req, res, next) => {
          WHERE id = $6`,
         [JSON.stringify(items), subtotal, session.id, saleRow.id, req.user.username, account.id]
       );
-      return { account, items, subtotal, payment, notes, saleId: saleRow.id };
+      return { account, items, subtotal, payment, notes, orderNote: userNote, saleId: saleRow.id };
     });
     const totals = await getSessionTotals(req.tdb, session.id);
     const rounds = await listTableRounds(req.tdb, [accountId]);
@@ -923,7 +925,7 @@ router.post('/table-accounts/:id/checkout', async (req, res, next) => {
         paymentBreakdown: result.payment.breakdown,
         cashReceived: result.payment.cashReceived,
         cashChange: result.payment.cashChange,
-        notes: result.notes,
+        notes: result.orderNote,
         tableNumber: result.account.table_number,
         waiterName: result.account.waiter_name,
         rounds,
@@ -1035,7 +1037,7 @@ router.get('/chatbot-orders', async (req, res, next) => {
     rowParams.push(pageSize, offset);
 
     const rows = await req.tdb.all(
-      `SELECT o.id, o.items, o.total::float AS total, o.status, o.delivery, o.notes, o.payment_method,
+      `SELECT o.id, o.items, o.total::float AS total, o.status, o.delivery, o.notes, o.order_notes, o.payment_method,
               o.pickup_branch_name, o.customer_location_text, o.customer_location_resolved,
               o.service_branch_id, o.service_branch_name,
               to_char(o.created_at AT TIME ZONE '${TZ}', 'DD Mon YYYY, HH24:MI') AS created_at,
@@ -1057,7 +1059,7 @@ router.get('/chatbot-orders', async (req, res, next) => {
       status: row.status,
       delivery: row.delivery,
       payment_method: row.payment_method || 'cash',
-      notes: row.notes || '',
+      notes: row.order_notes || '',
       pickup_branch_name: row.pickup_branch_name,
       service_branch_id: row.service_branch_id,
       service_branch_name: row.service_branch_name,
@@ -1143,7 +1145,7 @@ router.post('/chatbot-orders/:id/import', async (req, res, next) => {
          AND status = ANY($6::text[])
          AND (created_at AT TIME ZONE '${TZ}')::date = (now() AT TIME ZONE '${TZ}')::date
        RETURNING id, total::float AS total, payment_method, payment_breakdown, cash_received::float AS cash_received,
-                 cash_change::float AS cash_change, notes, items,
+                 cash_change::float AS cash_change, notes, order_notes, items,
                  to_char(created_at AT TIME ZONE '${TZ}', 'DD Mon YYYY, HH24:MI') AS created_at`,
       [session.id, paymentMethod, JSON.stringify(paymentBreakdown), mergedNote, id, Array.from(CHATBOT_IMPORTABLE_STATUSES), session.branch_id || null, session.branch_name || null, JSON.stringify(costedSourceItems), cogsTotal]
     );
@@ -1158,7 +1160,7 @@ router.post('/chatbot-orders/:id/import', async (req, res, next) => {
     const saleRow = await req.tdb.get(
       `SELECT id, subtotal::float AS subtotal, total::float AS total, delivery_fee::float AS delivery_fee,
               status, payment_method, payment_breakdown, cash_received::float AS cash_received,
-              cash_change::float AS cash_change, notes, items,
+              cash_change::float AS cash_change, notes, order_notes, items,
               to_char(created_at AT TIME ZONE '${TZ}', 'DD Mon YYYY, HH24:MI') AS created_at
        FROM {s}.orders
        WHERE id = $1`,
@@ -1170,6 +1172,7 @@ router.post('/chatbot-orders/:id/import', async (req, res, next) => {
       ok: true,
       sale: {
         ...saleRow,
+        notes: saleRow.order_notes || '',
         subtotal: Number(saleRow.subtotal || saleRow.total || 0),
         deliveryFee: Number(saleRow.delivery_fee || 0),
         items: JSON.parse(saleRow.items || '[]'),
@@ -1314,8 +1317,8 @@ async function createPosSale(req, res, next) {
       const cogsTotal = itemsCost(saleItems);
       const row = await tx.get(
         `INSERT INTO {s}.orders
-         (customer_id, items, subtotal, total, status, channel, delivery, notes, payment_method, payment_breakdown, cash_received, cash_change, pos_session_id, delivery_fee, service_branch_id, service_branch_name, cogs_total)
-         VALUES (NULL, $1, $2, $3, 'entregado', 'pos', $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+         (customer_id, items, subtotal, total, status, channel, delivery, notes, payment_method, payment_breakdown, cash_received, cash_change, pos_session_id, delivery_fee, service_branch_id, service_branch_name, cogs_total, order_notes)
+         VALUES (NULL, $1, $2, $3, 'entregado', 'pos', $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
          RETURNING id`,
         [
           JSON.stringify(saleItems),
@@ -1332,6 +1335,7 @@ async function createPosSale(req, res, next) {
           session.branch_id || null,
           session.branch_name || null,
           cogsTotal,
+          notes,
         ]
       );
       if (await decrementBranchStockForSale(tx, session.branch_id, saleItems)) {

@@ -8,7 +8,7 @@
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/regular/style.css" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/bold/style.css" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/fill/style.css" />
-  <link rel="stylesheet" href="/static/css/styles.css" />
+  <link rel="stylesheet" href="/static/css/styles.css?v=20260811-3" />
   <link rel="icon" type="image/svg+xml" href="/static/favicon.svg" />
   <link rel="icon" type="image/png" href="/static/chatbotpro100.png" />
 </head>
@@ -100,12 +100,22 @@
         </div>
         <div class="row-2">
           <div class="field">
-            <label for="demoLeadPhone"><i class="ph-bold ph-phone"></i> Teléfono *</label>
-            <input type="tel" id="demoLeadPhone" autocomplete="tel" inputmode="tel" placeholder="10 dígitos" required />
+            <label for="demoLeadCountry"><i class="ph-bold ph-magnifying-glass"></i> Buscar país o lada *</label>
+            <select id="demoLeadCountry" required><option value="">Cargando países…</option></select>
           </div>
           <div class="field">
             <label for="demoLeadGiro"><i class="ph-bold ph-storefront"></i> Giro del negocio *</label>
             <input type="text" id="demoLeadGiro" placeholder="Pizzería, tacos, cafetería..." required />
+          </div>
+        </div>
+        <div class="row-2">
+          <div class="field">
+            <label for="demoLeadCallingCode"><i class="ph-bold ph-hash"></i> Lada internacional</label>
+            <input type="text" id="demoLeadCallingCode" readonly aria-readonly="true" />
+          </div>
+          <div class="field">
+            <label for="demoLeadPhone"><i class="ph-bold ph-phone"></i> Número de teléfono *</label>
+            <input type="tel" id="demoLeadPhone" autocomplete="tel-national" inputmode="tel" placeholder="Número sin lada" maxlength="30" required />
           </div>
         </div>
         <div class="modal-actions">
@@ -119,6 +129,7 @@
     <i class="ph-fill ph-whatsapp-logo"></i>
     <span class="wa-txt"><b>¿Dudas para tu registro?</b><small>Te ayudo aquí</small></span>
   </a>
+  <script src="/static/js/phone-input.js?v=20260811-3"></script>
   <script>
     const form = document.getElementById('loginForm');
     const loginBtn = document.getElementById('loginBtn');
@@ -131,6 +142,8 @@
     const demoLeadModal = document.getElementById('demoLeadModal');
     const demoLeadForm = document.getElementById('demoLeadForm');
     const demoLeadCancel = document.getElementById('demoLeadCancel');
+    CBPPhoneInput.setup({ countryId: 'demoLeadCountry', callingCodeId: 'demoLeadCallingCode', phoneId: 'demoLeadPhone' })
+      .catch(() => { document.getElementById('errorMsg').textContent = 'No se pudo cargar la lista de países. Recarga la página.'; document.getElementById('error').classList.add('show'); });
 
     function openDemoLeadModal() {
       demoLeadModal.hidden = false;
@@ -198,16 +211,19 @@
 
     demoLeadForm.addEventListener('submit', async (e) => {
       e.preventDefault();
-      const phoneDigits = document.getElementById('demoLeadPhone').value.replace(/\D/g, '');
-      if (phoneDigits.length < 10 || phoneDigits.length > 15) {
-        document.getElementById('errorMsg').textContent = 'Ingresa un teléfono válido de 10 a 15 dígitos';
+      let phoneData;
+      try {
+        phoneData = CBPPhoneInput.values({ countryId: 'demoLeadCountry', phoneId: 'demoLeadPhone' });
+      } catch (error) {
+        document.getElementById('errorMsg').textContent = error.message;
         document.getElementById('error').classList.add('show');
         return;
       }
       closeDemoLeadModal();
       await doLogin('/api/auth/demo-login', {
         contactName: document.getElementById('demoLeadName').value,
-        phone: phoneDigits,
+        phone: phoneData.phone,
+        phoneCountry: phoneData.phoneCountry,
         businessGiro: document.getElementById('demoLeadGiro').value,
         sourcePage: 'login',
       });

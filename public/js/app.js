@@ -2244,6 +2244,10 @@ function buildOrderComandaItems(order) {
   }));
 }
 
+function operationalOrderNote(order) {
+  return String(order?.order_note || order?.order_notes || (order?.channel === 'pos' ? order?.notes : '') || '').trim();
+}
+
 function openOrderComandaPrintWindow(order) {
   if (!order) return toast('No se encontró el pedido para imprimir', true);
   const items = buildOrderComandaItems(order);
@@ -2281,7 +2285,7 @@ function openOrderComandaPrintWindow(order) {
   const delivery = esc(buildOrderDeliveryLabel(order));
   const branch = esc(order?.delivery === 'domicilio' ? (order?.service_branch_name || '—') : (order?.pickup_branch_name || '—'));
   const createdAt = esc(order?.created_at || new Date().toLocaleString('es-MX'));
-  const notes = esc(String(order?.notes || '').trim());
+  const notes = esc(operationalOrderNote(order));
 
   const html = `<!doctype html>
 <html lang="es">
@@ -2306,6 +2310,8 @@ function openOrderComandaPrintWindow(order) {
     td { padding: 4px 2px; vertical-align: top; }
     td.qty { width: 22%; text-align: center; font-weight: 800; }
     .headline { font-size: ${Math.max(fontPx + 2, 14)}px; font-weight: 800; letter-spacing: 0.5px; }
+    .order-note { margin: 9px 0; padding: 8px; border: 3px double #000; font-size: ${Math.max(fontPx + 2, 14)}px; font-weight: 900; line-height: 1.35; text-align: center; overflow-wrap: anywhere; }
+    .order-note span { display: block; margin-bottom: 3px; font-size: ${Math.max(fontPx - 2, 10)}px; letter-spacing: .7px; }
   </style>
 </head>
 <body>
@@ -2320,7 +2326,7 @@ function openOrderComandaPrintWindow(order) {
     <div class="meta"><b>Cliente:</b> ${customerName}${customerPhone ? ` · ${customerPhone}` : ''}</div>
     <div class="meta"><b>Entrega:</b> ${delivery}</div>
     <div class="meta"><b>Sucursal:</b> ${branch}</div>
-    ${notes ? `<div class="meta"><b>Nota:</b> ${notes}</div>` : ''}
+    ${notes ? `<div class="order-note"><span>⚠ NOTA DEL PEDIDO</span>${notes}</div>` : ''}
     <div class="sep"></div>
     <table>
       <thead>
@@ -2352,6 +2358,10 @@ function ordersTableHTML(orders, editable = true) {
   const rows = orders
     .map((o) => {
       const items = o.items.map((it) => `${it.qty}× ${it.name}`).join(', ');
+      const orderNote = operationalOrderNote(o);
+      const noteCallout = orderNote
+        ? `<div class="order-note-callout"><span><i class="ph-fill ph-warning-circle"></i> Nota del pedido</span><b>${esc(orderNote)}</b></div>`
+        : '';
       const statusCell = editable
         ? `<select data-order="${o.id}" class="status-sel s-${o.status}">
             ${STATUSES.map((st) => `<option value="${st}" ${st === o.status ? 'selected' : ''}>${st[0].toUpperCase() + st.slice(1)}</option>`).join('')}
@@ -2385,7 +2395,7 @@ function ordersTableHTML(orders, editable = true) {
       return `<tr>
         <td><b>#${o.id}</b></td>
         <td><div class="cust">${custAvatar(o.customer?.name)}<div class="cmeta"><b>${esc(o.customer?.name || '—')}</b><span>${esc(o.customer?.phone || '')}</span></div></div></td>
-        <td style="max-width:280px">${esc(items)}</td>
+        <td style="max-width:280px">${esc(items)}${noteCallout}</td>
         <td style="white-space:nowrap">${deliveryText}${deliveryFeeText}${locationText}${cancelNoteText}</td>
         <td style="white-space:nowrap;font-size:13px"><b>${esc(o.delivery === 'domicilio' ? (o.service_branch_name || '—') : (o.pickup_branch_name || '—'))}</b></td>
         <td><b>${fmtMoney(o.total)}</b></td>
@@ -3177,6 +3187,8 @@ function openThermalPrintWindow(ticket) {
     .meta { font-size: ${Math.max(fontPx - 1, 10)}px; }
     .logo { text-align: center; margin-bottom: 6px; }
     .logo img { max-width: 46mm; max-height: 22mm; object-fit: contain; }
+    .order-note { margin: 9px 0; padding: 8px; border: 3px double #000; font-size: ${Math.max(fontPx + 2, 14)}px; font-weight: 900; line-height: 1.35; text-align: center; overflow-wrap: anywhere; }
+    .order-note span { display: block; margin-bottom: 3px; font-size: ${Math.max(fontPx - 2, 10)}px; letter-spacing: .7px; }
   </style>
 </head>
 <body>
@@ -3207,7 +3219,7 @@ function openThermalPrintWindow(ticket) {
     ${!isMixed && Number(ticket.cashReceived || 0) > 0 ? `<tr><td>Efectivo recibido</td><td class="r">${esc(fmtMoney(ticket.cashReceived, currency))}</td></tr>` : ''}
     ${!isMixed && Number(ticket.cashChange || 0) > 0 ? `<tr><td>Cambio</td><td class="r">${esc(fmtMoney(ticket.cashChange, currency))}</td></tr>` : ''}`}
   </table>
-  ${ticket.notes ? `<div class="sep"></div><div class="meta">Nota: ${esc(ticket.notes)}</div>` : ''}
+  ${ticket.notes ? `<div class="sep"></div><div class="order-note"><span>⚠ NOTA DEL PEDIDO</span>${esc(ticket.notes)}</div>` : ''}
   <div class="sep"></div>
   <div class="center meta">${isRoundTicket ? 'Ronda enviada a preparación' : 'Gracias por tu compra'}</div>
   </div>
@@ -4372,7 +4384,7 @@ async function loadPosChatbotQueue(page = 1) {
         const items = (order.items || []).map((it) => `${it.qty}x ${it.name}`).join(', ');
         const isImporting = POS_CHATBOT_IMPORTING.has(Number(order.id));
         const locationText = order.customer_location_text || order.customer_location_resolved || '—';
-        const noteText = order.notes || '—';
+        const noteText = String(order.notes || '').trim();
         return `<article class="pos-chatbot-card">
           <div class="pos-chatbot-card-head">
             <b>#${order.id}</b>
@@ -4386,7 +4398,7 @@ async function loadPosChatbotQueue(page = 1) {
             <div class="pos-chatbot-kv"><span>Productos</span><div>${esc(items || '—')}</div></div>
             <div class="pos-chatbot-kv"><span>Estado</span><div>${chatbotOrderStatusBadge(order.status)}</div></div>
             <div class="pos-chatbot-kv"><span>Fecha</span><div>${esc(order.created_at || '')}</div></div>
-            <div class="pos-chatbot-kv"><span>Nota</span><div>${esc(noteText)}</div></div>
+            ${noteText ? `<div class="order-note-callout" style="grid-column:1/-1"><span><i class="ph-fill ph-warning-circle"></i> Nota del pedido</span><b>${esc(noteText)}</b></div>` : ''}
           </div>
           <button type="button" class="btn-pos-charge" data-import-chatbot-order="${order.id}" ${isImporting ? 'disabled' : ''}><i class="ph-bold ph-cash-register"></i> ${isImporting ? 'Procesando...' : 'Cobrar en POS'}</button>
         </article>`;
@@ -4401,7 +4413,7 @@ async function loadPosChatbotQueue(page = 1) {
           ? `<div style="font-size:12px;color:var(--ink-3)">${esc(order.customer_location_text)}</div>`
           : (order.customer_location_resolved ? `<div style="font-size:12px;color:var(--ink-3)">${esc(order.customer_location_resolved)}</div>` : '');
         const noteLine = order.notes
-          ? `<div style="font-size:12px;color:var(--ink-3);margin-top:4px">Nota: ${esc(order.notes)}</div>`
+          ? `<div class="order-note-callout"><span><i class="ph-fill ph-warning-circle"></i> Nota del pedido</span><b>${esc(order.notes)}</b></div>`
           : '';
         return `<tr>
           <td class="td-pedido"><b>#${order.id}</b></td>

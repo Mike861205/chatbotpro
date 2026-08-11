@@ -115,7 +115,7 @@
         ${ticket.isMixed ? `<span class="mixed-badge"><i class="ph-bold ph-arrows-split"></i> Mixto: ${esc(routeNames || 'varias áreas')}</span>` : ''}
       </div>
       <ul class="ticket-items">${itemList(ticket.areaItems)}</ul>
-      ${ticket.notes ? `<p class="ticket-notes"><i class="ph-bold ph-note-pencil"></i> <b>Nota:</b> ${esc(ticket.notes)}</p>` : ''}
+      ${ticket.notes ? `<div class="ticket-notes"><span><i class="ph-fill ph-warning-circle"></i> NOTA DEL PEDIDO</span><b>${esc(ticket.notes)}</b></div>` : ''}
       ${ticket.otherItems.length ? `<details class="ticket-other"><summary>${ticket.otherItems.length} partida(s) enviadas a otra área</summary><p>${esc(otherNames)}</p></details>` : ''}
       <div class="ticket-actions">
         ${back ? `<button class="ticket-back" type="button" data-status="${back}" title="Regresar estado"><i class="ph-bold ph-arrow-u-up-left"></i></button>` : ''}

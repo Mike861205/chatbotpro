@@ -3,6 +3,7 @@ const crypto = require('node:crypto');
 const { q, tdb } = require('../db');
 const { requireAuth, requireOwner } = require('../middleware/auth');
 const { decrypt } = require('../utils/crypto');
+const { operationalOrderNote } = require('../utils/orderNotes');
 
 const router = express.Router();
 const KDS_STATUSES = new Set(['pending', 'preparing', 'ready', 'completed']);
@@ -91,7 +92,7 @@ async function buildKdsPayload(tenant, tenantDb, area) {
     tenantDb.all('SELECT category_id FROM {s}.kds_area_categories WHERE area_id = $1', [area.id]),
     tenantDb.all('SELECT product_id FROM {s}.kds_area_products WHERE area_id = $1', [area.id]),
     tenantDb.all(
-      `SELECT o.id, o.customer_id, o.items, o.status AS order_status, o.channel, o.delivery, o.notes,
+      `SELECT o.id, o.customer_id, o.items, o.status AS order_status, o.channel, o.delivery, o.notes, o.order_notes,
               o.service_branch_id, o.service_branch_name, o.pickup_branch_id, o.pickup_branch_name, o.created_at,
               s.status AS kds_status, s.started_at, s.ready_at, s.completed_at, s.updated_at
        FROM {s}.orders o
@@ -105,7 +106,7 @@ async function buildKdsPayload(tenant, tenantDb, area) {
     ),
     tenantDb.all(
       `SELECT (-tr.id) AS id, NULL::int AS customer_id, tr.items, 'pendiente' AS order_status,
-              'table_round' AS channel, 'mesa' AS delivery, tr.notes,
+              'table_round' AS channel, 'mesa' AS delivery, tr.notes, tr.notes AS order_notes,
               NULLIF(ta.branch_id, 0) AS service_branch_id, b.name AS service_branch_name,
               NULL::int AS pickup_branch_id, NULL::text AS pickup_branch_name, tr.created_at,
               s.status AS kds_status, s.started_at, s.ready_at, s.completed_at, s.updated_at,
@@ -183,7 +184,7 @@ async function buildKdsPayload(tenant, tenantDb, area) {
       orderStatus: order.order_status,
       channel: order.channel,
       delivery: order.delivery,
-      notes: order.notes || '',
+      notes: operationalOrderNote(order),
       branchName: order.service_branch_name || order.pickup_branch_name || '',
       customerName: customerById.get(Number(order.customer_id)) || '',
       createdAt: order.created_at,

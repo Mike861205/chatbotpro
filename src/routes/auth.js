@@ -6,6 +6,7 @@ const { q, tdb, initTenantDefaults } = require('../db');
 const { encrypt, decrypt, lookupHash } = require('../utils/crypto');
 const { signToken, setAuthCookie, clearAuthCookie, requireAuth } = require('../middleware/auth');
 const { createRateLimiter } = require('../middleware/security');
+const { normalizeInternationalPhone, phoneCountries } = require('../utils/phone');
 
 const router = express.Router();
 
@@ -42,32 +43,39 @@ function supportWhatsappUrl() {
   return `https://wa.me/${SUPPORT_WHATSAPP}?text=${encodeURIComponent(SUPPORT_MESSAGE)}`;
 }
 
-function normalizePhone(raw) {
-  const digits = String(raw || '').replace(/\D/g, '');
-  return digits.length >= 10 && digits.length <= 15 ? digits : '';
-}
-
 function normalizeLeadText(raw, maxLength = 120) {
   return String(raw || '').trim().replace(/\s+/g, ' ').slice(0, maxLength);
 }
 
-async function saveDemoLead({ contactName, phone, businessGiro, sourcePage, tenantSlug }) {
+async function saveDemoLead({ contactName, phone, phoneCountry, businessGiro, sourcePage, tenantSlug }) {
   const cleanName = normalizeLeadText(contactName, 120);
-  const cleanPhone = normalizePhone(phone);
+  const normalizedPhone = normalizeInternationalPhone(phone, phoneCountry);
   const cleanGiro = normalizeLeadText(businessGiro, 120);
   const cleanSource = ['landing', 'login'].includes(String(sourcePage || '').trim().toLowerCase())
     ? String(sourcePage).trim().toLowerCase()
     : 'landing';
 
-  if (!cleanName || !cleanPhone || !cleanGiro) {
-    const err = new Error('Nombre, telefono y giro del negocio son obligatorios');
+  if (!cleanName || !cleanGiro) {
+    const err = new Error('Nombre, teléfono y giro del negocio son obligatorios');
     err.status = 400;
     throw err;
   }
 
-  const phoneHash = lookupHash(cleanPhone);
-  const phoneEnc = encrypt(cleanPhone);
-  const existing = await q('SELECT id, demo_count, first_seen_at FROM demo_leads WHERE phone_hash = $1 LIMIT 1', [phoneHash]);
+  const phoneHash = lookupHash(normalizedPhone.digits);
+  const phoneEnc = encrypt(normalizedPhone.e164);
+  const legacyHashes = [...new Set([
+    phoneHash,
+    lookupHash(normalizedPhone.nationalNumber),
+    lookupHash(String(phone || '').replace(/\D/g, '')),
+  ])];
+  const existing = await q(
+    `SELECT id, demo_count, first_seen_at
+     FROM demo_leads
+     WHERE phone_hash = ANY($1::text[])
+     ORDER BY CASE WHEN phone_hash = $2 THEN 0 ELSE 1 END, id ASC
+     LIMIT 1`,
+    [legacyHashes, phoneHash]
+  );
   const row = existing.rows[0];
 
   if (row) {
@@ -75,22 +83,25 @@ async function saveDemoLead({ contactName, phone, businessGiro, sourcePage, tena
       `UPDATE demo_leads
        SET contact_name = $1,
            phone_enc = $2,
-           business_giro = $3,
-           source_page = $4,
+           phone_hash = $3,
+           phone_country = $4,
+           phone_calling_code = $5,
+           business_giro = $6,
+           source_page = $7,
            demo_count = COALESCE(demo_count, 0) + 1,
            last_seen_at = now(),
-           last_demo_tenant_slug = $5
-       WHERE id = $6`,
-      [cleanName, phoneEnc, cleanGiro, cleanSource, tenantSlug || '', row.id]
+           last_demo_tenant_slug = $8
+       WHERE id = $9`,
+      [cleanName, phoneEnc, phoneHash, normalizedPhone.country, normalizedPhone.callingCode, cleanGiro, cleanSource, tenantSlug || '', row.id]
     );
     return { id: row.id, demo_count: Number(row.demo_count || 1) + 1 };
   }
 
   const inserted = await q(
-    `INSERT INTO demo_leads (contact_name, phone_enc, phone_hash, business_giro, source_page, demo_count, first_seen_at, last_seen_at, last_demo_tenant_slug)
-     VALUES ($1, $2, $3, $4, $5, 1, now(), now(), $6)
+    `INSERT INTO demo_leads (contact_name, phone_enc, phone_hash, phone_country, phone_calling_code, business_giro, source_page, demo_count, first_seen_at, last_seen_at, last_demo_tenant_slug)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, 1, now(), now(), $8)
      RETURNING id, demo_count`,
-    [cleanName, phoneEnc, phoneHash, cleanGiro, cleanSource, tenantSlug || '']
+    [cleanName, phoneEnc, phoneHash, normalizedPhone.country, normalizedPhone.callingCode, cleanGiro, cleanSource, tenantSlug || '']
   );
   return inserted.rows[0] || { id: null, demo_count: 1 };
 }
@@ -139,16 +150,17 @@ async function ensureDemoUser(username, password, tenant) {
 }
 
 // Registro de un nuevo negocio (tenant) + usuario dueño
+router.get('/phone-countries', (req, res) => {
+  res.json({ countries: phoneCountries(), defaultCountry: 'MX' });
+});
+
 router.post('/register', authAttemptLimiter, async (req, res, next) => {
   try {
-    const { ownerName, phone, businessName, slug, username, password } = req.body || {};
-    if (!ownerName || !phone || !businessName || !slug || !username || !password) {
+    const { ownerName, phone, phoneCountry, businessName, slug, username, password } = req.body || {};
+    if (!ownerName || !phone || !phoneCountry || !businessName || !slug || !username || !password) {
       return res.status(400).json({ error: 'Todos los campos marcados son obligatorios' });
     }
-    const cleanPhone = normalizePhone(phone);
-    if (!cleanPhone) {
-      return res.status(400).json({ error: 'Ingresa un telefono valido de 10 a 15 digitos' });
-    }
+    const normalizedPhone = normalizeInternationalPhone(phone, phoneCountry);
     const cleanSlug = String(slug).trim().toLowerCase();
     const cleanUser = String(username).trim().toLowerCase();
     const cleanOwnerName = normalizeLeadText(ownerName, 120);
@@ -170,8 +182,9 @@ router.post('/register', authAttemptLimiter, async (req, res, next) => {
 
     const passwordHash = await bcrypt.hash(cleanPassword, 12);
     const t = await q(
-      'INSERT INTO tenants (slug, business_name, owner_name, phone_enc) VALUES ($1, $2, $3, $4) RETURNING *',
-      [cleanSlug, cleanBusinessName, cleanOwnerName, encrypt(cleanPhone)]
+      `INSERT INTO tenants (slug, business_name, owner_name, phone_enc, phone_country, phone_calling_code)
+       VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
+      [cleanSlug, cleanBusinessName, cleanOwnerName, encrypt(normalizedPhone.e164), normalizedPhone.country, normalizedPhone.callingCode]
     );
     const tenant = t.rows[0];
     const u = await q(
@@ -240,6 +253,7 @@ router.post('/demo-login', authAttemptLimiter, async (req, res, next) => {
     const body = req.body || {};
     const contactName = body.contactName ?? body.name ?? body.ownerName;
     const phone = body.phone ?? body.contactPhone;
+    const phoneCountry = body.phoneCountry ?? body.country;
     const businessGiro = body.businessGiro ?? body.giro ?? body.businessType;
     const sourcePage = body.sourcePage ?? body.source ?? 'landing';
 
@@ -248,6 +262,7 @@ router.post('/demo-login', authAttemptLimiter, async (req, res, next) => {
       demoLead = await saveDemoLead({
         contactName,
         phone,
+        phoneCountry,
         businessGiro,
         sourcePage,
         tenantSlug: String(config.DEMO_TENANT_SLUG || '').trim().toLowerCase(),

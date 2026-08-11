@@ -823,16 +823,18 @@ async function replyNextModifierGroup(state, reply, currency, t, finish, keepMes
   return finish();
 }
 
-function buildOrderText(businessName, cart, customer, delivery, currency, labels = RESTAURANT_LABELS) {
+function buildOrderText(businessName, cart, customer, delivery, currency, labels = RESTAURANT_LABELS, orderId = null) {
   const subtotal = cartTotal(cart);
   const deliveryFee = Number(customer?.deliveryFee || 0);
   const deliveryLabel = deliveryZoneServiceLabel(customer);
   const orderNote = String(customer?.orderNote || '').trim();
   const headerTitle = labels.newOrderHeader || 'Nuevo pedido';
+  const normalizedOrderId = Number(orderId);
+  const orderNumber = Number.isInteger(normalizedOrderId) && normalizedOrderId > 0 ? ` #${normalizedOrderId}` : '';
   const addressLbl = labels.addressLabel || '📍 Entrega a domicilio';
   const pickupLbl = labels.pickupLabel || '🏪 Recoger en sucursal';
   const lines = [
-    `🧾 *${headerTitle} — ${businessName}*`,
+    `🧾 *${headerTitle}${orderNumber} — ${businessName}*`,
     '',
     ...cart.map((it) => {
       const varLine = it.variantName ? ` (${it.variantName})` : '';
@@ -2414,8 +2416,8 @@ async function handleMessage(t, slug, sessionId, rawInput) {
         : (state.customer.branchName || null);
       const orderRow = await t.get(
         `INSERT INTO {s}.orders
-         (customer_id, items, subtotal, total, status, channel, delivery, notes, pickup_branch_id, pickup_branch_name, customer_location_lat, customer_location_lng, customer_location_text, customer_location_resolved, delivery_fee, delivery_zone_name, service_branch_id, service_branch_name)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18) RETURNING id`,
+         (customer_id, items, subtotal, total, status, channel, delivery, notes, order_notes, pickup_branch_id, pickup_branch_name, customer_location_lat, customer_location_lng, customer_location_text, customer_location_resolved, delivery_fee, delivery_zone_name, service_branch_id, service_branch_name)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19) RETURNING id`,
         [
           customer.id,
           JSON.stringify(state.cart),
@@ -2425,6 +2427,7 @@ async function handleMessage(t, slug, sessionId, rawInput) {
           'chatbot',
           state.delivery || 'recoger',
           state.delivery === 'domicilio' ? (state.customer.reference || null) : null,
+          String(state.customer.orderNote || '').trim().slice(0, 220),
           state.customer.branchId || null,
           state.customer.branchName || null,
           Number.isFinite(state.customer.locationLat) ? state.customer.locationLat : null,
@@ -2442,7 +2445,7 @@ async function handleMessage(t, slug, sessionId, rawInput) {
         await t.run('UPDATE {s}.orders SET branch_stock_applied=1 WHERE id=$1', [orderRow.id]);
       }
 
-      const orderText = buildOrderText(businessName, state.cart, state.customer, state.delivery, currency, labels);
+      const orderText = buildOrderText(businessName, state.cart, state.customer, state.delivery, currency, labels, orderRow.id);
       const waLink = whatsapp ? `https://wa.me/${whatsapp}?text=${encodeURIComponent(orderText)}` : null;
 
       // Notificar al tenant (Socket.io + Web Push)
@@ -2564,4 +2567,4 @@ function newSessionId() {
   return crypto.randomUUID();
 }
 
-module.exports = { handleMessage, newSessionId };
+module.exports = { buildOrderText, handleMessage, newSessionId };
