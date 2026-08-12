@@ -8,12 +8,12 @@
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/regular/style.css" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/bold/style.css" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/fill/style.css" />
-  <link rel="stylesheet" href="/static/css/styles.css?v=20260811-3" />
+  <link rel="stylesheet" href="/static/css/styles.css?v=20260811-6" />
   <link rel="icon" type="image/svg+xml" href="/static/favicon.svg" />
   <link rel="icon" type="image/png" href="/static/chatbotpro100.png" />
 </head>
 <body>
-  <div class="auth-wrap">
+  <div class="auth-wrap auth-wrap--login">
     <div class="auth-hero">
       <div class="glow"></div>
       <div class="mark mark-logo"><img src="/static/chatbotpro100.png" alt="ChatBotPro" /></div>
@@ -53,6 +53,20 @@
         <div class="feat"><span class="fi"><i class="ph-bold ph-hamburger"></i></span><span>Administra tu menú en segundos</span></div>
         <div class="feat"><span class="fi"><i class="ph-bold ph-lock-key"></i></span><span>Información protegida con cifrado</span></div>
       </div>
+      <section class="benefit-showcase" aria-labelledby="loginBenefitsTitle">
+        <div class="benefit-showcase-head">
+          <span>Tu centro de operaciones</span>
+          <h2 id="loginBenefitsTitle">Todo tu negocio bajo control</h2>
+        </div>
+        <div class="benefit-grid">
+          <article class="benefit-item"><i class="ph-bold ph-storefront"></i><div><strong>Punto de venta</strong><span>Cobros y ventas de caja.</span></div></article>
+          <article class="benefit-item"><i class="ph-bold ph-printer"></i><div><strong>Comandas y tickets</strong><span>Impresi&oacute;n para caja y cocina.</span></div></article>
+          <article class="benefit-item"><i class="ph-bold ph-calculator"></i><div><strong>Costo de ventas</strong><span>Utilidad y margen de tus productos.</span></div></article>
+          <article class="benefit-item"><i class="ph-bold ph-monitor"></i><div><strong>KDS en tiempo real</strong><span>Pedidos sincronizados en cocina.</span></div></article>
+          <article class="benefit-item"><i class="ph-bold ph-package"></i><div><strong>Stock de inventarios</strong><span>Existencias siempre actualizadas.</span></div></article>
+          <article class="benefit-item"><i class="ph-bold ph-whatsapp-logo"></i><div><strong>Chatbot 24/7</strong><span>Pedidos autom&aacute;ticos por WhatsApp.</span></div></article>
+        </div>
+      </section>
     </div>
     <div class="auth-panel">
       <div class="float-bg" aria-hidden="true">
@@ -69,6 +83,13 @@
         <div class="logo"><span class="dot dot-logo"><img src="/static/chatbotpro100.png" alt="" /></span> ChatBotPro</div>
         <h2>Iniciar sesión</h2>
         <p class="sub">Accede al panel de tu restaurante.</p>
+        <div class="auth-card-benefits" aria-label="Herramientas de tu panel">
+          <span><i class="ph-bold ph-storefront"></i> Punto de venta</span>
+          <span><i class="ph-bold ph-printer"></i> Tickets y comandas</span>
+          <span><i class="ph-bold ph-calculator"></i> Costos</span>
+          <span><i class="ph-bold ph-monitor"></i> KDS en vivo</span>
+          <span><i class="ph-bold ph-package"></i> Inventarios</span>
+        </div>
         <div class="error-box" id="error"><i class="ph-fill ph-warning-circle"></i><span id="errorMsg"></span></div>
         <a class="btn btn-primary btn-block" id="suspendedWaBtn" href="https://wa.me/526241370820?text=tengo%20suspendiedo%20mi%20servicio%20y%20quiero%20realizar%20mi%20pago%20para%20activarlo" target="_blank" rel="noopener noreferrer" style="display:none;margin-bottom:12px">
           <i class="ph-bold ph-whatsapp-logo"></i> Contactar por WhatsApp

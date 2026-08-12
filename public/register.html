@@ -8,12 +8,12 @@
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/regular/style.css" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/bold/style.css" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/fill/style.css" />
-  <link rel="stylesheet" href="/static/css/styles.css?v=20260811-3" />
+  <link rel="stylesheet" href="/static/css/styles.css?v=20260811-6" />
   <link rel="icon" type="image/svg+xml" href="/static/favicon.svg" />
   <link rel="icon" type="image/png" href="/static/chatbotpro100.png" />
 </head>
 <body>
-  <div class="auth-wrap">
+  <div class="auth-wrap auth-wrap--register">
     <div class="auth-hero">
       <div class="glow"></div>
       <div class="mark mark-logo"><img src="/static/chatbotpro100.png" alt="ChatBotPro" /></div>
@@ -23,23 +23,25 @@
       </div>
       <h1>Crea tu chatbot de pedidos en <em>2 minutos</em></h1>
       <p>Registra tu restaurante, sube tu menú y comparte tu liga. Tus clientes ordenan solos y tú recibes todo por WhatsApp.</p>
-      <div class="icon-cloud">
-        <span class="chip" style="--glow:rgba(255,120,60,.75)" title="Repartidores"><span>🛵</span></span>
-        <span class="chip" style="--glow:rgba(80,220,120,.75)" title="Dinero"><span>💵</span></span>
-        <span class="chip" style="--glow:rgba(255,90,90,.75)" title="Pizza"><span>🍕</span></span>
-        <span class="chip" style="--glow:rgba(255,170,60,.8)" title="Pollo"><span>🍗</span></span>
-        <span class="chip" style="--glow:rgba(255,210,60,.8)" title="Papas"><span>🍟</span></span>
-        <span class="chip" style="--glow:rgba(255,80,140,.75)" title="Sushi"><span>🍣</span></span>
-        <span class="chip" style="--glow:rgba(80,180,255,.8)" title="Celular"><span>📱</span></span>
-        <span class="chip" style="--glow:rgba(150,120,255,.8)" title="Computadora"><span>💻</span></span>
-        <span class="chip" style="--glow:rgba(255,140,200,.8)" title="Helado"><span>🍦</span></span>
-        <span class="chip" style="--glow:rgba(60,200,230,.8)" title="Bebidas"><span>🥤</span></span>
-      </div>
       <div class="feats">
         <div class="feat"><span class="fi"><i class="ph-bold ph-number-circle-one"></i></span><span>Regístrate con los datos de tu negocio</span></div>
         <div class="feat"><span class="fi"><i class="ph-bold ph-number-circle-two"></i></span><span>Da de alta tus productos con foto</span></div>
         <div class="feat"><span class="fi"><i class="ph-bold ph-number-circle-three"></i></span><span>Comparte tu liga o QR y recibe pedidos</span></div>
       </div>
+      <section class="benefit-showcase" aria-labelledby="registerBenefitsTitle">
+        <div class="benefit-showcase-head">
+          <span>Tu cuenta incluye mucho m&aacute;s</span>
+          <h2 id="registerBenefitsTitle">Administra toda la operaci&oacute;n de tu negocio</h2>
+        </div>
+        <div class="benefit-grid">
+          <article class="benefit-item"><i class="ph-bold ph-storefront"></i><div><strong>Punto de venta</strong><span>Ventas y cobros desde caja.</span></div></article>
+          <article class="benefit-item"><i class="ph-bold ph-printer"></i><div><strong>Comandas y tickets</strong><span>Impresi&oacute;n para caja y cocina.</span></div></article>
+          <article class="benefit-item"><i class="ph-bold ph-calculator"></i><div><strong>Costo de ventas</strong><span>Costos, utilidad y m&aacute;rgenes.</span></div></article>
+          <article class="benefit-item"><i class="ph-bold ph-monitor"></i><div><strong>KDS en tiempo real</strong><span>Pedidos sincronizados en cocina.</span></div></article>
+          <article class="benefit-item"><i class="ph-bold ph-package"></i><div><strong>Stock de inventarios</strong><span>Entradas, salidas y existencias.</span></div></article>
+          <article class="benefit-item"><i class="ph-bold ph-chart-line-up"></i><div><strong>Reportes de ventas</strong><span>Resultados claros y actualizados.</span></div></article>
+        </div>
+      </section>
     </div>
     <div class="auth-panel">
       <div class="float-bg" aria-hidden="true">
@@ -57,6 +59,13 @@
         <div class="logo"><span class="dot dot-logo"><img src="/static/chatbotpro100.png" alt="" /></span> ChatBotPro</div>
         <h2>Registra tu negocio</h2>
         <p class="sub">Crea la cuenta de tu restaurante.</p>
+        <div class="auth-card-benefits" aria-label="Beneficios incluidos">
+          <span><i class="ph-bold ph-storefront"></i> Punto de venta</span>
+          <span><i class="ph-bold ph-printer"></i> Tickets y comandas</span>
+          <span><i class="ph-bold ph-calculator"></i> Costos</span>
+          <span><i class="ph-bold ph-monitor"></i> KDS en vivo</span>
+          <span><i class="ph-bold ph-package"></i> Inventarios</span>
+        </div>
         <div class="error-box" id="error"><i class="ph-fill ph-warning-circle"></i><span id="errorMsg"></span></div>
         <form id="regForm">
           <div class="row-2">
