@@ -1,6 +1,9 @@
 let SA_TENANTS = [];
 let SA_FILTER = 'all';
 let SA_SUMMARY = null;
+let SA_CLIENTS = [];
+let SA_CLIENT_FILTER = 'all';
+let SA_CLIENT_SUMMARY = null;
 let SA_DEMO_LEADS = [];
 let SA_PAYMENT_TENANT_ID = null;
 let SA_SUSPEND_TENANT_ID = null;
@@ -97,6 +100,14 @@ function fmtDateTime(v) {
   const d = new Date(v);
   if (Number.isNaN(d.getTime())) return '—';
   return d.toLocaleString('es-MX', { dateStyle: 'medium', timeStyle: 'short' });
+}
+
+function fmtMoney(value) {
+  return new Intl.NumberFormat('es-MX', { style: 'currency', currency: 'MXN' }).format(Number(value || 0));
+}
+
+function findBusiness(id) {
+  return [...SA_TENANTS, ...SA_CLIENTS].find((item) => Number(item.id) === Number(id));
 }
 
 function usageModules(entity) {
@@ -295,14 +306,9 @@ function renderBillingSummary(summary) {
   const el = $('#saBillingSummary');
   if (!el) return;
   const cards = [
-    { label: 'Total tenants', value: Number(s.total || 0), filter: 'all', tone: 'tone-total' },
-    { label: 'Activos', value: Number(s.activeTenants || 0), filter: 'active', tone: 'tone-active' },
+    { label: 'Total prospectos', value: Number(s.total || 0), filter: 'all', tone: 'tone-total' },
+    { label: 'Con acceso', value: Number(s.activeTenants || 0), filter: 'active', tone: 'tone-active' },
     { label: 'Inactivos', value: Number(s.inactiveTenants || 0), filter: 'inactive', tone: 'tone-inactive' },
-    { label: 'Al corriente', value: Number(s.billingCurrent || 0), filter: 'current', tone: 'tone-current' },
-    { label: 'Por pagar', value: Number(s.billingDue || 0), filter: 'due', tone: 'tone-due' },
-    { label: 'Suspendidos', value: Number(s.billingSuspended || 0), filter: 'suspended', tone: 'tone-suspended' },
-    { label: 'Vencen en 5 días', value: Number(s.dueSoon5 || 0), filter: 'dueSoon5', tone: 'tone-soon' },
-    { label: 'En mora', value: Number(s.inMora || 0), filter: 'mora', tone: 'tone-mora' },
   ];
 
   el.innerHTML = cards
@@ -334,7 +340,7 @@ function renderTenantTable() {
   }
 
   table.innerHTML = `<div class="table-wrap"><table><thead><tr>
-    <th>Tenant</th><th>Dueño</th><th>Registro</th><th>Cuenta</th><th>Pago</th><th>Plan</th><th>Vence</th><th>Módulos</th><th>Acciones</th>
+    <th>Prospecto</th><th>Dueño</th><th>Registro</th><th>Acceso</th><th>Plan de interés</th><th>Módulos</th><th>Acciones</th>
   </tr></thead><tbody>${filtered
     .map((t) => {
       const waUrl = t.phone_valid && t.phone_digits ? `https://wa.me/${t.phone_digits}` : '';
@@ -347,15 +353,14 @@ function renderTenantTable() {
       </td>
       <td>${fmtDate(t.created_at)}</td>
       <td>${statusChip('account', t.account_status)}</td>
-      <td>${statusChip('billing', t.billing_status)}</td>
-      <td>${esc(t.plan_name || 'starter')}</td>
-      <td>${fmtDate(t.billing_due_date)}</td>
+      <td>${esc(t.plan_name || 'starter')}<div class="meta">Hasta ${Number(t.branch_limit || 2)} sucursales activas</div></td>
       <td>${moduleUsageButton(t, 'tenant')}</td>
       <td>
         <div style="display:flex;gap:6px;flex-wrap:wrap">
           <button type="button" class="btn btn-ghost" data-sa-access="${t.id}"><i class="ph-bold ph-sign-in"></i> Entrar</button>
           <button type="button" class="btn btn-ghost" data-sa-password="${t.id}"><i class="ph-bold ph-key"></i> Password</button>
           <button type="button" class="btn btn-ghost" data-sa-payment="${t.id}"><i class="ph-bold ph-currency-circle-dollar"></i> Pago</button>
+          <button type="button" class="btn btn-ghost" data-sa-branches="${t.id}"><i class="ph-bold ph-storefront"></i> Sucursales</button>
           ${waUrl ? `<a class="btn btn-ghost" href="${waUrl}" target="_blank" rel="noopener noreferrer"><i class="ph-bold ph-whatsapp-logo"></i> WhatsApp</a>` : ''}
           ${t.phone_valid && t.phone_e164 ? `<button type="button" class="btn btn-ghost" data-sa-copy-phone="${esc(t.phone_e164)}"><i class="ph-bold ph-copy"></i> Copiar</button>` : ''}
           <button type="button" class="btn ${(t.account_status === 'active' && t.billing_status !== 'suspended') ? 'btn-danger' : 'btn-primary'}" data-sa-suspend="${t.id}">
@@ -380,6 +385,9 @@ function renderTenantTable() {
   });
   document.querySelectorAll('[data-sa-suspend]').forEach((btn) => {
     btn.addEventListener('click', () => toggleTenantSuspend(Number(btn.dataset.saSuspend)).catch((err) => toast(err.message, true)));
+  });
+  document.querySelectorAll('#saTenantsTable [data-sa-branches]').forEach((btn) => {
+    btn.addEventListener('click', () => changeBranchLimit(Number(btn.dataset.saBranches)).catch((err) => toast(err.message, true)));
   });
   bindModuleUsageButtons();
   bindPhoneActions();
@@ -462,13 +470,120 @@ function renderDemoLeadsTable() {
   });
 }
 
+function matchesClientFilter(client, filter) {
+  if (filter === 'all') return true;
+  if (filter === 'active') return client.account_status === 'active' && client.billing_status === 'active';
+  if (filter === 'due') return client.billing_status === 'due';
+  if (filter === 'suspended') return client.billing_status === 'suspended';
+  if (filter === 'mora') return Number(client.mora_days || 0) > 0;
+  return true;
+}
+
+function getFilteredClients() {
+  const search = String($('#saClientSearch')?.value || '').trim().toLowerCase();
+  return SA_CLIENTS.filter((client) => {
+    if (!matchesClientFilter(client, SA_CLIENT_FILTER)) return false;
+    if (!search) return true;
+    return [client.slug, client.business_name, client.owner_name, client.phone, client.phone_country_name, client.phone_calling_code]
+      .join(' ').toLowerCase().includes(search);
+  });
+}
+
+function setClientFilter(filter, announce = false) {
+  SA_CLIENT_FILTER = filter || 'all';
+  document.querySelectorAll('#saClientFilters button').forEach((button) => {
+    const active = button.dataset.status === SA_CLIENT_FILTER;
+    button.classList.toggle('active', active);
+    button.classList.toggle('on', active);
+  });
+  document.querySelectorAll('[data-sa-client-summary-filter]').forEach((card) => {
+    card.classList.toggle('active', card.dataset.saClientSummaryFilter === SA_CLIENT_FILTER);
+  });
+  renderClientsTable();
+  if (announce) {
+    const count = getFilteredClients().length;
+    toast(`Mostrando ${count} cliente${count === 1 ? '' : 's'}`);
+  }
+}
+
+function renderClientSummary(summary) {
+  SA_CLIENT_SUMMARY = summary || SA_CLIENT_SUMMARY;
+  const s = SA_CLIENT_SUMMARY || {};
+  const cards = [
+    { label: 'Número de clientes', value: Number(s.totalClients || 0), filter: 'all', tone: 'tone-total', icon: 'ph-users-three' },
+    { label: 'Clientes activos', value: Number(s.activeClients || 0), filter: 'active', tone: 'tone-active', icon: 'ph-check-circle' },
+    { label: 'Por pagar', value: Number(s.billingDue || 0), filter: 'due', tone: 'tone-due', icon: 'ph-clock-countdown' },
+    { label: 'En mora', value: Number(s.inMora || 0), filter: 'mora', tone: 'tone-mora', icon: 'ph-warning-circle' },
+    { label: 'Ingresos acumulados', value: fmtMoney(s.incomeTotal), tone: 'tone-current', icon: 'ph-currency-circle-dollar' },
+    { label: 'Número de licencias', value: Number(s.licenseCount || 0), tone: 'tone-soon', icon: 'ph-key' },
+  ];
+  const el = $('#saClientSummary');
+  if (!el) return;
+  el.innerHTML = cards.map((card) => `
+    <button type="button" class="pos-mini-stat sa-client-summary-card ${card.tone}" ${card.filter ? `data-sa-client-summary-filter="${card.filter}"` : ''}>
+      <span><i class="ph-bold ${card.icon}"></i> ${esc(card.label)}</span><b>${esc(card.value)}</b>
+    </button>`).join('');
+  document.querySelectorAll('[data-sa-client-summary-filter]').forEach((card) => {
+    card.addEventListener('click', () => setClientFilter(card.dataset.saClientSummaryFilter, true));
+  });
+  setClientFilter(SA_CLIENT_FILTER);
+}
+
+function renderClientsTable() {
+  const table = $('#saClientsTable');
+  if (!table) return;
+  const filtered = getFilteredClients();
+  if (!filtered.length) {
+    table.innerHTML = '<div class="empty"><i class="ph ph-handshake"></i><b>Sin clientes</b><p>Los prospectos aparecerán aquí automáticamente al registrar su primer pago.</p></div>';
+    return;
+  }
+
+  table.innerHTML = `<div class="table-wrap"><table><thead><tr>
+    <th>Cliente</th><th>Contacto</th><th>Cliente desde</th><th>Estado</th><th>Plan / cupos</th><th>Último pago</th><th>Vencimiento</th><th>Ingresos</th><th>Acciones</th>
+  </tr></thead><tbody>${filtered.map((client) => {
+    const waUrl = client.phone_valid && client.phone_digits ? `https://wa.me/${client.phone_digits}` : '';
+    return `<tr>
+      <td><b>${esc(client.business_name)}</b><div class="meta">/${esc(client.slug)}</div></td>
+      <td>${esc(client.owner_name)}<div class="meta">${countryFlag(client.phone_country)} ${esc(client.phone || '—')}</div></td>
+      <td>${fmtDate(client.customer_since)}</td>
+      <td>${statusChip('billing', client.billing_status)}<div class="meta">${Number(client.mora_days || 0) > 0 ? `${Number(client.mora_days)} días de mora` : 'Cuenta ' + (client.account_status === 'active' ? 'activa' : 'inactiva')}</div></td>
+      <td><b>${esc(client.plan_name || 'starter')}</b><div class="meta">${Number(client.license_count || 1)} licencia${Number(client.license_count || 1) === 1 ? '' : 's'} · Hasta ${Number(client.branch_limit || 2)} sucursales</div></td>
+      <td>${fmtMoney(client.last_payment_amount)}<div class="meta">${fmtDate(client.last_payment_at)} · ${esc(client.last_payment_method || '—')}</div></td>
+      <td>${fmtDate(client.billing_due_date)}</td>
+      <td><b>${fmtMoney(client.total_paid)}</b><div class="meta">${Number(client.payment_count || 0)} pago${Number(client.payment_count || 0) === 1 ? '' : 's'}</div></td>
+      <td><div style="display:flex;gap:6px;flex-wrap:wrap">
+        <button type="button" class="btn btn-ghost" data-sa-access="${client.id}"><i class="ph-bold ph-sign-in"></i> Entrar</button>
+        <button type="button" class="btn btn-ghost" data-sa-password="${client.id}"><i class="ph-bold ph-key"></i> Password</button>
+        <button type="button" class="btn btn-ghost" data-sa-payment="${client.id}"><i class="ph-bold ph-currency-circle-dollar"></i> Pago</button>
+        <button type="button" class="btn btn-ghost" data-sa-payments="${client.id}"><i class="ph-bold ph-receipt"></i> Historial</button>
+        <button type="button" class="btn btn-ghost" data-sa-licenses="${client.id}"><i class="ph-bold ph-key"></i> Licencias</button>
+        <button type="button" class="btn btn-ghost" data-sa-branches="${client.id}"><i class="ph-bold ph-storefront"></i> Sucursales</button>
+        ${moduleUsageButton(client, 'tenant')}
+        ${waUrl ? `<a class="btn btn-ghost" href="${waUrl}" target="_blank" rel="noopener noreferrer"><i class="ph-bold ph-whatsapp-logo"></i> WhatsApp</a>` : ''}
+        <button type="button" class="btn ${(client.account_status === 'active' && client.billing_status !== 'suspended') ? 'btn-danger' : 'btn-primary'}" data-sa-suspend="${client.id}">${(client.account_status === 'active' && client.billing_status !== 'suspended') ? 'Suspender' : 'Activar'}</button>
+        <button type="button" class="btn btn-danger" data-sa-delete-tenant="${client.id}"><i class="ph-bold ph-trash"></i> Eliminar</button>
+      </div></td>
+    </tr>`;
+  }).join('')}</tbody></table></div>`;
+
+  document.querySelectorAll('#saClientsTable [data-sa-access]').forEach((button) => button.onclick = () => accessTenant(Number(button.dataset.saAccess)).catch((error) => toast(error.message, true)));
+  document.querySelectorAll('#saClientsTable [data-sa-password]').forEach((button) => button.onclick = () => changeTenantPassword(Number(button.dataset.saPassword)).catch((error) => toast(error.message, true)));
+  document.querySelectorAll('#saClientsTable [data-sa-payment]').forEach((button) => button.onclick = () => addTenantPayment(Number(button.dataset.saPayment)).catch((error) => toast(error.message, true)));
+  document.querySelectorAll('#saClientsTable [data-sa-payments]').forEach((button) => button.onclick = () => openPaymentsModal(Number(button.dataset.saPayments)).catch((error) => toast(error.message, true)));
+  document.querySelectorAll('#saClientsTable [data-sa-licenses]').forEach((button) => button.onclick = () => changeClientLicenses(Number(button.dataset.saLicenses)).catch((error) => toast(error.message, true)));
+  document.querySelectorAll('#saClientsTable [data-sa-branches]').forEach((button) => button.onclick = () => changeBranchLimit(Number(button.dataset.saBranches)).catch((error) => toast(error.message, true)));
+  document.querySelectorAll('#saClientsTable [data-sa-suspend]').forEach((button) => button.onclick = () => toggleTenantSuspend(Number(button.dataset.saSuspend)).catch((error) => toast(error.message, true)));
+  document.querySelectorAll('#saClientsTable [data-sa-delete-tenant]').forEach((button) => button.onclick = () => openDeleteModal('tenant', Number(button.dataset.saDeleteTenant)));
+  bindModuleUsageButtons();
+}
+
 function closeModulesModal() {
   $('#saModulesModal')?.classList.remove('show');
 }
 
 function openModulesModal(type, id) {
   const entity = type === 'tenant'
-    ? SA_TENANTS.find((item) => Number(item.id) === Number(id))
+    ? findBusiness(id)
     : SA_DEMO_LEADS.find((item) => Number(item.id) === Number(id));
   if (!entity) return;
 
@@ -498,10 +613,10 @@ function openModulesModal(type, id) {
 
 function bindModuleUsageButtons() {
   document.querySelectorAll('[data-sa-modules]').forEach((btn) => {
-    btn.addEventListener('click', () => {
+    btn.onclick = () => {
       const [type, id] = String(btn.dataset.saModules || '').split(':');
       openModulesModal(type, Number(id));
-    });
+    };
   });
 }
 
@@ -514,7 +629,7 @@ function closeDeleteModal() {
 
 function openDeleteModal(type, id) {
   const entity = type === 'tenant'
-    ? SA_TENANTS.find((item) => Number(item.id) === Number(id))
+    ? findBusiness(id)
     : SA_DEMO_LEADS.find((item) => Number(item.id) === Number(id));
   if (!entity) return;
 
@@ -539,7 +654,7 @@ async function confirmDelete() {
     const deletedLabel = target.type === 'tenant' ? 'Tenant eliminado' : 'Lead demo eliminado';
     closeDeleteModal();
     toast(deletedLabel);
-    if (target.type === 'tenant') await loadTenants();
+    if (target.type === 'tenant') await Promise.all([loadTenants(), loadClients()]);
     else await loadDemoLeads();
   } catch (err) {
     if (confirmBtn) confirmBtn.disabled = false;
@@ -561,10 +676,16 @@ async function loadTenants() {
   renderTenantTable();
 }
 
+async function loadClients() {
+  const payload = await api('/api/superadmin/clients');
+  SA_CLIENTS = Array.isArray(payload?.clients) ? payload.clients : [];
+  renderClientSummary(payload?.summary || null);
+  renderClientsTable();
+}
+
 async function refreshBilling() {
   const payload = await api('/api/superadmin/billing/refresh', { method: 'POST' });
-  renderBillingSummary(payload?.summary || null);
-  await loadTenants();
+  await Promise.all([loadTenants(), loadClients()]);
   const movedDue = Number(payload?.refreshed?.movedToDue || 0);
   const movedSuspended = Number(payload?.refreshed?.movedToSuspended || 0);
   toast(`Cobranza actualizada: ${movedDue} a por pagar, ${movedSuspended} a suspendido`);
@@ -638,7 +759,7 @@ function openActivateModal(tenant, mode) {
 }
 
 async function accessTenant(id) {
-  const tenant = SA_TENANTS.find((t) => Number(t.id) === Number(id));
+  const tenant = findBusiness(id);
   if (!tenant) return;
   await api(`/api/superadmin/tenants/${id}/access`, { method: 'POST' });
   window.open('/app', '_blank');
@@ -646,7 +767,7 @@ async function accessTenant(id) {
 }
 
 async function changeTenantPassword(id) {
-  const tenant = SA_TENANTS.find((t) => Number(t.id) === Number(id));
+  const tenant = findBusiness(id);
   if (!tenant) return;
   const pass = String(prompt(`Nueva contraseña para ${tenant.business_name} (mínimo 8 caracteres):`, '') || '').trim();
   if (!pass) return;
@@ -660,7 +781,7 @@ async function changeTenantPassword(id) {
 }
 
 async function toggleTenantSuspend(id) {
-  const tenant = SA_TENANTS.find((t) => Number(t.id) === Number(id));
+  const tenant = findBusiness(id);
   if (!tenant) return;
   const needsActivation = tenant.account_status !== 'active' || tenant.billing_status === 'suspended';
   if (!needsActivation) {
@@ -673,7 +794,7 @@ async function toggleTenantSuspend(id) {
 }
 
 async function addTenantPayment(id) {
-  const tenant = SA_TENANTS.find((t) => Number(t.id) === Number(id));
+  const tenant = findBusiness(id);
   if (!tenant) return;
   openPaymentModal(tenant);
 }
@@ -703,8 +824,82 @@ async function submitPaymentForm(e) {
   });
 
   closePaymentModal();
-  toast(`Pago aplicado. Próximo vencimiento: ${fmtDate(payload?.nextDueDate)}`);
-  await loadTenants();
+  toast(payload?.becameClient
+    ? `Pago aplicado: el prospecto ya es cliente. Vence ${fmtDate(payload?.nextDueDate)}`
+    : `Pago aplicado. Próximo vencimiento: ${fmtDate(payload?.nextDueDate)}`);
+  await Promise.all([loadTenants(), loadClients()]);
+}
+
+function closePaymentsModal() {
+  $('#saPaymentsModal')?.classList.remove('show');
+}
+
+async function openPaymentsModal(clientId) {
+  const client = findBusiness(clientId);
+  if (!client) return;
+  const payload = await api(`/api/superadmin/clients/${clientId}/payments`);
+  const payments = Array.isArray(payload?.payments) ? payload.payments : [];
+  $('#saPaymentsSubject').textContent = `${client.business_name} · ${payments.length} pago${payments.length === 1 ? '' : 's'}`;
+  $('#saPaymentsDetail').innerHTML = payments.length
+    ? `<div class="table-wrap"><table><thead><tr><th>Fecha</th><th>Monto</th><th>Método</th><th>Referencia / nota</th><th>Registró</th></tr></thead><tbody>${payments.map((payment) => `<tr>
+        <td>${fmtDate(payment.paid_at)}</td><td><b>${fmtMoney(payment.amount)}</b></td><td><span class="tag ok">${esc(payment.method || 'manual')}</span></td><td>${esc(payment.note || '—')}</td><td>${esc(payment.created_by || '—')}</td>
+      </tr>`).join('')}</tbody></table></div>`
+    : '<div class="empty"><i class="ph ph-receipt"></i><b>Sin pagos</b><p>Aún no hay movimientos registrados.</p></div>';
+  $('#saPaymentsModal')?.classList.add('show');
+}
+
+async function changeClientLicenses(clientId) {
+  const client = findBusiness(clientId);
+  if (!client) return;
+  const raw = prompt(`Número de licencias para ${client.business_name}:`, String(client.license_count || 1));
+  if (raw === null) return;
+  const licenseCount = Number(raw);
+  if (!Number.isInteger(licenseCount) || licenseCount < 1 || licenseCount > 100000) {
+    return toast('Captura un número de licencias válido', true);
+  }
+  await api(`/api/superadmin/tenants/${clientId}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ license_count: licenseCount }),
+  });
+  toast('Número de licencias actualizado');
+  await loadClients();
+}
+
+async function changeBranchLimit(tenantId) {
+  const tenant = findBusiness(tenantId);
+  if (!tenant) return;
+  const details = await api(`/api/superadmin/tenants/${tenantId}/stats`);
+  const activeBranches = Number(details?.stats?.activeBranches || 0);
+  const totalBranches = Number(details?.stats?.totalBranches || 0);
+  $('#saBranchLimitTenantId').value = String(tenant.id);
+  $('#saBranchLimitTenantName').value = tenant.business_name || tenant.slug || `Tenant #${tenant.id}`;
+  $('#saBranchLimitValue').value = String(Number(tenant.branch_limit || 2));
+  $('#saBranchLimitUsage').textContent = `Uso actual: ${activeBranches} sucursal${activeBranches === 1 ? '' : 'es'} activa${activeBranches === 1 ? '' : 's'} de ${totalBranches} registrada${totalBranches === 1 ? '' : 's'}.`;
+  $('#saBranchLimitModal')?.classList.add('show');
+  setTimeout(() => $('#saBranchLimitValue')?.focus(), 60);
+}
+
+function closeBranchLimitModal() {
+  $('#saBranchLimitModal')?.classList.remove('show');
+}
+
+async function submitBranchLimitForm(event) {
+  event.preventDefault();
+  const tenantId = Number($('#saBranchLimitTenantId')?.value || 0);
+  const branchLimit = Number($('#saBranchLimitValue')?.value || 0);
+  if (!tenantId) return toast('No se encontró el negocio', true);
+  if (!Number.isInteger(branchLimit) || branchLimit < 1 || branchLimit > 1000) {
+    return toast('Captura un límite de 1 a 1000 sucursales', true);
+  }
+  await api(`/api/superadmin/tenants/${tenantId}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ branch_limit: branchLimit }),
+  });
+  closeBranchLimitModal();
+  toast(`Cupo actualizado: hasta ${branchLimit} sucursales activas`);
+  await Promise.all([loadTenants(), loadClients()]);
 }
 
 async function submitSuspendForm(e) {
@@ -722,7 +917,7 @@ async function submitSuspendForm(e) {
 
   closeSuspendModal();
   toast(mode === 'billing' ? 'Tenant suspendido por falta de pago' : 'Sistema suspendido para tenant');
-  await loadTenants();
+  await Promise.all([loadTenants(), loadClients()]);
 }
 
 async function confirmActivateTenant() {
@@ -736,7 +931,7 @@ async function confirmActivateTenant() {
   });
   closeActivateModal();
   toast(mode === 'billing' ? 'Servicio reactivado por cobranza' : 'Sistema activado para tenant');
-  await loadTenants();
+  await Promise.all([loadTenants(), loadClients()]);
 }
 
 async function loadIntegrations() {
@@ -942,22 +1137,28 @@ async function uploadSuperAdminLogo(fileParam, options = {}) {
 
 function setView(view) {
   const isTenants = view === 'tenants';
+  const isClients = view === 'clients';
   const isDemoLeads = view === 'demo-leads';
   let title = '<i class="ph-bold ph-plugs-connected"></i> Integraciones';
   let subtitle = 'Configuración central de OpenAI y APIs del chatbot.';
   if (isTenants) {
-    title = '<i class="ph-bold ph-buildings"></i> Tenants';
-    subtitle = 'Administra tenants activos, por pagar y suspendidos.';
+    title = '<i class="ph-bold ph-buildings"></i> Prospectos';
+    subtitle = 'Tenants que todavía no registran su primer pago.';
+  } else if (isClients) {
+    title = '<i class="ph-bold ph-handshake"></i> Clientes';
+    subtitle = 'Cartera de clientes, ingresos, licencias y cobranza.';
   } else if (isDemoLeads) {
     title = '<i class="ph-bold ph-rocket-launch"></i> Leads demo';
     subtitle = 'Contactos que pidieron acceso al demo con sus datos de negocio.';
   }
   $('#saViewTenants').hidden = !isTenants;
   $('#saViewTenants').classList.toggle('active', isTenants);
+  $('#saViewClients').hidden = !isClients;
+  $('#saViewClients').classList.toggle('active', isClients);
   $('#saViewDemoLeads').hidden = !isDemoLeads;
   $('#saViewDemoLeads').classList.toggle('active', isDemoLeads);
-  $('#saViewIntegrations').hidden = isTenants || isDemoLeads;
-  $('#saViewIntegrations').classList.toggle('active', !isTenants && !isDemoLeads);
+  $('#saViewIntegrations').hidden = isTenants || isClients || isDemoLeads;
+  $('#saViewIntegrations').classList.toggle('active', !isTenants && !isClients && !isDemoLeads);
   $('#saTitle').innerHTML = title;
   $('#saSub').textContent = subtitle;
   document.querySelectorAll('[data-sa-view]').forEach((a) => a.classList.toggle('active', a.dataset.saView === view));
@@ -968,7 +1169,7 @@ async function boot() {
     const me = await api('/api/superadmin/me');
     $('#saUserName').textContent = me.username || 'superadmin';
     startSuperAdminClock();
-    await Promise.all([loadTenants(), loadDemoLeads(), loadIntegrations(), loadDeployStatus(), loadGitDeployStatus()]);
+    await Promise.all([loadTenants(), loadClients(), loadDemoLeads(), loadIntegrations(), loadDeployStatus(), loadGitDeployStatus()]);
   } catch (err) {
     toast(err.message, true);
   }
@@ -983,6 +1184,8 @@ $('#saUploadBrandLogo')?.addEventListener('click', () => uploadSuperAdminLogo().
 
 $('#saTenantSearch')?.addEventListener('input', renderTenantTable);
 $('#saReloadTenants')?.addEventListener('click', () => loadTenants().catch((e) => toast(e.message, true)));
+$('#saClientSearch')?.addEventListener('input', renderClientsTable);
+$('#saReloadClients')?.addEventListener('click', () => loadClients().catch((e) => toast(e.message, true)));
 $('#saDemoLeadSearch')?.addEventListener('input', renderDemoLeadsTable);
 $('#saReloadDemoLeads')?.addEventListener('click', () => loadDemoLeads().catch((e) => toast(e.message, true)));
 $('#saBillingRefresh')?.addEventListener('click', () => refreshBilling().catch((e) => toast(e.message, true)));
@@ -1015,6 +1218,11 @@ $('#saPaymentModal')?.addEventListener('click', (e) => {
   if (e.target?.id === 'saPaymentModal') closePaymentModal();
 });
 $('#saPaymentForm')?.addEventListener('submit', (e) => submitPaymentForm(e).catch((err) => toast(err.message, true)));
+$('#saBranchLimitCancel')?.addEventListener('click', closeBranchLimitModal);
+$('#saBranchLimitModal')?.addEventListener('click', (e) => {
+  if (e.target?.id === 'saBranchLimitModal') closeBranchLimitModal();
+});
+$('#saBranchLimitForm')?.addEventListener('submit', (e) => submitBranchLimitForm(e).catch((err) => toast(err.message, true)));
 $('#saSuspendCancel')?.addEventListener('click', closeSuspendModal);
 $('#saSuspendModal')?.addEventListener('click', (e) => {
   if (e.target?.id === 'saSuspendModal') closeSuspendModal();
@@ -1025,9 +1233,16 @@ $('#saActivateConfirm')?.addEventListener('click', () => confirmActivateTenant()
 $('#saActivateModal')?.addEventListener('click', (e) => {
   if (e.target?.id === 'saActivateModal') closeActivateModal();
 });
+document.querySelectorAll('#saClientFilters button').forEach((btn) => {
+  btn.addEventListener('click', () => setClientFilter(btn.dataset.status, true));
+});
 $('#saModulesClose')?.addEventListener('click', closeModulesModal);
 $('#saModulesModal')?.addEventListener('click', (e) => {
   if (e.target?.id === 'saModulesModal') closeModulesModal();
+});
+$('#saPaymentsClose')?.addEventListener('click', closePaymentsModal);
+$('#saPaymentsModal')?.addEventListener('click', (e) => {
+  if (e.target?.id === 'saPaymentsModal') closePaymentsModal();
 });
 $('#saDeleteCancel')?.addEventListener('click', closeDeleteModal);
 $('#saDeleteConfirm')?.addEventListener('click', () => confirmDelete().catch((err) => toast(err.message, true)));
@@ -1035,7 +1250,7 @@ $('#saDeleteModal')?.addEventListener('click', (e) => {
   if (e.target?.id === 'saDeleteModal') closeDeleteModal();
 });
 
-const SA_INITIAL_VIEW = ['tenants', 'demo-leads', 'integrations'].includes((location.hash || '#tenants').slice(1))
+const SA_INITIAL_VIEW = ['tenants', 'clients', 'demo-leads', 'integrations'].includes((location.hash || '#tenants').slice(1))
   ? (location.hash || '#tenants').slice(1)
   : 'tenants';
 setView(SA_INITIAL_VIEW);

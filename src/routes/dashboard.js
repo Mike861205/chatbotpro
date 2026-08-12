@@ -1,5 +1,6 @@
 const express = require('express');
 const { requireAuth, requireOwner } = require('../middleware/auth');
+const { branchCapacity } = require('../utils/branchLimit');
 
 const router = express.Router();
 router.use(requireAuth);
@@ -131,6 +132,10 @@ router.get('/stats', async (req, res, next) => {
     const pending = (await t.get(`SELECT COUNT(*)::int AS c FROM {s}.orders WHERE status = 'pendiente' AND ${meta.whereSql}`)).c;
     const productCount = (await t.get('SELECT COUNT(*)::int AS c FROM {s}.products WHERE active = 1')).c;
     const customerCount = (await t.get('SELECT COUNT(*)::int AS c FROM {s}.customers')).c;
+    const branchCounts = await t.get(
+      'SELECT COUNT(*)::int AS total, COUNT(*) FILTER (WHERE active = 1)::int AS active FROM {s}.branches'
+    );
+    const capacity = branchCapacity(branchCounts?.active, req.tenant.branch_limit);
     const avgTicket = today.count ? today.sales / today.count : 0;
 
     const last7raw = await t.all(meta.seriesSql);
@@ -153,7 +158,28 @@ router.get('/stats', async (req, res, next) => {
 
     const byStatus = await t.all(`SELECT status, COUNT(*)::int AS c FROM {s}.orders WHERE ${meta.whereSql} GROUP BY status`);
 
-    res.json({ today, totals, pending, productCount, customerCount, avgTicket, last7, topProducts, byStatus, period: meta });
+    res.json({
+      today,
+      totals,
+      pending,
+      productCount,
+      customerCount,
+      avgTicket,
+      last7,
+      topProducts,
+      byStatus,
+      period: meta,
+      subscription: {
+        active: Boolean(req.tenant.customer_since),
+        planName: req.tenant.plan_name || 'starter',
+        billingStatus: req.tenant.billing_status || 'active',
+        dueDate: req.tenant.billing_due_date || null,
+        branchLimit: capacity.limit,
+        activeBranches: capacity.active,
+        availableBranches: capacity.available,
+        totalBranches: Number(branchCounts?.total || 0),
+      },
+    });
   } catch (e) { next(e); }
 });
 

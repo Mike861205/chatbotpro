@@ -9,6 +9,7 @@ const { createImageUpload, deleteManagedUpload, optimizeUploadedImage, safeUnlin
 const { signToken, setAuthCookie } = require('../middleware/auth');
 const { createRateLimiter } = require('../middleware/security');
 const { describeStoredPhone, normalizeInternationalPhone } = require('../utils/phone');
+const { buildClientSummary } = require('../utils/customerLifecycle');
 const {
   signSuperAdminToken,
   setSuperAdminCookie,
@@ -263,6 +264,32 @@ function parseStatusFilter(raw) {
   return null;
 }
 
+function parseClientStatusFilter(raw) {
+  const value = String(raw || '').trim().toLowerCase();
+  if (value === 'active') return { active: true };
+  if (value === 'due') return { billing: 'due' };
+  if (value === 'mora' || value === 'overdue') return { mora: true };
+  if (value === 'suspended') return { billing: 'suspended' };
+  return null;
+}
+
+function mapBusinessRows(rows) {
+  return rows.map((row) => {
+    const phone = describeStoredPhone(decrypt(row.phone_enc) || '', row.phone_country, row.phone_calling_code);
+    return {
+      ...row,
+      phone: phone.international,
+      phone_e164: phone.e164,
+      phone_digits: phone.digits,
+      phone_valid: phone.valid,
+      phone_country: phone.country,
+      phone_country_name: phone.countryName,
+      phone_calling_code: phone.callingCode,
+      due_alert: Number(row.days_to_due) >= 0 && Number(row.days_to_due) <= 5,
+    };
+  });
+}
+
 async function getTenantById(tenantId) {
   const found = await q('SELECT * FROM tenants WHERE id = $1', [tenantId]);
   return found.rows[0] || null;
@@ -390,7 +417,7 @@ router.get('/tenants', requireSuperAdmin, async (req, res, next) => {
     const qText = String(req.query.q || '').trim().toLowerCase();
     const statusFilter = parseStatusFilter(req.query.status);
     const values = [];
-    const where = [];
+    const where = ['t.customer_since IS NULL'];
 
     if (qText) {
       values.push(`%${qText}%`);
@@ -423,6 +450,7 @@ router.get('/tenants', requireSuperAdmin, async (req, res, next) => {
         t.account_status,
         t.billing_status,
         t.plan_name,
+        t.branch_limit,
         t.billing_due_date,
         CASE
           WHEN t.billing_due_date IS NULL THEN NULL
@@ -464,20 +492,7 @@ router.get('/tenants', requireSuperAdmin, async (req, res, next) => {
     `;
 
     const rows = await q(sql, values);
-    const mapped = rows.rows.map((row) => {
-      const phone = describeStoredPhone(decrypt(row.phone_enc) || '', row.phone_country, row.phone_calling_code);
-      return {
-        ...row,
-        phone: phone.international,
-        phone_e164: phone.e164,
-        phone_digits: phone.digits,
-        phone_valid: phone.valid,
-        phone_country: phone.country,
-        phone_country_name: phone.countryName,
-        phone_calling_code: phone.callingCode,
-        due_alert: Number(row.days_to_due) >= 0 && Number(row.days_to_due) <= 5,
-      };
-    });
+    const mapped = mapBusinessRows(rows.rows);
 
     res.json({
       tenants: mapped,
@@ -568,6 +583,124 @@ router.get('/demo-leads', requireSuperAdmin, async (req, res, next) => {
   }
 });
 
+router.get('/clients', requireSuperAdmin, async (req, res, next) => {
+  try {
+    await refreshTenantBillingStatuses();
+
+    const qText = String(req.query.q || '').trim().toLowerCase();
+    const statusFilter = parseClientStatusFilter(req.query.status);
+    const values = [];
+    const where = ['t.customer_since IS NOT NULL'];
+
+    if (qText) {
+      values.push(`%${qText}%`);
+      where.push(`(lower(t.slug) LIKE $${values.length} OR lower(t.business_name) LIKE $${values.length} OR lower(t.owner_name) LIKE $${values.length})`);
+    }
+    if (statusFilter?.active) where.push(`t.account_status = 'active' AND t.billing_status = 'active'`);
+    if (statusFilter?.billing) {
+      values.push(statusFilter.billing);
+      where.push(`t.billing_status = $${values.length}`);
+    }
+    if (statusFilter?.mora) where.push(`t.billing_due_date IS NOT NULL AND t.billing_due_date < CURRENT_DATE`);
+
+    const rows = await q(
+      `SELECT
+        t.id,
+        t.slug,
+        t.business_name,
+        t.owner_name,
+        t.phone_enc,
+        t.phone_country,
+        t.phone_calling_code,
+        t.logo,
+        t.primary_color,
+        t.account_status,
+        t.billing_status,
+        t.plan_name,
+        t.branch_limit,
+        t.billing_due_date,
+        t.customer_since,
+        t.license_count,
+        t.notes,
+        t.created_at,
+        CASE WHEN t.billing_due_date IS NULL THEN NULL ELSE (t.billing_due_date - CURRENT_DATE)::int END AS days_to_due,
+        CASE WHEN t.billing_due_date IS NULL OR t.billing_due_date >= CURRENT_DATE THEN 0 ELSE (CURRENT_DATE - t.billing_due_date)::int END AS mora_days,
+        COALESCE(u.username, '') AS owner_username,
+        COALESCE(payments.payment_count, 0)::int AS payment_count,
+        COALESCE(payments.total_paid, 0)::float AS total_paid,
+        payments.last_payment_at,
+        COALESCE(payments.last_payment_amount, 0)::float AS last_payment_amount,
+        COALESCE(payments.last_payment_method, '') AS last_payment_method,
+        COALESCE(usage_stats.module_count, 0)::int AS module_count,
+        COALESCE(usage_stats.module_views, 0)::int AS module_views,
+        usage_stats.module_last_seen,
+        COALESCE(usage_stats.modules, '[]'::json) AS modules
+      FROM tenants t
+      LEFT JOIN LATERAL (
+        SELECT username FROM users WHERE tenant_id = t.id ORDER BY id ASC LIMIT 1
+      ) u ON true
+      LEFT JOIN LATERAL (
+        SELECT
+          COUNT(*)::int AS payment_count,
+          COALESCE(SUM(tp.amount), 0) AS total_paid,
+          MAX(tp.paid_at) AS last_payment_at,
+          (ARRAY_AGG(tp.amount ORDER BY tp.paid_at DESC, tp.id DESC))[1] AS last_payment_amount,
+          (ARRAY_AGG(tp.method ORDER BY tp.paid_at DESC, tp.id DESC))[1] AS last_payment_method
+        FROM tenant_payments tp
+        WHERE tp.tenant_id = t.id
+      ) payments ON true
+      LEFT JOIN LATERAL (
+        SELECT
+          COUNT(*)::int AS module_count,
+          COALESCE(SUM(mu.view_count), 0)::int AS module_views,
+          MAX(mu.last_seen_at) AS module_last_seen,
+          json_agg(
+            json_build_object(
+              'key', mu.module_key,
+              'count', mu.view_count,
+              'firstSeenAt', mu.first_seen_at,
+              'lastSeenAt', mu.last_seen_at
+            ) ORDER BY mu.view_count DESC, mu.last_seen_at DESC
+          ) AS modules
+        FROM module_usage mu
+        WHERE mu.tenant_id = t.id AND mu.demo_lead_id IS NULL
+      ) usage_stats ON true
+      WHERE ${where.join(' AND ')}
+      ORDER BY t.customer_since DESC, t.created_at DESC`,
+      values
+    );
+
+    const clients = mapBusinessRows(rows.rows);
+    res.json({ clients, summary: buildClientSummary(clients) });
+  } catch (e) {
+    next(e);
+  }
+});
+
+router.get('/clients/:id/payments', requireSuperAdmin, async (req, res, next) => {
+  try {
+    const clientId = Number(req.params.id);
+    if (!Number.isInteger(clientId) || clientId <= 0) return res.status(400).json({ error: 'Cliente inválido' });
+
+    const found = await q(
+      'SELECT id, business_name, customer_since FROM tenants WHERE id = $1 AND customer_since IS NOT NULL',
+      [clientId]
+    );
+    if (!found.rows[0]) return res.status(404).json({ error: 'Cliente no encontrado' });
+
+    const payments = await q(
+      `SELECT id, amount::float AS amount, method, note, created_by, paid_at
+       FROM tenant_payments
+       WHERE tenant_id = $1
+       ORDER BY paid_at DESC, id DESC`,
+      [clientId]
+    );
+    res.json({ client: found.rows[0], payments: payments.rows });
+  } catch (e) {
+    next(e);
+  }
+});
+
 router.delete('/demo-leads/:id', requireSuperAdmin, async (req, res, next) => {
   try {
     const leadId = Number(req.params.id);
@@ -642,11 +775,12 @@ router.get('/tenants/:id/stats', requireSuperAdmin, async (req, res, next) => {
     if (!tenant) return res.status(404).json({ error: 'Tenant no encontrado' });
 
     const t = tdb(tenant.slug);
-    const [orders, products, openSessions, sales] = await Promise.all([
+    const [orders, products, openSessions, sales, branches] = await Promise.all([
       t.get('SELECT COUNT(*)::int AS count, MAX(created_at) AS last_order_at FROM {s}.orders'),
       t.get('SELECT COUNT(*)::int AS count FROM {s}.products WHERE active = 1'),
       t.get("SELECT COUNT(*)::int AS count FROM {s}.pos_sessions WHERE status = 'open'"),
-      t.get("SELECT COALESCE(SUM(total),0)::float AS total FROM {s}.orders WHERE channel = 'pos'")
+      t.get("SELECT COALESCE(SUM(total),0)::float AS total FROM {s}.orders WHERE channel = 'pos'"),
+      t.get('SELECT COUNT(*)::int AS total, COUNT(*) FILTER (WHERE active = 1)::int AS active FROM {s}.branches')
     ]);
 
     res.json({
@@ -670,6 +804,7 @@ router.get('/tenants/:id/stats', requireSuperAdmin, async (req, res, next) => {
         account_status: tenant.account_status,
         billing_status: tenant.billing_status,
         plan_name: tenant.plan_name,
+        branch_limit: Number(tenant.branch_limit || 2),
         billing_due_date: tenant.billing_due_date,
         notes: tenant.notes || '',
       },
@@ -678,6 +813,8 @@ router.get('/tenants/:id/stats', requireSuperAdmin, async (req, res, next) => {
         activeProducts: Number(products?.count || 0),
         openPosSessions: Number(openSessions?.count || 0),
         posSalesTotal: Number(sales?.total || 0),
+        activeBranches: Number(branches?.active || 0),
+        totalBranches: Number(branches?.total || 0),
         lastOrderAt: orders?.last_order_at || null,
       },
     });
@@ -722,7 +859,29 @@ router.patch('/tenants/:id', requireSuperAdmin, async (req, res, next) => {
       push('billing_status', value);
     }
     if (body.plan_name !== undefined) push('plan_name', String(body.plan_name || '').trim());
+    if (body.branch_limit !== undefined) {
+      const branchLimit = Number(body.branch_limit);
+      if (!Number.isInteger(branchLimit) || branchLimit < 1 || branchLimit > 1000) {
+        return res.status(400).json({ error: 'El límite de sucursales debe estar entre 1 y 1000' });
+      }
+      const tenant = await getTenantById(tenantId);
+      if (!tenant) return res.status(404).json({ error: 'Tenant no encontrado' });
+      const activeBranches = await tdb(tenant.slug).get('SELECT COUNT(*)::int AS count FROM {s}.branches WHERE active = 1');
+      if (Number(activeBranches?.count || 0) > branchLimit) {
+        return res.status(409).json({
+          error: `Este negocio tiene ${Number(activeBranches.count)} sucursales activas. Desactiva algunas antes de reducir el límite.`,
+        });
+      }
+      push('branch_limit', branchLimit);
+    }
     if (body.billing_due_date !== undefined) push('billing_due_date', body.billing_due_date || null);
+    if (body.license_count !== undefined) {
+      const licenseCount = Number(body.license_count);
+      if (!Number.isInteger(licenseCount) || licenseCount < 1 || licenseCount > 100000) {
+        return res.status(400).json({ error: 'Número de licencias inválido' });
+      }
+      push('license_count', licenseCount);
+    }
     if (body.notes !== undefined) push('notes', String(body.notes || '').trim());
 
     if (!updates.length) return res.status(400).json({ error: 'Sin cambios para actualizar' });
@@ -813,6 +972,7 @@ router.post('/tenants/:id/suspend', requireSuperAdmin, async (req, res, next) =>
 });
 
 router.post('/tenants/:id/payment', requireSuperAdmin, async (req, res, next) => {
+  const client = await pool.connect();
   try {
     const tenantId = Number(req.params.id);
     if (!tenantId) return res.status(400).json({ error: 'Tenant inválido' });
@@ -829,35 +989,49 @@ router.post('/tenants/:id/payment', requireSuperAdmin, async (req, res, next) =>
       return res.status(400).json({ error: 'Monto de pago inválido' });
     }
 
-    await q(
+    await client.query('BEGIN');
+    const tenantResult = await client.query('SELECT id, customer_since FROM tenants WHERE id = $1 FOR UPDATE', [tenantId]);
+    const tenant = tenantResult.rows[0];
+    if (!tenant) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ error: 'Tenant no encontrado' });
+    }
+
+    await client.query(
       'INSERT INTO tenant_payments (tenant_id, amount, method, note, created_by, paid_at) VALUES ($1, $2, $3, $4, $5, $6::date)',
       [tenantId, amount, method, note, req.superadmin.username, paidAt]
     );
 
-    const dueDateRow = await q('SELECT ($1::date + INTERVAL \'1 month\')::date AS next_due_date', [paidAt]);
+    const dueDateRow = await client.query('SELECT ($1::date + INTERVAL \'1 month\')::date AS next_due_date', [paidAt]);
     const nextDueDate = dueDateRow.rows[0]?.next_due_date;
     const paymentNote = `[PAGO ${paidAt}] ${amount.toFixed(2)} (${method})${note ? ` - ${note}` : ''}`;
 
-    await q(
+    await client.query(
       `UPDATE tenants
        SET billing_status = 'active',
            account_status = 'active',
            billing_due_date = $1::date,
+           customer_since = COALESCE(customer_since, $2::date),
            notes = CASE
-             WHEN COALESCE(notes, '') = '' THEN $2
-             ELSE notes || E'\n' || $2
+             WHEN COALESCE(notes, '') = '' THEN $3
+             ELSE notes || E'\n' || $3
            END
-       WHERE id = $3`,
+       WHERE id = $4`,
       [
         nextDueDate,
+        paidAt,
         paymentNote,
         tenantId,
       ]
     );
 
-    res.json({ ok: true, nextDueDate });
+    await client.query('COMMIT');
+    res.json({ ok: true, nextDueDate, becameClient: !tenant.customer_since });
   } catch (e) {
+    try { await client.query('ROLLBACK'); } catch {}
     next(e);
+  } finally {
+    client.release();
   }
 });
 

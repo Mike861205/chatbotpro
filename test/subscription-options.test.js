@@ -31,3 +31,16 @@ test('mantiene los beneficios principales en las tres tarjetas', () => {
     assert.equal(appHtml.split(benefit).length - 1, 3, `${benefit} debe aparecer en los tres planes`);
   }
 });
+
+test('las tres tarjetas explican que incluyen de una a dos sucursales', () => {
+  assert.equal(appHtml.split('Incluye de 1 a 2 sucursales').length - 1, 3);
+  assert.equal(appHtml.split('ph-fill ph-storefront').length >= 3, true);
+  assert.equal(appHtml.split('Activas al mismo tiempo').length - 1, 3);
+});
+
+test('explica que tres o más sucursales requieren cotización personalizada', () => {
+  assert.match(appHtml, /¿Tu negocio necesita 3 o más sucursales activas\?/);
+  assert.match(appHtml, /El precio varía según el número de sucursales activas/);
+  assert.match(appHtml, /Precio personalizado/);
+  assert.ok(appHtml.indexOf('subs-extra-branches-notice') < appHtml.indexOf('subs-currency-notice'));
+});

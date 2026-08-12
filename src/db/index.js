@@ -96,6 +96,9 @@ async function initMaster() {
       billing_status TEXT DEFAULT 'active',
       plan_name TEXT DEFAULT 'starter',
       billing_due_date DATE,
+      customer_since TIMESTAMPTZ,
+      license_count INTEGER NOT NULL DEFAULT 1,
+      branch_limit INTEGER NOT NULL DEFAULT 2,
       notes TEXT DEFAULT '',
       created_at TIMESTAMPTZ DEFAULT now()
     );
@@ -163,6 +166,9 @@ async function initMaster() {
   await q(`ALTER TABLE tenants ADD COLUMN IF NOT EXISTS billing_status TEXT DEFAULT 'active'`);
   await q(`ALTER TABLE tenants ADD COLUMN IF NOT EXISTS plan_name TEXT DEFAULT 'starter'`);
   await q(`ALTER TABLE tenants ADD COLUMN IF NOT EXISTS billing_due_date DATE`);
+  await q(`ALTER TABLE tenants ADD COLUMN IF NOT EXISTS customer_since TIMESTAMPTZ`);
+  await q(`ALTER TABLE tenants ADD COLUMN IF NOT EXISTS license_count INTEGER NOT NULL DEFAULT 1`);
+  await q(`ALTER TABLE tenants ADD COLUMN IF NOT EXISTS branch_limit INTEGER NOT NULL DEFAULT 2`);
   await q(`ALTER TABLE tenants ADD COLUMN IF NOT EXISTS notes TEXT DEFAULT ''`);
   await q(`ALTER TABLE tenants ADD COLUMN IF NOT EXISTS phone_country TEXT DEFAULT ''`);
   await q(`ALTER TABLE tenants ADD COLUMN IF NOT EXISTS phone_calling_code TEXT DEFAULT ''`);
@@ -185,6 +191,18 @@ async function initMaster() {
   await q(`ALTER TABLE tenant_payments ADD COLUMN IF NOT EXISTS note TEXT DEFAULT ''`);
   await q(`ALTER TABLE tenant_payments ADD COLUMN IF NOT EXISTS created_by TEXT DEFAULT ''`);
   await q(`ALTER TABLE tenant_payments ADD COLUMN IF NOT EXISTS paid_at TIMESTAMPTZ DEFAULT now()`);
+  await q(`
+    UPDATE tenants t
+    SET customer_since = first_payment.first_paid_at
+    FROM (
+      SELECT tenant_id, MIN(paid_at) AS first_paid_at
+      FROM tenant_payments
+      GROUP BY tenant_id
+    ) first_payment
+    WHERE t.id = first_payment.tenant_id
+      AND t.customer_since IS NULL
+  `);
+  await q(`CREATE INDEX IF NOT EXISTS idx_tenants_customer_since ON tenants (customer_since)`);
   await q(`ALTER TABLE users ADD COLUMN IF NOT EXISTS display_name TEXT DEFAULT ''`);
   await q(`ALTER TABLE users ADD COLUMN IF NOT EXISTS branch_id INTEGER`);
   await q(`ALTER TABLE users ADD COLUMN IF NOT EXISTS cashier_slug TEXT`);

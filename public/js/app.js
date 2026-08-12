@@ -241,6 +241,28 @@ function orderDayKeyLocal() {
   return `${now.getFullYear()}-${m}-${d}`;
 }
 
+function orderDateKeyLocal(date) {
+  const m = String(date.getMonth() + 1).padStart(2, '0');
+  const d = String(date.getDate()).padStart(2, '0');
+  return `${date.getFullYear()}-${m}-${d}`;
+}
+
+function defaultOrdersWeekRange() {
+  const end = new Date();
+  const start = new Date(end);
+  start.setDate(start.getDate() - 6);
+  return {
+    start: orderDateKeyLocal(start),
+    end: orderDateKeyLocal(end),
+  };
+}
+
+function resetOrdersToDefaultWeek() {
+  const range = defaultOrdersWeekRange();
+  orderDateStart = range.start;
+  orderDateEnd = range.end;
+}
+
 function normalizeOrderStatus(status) {
   return String(status || '').trim().toLowerCase();
 }
@@ -638,6 +660,50 @@ $('#posSortSelect')?.addEventListener('change', async (e) => {
 });
 
 /* ===== Dashboard ===== */
+function subscriptionPlanLabel(planName) {
+  const value = String(planName || 'starter').trim();
+  const labels = {
+    starter: 'Plan Starter',
+    mensual: 'Plan mensual',
+    annual: 'Plan anual',
+    anual: 'Plan anual',
+  };
+  return labels[value.toLowerCase()] || value;
+}
+
+function renderDashboardSubscription(subscription) {
+  const card = $('#dashboardSubscriptionCard');
+  if (!card) return;
+  if (!subscription?.active) {
+    card.hidden = true;
+    card.innerHTML = '';
+    return;
+  }
+
+  const limit = Math.max(1, Number(subscription.branchLimit || 2));
+  const active = Math.max(0, Number(subscription.activeBranches || 0));
+  const available = Math.max(0, Number(subscription.availableBranches ?? (limit - active)));
+  const includedText = limit === 2
+    ? 'Tu plan incluye de 1 a 2 sucursales activas'
+    : `Tu plan incluye hasta ${limit} sucursales activas`;
+  const billingText = subscription.billingStatus === 'due' ? 'Por pagar' : 'Al corriente';
+  const dueDateKey = String(subscription.dueDate || '').slice(0, 10);
+  const dueText = dueDateKey
+    ? ` · vence ${new Date(`${dueDateKey}T12:00:00`).toLocaleDateString('es-MX', { day: 'numeric', month: 'short', year: 'numeric' })}`
+    : '';
+
+  card.innerHTML = `
+    <div class="dashboard-plan-icon"><i class="ph-fill ph-storefront"></i></div>
+    <div class="dashboard-plan-copy">
+      <b>${esc(subscriptionPlanLabel(subscription.planName))} activo</b>
+      <span>${esc(includedText)} · ${esc(billingText)}${esc(dueText)}</span>
+    </div>
+    <div class="dashboard-plan-branches"><span>Sucursales activas</span><b>${active} de ${limit} en uso</b></div>
+    <div class="dashboard-plan-available"><span>Disponibilidad</span><b>${available} disponible${available === 1 ? '' : 's'}</b></div>
+  `;
+  card.hidden = false;
+}
+
 async function loadDashboard() {
   const s = await api(`/api/dashboard/stats?period=${encodeURIComponent(DASHBOARD_PERIOD)}`);
   const periodMeta = s.period || {};
@@ -652,6 +718,7 @@ async function loadDashboard() {
   $('#stPendingLabel').textContent = `Pendientes ${periodSuffix}`;
   $('#dashboardSalesTitle').innerHTML = `<i class="ph-bold ph-trend-up"></i> ${periodMeta.chartTitle || 'Ventas'}`;
   $('#dashboardTopTitle').innerHTML = `<i class="ph-bold ph-trophy"></i> ${periodMeta.topTitle || 'Más vendidos'}`;
+  renderDashboardSubscription(s.subscription);
   document.querySelectorAll('#dashboardPeriodFilter button').forEach((button) => {
     button.classList.toggle('on', button.dataset.period === periodKey);
   });
@@ -2508,7 +2575,7 @@ function syncOrdersFiltersUI() {
   if (toggle) {
     toggle.classList.toggle('on', orderTodayOnly);
     toggle.setAttribute('aria-pressed', String(orderTodayOnly));
-    toggle.innerHTML = `<i class="ph-bold ph-calendar-check"></i> Solo pedidos del día: ${orderTodayOnly ? 'Activado' : 'Desactivado'}`;
+    toggle.innerHTML = `<i class="ph-bold ph-calendar-check"></i> Solo pedidos del día: ${orderTodayOnly ? 'Activado' : 'Desactivado · últimos 7 días'}`;
   }
   const start = $('#ordersDateStart');
   const end = $('#ordersDateEnd');
@@ -2524,6 +2591,7 @@ function syncOrdersFiltersUI() {
 }
 
 async function loadOrders() {
+  if (!orderTodayOnly && !orderDateStart && !orderDateEnd) resetOrdersToDefaultWeek();
   syncOrdersFiltersUI();
   const params = new URLSearchParams();
   if (orderStatusFilter) params.set('status', orderStatusFilter);
@@ -2817,6 +2885,8 @@ $('#ordersTodayToggle')?.addEventListener('click', () => {
   if (orderTodayOnly) {
     orderDateStart = '';
     orderDateEnd = '';
+  } else {
+    resetOrdersToDefaultWeek();
   }
   orderPage = 1;
   loadOrders();
@@ -2835,12 +2905,12 @@ $('#ordersApplyDate')?.addEventListener('click', () => {
 });
 
 $('#ordersClearDate')?.addEventListener('click', () => {
-  orderDateStart = '';
-  orderDateEnd = '';
-  const start = $('#ordersDateStart');
-  const end = $('#ordersDateEnd');
-  if (start) start.value = '';
-  if (end) end.value = '';
+  if (orderTodayOnly) {
+    orderDateStart = '';
+    orderDateEnd = '';
+  } else {
+    resetOrdersToDefaultWeek();
+  }
   orderPage = 1;
   loadOrders();
 });

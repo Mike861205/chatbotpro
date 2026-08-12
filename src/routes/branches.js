@@ -1,5 +1,6 @@
 const express = require('express');
 const { requireAuth, requireOwner } = require('../middleware/auth');
+const { branchCapacity } = require('../utils/branchLimit');
 
 const router = express.Router();
 router.use(requireAuth);
@@ -25,10 +26,25 @@ router.post('/', async (req, res, next) => {
     if (name.length < 2) return res.status(400).json({ error: 'El nombre de la sucursal es obligatorio' });
     if (address.length < 5) return res.status(400).json({ error: 'La dirección de la sucursal es obligatoria' });
 
-    const row = await req.tdb.get(
-      'INSERT INTO {s}.branches (name, address, reference, active) VALUES ($1, $2, $3, $4) RETURNING id, name, address, reference, active',
-      [name, address, reference, body.active === '0' || body.active === 0 ? 0 : 1]
-    );
+    const active = body.active === '0' || body.active === 0 ? 0 : 1;
+    const row = await req.tdb.tx(async (tx) => {
+      await tx.run('SELECT pg_advisory_xact_lock($1)', [Number(req.tenant.id)]);
+      if (active) {
+        const count = await tx.get('SELECT COUNT(*)::int AS count FROM {s}.branches WHERE active = 1');
+        const capacity = branchCapacity(count?.count, req.tenant.branch_limit);
+        if (capacity.reached) {
+          const error = new Error(`Tu plan permite máximo ${capacity.limit} sucursales activas. Solicita una ampliación al administrador.`);
+          error.status = 409;
+          error.code = 'BRANCH_LIMIT_REACHED';
+          error.details = capacity;
+          throw error;
+        }
+      }
+      return tx.get(
+        'INSERT INTO {s}.branches (name, address, reference, active) VALUES ($1, $2, $3, $4) RETURNING id, name, address, reference, active',
+        [name, address, reference, active]
+      );
+    });
     res.json({ ...row, active: Number(row.active) });
   } catch (e) {
     next(e);
@@ -44,10 +60,27 @@ router.put('/:id', async (req, res, next) => {
     if (name.length < 2) return res.status(400).json({ error: 'El nombre de la sucursal es obligatorio' });
     if (address.length < 5) return res.status(400).json({ error: 'La dirección de la sucursal es obligatoria' });
 
-    const r = await req.tdb.run(
-      'UPDATE {s}.branches SET name = $1, address = $2, reference = $3, active = $4 WHERE id = $5',
-      [name, address, reference, body.active === '0' || body.active === 0 ? 0 : 1, req.params.id]
-    );
+    const active = body.active === '0' || body.active === 0 ? 0 : 1;
+    const r = await req.tdb.tx(async (tx) => {
+      await tx.run('SELECT pg_advisory_xact_lock($1)', [Number(req.tenant.id)]);
+      const current = await tx.get('SELECT id, active FROM {s}.branches WHERE id = $1', [req.params.id]);
+      if (!current) return { rowCount: 0 };
+      if (active && !Number(current.active)) {
+        const count = await tx.get('SELECT COUNT(*)::int AS count FROM {s}.branches WHERE active = 1');
+        const capacity = branchCapacity(count?.count, req.tenant.branch_limit);
+        if (capacity.reached) {
+          const error = new Error(`Tu plan permite máximo ${capacity.limit} sucursales activas. Solicita una ampliación al administrador.`);
+          error.status = 409;
+          error.code = 'BRANCH_LIMIT_REACHED';
+          error.details = capacity;
+          throw error;
+        }
+      }
+      return tx.run(
+        'UPDATE {s}.branches SET name = $1, address = $2, reference = $3, active = $4 WHERE id = $5',
+        [name, address, reference, active, req.params.id]
+      );
+    });
     if (!r.rowCount) return res.status(404).json({ error: 'Sucursal no encontrada' });
     res.json({ ok: true });
   } catch (e) {

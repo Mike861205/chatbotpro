@@ -9,8 +9,9 @@
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/regular/style.css" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/bold/style.css" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/fill/style.css" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/duotone/style.css" />
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-  <link rel="stylesheet" href="/static/css/styles.css?v=20260811annual625neon" />
+  <link rel="stylesheet" href="/static/css/styles.css?v=20260811sidebar2026" />
   <link rel="icon" type="image/svg+xml" href="/static/favicon.svg" />
   <link rel="icon" type="image/png" href="/static/chatbotpro100.png" />
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
@@ -32,25 +33,25 @@
       </div>
       <nav>
         <div class="nav-label nav-label-principal"><i class="ph-fill ph-chart-pie-slice"></i> Principal</div>
-        <a href="#dashboard" data-view="dashboard" class="active" data-color="indigo"><span class="nav-ic"><i class="ph-fill ph-house"></i></span><span>Dashboard</span></a>
-        <a href="#pedidos" data-view="pedidos" data-color="orange"><span class="nav-ic"><i class="ph-fill ph-receipt"></i></span><span>Pedidos</span> <span id="pendingBadge" class="count" style="display:none"></span></a>
-        <a href="#clientes" data-view="clientes" data-color="blue"><span class="nav-ic"><i class="ph-fill ph-users-three"></i></span><span>Clientes</span></a>
-        <a href="#pos" data-view="pos" data-color="emerald"><span class="nav-ic"><i class="ph-fill ph-cash-register"></i></span><span>Punto de venta</span></a>
-        <a href="#kds" data-view="kds" data-color="orange"><span class="nav-ic"><i class="ph-fill ph-monitor-play"></i></span><span>Pantallas KDS</span></a>
-        <a href="#ventas" data-view="ventas" data-color="blue"><span class="nav-ic"><i class="ph-fill ph-chart-line-up"></i></span><span>Ventas</span></a>
-        <a href="#productos" data-view="productos" data-color="rose"><span class="nav-ic"><i class="ph-fill ph-bowl-food"></i></span><span>Productos</span></a>
-        <a href="#costos" data-view="costos" data-color="amber"><span class="nav-ic"><i class="ph-fill ph-coins"></i></span><span>Costo de ventas</span></a>
-        <a href="#inventarios" data-view="inventarios" data-color="teal"><span class="nav-ic"><i class="ph-fill ph-package"></i></span><span>Inventarios</span></a>
-        <a href="#stock-sucursales" data-view="stock-sucursales" data-color="cyan"><span class="nav-ic"><i class="ph-fill ph-buildings"></i></span><span>Stock por sucursal</span></a>
-        <a href="#compras" data-view="compras" data-color="blue"><span class="nav-ic"><i class="ph-fill ph-shopping-cart-simple"></i></span><span>Compras</span></a>
+        <a href="#dashboard" data-view="dashboard" class="active" data-color="indigo"><span class="nav-ic"><i class="ph-duotone ph-squares-four"></i></span><span>Dashboard</span></a>
+        <a href="#pedidos" data-view="pedidos" data-color="orange"><span class="nav-ic"><i class="ph-duotone ph-clipboard-text"></i></span><span>Pedidos</span> <span id="pendingBadge" class="count" style="display:none"></span></a>
+        <a href="#clientes" data-view="clientes" data-color="blue"><span class="nav-ic"><i class="ph-duotone ph-identification-card"></i></span><span>Clientes</span></a>
+        <a href="#pos" data-view="pos" data-color="emerald"><span class="nav-ic"><i class="ph-duotone ph-cash-register"></i></span><span>Punto de venta</span></a>
+        <a href="#kds" data-view="kds" data-color="orange"><span class="nav-ic"><i class="ph-duotone ph-monitor-play"></i></span><span>Pantallas KDS</span></a>
+        <a href="#ventas" data-view="ventas" data-color="blue"><span class="nav-ic"><i class="ph-duotone ph-chart-line-up"></i></span><span>Ventas</span></a>
+        <a href="#productos" data-view="productos" data-color="rose"><span class="nav-ic"><i class="ph-duotone ph-cooking-pot"></i></span><span>Productos</span></a>
+        <a href="#costos" data-view="costos" data-color="amber"><span class="nav-ic"><i class="ph-duotone ph-chart-pie-slice"></i></span><span>Costo de ventas</span></a>
+        <a href="#inventarios" data-view="inventarios" data-color="teal"><span class="nav-ic"><i class="ph-duotone ph-package"></i></span><span>Inventarios</span></a>
+        <a href="#stock-sucursales" data-view="stock-sucursales" data-color="cyan"><span class="nav-ic"><i class="ph-duotone ph-warehouse"></i></span><span>Stock por sucursal</span></a>
+        <a href="#compras" data-view="compras" data-color="blue"><span class="nav-ic"><i class="ph-duotone ph-shopping-bag-open"></i></span><span>Compras</span></a>
         <div class="nav-label nav-label-empleados"><i class="ph-fill ph-users"></i> Empleados</div>
-        <a href="#empleados" data-view="empleados" data-color="fuchsia"><span class="nav-ic"><i class="ph-fill ph-identification-badge"></i></span><span>Productividad</span></a>
+        <a href="#empleados" data-view="empleados" data-color="fuchsia"><span class="nav-ic"><i class="ph-duotone ph-users-three"></i></span><span>Productividad</span></a>
         <div class="nav-label nav-label-chatbot"><i class="ph-fill ph-chat-circle-dots"></i> Chatbot</div>
-        <a href="#chatbot" data-view="chatbot" data-color="cyan"><span class="nav-ic"><i class="ph-fill ph-chat-circle-dots"></i></span><span>Mi chatbot</span></a>
+        <a href="#chatbot" data-view="chatbot" data-color="cyan"><span class="nav-ic"><i class="ph-duotone ph-robot"></i></span><span>Mi chatbot</span></a>
         <div class="nav-label nav-label-negocio"><i class="ph-fill ph-briefcase"></i> Negocio</div>
-        <a href="#config" data-view="config" data-color="amber"><span class="nav-ic"><i class="ph-fill ph-storefront"></i></span><span>Mi negocio</span></a>
-        <a href="#suscripciones" data-view="suscripciones" data-color="violet"><span class="nav-ic"><i class="ph-fill ph-crown"></i></span><span>Suscripciones</span></a>
-        <a href="/notificaciones" target="_blank" style="color:#a78bfa"><span class="nav-ic"><i class="ph-fill ph-bell-ringing"></i></span><span>Pedidos en vivo</span> <span style="font-size:9px;background:#6c47ff;color:#fff;padding:2px 6px;border-radius:10px;margin-left:auto">PWA</span></a>
+        <a href="#config" data-view="config" data-color="amber"><span class="nav-ic"><i class="ph-duotone ph-buildings"></i></span><span>Mi negocio</span></a>
+        <a href="#suscripciones" data-view="suscripciones" data-color="violet"><span class="nav-ic"><i class="ph-duotone ph-seal-check"></i></span><span>Suscripciones</span></a>
+        <a href="/notificaciones" target="_blank" data-color="violet" style="color:#a78bfa"><span class="nav-ic"><i class="ph-duotone ph-broadcast"></i></span><span>Pedidos en vivo</span> <span style="font-size:9px;background:#6c47ff;color:#fff;padding:2px 6px;border-radius:10px;margin-left:auto">PWA</span></a>
       </nav>
       <div class="foot">
         <div class="user-chip">
@@ -95,6 +96,7 @@
           </div>
           <div class="dashboard-toolbar-copy">Consulta tus reportes por día, semana, mes o año.</div>
         </div>
+        <div class="dashboard-subscription-card" id="dashboardSubscriptionCard" hidden></div>
         <div class="grid-stats">
           <div class="card stat"><div class="ic g1"><i class="ph-bold ph-currency-dollar"></i></div><div><div class="val" id="stSalesToday">—</div><div class="lbl" id="stSalesLabel">Ventas de hoy</div></div></div>
           <div class="card stat"><div class="ic g2"><i class="ph-bold ph-receipt"></i></div><div><div class="val" id="stOrdersToday">—</div><div class="lbl" id="stOrdersLabel">Pedidos de hoy</div></div></div>
@@ -1091,6 +1093,7 @@
               <span class="plan-compare-badge"><i class="ph-fill ph-arrow-bend-down-right"></i> Mejor valor en promoción</span>
               <div class="plan-icon"><i class="ph-fill ph-package"></i></div>
               <div class="plan-label">Plan mensual regular</div>
+              <div class="plan-branch-limit"><i class="ph-fill ph-storefront"></i><span><strong>Incluye de 1 a 2 sucursales</strong><small>Activas al mismo tiempo</small></span></div>
               <div class="plan-regular-old">Precio de lista <s>$999</s></div>
               <div class="plan-price"><span class="cur">$</span><span class="amt">999</span><span class="per">/ mes MXN</span></div>
               <div class="plan-regular-note">Ideal si prefieres pagar mes a mes sin aprovechar la promoción anual.</div>
@@ -1108,6 +1111,7 @@
               <span class="plan-flag"><i class="ph-fill ph-star"></i> Más popular</span>
               <div class="plan-icon promo"><i class="ph-fill ph-rocket-launch"></i></div>
               <div class="plan-label">Promoción primer año</div>
+              <div class="plan-branch-limit promo"><i class="ph-fill ph-storefront"></i><span><strong>Incluye de 1 a 2 sucursales</strong><small>Activas al mismo tiempo</small></span></div>
               <div class="plan-price big">
                 <span class="cur">$</span><span class="amt">699</span><span class="per">/ mes MXN</span>
               </div>
@@ -1135,6 +1139,7 @@
               <span class="plan-flag annual"><i class="ph-fill ph-crown"></i> Recomendado · Ahorra 12%</span>
               <div class="plan-icon annual"><i class="ph-fill ph-calendar-star"></i></div>
               <div class="plan-label">Plan anual</div>
+              <div class="plan-branch-limit annual"><i class="ph-fill ph-storefront"></i><span><strong>Incluye de 1 a 2 sucursales</strong><small>Activas al mismo tiempo</small></span></div>
               <div class="annual-msi-highlight">
                 <span>12 meses sin intereses de</span>
                 <div><small>$</small><strong>625</strong><em>/ mes MXN</em></div>
@@ -1160,6 +1165,15 @@
               </a>
               <div class="plan-pay-foot annual"><i class="ph-bold ph-info"></i> Los 12 MSI aplican con tarjetas participantes y se confirman en Stripe.</div>
             </article>
+          </div>
+
+          <div class="subs-extra-branches-notice">
+            <div class="subs-extra-branches-icon"><i class="ph-fill ph-buildings"></i></div>
+            <div>
+              <b>¿Tu negocio necesita 3 o más sucursales activas?</b>
+              <span>Contacta a tu administrador para recibir una cotización personalizada. El precio varía según el número de sucursales activas que necesite tu negocio.</span>
+            </div>
+            <div class="subs-extra-branches-tag"><i class="ph-bold ph-currency-dollar"></i> Precio personalizado</div>
           </div>
 
           <div class="subs-currency-notice">
@@ -2276,6 +2290,6 @@
     </div>
   </div>
 
-  <script src="/static/js/app.js?v=20260811purchaseactions"></script>
+  <script src="/static/js/app.js?v=20260811ordersweek"></script>
 </body>
 </html>

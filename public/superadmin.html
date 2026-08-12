@@ -23,7 +23,8 @@
         </div>
       </div>
       <nav>
-        <a href="#tenants" data-sa-view="tenants" data-color="cyan" class="active"><span class="nav-ic"><i class="ph-fill ph-buildings"></i></span><span>Tenants</span><span class="sa-module-icon"><i class="ph-bold ph-users-three"></i></span></a>
+        <a href="#tenants" data-sa-view="tenants" data-color="cyan" class="active"><span class="nav-ic"><i class="ph-fill ph-buildings"></i></span><span>Prospectos</span><span class="sa-module-icon"><i class="ph-bold ph-users-three"></i></span></a>
+        <a href="#clients" data-sa-view="clients" data-color="green"><span class="nav-ic"><i class="ph-fill ph-handshake"></i></span><span>Clientes</span><span class="sa-module-icon"><i class="ph-bold ph-identification-card"></i></span></a>
         <a href="#demo-leads" data-sa-view="demo-leads" data-color="violet"><span class="nav-ic"><i class="ph-fill ph-rocket-launch"></i></span><span>Leads demo</span><span class="sa-module-icon"><i class="ph-bold ph-phone-call"></i></span></a>
         <a href="#integrations" data-sa-view="integrations" data-color="amber"><span class="nav-ic"><i class="ph-fill ph-plugs-connected"></i></span><span>Integraciones</span><span class="sa-module-icon"><i class="ph-bold ph-gear-six"></i></span></a>
       </nav>
@@ -40,8 +41,8 @@
     <main class="main">
       <header class="topbar">
         <div>
-          <h1 id="saTitle"><i class="ph-bold ph-buildings"></i> Tenants</h1>
-          <p id="saSub" class="muted">Administra tenants activos, por pagar y suspendidos.</p>
+          <h1 id="saTitle"><i class="ph-bold ph-buildings"></i> Prospectos</h1>
+          <p id="saSub" class="muted">Tenants que todavía no registran su primer pago.</p>
         </div>
         <div class="sa-clock-pill">
           <div><i class="ph-bold ph-calendar-blank"></i> <span id="saNowDate">--</span></div>
@@ -52,8 +53,8 @@
       <section id="saViewTenants" class="section active">
         <div class="card" style="padding:16px;margin-bottom:14px">
           <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px">
-            <h3><i class="ph-bold ph-bell-ringing"></i> Cobranza mensual y alertas</h3>
-            <button type="button" class="btn btn-ghost" id="saBillingRefresh"><i class="ph-bold ph-arrows-clockwise"></i> Actualizar cobranza</button>
+            <h3><i class="ph-bold ph-funnel"></i> Pipeline de prospectos</h3>
+            <span class="hint">Al registrar el primer pago, el prospecto se mueve automáticamente a Clientes.</span>
           </div>
           <div id="saBillingSummary" class="pos-close-grid"></div>
         </div>
@@ -63,15 +64,46 @@
             <label for="saTenantSearch" style="position:absolute;left:-9999px;width:1px;height:1px;overflow:hidden">Buscar tenants</label>
             <div class="segmented" id="saTenantFilters">
               <button type="button" class="active" data-status="all">Todos</button>
-              <button type="button" data-status="active">Activos</button>
-              <button type="button" data-status="due">Por pagar</button>
-              <button type="button" data-status="mora">En mora</button>
+              <button type="button" data-status="active">Con acceso</button>
               <button type="button" data-status="inactive">Inactivos</button>
             </div>
             <input id="saTenantSearch" type="search" placeholder="Buscar por negocio, país, lada o teléfono" style="max-width:360px" />
             <button type="button" class="btn btn-primary" id="saReloadTenants"><i class="ph-bold ph-arrows-clockwise"></i> Actualizar</button>
           </div>
           <div id="saTenantsTable"></div>
+        </div>
+      </section>
+
+      <section id="saViewClients" class="section" hidden>
+        <div class="card clients-hero-card" style="padding:18px;margin-bottom:14px">
+          <div>
+            <span class="clients-hero-kicker"><i class="ph-bold ph-handshake"></i> Cartera comercial</span>
+            <h3>Clientes con pago registrado</h3>
+            <p>Controla ingresos, licencias, vencimientos y el historial de cobros de cada cliente.</p>
+          </div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <button type="button" class="btn btn-ghost" id="saBillingRefresh"><i class="ph-bold ph-calendar-check"></i> Actualizar cobranza</button>
+            <button type="button" class="btn btn-ghost" id="saReloadClients"><i class="ph-bold ph-arrows-clockwise"></i> Actualizar</button>
+          </div>
+        </div>
+
+        <div class="card" style="padding:16px;margin-bottom:14px">
+          <div id="saClientSummary" class="client-summary-grid"></div>
+        </div>
+
+        <div class="card" style="padding:16px">
+          <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:12px">
+            <div class="segmented" id="saClientFilters">
+              <button type="button" class="active" data-status="all">Todos</button>
+              <button type="button" data-status="active">Activos</button>
+              <button type="button" data-status="due">Por pagar</button>
+              <button type="button" data-status="mora">En mora</button>
+              <button type="button" data-status="suspended">Suspendidos</button>
+            </div>
+            <label for="saClientSearch" style="position:absolute;left:-9999px;width:1px;height:1px;overflow:hidden">Buscar clientes</label>
+            <input id="saClientSearch" type="search" placeholder="Buscar cliente, dueño, país o teléfono" style="max-width:360px" />
+          </div>
+          <div id="saClientsTable"></div>
         </div>
       </section>
 
@@ -175,11 +207,11 @@
 
   <div class="modal-bg" id="saPaymentModal">
     <div class="modal" style="max-width:560px">
-      <h3><i class="ph-bold ph-currency-circle-dollar"></i> Registrar pago de tenant</h3>
+      <h3><i class="ph-bold ph-currency-circle-dollar"></i> Registrar pago</h3>
       <form id="saPaymentForm">
         <input type="hidden" id="saPayTenantId" />
         <div class="field">
-          <label><i class="ph-bold ph-buildings"></i> Tenant</label>
+          <label><i class="ph-bold ph-buildings"></i> Negocio</label>
           <input type="text" id="saPayTenantName" readonly />
         </div>
         <div class="row-2">
@@ -210,10 +242,33 @@
           <label><i class="ph-bold ph-note-pencil"></i> Notas</label>
           <textarea id="saPayNote" rows="3" placeholder="Referencia, folio, observaciones"></textarea>
         </div>
-        <div class="hint" id="saPayHint">El sistema calculará el próximo vencimiento exactamente a +1 mes.</div>
+        <div class="hint" id="saPayHint">El primer pago convierte automáticamente al prospecto en cliente y calcula el próximo vencimiento a +1 mes.</div>
         <div class="modal-actions">
           <button type="button" class="btn btn-ghost" id="saPayCancel">Cancelar</button>
           <button class="btn btn-primary" type="submit"><i class="ph-bold ph-check-circle"></i> Registrar pago</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <div class="modal-bg" id="saBranchLimitModal">
+    <div class="modal" style="max-width:540px">
+      <h3><i class="ph-bold ph-storefront"></i> Cupo de sucursales</h3>
+      <form id="saBranchLimitForm">
+        <input type="hidden" id="saBranchLimitTenantId" />
+        <div class="field">
+          <label><i class="ph-bold ph-buildings"></i> Negocio</label>
+          <input type="text" id="saBranchLimitTenantName" readonly />
+        </div>
+        <div class="field">
+          <label><i class="ph-bold ph-hash"></i> Máximo de sucursales activas</label>
+          <input type="number" id="saBranchLimitValue" min="1" max="1000" step="1" required />
+        </div>
+        <div class="hint" id="saBranchLimitUsage"></div>
+        <div class="hint">El plan incluye 2 por defecto. Puedes ampliar este cupo individualmente; no se permitirá reducirlo por debajo de las sucursales que ya estén activas.</div>
+        <div class="modal-actions">
+          <button type="button" class="btn btn-ghost" id="saBranchLimitCancel">Cancelar</button>
+          <button type="submit" class="btn btn-primary"><i class="ph-bold ph-check-circle"></i> Guardar cupo</button>
         </div>
       </form>
     </div>
@@ -271,6 +326,17 @@
       <div id="saModulesDetail"></div>
       <div class="modal-actions">
         <button type="button" class="btn btn-primary" id="saModulesClose">Cerrar</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal-bg" id="saPaymentsModal">
+    <div class="modal" style="max-width:760px">
+      <h3><i class="ph-bold ph-receipt"></i> Historial de pagos</h3>
+      <p id="saPaymentsSubject" style="color:var(--ink-2);font-size:14px;margin:-10px 0 16px"></p>
+      <div id="saPaymentsDetail"></div>
+      <div class="modal-actions">
+        <button type="button" class="btn btn-primary" id="saPaymentsClose">Cerrar</button>
       </div>
     </div>
   </div>
