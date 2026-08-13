@@ -2573,9 +2573,16 @@ function renderOrdersPagination(totalItems) {
 function syncOrdersFiltersUI() {
   const toggle = $('#ordersTodayToggle');
   if (toggle) {
+    const defaultRange = defaultOrdersWeekRange();
+    let dateModeLabel = 'todas las fechas';
+    if (orderDateStart || orderDateEnd) {
+      dateModeLabel = orderDateStart === defaultRange.start && orderDateEnd === defaultRange.end
+        ? 'últimos 7 días'
+        : 'rango personalizado';
+    }
     toggle.classList.toggle('on', orderTodayOnly);
     toggle.setAttribute('aria-pressed', String(orderTodayOnly));
-    toggle.innerHTML = `<i class="ph-bold ph-calendar-check"></i> Solo pedidos del día: ${orderTodayOnly ? 'Activado' : 'Desactivado · últimos 7 días'}`;
+    toggle.innerHTML = `<i class="ph-bold ph-calendar-check"></i> Solo pedidos del día: ${orderTodayOnly ? 'Activado' : `Desactivado · ${dateModeLabel}`}`;
   }
   const start = $('#ordersDateStart');
   const end = $('#ordersDateEnd');
@@ -2591,7 +2598,6 @@ function syncOrdersFiltersUI() {
 }
 
 async function loadOrders() {
-  if (!orderTodayOnly && !orderDateStart && !orderDateEnd) resetOrdersToDefaultWeek();
   syncOrdersFiltersUI();
   const params = new URLSearchParams();
   if (orderStatusFilter) params.set('status', orderStatusFilter);
@@ -2905,12 +2911,9 @@ $('#ordersApplyDate')?.addEventListener('click', () => {
 });
 
 $('#ordersClearDate')?.addEventListener('click', () => {
-  if (orderTodayOnly) {
-    orderDateStart = '';
-    orderDateEnd = '';
-  } else {
-    resetOrdersToDefaultWeek();
-  }
+  orderTodayOnly = false;
+  orderDateStart = '';
+  orderDateEnd = '';
   orderPage = 1;
   loadOrders();
 });

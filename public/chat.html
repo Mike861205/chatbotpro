@@ -363,6 +363,28 @@
     }
     .opt:hover::after { opacity: 1; }
     .opt:active { transform: scale(0.96); }
+    .modifier-picker { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .modifier-picker-status {
+      grid-column: 1 / -1;
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 2px 3px;
+      color: #626b80;
+      font-size: 12px;
+      font-weight: 750;
+    }
+    .modifier-choice.selected {
+      color: #fff;
+      border-color: var(--primary);
+      background: linear-gradient(135deg, var(--primary), color-mix(in srgb, var(--primary) 72%, #ff9d6b));
+      box-shadow: 0 7px 18px color-mix(in srgb, var(--primary) 30%, transparent);
+      text-shadow: none;
+    }
+    .modifier-choice:disabled:not(.selected) { opacity: .45; cursor: not-allowed; transform: none; }
+    .opt.modifier-submit { grid-column: 1 / -1; color: #fff; background: var(--primary); }
+    .modifier-submit:disabled { opacity: .45; cursor: not-allowed; box-shadow: none; transform: none; }
+    .modifier-clear[hidden] { display: none; }
     @media (max-width: 430px) {
       .options { grid-template-columns: 1fr 1fr; }
       .opt { font-size: 12.5px; padding: 9px 12px; }
@@ -637,6 +659,87 @@
     }
     function hideTyping() { document.getElementById('typing')?.remove(); }
 
+    function renderModifierGroup(group) {
+      const options = Array.isArray(group?.options) ? group.options : [];
+      if (!options.length) return false;
+
+      const min = Math.max(0, Number(group.minSelections) || 0);
+      const max = Math.max(1, Number(group.maxSelections) || 1);
+      const selected = new Set(options.filter((option) => option.selected).map((option) => Number(option.id)));
+      const wrap = document.createElement('div');
+      wrap.className = 'options modifier-picker';
+
+      const status = document.createElement('div');
+      status.className = 'modifier-picker-status';
+      wrap.appendChild(status);
+
+      const optionButtons = options.map((option) => {
+        const id = Number(option.id);
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'opt modifier-choice';
+        button.addEventListener('click', () => {
+          if (selected.has(id)) selected.delete(id);
+          else if (selected.size < max) selected.add(id);
+          redraw();
+          if (max === 1 && selected.size === 1) submitSelection();
+        });
+        wrap.appendChild(button);
+        return { button, option, id };
+      });
+
+      const clearButton = document.createElement('button');
+      clearButton.type = 'button';
+      clearButton.className = 'opt modifier-clear';
+      clearButton.textContent = '🧹 Limpiar selección';
+      clearButton.addEventListener('click', () => {
+        selected.clear();
+        redraw();
+      });
+      wrap.appendChild(clearButton);
+
+      const submitButton = document.createElement('button');
+      submitButton.type = 'button';
+      submitButton.className = 'opt modifier-submit';
+      submitButton.textContent = group.submitLabel || '✅ Enviar selección';
+      submitButton.addEventListener('click', submitSelection);
+      wrap.appendChild(submitButton);
+
+      if (min === 0) {
+        const skipButton = document.createElement('button');
+        skipButton.type = 'button';
+        skipButton.className = 'opt';
+        skipButton.textContent = '⏭️ Omitir';
+        skipButton.addEventListener('click', () => send('mod_apply_', 'Omitir'));
+        wrap.appendChild(skipButton);
+      }
+
+      function submitSelection() {
+        if (selected.size < min || selected.size > max) return;
+        const ordered = options.filter((option) => selected.has(Number(option.id)));
+        const ids = ordered.map((option) => option.id).join(',');
+        const names = ordered.map((option) => option.name).join(', ');
+        send(`mod_apply_${ids}`, names || 'Sin opciones');
+      }
+
+      function redraw() {
+        status.innerHTML = `<span>${selected.size} seleccionada${selected.size === 1 ? '' : 's'}</span><span>Mín. ${min} · Máx. ${max}</span>`;
+        optionButtons.forEach(({ button, option, id }) => {
+          const isSelected = selected.has(id);
+          button.classList.toggle('selected', isSelected);
+          button.setAttribute('aria-pressed', String(isSelected));
+          button.disabled = !isSelected && selected.size >= max;
+          button.textContent = `${isSelected ? '✅ ' : ''}${option.label || option.name}`;
+        });
+        clearButton.hidden = selected.size === 0;
+        submitButton.disabled = selected.size < min || selected.size > max;
+      }
+
+      redraw();
+      messagesEl.appendChild(wrap);
+      return true;
+    }
+
     function renderReply(data) {
       hideTyping();
       const bankAccountsRendered = renderBankAccounts(data.bankAccounts);
@@ -737,7 +840,9 @@
         messagesEl.appendChild(a);
       }
 
-      if (data.options && data.options.length) {
+      const modifierGroupRendered = renderModifierGroup(data.modifierGroup);
+
+      if (!modifierGroupRendered && data.options && data.options.length) {
         const optionsRaw = Array.isArray(data.options) ? data.options.slice() : [];
         const grouped = {
           primary: [],

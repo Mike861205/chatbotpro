@@ -767,7 +767,47 @@ async function loadProductConfig(t, productId) {
   };
 }
 
-async function replyNextModifierGroup(state, reply, currency, t, finish, keepMessages = false, labels = RESTAURANT_LABELS) {
+function toggleModifierOptionSelection(state, group, optionId) {
+  const validOption = (group.options || []).find((option) => Number(option.id) === Number(optionId));
+  const max = Math.max(1, Number(group.max_selections) || 1);
+  if (!validOption) return { valid: false, reachedMax: false, selected: [] };
+
+  const groupId = group.id;
+  const selected = Array.isArray(state.pendingModifiers[groupId])
+    ? state.pendingModifiers[groupId].filter((id) => (group.options || []).some((option) => Number(option.id) === Number(id)))
+    : [];
+  const selectedIndex = selected.findIndex((id) => Number(id) === Number(validOption.id));
+  let added = false;
+
+  if (selectedIndex >= 0) {
+    selected.splice(selectedIndex, 1);
+  } else if (max === 1) {
+    selected.splice(0, selected.length, validOption.id);
+    added = true;
+  } else if (selected.length < max) {
+    selected.push(validOption.id);
+    added = true;
+  }
+
+  state.pendingModifiers[groupId] = selected;
+  return {
+    valid: true,
+    reachedMax: added && selected.length >= max,
+    selected,
+    max,
+  };
+}
+
+async function replyNextModifierGroup(
+  state,
+  reply,
+  currency,
+  t,
+  finish,
+  keepMessages = false,
+  labels = RESTAURANT_LABELS,
+  silentProgress = false
+) {
   const prod = state.pendingProduct;
   if (!prod) { state.step = 'start'; return finish(); }
   const groups = prod.groups || [];
@@ -809,7 +849,9 @@ async function replyNextModifierGroup(state, reply, currency, t, finish, keepMes
   const selText = sel.length
     ? `\nSeleccionados: ${(group.options || []).filter((o) => sel.includes(o.id)).map((o) => o.name).join(', ')}`
     : '';
-  if (keepMessages) {
+  if (keepMessages && silentProgress) {
+    reply.messages = [];
+  } else if (keepMessages) {
     const progress = `(${sel.length}/${maxSel})`;
     if (sel.length < minSel) {
       reply.messages = [`*${group.name}* ${progress}: falta seleccionar ${minSel - sel.length} para continuar.${selText}`];
@@ -820,6 +862,19 @@ async function replyNextModifierGroup(state, reply, currency, t, finish, keepMes
     reply.messages = [`*${group.name}*${reqLabel} — elige hasta ${maxSel} y después toca *${nextLabel}*.${selText}`];
   }
   reply.options = optOptions;
+  reply.modifierGroup = {
+    id: group.id,
+    name: group.name,
+    minSelections: minSel,
+    maxSelections: maxSel,
+    submitLabel: nextLabel,
+    options: (group.options || []).map((option) => ({
+      id: option.id,
+      name: option.name,
+      label: `${option.name}${Number(option.extra_price) > 0 ? ` +${money(option.extra_price, currency)}` : ''}`,
+      selected: sel.some((id) => Number(id) === Number(option.id)),
+    })),
+  };
   return finish();
 }
 
@@ -1234,7 +1289,7 @@ async function handleMessage(t, slug, sessionId, rawInput) {
   if (!Array.isArray(state.aiHistory)) state.aiHistory = [];
   state.currency = currency;
 
-  const reply = { messages: [], options: [], products: null, cart: null, order: null, bankAccounts: null };
+  const reply = { messages: [], options: [], products: null, cart: null, order: null, bankAccounts: null, modifierGroup: null };
   const lower = input.toLowerCase();
   const finishIntents = new Set([
     'seria todo',
@@ -1741,21 +1796,45 @@ async function handleMessage(t, slug, sessionId, rawInput) {
 
     if (lower.startsWith('mod_opt_')) {
       const optId = Number(lower.slice('mod_opt_'.length));
-      if (!state.pendingModifiers[group.id]) state.pendingModifiers[group.id] = [];
-      const sel = state.pendingModifiers[group.id];
-      const idx = sel.indexOf(optId);
-      const max = Number(group.max_selections) || 1;
-      if (idx >= 0) {
-        sel.splice(idx, 1); // toggle off
-      } else if (max === 1) {
-        state.pendingModifiers[group.id] = [optId];
-      } else if (sel.length < max) {
-        sel.push(optId);
-      } else {
-        reply.messages = [`Ya llegaste al máximo (${max}) en *${group.name}*. Desmarca una opción o confirma.`];
+      const result = toggleModifierOptionSelection(state, group, optId);
+      if (!result.valid) {
+        reply.messages = [`Esa opción ya no está disponible en *${group.name}*.`];
         return replyNextModifierGroup(state, reply, currency, t, finish, true);
       }
-      return replyNextModifierGroup(state, reply, currency, t, finish, true);
+      if (result.reachedMax) {
+        state.pendingModifierGroupIndex = gi + 1;
+        return replyNextModifierGroup(state, reply, currency, t, finish);
+      }
+      if (result.selected.length >= result.max) {
+        reply.messages = [`Ya llegaste al máximo (${result.max}) en *${group.name}*. Desmarca una opción o confirma.`];
+        return replyNextModifierGroup(state, reply, currency, t, finish, true);
+      }
+      return replyNextModifierGroup(state, reply, currency, t, finish, true, labels, true);
+    }
+
+    if (lower.startsWith('mod_apply_')) {
+      const rawIds = lower.slice('mod_apply_'.length).trim();
+      const requestedIds = [...new Set(rawIds.split(',').filter(Boolean).map(Number))];
+      const validOptions = new Map((group.options || []).map((option) => [Number(option.id), option]));
+      const min = Math.max(0, Number(group.min_selections) || 0);
+      const max = Math.max(1, Number(group.max_selections) || 1);
+
+      if (requestedIds.some((id) => !Number.isFinite(id) || !validOptions.has(id))) {
+        reply.messages = [`Una de las opciones ya no está disponible en *${group.name}*. Vuelve a elegir.`];
+        return replyNextModifierGroup(state, reply, currency, t, finish, true, labels);
+      }
+      if (requestedIds.length < min) {
+        reply.messages = [`Selecciona al menos ${min} opción${min === 1 ? '' : 'es'} de *${group.name}* para continuar.`];
+        return replyNextModifierGroup(state, reply, currency, t, finish, true, labels);
+      }
+      if (requestedIds.length > max) {
+        reply.messages = [`Puedes seleccionar máximo ${max} opción${max === 1 ? '' : 'es'} de *${group.name}*.`];
+        return replyNextModifierGroup(state, reply, currency, t, finish, true, labels);
+      }
+
+      state.pendingModifiers[group.id] = requestedIds.map((id) => validOptions.get(id).id);
+      state.pendingModifierGroupIndex = gi + 1;
+      return replyNextModifierGroup(state, reply, currency, t, finish, false, labels);
     }
 
     if (lower === 'mod_clear') {
@@ -2567,4 +2646,4 @@ function newSessionId() {
   return crypto.randomUUID();
 }
 
-module.exports = { buildOrderText, handleMessage, newSessionId };
+module.exports = { buildOrderText, handleMessage, newSessionId, toggleModifierOptionSelection };
