@@ -767,6 +767,132 @@ async function loadProductConfig(t, productId) {
   };
 }
 
+function setPendingProductConfiguration(state, cfg, qty = 1) {
+  state.pendingProduct = {
+    id: cfg.id,
+    name: cfg.name,
+    price: cfg.price,
+    variants: cfg.variants,
+    groups: cfg.groups,
+  };
+  state.pendingAddQty = Math.max(1, Number(qty || 1));
+  state.pendingVariantId = null;
+  state.pendingVariantName = null;
+  state.pendingVariantPrice = null;
+  state.pendingModifiers = {};
+  state.pendingModifierGroupIndex = 0;
+}
+
+function pendingConfigurationHeading(state, productName = state.pendingProduct?.name) {
+  const total = Math.max(0, Number(state.pendingConfigurationTotal) || 0);
+  const current = Math.max(0, Number(state.pendingConfigurationCurrent) || 0);
+  if (total <= 1 || current < 1) return '';
+  const qty = Math.max(1, Number(state.pendingAddQty) || 1);
+  const product = state.pendingProduct || {};
+  const hasVariants = Array.isArray(product.variants) && product.variants.length > 1;
+  const hasModifiers = Array.isArray(product.groups) && product.groups.length > 0;
+  const configurationType = hasVariants && hasModifiers
+    ? 'Variante e ingredientes'
+    : hasVariants
+      ? 'Variante'
+      : 'Ingredientes';
+  return (
+    `*Producto ${current} de ${total}*\n` +
+    `🍽️ *Nombre: ${productName || 'Producto'}*\n` +
+    `🔢 Cantidad: *${qty}*\n` +
+    `⚙️ Configuración: *${configurationType}*\n\n`
+  );
+}
+
+function clearPendingConfigurationQueue(state) {
+  state.pendingConfigurationQueue = [];
+  state.pendingConfigurationTotal = 0;
+  state.pendingConfigurationCurrent = 0;
+}
+
+function cancelPendingProductConfiguration(state) {
+  clearPendingConfigurationQueue(state);
+  state.pendingProduct = null;
+  state.pendingVariantId = null;
+  state.pendingVariantName = null;
+  state.pendingVariantPrice = null;
+  state.pendingAddQty = null;
+  state.pendingModifiers = {};
+  state.pendingModifierGroupIndex = 0;
+}
+
+async function presentNextQueuedProductConfiguration(state, reply, currency, t, finish, labels = RESTAURANT_LABELS) {
+  const queue = Array.isArray(state.pendingConfigurationQueue) ? state.pendingConfigurationQueue : [];
+  while (queue.length) {
+    const next = queue.shift();
+    const cfg = await loadProductConfig(t, next.productId);
+    if (!cfg) continue;
+
+    state.pendingConfigurationCurrent = Math.max(1, Number(state.pendingConfigurationTotal) - queue.length);
+    setPendingProductConfiguration(state, cfg, next.qty);
+    const heading = pendingConfigurationHeading(state, cfg.name);
+
+    if (cfg.hasVariants) {
+      state.step = 'choosing_variant';
+      reply.messages = [
+        `${heading}¿Cómo lo quieres? Elige una variante de *${cfg.name}* para ${state.pendingAddQty} unidad(es):`,
+      ];
+      reply.options = cfg.variants.map((variant) => ({
+        label: `${variant.name} — ${money(variant.price, currency)}`,
+        value: `variant_${variant.id}`,
+      }));
+      return finish();
+    }
+
+    if (cfg.hasModifiers) {
+      state.step = 'choosing_modifiers';
+      return replyNextModifierGroup(state, reply, currency, t, finish, false, labels);
+    }
+
+    addPendingProductToCart(state);
+  }
+
+  clearPendingConfigurationQueue(state);
+  state.step = 'start';
+  reply.messages = [
+    `✅ Todos los productos quedaron configurados.\n\n${cartSummary(state.cart, currency, labels)}`,
+    '¿Deseas agregar más productos o finalizar tu pedido?',
+  ];
+  reply.products = null;
+  reply.options = [
+    { label: '➕ Agregar más productos', value: 'menu' },
+    { label: labels.checkoutButton, value: 'checkout' },
+    { label: labels.cartButton, value: 'cart' },
+  ];
+  return finish();
+}
+
+async function finishPendingProductConfiguration(state, reply, currency, t, finish, labels = RESTAURANT_LABELS) {
+  const configuredProductName = state.pendingProduct?.name || 'producto';
+  addPendingProductToCart(state);
+
+  if (Array.isArray(state.pendingConfigurationQueue) && state.pendingConfigurationQueue.length) {
+    reply.messages = [`✅ *${configuredProductName}* configurado. Continuamos con el siguiente producto.`];
+    return presentNextQueuedProductConfiguration(state, reply, currency, t, finish, labels);
+  }
+
+  const completedBatch = Number(state.pendingConfigurationTotal) > 1;
+  clearPendingConfigurationQueue(state);
+  const summary = cartSummary(state.cart, currency, labels);
+  state.step = 'start';
+  reply.messages = [
+    `${completedBatch ? '✅ Todos los productos quedaron configurados.' : '✅ Agregado con tus opciones.'}\n\n${summary}`,
+    '¿Deseas agregar más productos o finalizar tu pedido?',
+  ];
+  reply.products = null;
+  reply.options = [
+    { label: '➕ Agregar más productos', value: 'menu' },
+    { label: labels.checkoutButton, value: 'checkout' },
+    { label: labels.cartButton, value: 'cart' },
+  ];
+  return finish();
+}
+
 function toggleModifierOptionSelection(state, group, optionId) {
   const validOption = (group.options || []).find((option) => Number(option.id) === Number(optionId));
   const max = Math.max(1, Number(group.max_selections) || 1);
@@ -815,20 +941,7 @@ async function replyNextModifierGroup(
   const group = groups[gi];
 
   if (!group) {
-    addPendingProductToCart(state);
-    const summary = cartSummary(state.cart, currency, labels);
-    state.step = 'start';
-    reply.messages = (keepMessages ? reply.messages : []).concat([
-      `✅ Agregado con tus opciones.\n\n${summary}`,
-      '¿Deseas agregar más productos o finalizar tu pedido?',
-    ]);
-    reply.products = null;
-    reply.options = [
-      { label: '➕ Agregar más productos', value: 'menu' },
-      { label: labels.checkoutButton, value: 'checkout' },
-      { label: labels.cartButton, value: 'cart' },
-    ];
-    return finish();
+    return finishPendingProductConfiguration(state, reply, currency, t, finish, labels);
   }
 
   const sel = state.pendingModifiers[group.id] || [];
@@ -859,7 +972,7 @@ async function replyNextModifierGroup(
       reply.messages = [`*${group.name}* ${progress}: puedes elegir más o tocar *${nextLabel}*.${selText}`];
     }
   } else {
-    reply.messages = [`*${group.name}*${reqLabel} — elige hasta ${maxSel} y después toca *${nextLabel}*.${selText}`];
+    reply.messages = [`${pendingConfigurationHeading(state)}*${group.name}*${reqLabel} — elige hasta ${maxSel} y después toca *${nextLabel}*.${selText}`];
   }
   reply.options = optOptions;
   reply.modifierGroup = {
@@ -1429,6 +1542,7 @@ async function handleMessage(t, slug, sessionId, rawInput) {
 
   // Comandos globales
   if (!input || lower === 'start' || lower === 'hola' || lower === 'inicio') {
+    cancelPendingProductConfiguration(state);
     state.step = 'start';
     state.returningProfile = null;
     state.aiHistory = [];
@@ -1464,6 +1578,7 @@ async function handleMessage(t, slug, sessionId, rawInput) {
     return finish();
   }
   if (lower === 'menu' || lower === 'menú') {
+    cancelPendingProductConfiguration(state);
     Object.assign(reply, await showMenu(t, state, labels));
     return finish();
   }
@@ -1479,6 +1594,7 @@ async function handleMessage(t, slug, sessionId, rawInput) {
     return finish();
   }
   if (lower === 'clear_cart') {
+    cancelPendingProductConfiguration(state);
     state.cart = [];
     state.step = 'start';
     resetUpsellProgress();
@@ -1506,65 +1622,39 @@ async function handleMessage(t, slug, sessionId, rawInput) {
       .map((it) => ({ id: it.id, qty: Math.floor(it.qty) }));
 
     if (parsed.length) {
+      const resolvedItems = [];
       const configurableItems = [];
       for (const item of parsed) {
-        if (item.qty <= 0) continue;
         const cfg = await loadProductConfig(t, item.id);
-        if (cfg && (cfg.hasVariants || cfg.hasModifiers)) configurableItems.push({ item, cfg });
-      }
-
-      if (configurableItems.length > 1) {
-        reply.messages = ['Tienes varios productos con configuración (variantes/opciones). Para evitar errores, agrégalos uno por uno tocando el producto en el menú.'];
-        reply.options = [
-          { label: '📋 Ver menú', value: 'menu' },
-          { label: '🛒 Ver carrito', value: 'cart' },
-        ];
-        return finish();
-      }
-
-      if (configurableItems.length === 1 && parsed.length === 1) {
-        const { item, cfg } = configurableItems[0];
-        state.pendingProduct = { id: cfg.id, name: cfg.name, price: cfg.price, variants: cfg.variants, groups: cfg.groups };
-        state.pendingAddQty = Math.max(1, Number(item.qty || 1));
-        state.pendingVariantId = null;
-        state.pendingModifiers = {};
-        state.pendingModifierGroupIndex = 0;
-        if (cfg.hasVariants) {
-          state.step = 'choosing_variant';
-          reply.messages = [`¿Cómo lo quieres? Elige una opción de *${cfg.name}* para ${state.pendingAddQty} unidad(es):`];
-          reply.options = cfg.variants.map((v) => ({ label: `${v.name} — ${money(v.price, currency)}`, value: `variant_${v.id}` }));
-          return finish();
-        }
-        state.step = 'choosing_modifiers';
-        return replyNextModifierGroup(state, reply, currency, t, finish);
-      }
-
-      if (configurableItems.length === 1 && parsed.length > 1) {
-        reply.messages = ['Incluiste un producto con variantes/opciones junto con otros productos. Primero configura ese producto por separado, luego confirma los demás.'];
-        reply.options = [
-          { label: '📋 Ver menú', value: 'menu' },
-          { label: '🛒 Ver carrito', value: 'cart' },
-        ];
-        return finish();
+        if (!cfg) continue;
+        resolvedItems.push({ item, cfg });
+        if (item.qty > 0 && (cfg.hasVariants || cfg.hasModifiers)) configurableItems.push({ item, cfg });
       }
 
       const lines = [];
-      for (const item of parsed) {
-        const prod = await t.get('SELECT id, name, price::float AS price FROM {s}.products WHERE id = $1 AND active = 1', [item.id]);
-        if (!prod) continue;
-
-        const existing = state.cart.find((it) => it.id === prod.id);
+      for (const { item, cfg } of resolvedItems) {
+        const existing = state.cart.find((it) => Number(it.id) === Number(cfg.id) && !it._cartKey);
         if (item.qty <= 0) {
-          state.cart = state.cart.filter((it) => it.id !== prod.id);
-          lines.push(`• Quitado: *${prod.name}*`);
-        } else {
+          state.cart = state.cart.filter((it) => Number(it.id) !== Number(cfg.id));
+          lines.push(`• Quitado: *${cfg.name}*`);
+        } else if (!cfg.hasVariants && !cfg.hasModifiers) {
           if (existing) existing.qty = item.qty;
-          else state.cart.push({ id: prod.id, name: prod.name, price: prod.price, qty: item.qty });
-          lines.push(`• *${item.qty}x ${prod.name}* = *${money(item.qty * Number(prod.price || 0), currency)}*`);
+          else state.cart.push({ id: cfg.id, name: cfg.name, price: cfg.price, qty: item.qty });
+          lines.push(`• *${item.qty}x ${cfg.name}* = *${money(item.qty * Number(cfg.price || 0), currency)}*`);
         }
       }
 
       resetUpsellProgress();
+
+      if (configurableItems.length) {
+        state.pendingConfigurationQueue = configurableItems.map(({ item }) => ({
+          productId: item.id,
+          qty: item.qty,
+        }));
+        state.pendingConfigurationTotal = configurableItems.length;
+        state.pendingConfigurationCurrent = 0;
+        return presentNextQueuedProductConfiguration(state, reply, currency, t, finish, labels);
+      }
 
       state.step = 'start';
       const summary = cartSummary(state.cart, currency, labels);
@@ -1588,11 +1678,8 @@ async function handleMessage(t, slug, sessionId, rawInput) {
       const prod = cfg;
       if (prod) {
         if ((cfg.hasVariants || cfg.hasModifiers) && Math.floor(qty) > 0) {
-          state.pendingProduct = { id: cfg.id, name: cfg.name, price: cfg.price, variants: cfg.variants, groups: cfg.groups };
-          state.pendingAddQty = Math.floor(qty);
-          state.pendingVariantId = null;
-          state.pendingModifiers = {};
-          state.pendingModifierGroupIndex = 0;
+          clearPendingConfigurationQueue(state);
+          setPendingProductConfiguration(state, cfg, Math.floor(qty));
           if (cfg.hasVariants) {
             state.step = 'choosing_variant';
             reply.messages = [`¿Cómo lo quieres? Elige una opción de *${cfg.name}* para ${state.pendingAddQty} unidad(es):`];
@@ -1697,11 +1784,8 @@ async function handleMessage(t, slug, sessionId, rawInput) {
       const hasModifiers = prod.hasModifiers;
 
       if (hasVariants || hasModifiers) {
-        state.pendingProduct = { id: prod.id, name: prod.name, price: prod.price, variants: prod.variants, groups: prod.groups };
-        state.pendingAddQty = 1;
-        state.pendingVariantId = null;
-        state.pendingModifiers = {}; // { groupId: [optId, ...] }
-        state.pendingModifierGroupIndex = 0;
+        clearPendingConfigurationQueue(state);
+        setPendingProductConfiguration(state, prod, 1);
 
         if (hasVariants) {
           state.step = 'choosing_variant';
@@ -1746,20 +1830,7 @@ async function handleMessage(t, slug, sessionId, rawInput) {
           return replyNextModifierGroup(state, reply, currency, t, finish);
         }
         // No modifiers — add to cart
-        addPendingProductToCart(state);
-        const summary = cartSummary(state.cart, currency, labels);
-        state.step = 'start';
-        reply.messages = [
-          `✅ Agregado: *${state.cart[state.cart.length - 1]?.name || prod.name}*.\n\n${summary}`,
-          '¿Deseas agregar más productos o finalizar tu pedido?',
-        ];
-        reply.products = null;
-        reply.options = [
-          { label: '➕ Agregar más productos', value: 'menu' },
-          { label: labels.checkoutButton, value: 'checkout' },
-          { label: labels.cartButton, value: 'cart' },
-        ];
-        return finish();
+        return finishPendingProductConfiguration(state, reply, currency, t, finish, labels);
       }
     }
     reply.messages = ['Por favor elige una de las opciones disponibles.'];
@@ -1777,21 +1848,7 @@ async function handleMessage(t, slug, sessionId, rawInput) {
     const gi = state.pendingModifierGroupIndex || 0;
     const group = groups[gi];
     if (!group) {
-      // All groups done, add to cart
-      addPendingProductToCart(state);
-      const summary = cartSummary(state.cart, currency, labels);
-      state.step = 'start';
-      reply.messages = [
-        `✅ Agregado con tus opciones.\n\n${summary}`,
-        '¿Deseas agregar más productos o finalizar tu pedido?',
-      ];
-      reply.products = null;
-      reply.options = [
-        { label: '➕ Agregar más productos', value: 'menu' },
-        { label: labels.checkoutButton, value: 'checkout' },
-        { label: labels.cartButton, value: 'cart' },
-      ];
-      return finish();
+      return finishPendingProductConfiguration(state, reply, currency, t, finish, labels);
     }
 
     if (lower.startsWith('mod_opt_')) {
@@ -2002,6 +2059,20 @@ async function handleMessage(t, slug, sessionId, rawInput) {
 
   // Checkout
   if (checkoutRequested) {
+    if (state.pendingProduct && state.step === 'choosing_variant') {
+      const heading = pendingConfigurationHeading(state);
+      reply.messages = [`${heading}Antes de finalizar, elige una variante de *${state.pendingProduct.name}*:`];
+      reply.options = (state.pendingProduct.variants || []).map((variant) => ({
+        label: `${variant.name} — ${money(variant.price, currency)}`,
+        value: `variant_${variant.id}`,
+      }));
+      return finish();
+    }
+    if (state.pendingProduct && state.step === 'choosing_modifiers') {
+      reply.messages = ['Antes de finalizar, completa las opciones del producto actual.'];
+      return replyNextModifierGroup(state, reply, currency, t, finish, true, labels);
+    }
+
     if (!state.cart.length) {
       reply.messages = ['Tu carrito está vacío. ¡Mira nuestro menú! 😊'];
       reply.options = [{ label: '📋 Ver menú', value: 'menu' }];

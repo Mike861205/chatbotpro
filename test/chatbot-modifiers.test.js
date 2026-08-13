@@ -52,6 +52,53 @@ function fakeTenantDb(initialState) {
   };
 }
 
+function fakeCatalogTenantDb(initialState) {
+  const products = new Map([
+    [101, { id: 101, name: 'Pizza especial', price: 150 }],
+    [102, { id: 102, name: 'Refresco', price: 40 }],
+    [103, { id: 103, name: 'Hamburguesa', price: 95 }],
+    [104, { id: 104, name: 'Papas', price: 50 }],
+  ]);
+  const variants = new Map([
+    [101, [{ id: 1001, name: 'Mediana', price: 150 }, { id: 1002, name: 'Grande', price: 190 }]],
+    [102, [{ id: 1101, name: 'Regular', price: 40 }, { id: 1102, name: 'Grande', price: 55 }]],
+  ]);
+  const groups = new Map([
+    [101, [{ id: 201, name: 'Ingredientes', min_selections: 1, max_selections: 2 }]],
+    [103, [{ id: 301, name: 'Verduras', min_selections: 1, max_selections: 1 }]],
+  ]);
+  const options = new Map([
+    [201, [{ id: 2001, name: 'Pepperoni', extra_price: 0 }, { id: 2002, name: 'Jalapeño', extra_price: 0 }]],
+    [301, [{ id: 3001, name: 'Con todo', extra_price: 0 }, { id: 3002, name: 'Sin cebolla', extra_price: 0 }]],
+  ]);
+  let savedState = structuredClone(initialState);
+
+  return {
+    get savedState() { return savedState; },
+    async get(sql, params) {
+      if (sql.includes('chat_sessions')) return { state: JSON.stringify(savedState) };
+      if (sql.includes('settings')) {
+        if (params[0] === 'whatsapp') return { value: '526141234567' };
+        return null;
+      }
+      if (sql.includes('FROM {s}.products WHERE id')) return products.get(Number(params[0])) || null;
+      throw new Error(`Consulta get inesperada: ${sql}`);
+    },
+    async all(sql, params) {
+      const id = Number(params[0]);
+      if (sql.includes('product_variants')) return variants.get(id) || [];
+      if (sql.includes('modifier_groups')) return groups.get(id) || [];
+      if (sql.includes('modifier_options')) return options.get(id) || [];
+      throw new Error(`Consulta all inesperada: ${sql}`);
+    },
+    async run(sql, params) {
+      if (!sql.includes('chat_sessions')) throw new Error(`Consulta run inesperada: ${sql}`);
+      savedState = JSON.parse(params[1]);
+      return { changes: 1 };
+    },
+  };
+}
+
 test('una opción con máximo 1 completa el ingrediente inmediatamente', async () => {
   const group = {
     id: 5,
@@ -163,4 +210,43 @@ test('la interfaz acumula ingredientes localmente y los envía juntos', () => {
   assert.match(chatHtml, /send\(`mod_apply_\$\{ids\}`/);
   assert.match(chatHtml, /Mín\. \$\{min\} · Máx\. \$\{max\}/);
   assert.match(chatHtml, /submitButton\.disabled = selected\.size < min \|\| selected\.size > max/);
+});
+
+test('configura automáticamente varios productos con variantes, ingredientes o ambos', async () => {
+  const db = fakeCatalogTenantDb({ step: 'choosing_product', cart: [], customer: {}, currency: 'MXN', aiHistory: [] });
+
+  let reply = await handleMessage(db, 'restaurante', 'session-bulk', 'prod_apply_101-1,102-2,103-1,104-3');
+  assert.equal(db.savedState.step, 'choosing_variant');
+  assert.equal(db.savedState.pendingProduct.id, 101);
+  assert.equal(db.savedState.pendingConfigurationTotal, 3);
+  assert.match(reply.messages[0], /Producto 1 de 3/);
+  assert.match(reply.messages[0], /Nombre: Pizza especial/);
+  assert.match(reply.messages[0], /Configuración: \*Variante e ingredientes\*/);
+
+  reply = await handleMessage(db, 'restaurante', 'session-bulk', 'variant_1002');
+  assert.equal(db.savedState.step, 'choosing_modifiers');
+  assert.equal(reply.modifierGroup.id, 201);
+
+  reply = await handleMessage(db, 'restaurante', 'session-bulk', 'mod_apply_2001');
+  assert.equal(db.savedState.step, 'choosing_variant');
+  assert.equal(db.savedState.pendingProduct.id, 102);
+  assert.match(reply.messages[0], /Producto 2 de 3/);
+  assert.match(reply.messages[0], /Nombre: Refresco/);
+  assert.match(reply.messages[0], /Configuración: \*Variante\*/);
+
+  reply = await handleMessage(db, 'restaurante', 'session-bulk', 'variant_1101');
+  assert.equal(db.savedState.step, 'choosing_modifiers');
+  assert.equal(db.savedState.pendingProduct.id, 103);
+  assert.equal(reply.modifierGroup.id, 301);
+  assert.match(reply.messages[0], /Producto 3 de 3/);
+  assert.match(reply.messages[0], /Nombre: Hamburguesa/);
+  assert.match(reply.messages[0], /Configuración: \*Ingredientes\*/);
+
+  reply = await handleMessage(db, 'restaurante', 'session-bulk', 'mod_apply_3002');
+  assert.equal(db.savedState.step, 'start');
+  assert.equal(db.savedState.pendingConfigurationTotal, 0);
+  assert.equal(db.savedState.cart.length, 4);
+  assert.equal(db.savedState.cart.find((item) => item.id === 102).qty, 2);
+  assert.equal(db.savedState.cart.find((item) => item.id === 104).qty, 3);
+  assert.match(reply.messages[0], /Todos los productos quedaron configurados/);
 });
