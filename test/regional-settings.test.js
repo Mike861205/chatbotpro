@@ -81,8 +81,13 @@ test('el encabezado muestra fecha, hora y zona local actualizadas cada segundo',
   assert.match(appHtml, /id="tenantLocalDate"/);
   assert.match(appHtml, /id="tenantLocalTime"/);
   assert.match(appHtml, /id="tenantTimezoneLabel"/);
+  assert.match(appHtml, /id="configureTimezoneBtn"/);
+  assert.match(appHtml, /Configura tu horario local/);
   assert.match(appScript, /function updateTenantClock\(\)/);
   assert.match(appScript, /setInterval\(updateTenantClock, 1000\)/);
   assert.match(appScript, /timeZone: timezone/);
   assert.match(appScript, /startTenantClock\(\)/);
+  assert.match(appScript, /configureTimezoneBtn/);
+  assert.match(appScript, /await navigate\('config'\)/);
+  assert.match(appScript, /scrollIntoView/);
 });

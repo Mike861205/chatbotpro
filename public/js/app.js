@@ -792,6 +792,17 @@ async function navigate(view) {
 }
 globalThis.navigate = navigate;
 
+$('#configureTimezoneBtn')?.addEventListener('click', async () => {
+  if (isCashierUser()) return;
+  await navigate('config');
+  const select = $('#cfgTimezone');
+  const field = select?.closest('.field');
+  field?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  field?.classList.add('timezone-focus-pulse');
+  setTimeout(() => field?.classList.remove('timezone-focus-pulse'), 1500);
+  setTimeout(() => select?.focus({ preventScroll: true }), 420);
+});
+
 document.querySelectorAll('.sidebar nav a').forEach((a) =>
   a.addEventListener('click', (e) => {
     if (!a.dataset.view) return; // enlaces externos (ej. /notificaciones) — dejar pasar

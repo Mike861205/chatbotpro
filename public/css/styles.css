@@ -1726,6 +1726,15 @@ label { display: flex; align-items: center; gap: 6px; font-size: 12.5px; font-we
 .tenant-clock-time strong { color: var(--primary); font-size: 14px; font-weight: 900; letter-spacing: .02em; }
 .tenant-clock small { grid-column: 1 / -1; display: flex; align-items: center; justify-content: center; gap: 5px; overflow: hidden; color: var(--ink-3); font-size: 9px; font-weight: 750; white-space: nowrap; text-overflow: ellipsis; }
 .tenant-clock small i { color: var(--primary); font-size: 11px; }
+.tenant-clock-config { grid-column: 1 / -1; display: inline-flex; align-items: center; justify-content: center; gap: 5px; width: 100%; margin-top: 2px; padding: 5px 9px; border: 1px solid color-mix(in srgb,var(--primary) 26%,transparent); border-radius: 8px; color: var(--primary); background: color-mix(in srgb,var(--primary) 7%,#fff); font: inherit; font-size: 9px; font-weight: 900; cursor: pointer; transition: color .16s, background .16s, transform .16s, box-shadow .16s; }
+.tenant-clock-config:hover { transform: translateY(-1px); color: #fff; background: var(--primary); box-shadow: 0 5px 12px color-mix(in srgb,var(--primary) 24%,transparent); }
+.tenant-clock-config i { font-size: 11px; }
+.timezone-focus-pulse { animation: timezoneFocusPulse 1.4s ease-out; }
+@keyframes timezoneFocusPulse {
+  0%,100% { box-shadow: none; }
+  35% { box-shadow: 0 0 0 5px color-mix(in srgb,var(--primary) 18%,transparent); }
+}
+body.cashier-mode .tenant-clock-config { display: none; }
 @media (max-width: 680px) {
   .topbar-actions { width: 100%; justify-content: stretch; }
   .tenant-clock { order: -1; width: 100%; min-width: 0; }
