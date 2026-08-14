@@ -5,12 +5,27 @@ let SA_CLIENTS = [];
 let SA_CLIENT_FILTER = 'all';
 let SA_CLIENT_SUMMARY = null;
 let SA_DEMO_LEADS = [];
+let SA_FOLLOW_UP = [];
+let SA_FOLLOWUP_TARGETS = [];
+const SA_SELECTED = new Set();
 let SA_PAYMENT_TENANT_ID = null;
 let SA_SUSPEND_TENANT_ID = null;
 let SA_ACTIVATE_TENANT_ID = null;
 let SA_ACTIVATE_MODE = 'account';
 let SA_DEPLOY_POLL_TIMER = null;
 let SA_DELETE_TARGET = null;
+
+const SA_SALES_STAGES = [
+  ['new', 'Nuevo', 'new'],
+  ['contacted', 'Contactado', 'contacted'],
+  ['interested', 'Interesado', 'interested'],
+  ['potential', 'Potencial a compra', 'potential'],
+  ['follow_up', 'En seguimiento', 'follow-up'],
+  ['won', 'Cierre exitoso', 'won'],
+  ['not_interested', 'No interesado', 'not-interested'],
+  ['lost', 'Cierre no exitoso', 'lost'],
+];
+const SA_DELETABLE_STAGES = new Set(['not_interested', 'lost']);
 
 const SA_MODULE_LABELS = {
   dashboard: 'Dashboard',
@@ -262,8 +277,10 @@ function matchesTenantFilter(tenant, filter) {
 
 function getFilteredTenants() {
   const search = String($('#saTenantSearch')?.value || '').trim().toLowerCase();
+  const stage = String($('#saTenantStageFilter')?.value || 'all');
   return SA_TENANTS.filter((t) => {
     if (!matchesTenantFilter(t, SA_FILTER)) return false;
+    if (stage !== 'all' && String(t.sales_stage || 'new') !== stage) return false;
     if (!search) return true;
     return [t.slug, t.business_name, t.owner_name, t.phone, t.phone_country_name, t.phone_calling_code].join(' ').toLowerCase().includes(search);
   });
@@ -336,21 +353,26 @@ function renderTenantTable() {
 
   if (!filtered.length) {
     table.innerHTML = '<div class="empty"><i class="ph ph-buildings"></i><b>Sin tenants</b><p>No hay resultados con ese filtro.</p></div>';
+    renderSalesBulkBars();
     return;
   }
 
+  const allChecked = filtered.length > 0 && filtered.every((item) => SA_SELECTED.has(salesSubjectKey('tenant', item.id)));
   table.innerHTML = `<div class="table-wrap"><table><thead><tr>
-    <th>Prospecto</th><th>Dueño</th><th>Registro</th><th>Acceso</th><th>Plan de interés</th><th>Módulos</th><th>Acciones</th>
+    <th class="sa-select-col"><input type="checkbox" data-sa-select-all="tenant" ${allChecked ? 'checked' : ''} aria-label="Seleccionar prospectos visibles" /></th><th>Prospecto</th><th>Dueño</th><th>Etapa</th><th>Registro</th><th>Acceso</th><th>Plan de interés</th><th>Módulos</th><th>Acciones</th>
   </tr></thead><tbody>${filtered
     .map((t) => {
       const waUrl = t.phone_valid && t.phone_digits ? `https://wa.me/${t.phone_digits}` : '';
       const country = t.phone_country_name || t.phone_country || 'Sin país';
-      return `<tr>
+      const key = salesSubjectKey('tenant', t.id);
+      return `<tr class="${SA_SELECTED.has(key) ? 'sa-row-selected' : ''}">
+      <td class="sa-select-col"><input type="checkbox" data-sa-sales-select="${key}" ${SA_SELECTED.has(key) ? 'checked' : ''} aria-label="Seleccionar ${esc(t.business_name)}" /></td>
       <td><b>${esc(t.business_name)}</b><div class="meta">/${esc(t.slug)}</div></td>
       <td>${esc(t.owner_name)}
         <div class="meta">${countryFlag(t.phone_country)} ${esc(country)} · Lada ${t.phone_calling_code ? `+${esc(t.phone_calling_code)}` : '—'}</div>
         <div class="meta">${esc(t.phone || '—')}${t.phone && !t.phone_valid ? ' · Revisar número histórico' : ''}</div>
       </td>
+      <td>${salesStageChip(t.sales_stage)}${t.next_follow_up_at ? `<div class="meta">Próximo: ${fmtDateTime(t.next_follow_up_at)}</div>` : ''}</td>
       <td>${fmtDate(t.created_at)}</td>
       <td>${statusChip('account', t.account_status)}</td>
       <td>${esc(t.plan_name || 'starter')}<div class="meta">Hasta ${Number(t.branch_limit || 2)} sucursales activas</div></td>
@@ -363,6 +385,7 @@ function renderTenantTable() {
           <button type="button" class="btn btn-ghost" data-sa-branches="${t.id}"><i class="ph-bold ph-storefront"></i> Sucursales</button>
           ${waUrl ? `<a class="btn btn-ghost" href="${waUrl}" target="_blank" rel="noopener noreferrer"><i class="ph-bold ph-whatsapp-logo"></i> WhatsApp</a>` : ''}
           ${t.phone_valid && t.phone_e164 ? `<button type="button" class="btn btn-ghost" data-sa-copy-phone="${esc(t.phone_e164)}"><i class="ph-bold ph-copy"></i> Copiar</button>` : ''}
+          <button type="button" class="btn btn-ghost" data-sa-manage="tenant:${t.id}"><i class="ph-bold ph-note-pencil"></i> Gestionar</button>
           <button type="button" class="btn ${(t.account_status === 'active' && t.billing_status !== 'suspended') ? 'btn-danger' : 'btn-primary'}" data-sa-suspend="${t.id}">
             <i class="ph-bold ${(t.account_status === 'active' && t.billing_status !== 'suspended') ? 'ph-pause-circle' : 'ph-play-circle'}"></i>
             ${(t.account_status === 'active' && t.billing_status !== 'suspended') ? 'Suspender' : 'Activar'}
@@ -391,6 +414,7 @@ function renderTenantTable() {
   });
   bindModuleUsageButtons();
   bindPhoneActions();
+  bindSalesSelection('tenant', filtered);
   document.querySelectorAll('[data-sa-delete-tenant]').forEach((btn) => {
     btn.addEventListener('click', () => openDeleteModal('tenant', Number(btn.dataset.saDeleteTenant)));
   });
@@ -398,7 +422,9 @@ function renderTenantTable() {
 
 function getFilteredDemoLeads() {
   const search = String($('#saDemoLeadSearch')?.value || '').trim().toLowerCase();
+  const stage = String($('#saDemoStageFilter')?.value || 'all');
   return SA_DEMO_LEADS.filter((lead) => {
+    if (stage !== 'all' && String(lead.sales_stage || 'new') !== stage) return false;
     if (!search) return true;
     return [lead.contact_name, lead.phone, lead.phone_country_name, lead.phone_calling_code, lead.business_giro, lead.source_label, lead.last_demo_tenant_slug].join(' ').toLowerCase().includes(search);
   });
@@ -433,17 +459,22 @@ function renderDemoLeadsTable() {
   if (!table) return;
   if (!filtered.length) {
     table.innerHTML = '<div class="empty"><i class="ph ph-rocket-launch"></i><b>Sin leads demo</b><p>No hay resultados con ese filtro.</p></div>';
+    renderSalesBulkBars();
     return;
   }
 
+  const allChecked = filtered.length > 0 && filtered.every((item) => SA_SELECTED.has(salesSubjectKey('demo_lead', item.id)));
   table.innerHTML = `<div class="table-wrap"><table><thead><tr>
-    <th>Nombre</th><th>País</th><th>Lada / teléfono</th><th>Giro</th><th>Origen</th><th>Veces</th><th>Primera vez</th><th>Última vez</th><th>Módulos</th><th>Acciones</th>
+    <th class="sa-select-col"><input type="checkbox" data-sa-select-all="demo_lead" ${allChecked ? 'checked' : ''} aria-label="Seleccionar leads visibles" /></th><th>Nombre</th><th>Etapa</th><th>País</th><th>Lada / teléfono</th><th>Giro</th><th>Origen</th><th>Veces</th><th>Primera vez</th><th>Última vez</th><th>Módulos</th><th>Acciones</th>
   </tr></thead><tbody>${filtered
     .map((lead) => {
       const digits = String(lead.phone_digits || '').replace(/\D/g, '');
       const waUrl = lead.phone_valid && digits ? `https://wa.me/${digits}` : '';
-      return `<tr>
+      const key = salesSubjectKey('demo_lead', lead.id);
+      return `<tr class="${SA_SELECTED.has(key) ? 'sa-row-selected' : ''}">
+        <td class="sa-select-col"><input type="checkbox" data-sa-sales-select="${key}" ${SA_SELECTED.has(key) ? 'checked' : ''} aria-label="Seleccionar ${esc(lead.contact_name)}" /></td>
         <td><b>${esc(lead.contact_name)}</b><div class="meta">ID #${lead.id}</div></td>
+        <td>${salesStageChip(lead.sales_stage)}${lead.next_follow_up_at ? `<div class="meta">Próximo: ${fmtDateTime(lead.next_follow_up_at)}</div>` : ''}</td>
         <td>${countryFlag(lead.phone_country)} ${esc(lead.phone_country_name || lead.phone_country || '—')}</td>
         <td><b>${lead.phone_calling_code ? `+${esc(lead.phone_calling_code)}` : '—'}</b><div class="meta">${digits ? esc(lead.phone) : '—'}${lead.phone && !lead.phone_valid ? ' · Revisar número histórico' : ''}</div></td>
         <td>${esc(lead.business_giro)}</td>
@@ -456,6 +487,7 @@ function renderDemoLeadsTable() {
           <div style="display:flex;gap:6px;flex-wrap:wrap">
             ${waUrl ? `<a class="btn btn-ghost" href="${waUrl}" target="_blank" rel="noopener noreferrer"><i class="ph-bold ph-whatsapp-logo"></i> WhatsApp</a>` : ''}
             ${lead.phone_valid && lead.phone_e164 ? `<button type="button" class="btn btn-ghost" data-sa-copy-phone="${esc(lead.phone_e164)}"><i class="ph-bold ph-copy"></i> Copiar</button>` : ''}
+            <button type="button" class="btn btn-ghost" data-sa-manage="demo_lead:${lead.id}"><i class="ph-bold ph-note-pencil"></i> Gestionar</button>
             <button type="button" class="btn btn-danger" data-sa-delete-lead="${lead.id}"><i class="ph-bold ph-trash"></i> Eliminar</button>
           </div>
         </td>
@@ -465,9 +497,269 @@ function renderDemoLeadsTable() {
 
   bindModuleUsageButtons();
   bindPhoneActions();
+  bindSalesSelection('demo_lead', filtered);
   document.querySelectorAll('[data-sa-delete-lead]').forEach((btn) => {
     btn.addEventListener('click', () => openDeleteModal('lead', Number(btn.dataset.saDeleteLead)));
   });
+}
+
+function salesStageMeta(value) {
+  const found = SA_SALES_STAGES.find(([key]) => key === String(value || 'new')) || SA_SALES_STAGES[0];
+  return { value: found[0], label: found[1], tone: found[2] };
+}
+
+function salesStageChip(value) {
+  const stage = salesStageMeta(value);
+  return `<span class="sa-stage-chip stage-${stage.tone}">${esc(stage.label)}</span>`;
+}
+
+function salesStageOptions({ includeAll = false, includeActive = false, includeKeep = false } = {}) {
+  const options = [];
+  if (includeKeep) options.push('<option value="">Mantener etapa actual</option>');
+  if (includeAll) options.push('<option value="all">Todas las etapas</option>');
+  if (includeActive) options.push('<option value="active">Candidatos activos</option>');
+  options.push(...SA_SALES_STAGES.map(([value, label]) => `<option value="${value}">${esc(label)}</option>`));
+  return options.join('');
+}
+
+function salesSubjectKey(type, id) {
+  return `${type}:${Number(id)}`;
+}
+
+function findSalesSubject(type, id) {
+  if (type === 'tenant') return SA_TENANTS.find((item) => Number(item.id) === Number(id))
+    || SA_FOLLOW_UP.find((item) => item.entity_type === type && Number(item.id) === Number(id));
+  return SA_DEMO_LEADS.find((item) => Number(item.id) === Number(id))
+    || SA_FOLLOW_UP.find((item) => item.entity_type === type && Number(item.id) === Number(id));
+}
+
+function selectionSubjects(type = null) {
+  return [...SA_SELECTED].map((key) => {
+    const [subjectType, rawId] = key.split(':');
+    const entity = findSalesSubject(subjectType, Number(rawId));
+    return entity ? { type: subjectType, id: Number(rawId), entity } : null;
+  }).filter((item) => item && (!type || item.type === type));
+}
+
+function initSalesStageControls() {
+  const tenantFilter = $('#saTenantStageFilter');
+  const demoFilter = $('#saDemoStageFilter');
+  const followFilter = $('#saFollowUpStageFilter');
+  const modalStage = $('#saFollowUpStage');
+  if (tenantFilter) tenantFilter.innerHTML = salesStageOptions({ includeAll: true });
+  if (demoFilter) demoFilter.innerHTML = salesStageOptions({ includeAll: true });
+  if (followFilter) {
+    followFilter.innerHTML = salesStageOptions({ includeAll: true, includeActive: true });
+    followFilter.value = 'active';
+  }
+  if (modalStage) modalStage.innerHTML = salesStageOptions();
+}
+
+function subjectDisplayName(subject) {
+  if (subject.type === 'tenant') return subject.entity.business_name || subject.entity.name || `Prospecto #${subject.id}`;
+  return subject.entity.contact_name || subject.entity.name || `Lead #${subject.id}`;
+}
+
+function renderSalesBulkBars() {
+  const configs = [['#saTenantBulkBar', 'tenant'], ['#saDemoBulkBar', 'demo_lead'], ['#saFollowUpBulkBar', null]];
+  configs.forEach(([selector, type]) => {
+    const bar = $(selector);
+    if (!bar) return;
+    const subjects = selectionSubjects(type);
+    bar.hidden = subjects.length === 0;
+    if (!subjects.length) { bar.innerHTML = ''; return; }
+    const deletable = subjects.every((item) => SA_DELETABLE_STAGES.has(String(item.entity.sales_stage || 'new')));
+    const scope = type || 'all';
+    bar.innerHTML = `<div><b>${subjects.length}</b> seleccionado${subjects.length === 1 ? '' : 's'}</div>
+      <div class="sa-bulk-actions">
+        <button type="button" class="btn btn-primary" data-sa-bulk-manage="${scope}"><i class="ph-bold ph-note-pencil"></i> Agregar gestión</button>
+        <button type="button" class="btn btn-danger" data-sa-bulk-delete="${scope}" ${deletable ? '' : 'disabled title="Marca primero todos como No interesado o Cierre no exitoso"'}><i class="ph-bold ph-trash"></i> Eliminar</button>
+        <button type="button" class="btn btn-ghost" data-sa-bulk-clear="${scope}">Quitar selección</button>
+      </div>`;
+  });
+  document.querySelectorAll('[data-sa-bulk-manage]').forEach((button) => {
+    button.onclick = () => {
+      const scope = button.dataset.saBulkManage;
+      openFollowUpModal(selectionSubjects(scope === 'all' ? null : scope));
+    };
+  });
+  document.querySelectorAll('[data-sa-bulk-delete]').forEach((button) => {
+    button.onclick = () => {
+      const scope = button.dataset.saBulkDelete;
+      openBulkDelete(selectionSubjects(scope === 'all' ? null : scope));
+    };
+  });
+  document.querySelectorAll('[data-sa-bulk-clear]').forEach((button) => {
+    button.onclick = () => {
+      const scope = button.dataset.saBulkClear;
+      selectionSubjects(scope === 'all' ? null : scope).forEach((item) => SA_SELECTED.delete(salesSubjectKey(item.type, item.id)));
+      renderTenantTable(); renderDemoLeadsTable(); renderFollowUpTable();
+    };
+  });
+}
+
+function bindSalesSelection(type, visibleItems) {
+  document.querySelectorAll('[data-sa-sales-select]').forEach((checkbox) => {
+    checkbox.onchange = () => {
+      if (checkbox.checked) SA_SELECTED.add(checkbox.dataset.saSalesSelect);
+      else SA_SELECTED.delete(checkbox.dataset.saSalesSelect);
+      checkbox.closest('tr')?.classList.toggle('sa-row-selected', checkbox.checked);
+      renderSalesBulkBars();
+    };
+  });
+  document.querySelectorAll(`[data-sa-select-all="${type || 'all'}"]`).forEach((checkbox) => {
+    checkbox.onchange = () => {
+      visibleItems.forEach((item) => {
+        const itemType = type || item.entity_type;
+        const key = salesSubjectKey(itemType, item.id);
+        if (checkbox.checked) SA_SELECTED.add(key); else SA_SELECTED.delete(key);
+      });
+      if (type === 'tenant') renderTenantTable();
+      else if (type === 'demo_lead') renderDemoLeadsTable();
+      else renderFollowUpTable();
+    };
+  });
+  document.querySelectorAll('[data-sa-manage]').forEach((button) => {
+    button.onclick = () => {
+      const [subjectType, rawId] = String(button.dataset.saManage || '').split(':');
+      const entity = findSalesSubject(subjectType, Number(rawId));
+      if (entity) openFollowUpModal([{ type: subjectType, id: Number(rawId), entity }]);
+    };
+  });
+  renderSalesBulkBars();
+}
+
+function toDateTimeLocal(value) {
+  if (!value) return '';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  return new Date(date.getTime() - date.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+}
+
+function closeFollowUpModal() {
+  $('#saFollowUpModal')?.classList.remove('show');
+  SA_FOLLOWUP_TARGETS = [];
+}
+
+async function openFollowUpModal(subjects) {
+  if (!Array.isArray(subjects) || !subjects.length) return;
+  SA_FOLLOWUP_TARGETS = subjects;
+  const isBulk = subjects.length > 1;
+  const stage = $('#saFollowUpStage');
+  stage.innerHTML = salesStageOptions({ includeKeep: isBulk });
+  stage.required = !isBulk;
+  stage.value = isBulk ? '' : String(subjects[0].entity.sales_stage || 'new');
+  $('#saFollowUpActivityType').value = 'contact';
+  $('#saFollowUpDate').value = isBulk ? '' : toDateTimeLocal(subjects[0].entity.next_follow_up_at);
+  $('#saFollowUpNote').value = '';
+  $('#saFollowUpSubject').textContent = isBulk ? `${subjects.length} contactos seleccionados. La gestión se agregará a todos.` : subjectDisplayName(subjects[0]);
+  $('#saFollowUpHistoryWrap').hidden = isBulk;
+  $('#saFollowUpHistory').innerHTML = isBulk ? '' : '<div class="hint">Cargando historial...</div>';
+  $('#saFollowUpModal')?.classList.add('show');
+  if (!isBulk) {
+    try {
+      const subject = subjects[0];
+      const payload = await api(`/api/superadmin/follow-up/${subject.type}/${subject.id}/activities`);
+      renderFollowUpHistory(payload.activities || []);
+    } catch (error) {
+      $('#saFollowUpHistory').innerHTML = `<div class="hint">${esc(error.message)}</div>`;
+    }
+  }
+}
+
+function renderFollowUpHistory(activities) {
+  const el = $('#saFollowUpHistory');
+  if (!el) return;
+  if (!activities.length) {
+    el.innerHTML = '<div class="empty sa-history-empty"><i class="ph ph-note"></i><b>Sin gestiones todavía</b></div>';
+    return;
+  }
+  const typeLabels = { contact: 'Contactación', follow_up: 'Seguimiento', note: 'Nota', close_won: 'Cierre exitoso', close_lost: 'Cierre no exitoso', stage_change: 'Cambio de etapa' };
+  el.innerHTML = `<div class="sa-activity-list">${activities.map((item) => `<article class="sa-activity-item">
+    <div><b>${esc(typeLabels[item.activity_type] || item.activity_type)}</b><time>${fmtDateTime(item.created_at)}</time></div>
+    ${item.stage_from !== item.stage_to ? `<div>${salesStageChip(item.stage_from)} <i class="ph-bold ph-arrow-right"></i> ${salesStageChip(item.stage_to)}</div>` : ''}
+    ${item.note ? `<p>${esc(item.note)}</p>` : ''}
+    ${item.follow_up_at ? `<small><i class="ph-bold ph-calendar-check"></i> Próximo: ${fmtDateTime(item.follow_up_at)}</small>` : ''}
+    <small>Por ${esc(item.created_by || 'superadmin')}</small>
+  </article>`).join('')}</div>`;
+}
+
+async function submitFollowUp(event) {
+  event.preventDefault();
+  if (!SA_FOLLOWUP_TARGETS.length) return;
+  const targets = [...SA_FOLLOWUP_TARGETS];
+  const isBulk = targets.length > 1;
+  const followUpDate = $('#saFollowUpDate').value;
+  const payload = { activityType: $('#saFollowUpActivityType').value, note: $('#saFollowUpNote').value };
+  if (followUpDate) payload.nextFollowUpAt = new Date(followUpDate).toISOString();
+  else if (!isBulk) payload.nextFollowUpAt = null;
+  const selectedStage = $('#saFollowUpStage').value;
+  if (selectedStage) payload.stage = selectedStage;
+  if (isBulk) {
+    payload.subjects = targets.map(({ type, id }) => ({ type, id }));
+    await api('/api/superadmin/follow-up/bulk/update', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+  } else {
+    const subject = targets[0];
+    await api(`/api/superadmin/follow-up/item/${subject.type}/${subject.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+  }
+  closeFollowUpModal();
+  toast(isBulk ? `Gestión agregada a ${targets.length} contactos` : 'Gestión comercial guardada');
+  SA_SELECTED.clear();
+  await Promise.all([loadTenants(), loadDemoLeads(), loadFollowUp()]);
+}
+
+function isActiveSalesStage(stage) {
+  return ['contacted', 'interested', 'potential', 'follow_up'].includes(String(stage || 'new'));
+}
+
+function getFilteredFollowUp() {
+  const search = String($('#saFollowUpSearch')?.value || '').trim().toLowerCase();
+  const stage = String($('#saFollowUpStageFilter')?.value || 'active');
+  const type = String($('#saFollowUpTypeFilter')?.value || 'all');
+  return SA_FOLLOW_UP.filter((item) => {
+    if (type !== 'all' && item.entity_type !== type) return false;
+    if (stage === 'active' && !isActiveSalesStage(item.sales_stage)) return false;
+    if (stage !== 'all' && stage !== 'active' && String(item.sales_stage || 'new') !== stage) return false;
+    if (!search) return true;
+    return [item.name, item.contact_name, item.phone, item.phone_country_name, item.detail, item.last_note].join(' ').toLowerCase().includes(search);
+  });
+}
+
+function renderFollowUpSummary() {
+  const el = $('#saFollowUpSummary');
+  if (!el) return;
+  el.innerHTML = ['contacted', 'interested', 'potential', 'follow_up'].map((stage) => {
+    const meta = salesStageMeta(stage);
+    const count = SA_FOLLOW_UP.filter((item) => item.sales_stage === stage).length;
+    return `<button type="button" class="card sa-followup-stage-card stage-${meta.tone}" data-sa-followup-stage="${stage}"><span>${esc(meta.label)}</span><b>${count}</b></button>`;
+  }).join('');
+  document.querySelectorAll('[data-sa-followup-stage]').forEach((button) => {
+    button.onclick = () => { $('#saFollowUpStageFilter').value = button.dataset.saFollowupStage; renderFollowUpTable(); };
+  });
+}
+
+function renderFollowUpTable() {
+  const table = $('#saFollowUpTable');
+  if (!table) return;
+  const filtered = getFilteredFollowUp();
+  if (!filtered.length) {
+    table.innerHTML = '<div class="empty"><i class="ph ph-path"></i><b>Sin candidatos en esta etapa</b><p>Gestiona prospectos o leads demo para incorporarlos al seguimiento.</p></div>';
+    renderSalesBulkBars(); return;
+  }
+  const allChecked = filtered.every((item) => SA_SELECTED.has(salesSubjectKey(item.entity_type, item.id)));
+  table.innerHTML = `<div class="table-wrap"><table><thead><tr><th class="sa-select-col"><input type="checkbox" data-sa-select-all="all" ${allChecked ? 'checked' : ''} aria-label="Seleccionar candidatos visibles" /></th><th>Candidato</th><th>Origen</th><th>Etapa</th><th>Próximo seguimiento</th><th>Última gestión</th><th>Acciones</th></tr></thead><tbody>${filtered.map((item) => {
+    const key = salesSubjectKey(item.entity_type, item.id);
+    const overdue = item.next_follow_up_at && new Date(item.next_follow_up_at).getTime() < Date.now();
+    const waUrl = item.phone_valid && item.phone_digits ? `https://wa.me/${item.phone_digits}` : '';
+    return `<tr class="${SA_SELECTED.has(key) ? 'sa-row-selected' : ''}"><td class="sa-select-col"><input type="checkbox" data-sa-sales-select="${key}" ${SA_SELECTED.has(key) ? 'checked' : ''} /></td><td><b>${esc(item.name || item.contact_name)}</b><div class="meta">${esc(item.contact_name || '')} · ${esc(item.phone || '—')}</div></td><td><span class="tag">${item.entity_type === 'tenant' ? 'Prospecto' : 'Lead demo'}</span></td><td>${salesStageChip(item.sales_stage)}</td><td><span class="${overdue ? 'sa-followup-overdue' : ''}">${item.next_follow_up_at ? fmtDateTime(item.next_follow_up_at) : 'Sin programar'}</span></td><td>${item.last_note ? `<span class="sa-last-note">${esc(item.last_note)}</span>` : '<span class="meta">Sin notas</span>'}<div class="meta">${Number(item.activity_count || 0)} gestiones · ${fmtDateTime(item.last_activity_at)}</div></td><td><div class="sa-row-actions"><button type="button" class="btn btn-primary" data-sa-manage="${key}"><i class="ph-bold ph-note-pencil"></i> Gestionar</button>${waUrl ? `<a class="btn btn-ghost" href="${waUrl}" target="_blank" rel="noopener noreferrer"><i class="ph-bold ph-whatsapp-logo"></i> WhatsApp</a>` : ''}</div></td></tr>`;
+  }).join('')}</tbody></table></div>`;
+  bindSalesSelection(null, filtered);
+}
+
+async function loadFollowUp() {
+  const payload = await api('/api/superadmin/follow-up');
+  SA_FOLLOW_UP = Array.isArray(payload?.items) ? payload.items : [];
+  renderFollowUpSummary(); renderFollowUpTable();
 }
 
 function matchesClientFilter(client, filter) {
@@ -641,12 +933,34 @@ function openDeleteModal(type, id) {
   $('#saDeleteModal')?.classList.add('show');
 }
 
+function openBulkDelete(subjects) {
+  if (!Array.isArray(subjects) || !subjects.length) return;
+  if (!subjects.every((item) => SA_DELETABLE_STAGES.has(String(item.entity.sales_stage || 'new')))) {
+    return toast('Solo puedes eliminar en masa contactos marcados como No interesado o Cierre no exitoso', true);
+  }
+  SA_DELETE_TARGET = { type: 'bulk', subjects: subjects.map(({ type, id }) => ({ type, id })) };
+  $('#saDeleteMessage').textContent = `¿Seguro que deseas eliminar permanentemente ${subjects.length} contactos descartados?`;
+  $('#saDeleteHint').textContent = 'Se eliminarán sus datos e historial. Esta acción no incluye clientes y no se puede deshacer.';
+  $('#saDeleteModal')?.classList.add('show');
+}
+
 async function confirmDelete() {
   const target = SA_DELETE_TARGET;
   if (!target) return;
   const confirmBtn = $('#saDeleteConfirm');
   if (confirmBtn) confirmBtn.disabled = true;
   try {
+    if (target.type === 'bulk') {
+      await api('/api/superadmin/follow-up/bulk', {
+        method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ subjects: target.subjects }),
+      });
+      const deletedCount = target.subjects.length;
+      closeDeleteModal();
+      SA_SELECTED.clear();
+      toast(`${deletedCount} contacto${deletedCount === 1 ? '' : 's'} eliminado${deletedCount === 1 ? '' : 's'}`);
+      await Promise.all([loadTenants(), loadDemoLeads(), loadFollowUp()]);
+      return;
+    }
     const endpoint = target.type === 'tenant'
       ? `/api/superadmin/tenants/${target.id}`
       : `/api/superadmin/demo-leads/${target.id}`;
@@ -1139,6 +1453,7 @@ function setView(view) {
   const isTenants = view === 'tenants';
   const isClients = view === 'clients';
   const isDemoLeads = view === 'demo-leads';
+  const isFollowUp = view === 'follow-up';
   let title = '<i class="ph-bold ph-plugs-connected"></i> Integraciones';
   let subtitle = 'Configuración central de OpenAI y APIs del chatbot.';
   if (isTenants) {
@@ -1150,6 +1465,9 @@ function setView(view) {
   } else if (isDemoLeads) {
     title = '<i class="ph-bold ph-rocket-launch"></i> Leads demo';
     subtitle = 'Contactos que pidieron acceso al demo con sus datos de negocio.';
+  } else if (isFollowUp) {
+    title = '<i class="ph-bold ph-path"></i> Seguimiento';
+    subtitle = 'Pipeline comercial de candidatos con potencial de compra.';
   }
   $('#saViewTenants').hidden = !isTenants;
   $('#saViewTenants').classList.toggle('active', isTenants);
@@ -1157,8 +1475,10 @@ function setView(view) {
   $('#saViewClients').classList.toggle('active', isClients);
   $('#saViewDemoLeads').hidden = !isDemoLeads;
   $('#saViewDemoLeads').classList.toggle('active', isDemoLeads);
-  $('#saViewIntegrations').hidden = isTenants || isClients || isDemoLeads;
-  $('#saViewIntegrations').classList.toggle('active', !isTenants && !isClients && !isDemoLeads);
+  $('#saViewFollowUp').hidden = !isFollowUp;
+  $('#saViewFollowUp').classList.toggle('active', isFollowUp);
+  $('#saViewIntegrations').hidden = isTenants || isClients || isDemoLeads || isFollowUp;
+  $('#saViewIntegrations').classList.toggle('active', !isTenants && !isClients && !isDemoLeads && !isFollowUp);
   $('#saTitle').innerHTML = title;
   $('#saSub').textContent = subtitle;
   document.querySelectorAll('[data-sa-view]').forEach((a) => a.classList.toggle('active', a.dataset.saView === view));
@@ -1169,7 +1489,8 @@ async function boot() {
     const me = await api('/api/superadmin/me');
     $('#saUserName').textContent = me.username || 'superadmin';
     startSuperAdminClock();
-    await Promise.all([loadTenants(), loadClients(), loadDemoLeads(), loadIntegrations(), loadDeployStatus(), loadGitDeployStatus()]);
+    initSalesStageControls();
+    await Promise.all([loadTenants(), loadClients(), loadDemoLeads(), loadFollowUp(), loadIntegrations(), loadDeployStatus(), loadGitDeployStatus()]);
   } catch (err) {
     toast(err.message, true);
   }
@@ -1183,11 +1504,17 @@ $('#saBrandLogoFile')?.addEventListener('change', (e) => {
 $('#saUploadBrandLogo')?.addEventListener('click', () => uploadSuperAdminLogo().catch((e) => toast(e.message, true)));
 
 $('#saTenantSearch')?.addEventListener('input', renderTenantTable);
+$('#saTenantStageFilter')?.addEventListener('change', renderTenantTable);
 $('#saReloadTenants')?.addEventListener('click', () => loadTenants().catch((e) => toast(e.message, true)));
 $('#saClientSearch')?.addEventListener('input', renderClientsTable);
 $('#saReloadClients')?.addEventListener('click', () => loadClients().catch((e) => toast(e.message, true)));
 $('#saDemoLeadSearch')?.addEventListener('input', renderDemoLeadsTable);
+$('#saDemoStageFilter')?.addEventListener('change', renderDemoLeadsTable);
 $('#saReloadDemoLeads')?.addEventListener('click', () => loadDemoLeads().catch((e) => toast(e.message, true)));
+$('#saFollowUpSearch')?.addEventListener('input', renderFollowUpTable);
+$('#saFollowUpStageFilter')?.addEventListener('change', renderFollowUpTable);
+$('#saFollowUpTypeFilter')?.addEventListener('change', renderFollowUpTable);
+$('#saReloadFollowUp')?.addEventListener('click', () => loadFollowUp().catch((e) => toast(e.message, true)));
 $('#saBillingRefresh')?.addEventListener('click', () => refreshBilling().catch((e) => toast(e.message, true)));
 $('#saIntegrationForm')?.addEventListener('submit', (e) => saveIntegrations(e).catch((err) => toast(err.message, true)));
 $('#saDeployRun')?.addEventListener('click', () => runProductionDeploy().catch((err) => toast(err.message, true)));
@@ -1250,7 +1577,21 @@ $('#saDeleteModal')?.addEventListener('click', (e) => {
   if (e.target?.id === 'saDeleteModal') closeDeleteModal();
 });
 
-const SA_INITIAL_VIEW = ['tenants', 'clients', 'demo-leads', 'integrations'].includes((location.hash || '#tenants').slice(1))
+$('#saFollowUpCancel')?.addEventListener('click', closeFollowUpModal);
+$('#saFollowUpModal')?.addEventListener('click', (e) => {
+  if (e.target?.id === 'saFollowUpModal') closeFollowUpModal();
+});
+$('#saFollowUpForm')?.addEventListener('submit', (e) => submitFollowUp(e).catch((err) => toast(err.message, true)));
+$('#saFollowUpActivityType')?.addEventListener('change', (e) => {
+  const type = e.target.value;
+  const stage = $('#saFollowUpStage');
+  if (type === 'close_won') stage.value = 'won';
+  if (type === 'close_lost') stage.value = 'lost';
+  if (type === 'follow_up') stage.value = 'follow_up';
+  if (type === 'contact' && stage.value === 'new') stage.value = 'contacted';
+});
+
+const SA_INITIAL_VIEW = ['tenants', 'clients', 'demo-leads', 'follow-up', 'integrations'].includes((location.hash || '#tenants').slice(1))
   ? (location.hash || '#tenants').slice(1)
   : 'tenants';
 setView(SA_INITIAL_VIEW);

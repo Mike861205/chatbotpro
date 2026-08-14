@@ -160,6 +160,22 @@ async function initMaster() {
       first_seen_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       last_seen_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
+    CREATE TABLE IF NOT EXISTS sales_followup_activities (
+      id SERIAL PRIMARY KEY,
+      tenant_id INTEGER REFERENCES tenants(id) ON DELETE CASCADE,
+      demo_lead_id INTEGER REFERENCES demo_leads(id) ON DELETE CASCADE,
+      activity_type TEXT NOT NULL DEFAULT 'note',
+      note TEXT NOT NULL DEFAULT '',
+      stage_from TEXT,
+      stage_to TEXT,
+      follow_up_at TIMESTAMPTZ,
+      created_by TEXT DEFAULT '',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      CONSTRAINT sales_followup_single_subject CHECK (
+        (tenant_id IS NOT NULL AND demo_lead_id IS NULL)
+        OR (tenant_id IS NULL AND demo_lead_id IS NOT NULL)
+      )
+    );
   `);
 
   await q(`ALTER TABLE tenants ADD COLUMN IF NOT EXISTS account_status TEXT DEFAULT 'active'`);
@@ -172,6 +188,9 @@ async function initMaster() {
   await q(`ALTER TABLE tenants ADD COLUMN IF NOT EXISTS notes TEXT DEFAULT ''`);
   await q(`ALTER TABLE tenants ADD COLUMN IF NOT EXISTS phone_country TEXT DEFAULT ''`);
   await q(`ALTER TABLE tenants ADD COLUMN IF NOT EXISTS phone_calling_code TEXT DEFAULT ''`);
+  await q(`ALTER TABLE tenants ADD COLUMN IF NOT EXISTS sales_stage TEXT NOT NULL DEFAULT 'new'`);
+  await q(`ALTER TABLE tenants ADD COLUMN IF NOT EXISTS next_follow_up_at TIMESTAMPTZ`);
+  await q(`ALTER TABLE tenants ADD COLUMN IF NOT EXISTS sales_updated_at TIMESTAMPTZ DEFAULT now()`);
   await q(`ALTER TABLE demo_leads ADD COLUMN IF NOT EXISTS contact_name TEXT NOT NULL DEFAULT ''`);
   await q(`ALTER TABLE demo_leads ADD COLUMN IF NOT EXISTS phone_enc TEXT NOT NULL DEFAULT ''`);
   await q(`ALTER TABLE demo_leads ADD COLUMN IF NOT EXISTS phone_hash TEXT`);
@@ -185,6 +204,9 @@ async function initMaster() {
   await q(`ALTER TABLE demo_leads ADD COLUMN IF NOT EXISTS last_demo_tenant_slug TEXT DEFAULT ''`);
   await q(`ALTER TABLE demo_leads ADD COLUMN IF NOT EXISTS notes TEXT DEFAULT ''`);
   await q(`ALTER TABLE demo_leads ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT now()`);
+  await q(`ALTER TABLE demo_leads ADD COLUMN IF NOT EXISTS sales_stage TEXT NOT NULL DEFAULT 'new'`);
+  await q(`ALTER TABLE demo_leads ADD COLUMN IF NOT EXISTS next_follow_up_at TIMESTAMPTZ`);
+  await q(`ALTER TABLE demo_leads ADD COLUMN IF NOT EXISTS sales_updated_at TIMESTAMPTZ DEFAULT now()`);
   await q(`CREATE UNIQUE INDEX IF NOT EXISTS idx_demo_leads_phone_hash_unique ON demo_leads (phone_hash)`);
   await q(`ALTER TABLE tenant_payments ADD COLUMN IF NOT EXISTS amount NUMERIC(12,2) NOT NULL DEFAULT 0`);
   await q(`ALTER TABLE tenant_payments ADD COLUMN IF NOT EXISTS method TEXT DEFAULT 'manual'`);
@@ -212,6 +234,10 @@ async function initMaster() {
   await q(`CREATE UNIQUE INDEX IF NOT EXISTS idx_module_usage_lead_module ON module_usage (demo_lead_id, module_key) WHERE demo_lead_id IS NOT NULL`);
   await q(`CREATE INDEX IF NOT EXISTS idx_module_usage_tenant_last_seen ON module_usage (tenant_id, last_seen_at DESC)`);
   await q(`CREATE INDEX IF NOT EXISTS idx_module_usage_lead_last_seen ON module_usage (demo_lead_id, last_seen_at DESC) WHERE demo_lead_id IS NOT NULL`);
+  await q(`CREATE INDEX IF NOT EXISTS idx_tenants_sales_stage ON tenants (sales_stage, next_follow_up_at) WHERE customer_since IS NULL`);
+  await q(`CREATE INDEX IF NOT EXISTS idx_demo_leads_sales_stage ON demo_leads (sales_stage, next_follow_up_at)`);
+  await q(`CREATE INDEX IF NOT EXISTS idx_sales_followup_tenant ON sales_followup_activities (tenant_id, created_at DESC) WHERE tenant_id IS NOT NULL`);
+  await q(`CREATE INDEX IF NOT EXISTS idx_sales_followup_demo_lead ON sales_followup_activities (demo_lead_id, created_at DESC) WHERE demo_lead_id IS NOT NULL`);
 
   await ensureSuperAdminSeed();
 

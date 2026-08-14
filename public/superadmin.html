@@ -26,6 +26,7 @@
         <a href="#tenants" data-sa-view="tenants" data-color="cyan" class="active"><span class="nav-ic"><i class="ph-fill ph-buildings"></i></span><span>Prospectos</span><span class="sa-module-icon"><i class="ph-bold ph-users-three"></i></span></a>
         <a href="#clients" data-sa-view="clients" data-color="green"><span class="nav-ic"><i class="ph-fill ph-handshake"></i></span><span>Clientes</span><span class="sa-module-icon"><i class="ph-bold ph-identification-card"></i></span></a>
         <a href="#demo-leads" data-sa-view="demo-leads" data-color="violet"><span class="nav-ic"><i class="ph-fill ph-rocket-launch"></i></span><span>Leads demo</span><span class="sa-module-icon"><i class="ph-bold ph-phone-call"></i></span></a>
+        <a href="#follow-up" data-sa-view="follow-up" data-color="cyan"><span class="nav-ic"><i class="ph-fill ph-path"></i></span><span>Seguimiento</span><span class="sa-module-icon"><i class="ph-bold ph-kanban"></i></span></a>
         <a href="#integrations" data-sa-view="integrations" data-color="amber"><span class="nav-ic"><i class="ph-fill ph-plugs-connected"></i></span><span>Integraciones</span><span class="sa-module-icon"><i class="ph-bold ph-gear-six"></i></span></a>
       </nav>
       <div class="user-pill" style="margin-top:auto">
@@ -68,8 +69,10 @@
               <button type="button" data-status="inactive">Inactivos</button>
             </div>
             <input id="saTenantSearch" type="search" placeholder="Buscar por negocio, país, lada o teléfono" style="max-width:360px" />
+            <select id="saTenantStageFilter" class="sa-stage-filter" aria-label="Filtrar por etapa comercial"></select>
             <button type="button" class="btn btn-primary" id="saReloadTenants"><i class="ph-bold ph-arrows-clockwise"></i> Actualizar</button>
           </div>
+          <div id="saTenantBulkBar" class="sa-bulk-bar" hidden></div>
           <div id="saTenantsTable"></div>
         </div>
       </section>
@@ -130,8 +133,36 @@
           <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:12px">
             <label for="saDemoLeadSearch" style="position:absolute;left:-9999px;width:1px;height:1px;overflow:hidden">Buscar leads demo</label>
             <input id="saDemoLeadSearch" type="search" placeholder="Buscar por nombre, país, lada, teléfono o giro" style="max-width:380px" />
+            <select id="saDemoStageFilter" class="sa-stage-filter" aria-label="Filtrar por etapa comercial"></select>
           </div>
+          <div id="saDemoBulkBar" class="sa-bulk-bar" hidden></div>
           <div id="saDemoLeadsTable"></div>
+        </div>
+      </section>
+
+      <section id="saViewFollowUp" class="section" hidden>
+        <div class="card sa-followup-hero" style="padding:18px;margin-bottom:14px">
+          <div>
+            <span class="clients-hero-kicker"><i class="ph-bold ph-path"></i> Pipeline comercial</span>
+            <h3>Seguimiento de candidatos reales</h3>
+            <p>Centraliza contactos, próximas tareas, notas y cierres de prospectos y leads demo.</p>
+          </div>
+          <button type="button" class="btn btn-ghost" id="saReloadFollowUp"><i class="ph-bold ph-arrows-clockwise"></i> Actualizar</button>
+        </div>
+        <div class="sa-followup-stage-grid" id="saFollowUpSummary"></div>
+        <div class="card" style="padding:16px">
+          <div class="sa-followup-toolbar">
+            <label for="saFollowUpSearch" style="position:absolute;left:-9999px;width:1px;height:1px;overflow:hidden">Buscar seguimiento</label>
+            <input id="saFollowUpSearch" type="search" placeholder="Buscar negocio, contacto, nota o teléfono" />
+            <select id="saFollowUpStageFilter" class="sa-stage-filter" aria-label="Filtrar seguimiento por etapa"></select>
+            <select id="saFollowUpTypeFilter" aria-label="Filtrar seguimiento por origen">
+              <option value="all">Todos los orígenes</option>
+              <option value="tenant">Prospectos</option>
+              <option value="demo_lead">Leads demo</option>
+            </select>
+          </div>
+          <div id="saFollowUpBulkBar" class="sa-bulk-bar" hidden></div>
+          <div id="saFollowUpTable"></div>
         </div>
       </section>
 
@@ -350,6 +381,47 @@
       <div class="modal-actions" style="justify-content:center">
         <button type="button" class="btn btn-ghost" id="saDeleteCancel">Cancelar</button>
         <button type="button" class="btn btn-danger" id="saDeleteConfirm"><i class="ph-bold ph-trash"></i> Sí, eliminar</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal-bg" id="saFollowUpModal">
+    <div class="modal sa-followup-modal" style="max-width:760px">
+      <h3><i class="ph-bold ph-note-pencil"></i> Registrar gestión comercial</h3>
+      <p id="saFollowUpSubject" class="sa-followup-subject"></p>
+      <form id="saFollowUpForm">
+        <div class="row-2">
+          <div class="field">
+            <label><i class="ph-bold ph-kanban"></i> Etapa</label>
+            <select id="saFollowUpStage" required></select>
+          </div>
+          <div class="field">
+            <label><i class="ph-bold ph-list-checks"></i> Tipo de gestión</label>
+            <select id="saFollowUpActivityType" required>
+              <option value="contact">Contactación</option>
+              <option value="follow_up">Seguimiento</option>
+              <option value="note">Nota manual</option>
+              <option value="close_won">Cierre exitoso</option>
+              <option value="close_lost">Cierre no exitoso</option>
+            </select>
+          </div>
+        </div>
+        <div class="field">
+          <label><i class="ph-bold ph-calendar-check"></i> Próximo seguimiento (opcional)</label>
+          <input id="saFollowUpDate" type="datetime-local" />
+        </div>
+        <div class="field">
+          <label><i class="ph-bold ph-note"></i> Nota manual</label>
+          <textarea id="saFollowUpNote" rows="4" maxlength="4000" placeholder="Resultado del contacto, objeciones, acuerdos y siguiente acción"></textarea>
+        </div>
+        <div class="modal-actions">
+          <button type="button" class="btn btn-ghost" id="saFollowUpCancel">Cancelar</button>
+          <button type="submit" class="btn btn-primary"><i class="ph-bold ph-floppy-disk"></i> Guardar gestión</button>
+        </div>
+      </form>
+      <div id="saFollowUpHistoryWrap">
+        <h3><i class="ph-bold ph-clock-counter-clockwise"></i> Historial</h3>
+        <div id="saFollowUpHistory"></div>
       </div>
     </div>
   </div>

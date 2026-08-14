@@ -18,6 +18,9 @@ const {
 } = require('../middleware/superadmin');
 
 const router = express.Router();
+const SALES_STAGES = new Set(['new', 'contacted', 'interested', 'potential', 'follow_up', 'won', 'not_interested', 'lost']);
+const SALES_ACTIVITY_TYPES = new Set(['note', 'contact', 'follow_up', 'close_won', 'close_lost', 'stage_change']);
+const BULK_DELETE_STAGES = new Set(['not_interested', 'lost']);
 const superadminLoginLimiter = createRateLimiter({
   windowMs: 15 * 60 * 1000,
   max: 10,
@@ -264,6 +267,71 @@ function parseStatusFilter(raw) {
   return null;
 }
 
+function parseSalesSubject(rawType, rawId) {
+  const type = String(rawType || '').trim().toLowerCase();
+  const id = Number(rawId);
+  if (!['tenant', 'demo_lead'].includes(type) || !Number.isInteger(id) || id <= 0) return null;
+  return { type, id };
+}
+
+function parseOptionalFollowUp(raw) {
+  if (raw === undefined) return undefined;
+  if (raw === null || String(raw).trim() === '') return null;
+  const value = new Date(raw);
+  if (Number.isNaN(value.getTime())) return undefined;
+  return value.toISOString();
+}
+
+function followupSubjectConfig(type) {
+  return type === 'tenant'
+    ? { table: 'tenants', foreignKey: 'tenant_id', extraWhere: 'AND customer_since IS NULL', label: 'business_name' }
+    : { table: 'demo_leads', foreignKey: 'demo_lead_id', extraWhere: '', label: 'contact_name' };
+}
+
+async function updateSalesSubject(client, subject, input, username) {
+  const cfg = followupSubjectConfig(subject.type);
+  const found = await client.query(
+    `SELECT id, ${cfg.label} AS name, sales_stage FROM ${cfg.table} WHERE id = $1 ${cfg.extraWhere} FOR UPDATE`,
+    [subject.id]
+  );
+  const current = found.rows[0];
+  if (!current) return null;
+
+  let stage = input.stage === undefined ? current.sales_stage : String(input.stage || '').trim().toLowerCase();
+  if (!SALES_STAGES.has(stage)) throw Object.assign(new Error('Etapa comercial inválida'), { status: 400 });
+  const activityType = String(input.activityType || (stage !== current.sales_stage ? 'stage_change' : 'note')).trim().toLowerCase();
+  if (!SALES_ACTIVITY_TYPES.has(activityType)) throw Object.assign(new Error('Tipo de gestión inválido'), { status: 400 });
+  if (activityType === 'close_won') stage = 'won';
+  if (activityType === 'close_lost') stage = 'lost';
+  const note = String(input.note || '').trim().slice(0, 4000);
+  let nextFollowUpAt = parseOptionalFollowUp(input.nextFollowUpAt);
+  if (input.nextFollowUpAt !== undefined && nextFollowUpAt === undefined) {
+    throw Object.assign(new Error('Fecha de seguimiento inválida'), { status: 400 });
+  }
+  if (nextFollowUpAt === undefined && ['won', 'not_interested', 'lost'].includes(stage)) nextFollowUpAt = null;
+  if (!note && stage === current.sales_stage && nextFollowUpAt === undefined) {
+    throw Object.assign(new Error('Agrega una nota, cambia la etapa o programa una fecha'), { status: 400 });
+  }
+
+  const values = [stage, subject.id];
+  let followUpSql = '';
+  if (nextFollowUpAt !== undefined) {
+    values.push(nextFollowUpAt);
+    followUpSql = `, next_follow_up_at = $${values.length}`;
+  }
+  await client.query(
+    `UPDATE ${cfg.table} SET sales_stage = $1, sales_updated_at = now()${followUpSql} WHERE id = $2`,
+    values
+  );
+  await client.query(
+    `INSERT INTO sales_followup_activities
+      (${cfg.foreignKey}, activity_type, note, stage_from, stage_to, follow_up_at, created_by)
+     VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+    [subject.id, activityType, note, current.sales_stage, stage, nextFollowUpAt === undefined ? null : nextFollowUpAt, username]
+  );
+  return { ...subject, name: current.name, stage };
+}
+
 function parseClientStatusFilter(raw) {
   const value = String(raw || '').trim().toLowerCase();
   if (value === 'active') return { active: true };
@@ -461,12 +529,18 @@ router.get('/tenants', requireSuperAdmin, async (req, res, next) => {
           ELSE (CURRENT_DATE - t.billing_due_date)::int
         END AS mora_days,
         t.notes,
+        t.sales_stage,
+        t.next_follow_up_at,
+        t.sales_updated_at,
         t.created_at,
         COALESCE(u.username, '') AS owner_username,
         COALESCE(usage_stats.module_count, 0)::int AS module_count,
         COALESCE(usage_stats.module_views, 0)::int AS module_views,
         usage_stats.module_last_seen,
-        COALESCE(usage_stats.modules, '[]'::json) AS modules
+        COALESCE(usage_stats.modules, '[]'::json) AS modules,
+        COALESCE(followup_stats.activity_count, 0)::int AS activity_count,
+        followup_stats.last_activity_at,
+        COALESCE(followup_stats.last_note, '') AS last_note
       FROM tenants t
       LEFT JOIN LATERAL (
         SELECT username FROM users WHERE tenant_id = t.id ORDER BY id ASC LIMIT 1
@@ -487,6 +561,11 @@ router.get('/tenants', requireSuperAdmin, async (req, res, next) => {
         FROM module_usage mu
         WHERE mu.tenant_id = t.id AND mu.demo_lead_id IS NULL
       ) usage_stats ON true
+      LEFT JOIN LATERAL (
+        SELECT COUNT(*)::int AS activity_count, MAX(a.created_at) AS last_activity_at,
+          (ARRAY_AGG(a.note ORDER BY a.created_at DESC) FILTER (WHERE a.note <> ''))[1] AS last_note
+        FROM sales_followup_activities a WHERE a.tenant_id = t.id
+      ) followup_stats ON true
       ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
       ORDER BY t.created_at DESC
     `;
@@ -533,10 +612,16 @@ router.get('/demo-leads', requireSuperAdmin, async (req, res, next) => {
         dl.last_seen_at,
         dl.last_demo_tenant_slug,
         dl.notes,
+        dl.sales_stage,
+        dl.next_follow_up_at,
+        dl.sales_updated_at,
         COALESCE(usage_stats.module_count, 0)::int AS module_count,
         COALESCE(usage_stats.module_views, 0)::int AS module_views,
         usage_stats.module_last_seen,
-        COALESCE(usage_stats.modules, '[]'::json) AS modules
+        COALESCE(usage_stats.modules, '[]'::json) AS modules,
+        COALESCE(followup_stats.activity_count, 0)::int AS activity_count,
+        followup_stats.last_activity_at,
+        COALESCE(followup_stats.last_note, '') AS last_note
       FROM demo_leads dl
       LEFT JOIN LATERAL (
         SELECT
@@ -554,6 +639,11 @@ router.get('/demo-leads', requireSuperAdmin, async (req, res, next) => {
         FROM module_usage mu
         WHERE mu.demo_lead_id = dl.id
       ) usage_stats ON true
+      LEFT JOIN LATERAL (
+        SELECT COUNT(*)::int AS activity_count, MAX(a.created_at) AS last_activity_at,
+          (ARRAY_AGG(a.note ORDER BY a.created_at DESC) FILTER (WHERE a.note <> ''))[1] AS last_note
+        FROM sales_followup_activities a WHERE a.demo_lead_id = dl.id
+      ) followup_stats ON true
       ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
       ORDER BY dl.last_seen_at DESC, dl.id DESC
     `;
@@ -698,6 +788,184 @@ router.get('/clients/:id/payments', requireSuperAdmin, async (req, res, next) =>
     res.json({ client: found.rows[0], payments: payments.rows });
   } catch (e) {
     next(e);
+  }
+});
+
+router.get('/follow-up', requireSuperAdmin, async (req, res, next) => {
+  try {
+    const [tenants, leads] = await Promise.all([
+      q(`SELECT t.id, t.business_name AS name, t.owner_name AS contact_name, t.phone_enc,
+                t.phone_country, t.phone_calling_code, t.plan_name AS detail, t.sales_stage,
+                t.next_follow_up_at, t.sales_updated_at, t.created_at,
+                COALESCE(s.activity_count, 0)::int AS activity_count, s.last_activity_at,
+                COALESCE(s.last_note, '') AS last_note
+         FROM tenants t
+         LEFT JOIN LATERAL (
+           SELECT COUNT(*)::int AS activity_count, MAX(a.created_at) AS last_activity_at,
+             (ARRAY_AGG(a.note ORDER BY a.created_at DESC) FILTER (WHERE a.note <> ''))[1] AS last_note
+           FROM sales_followup_activities a WHERE a.tenant_id = t.id
+         ) s ON true
+         WHERE t.customer_since IS NULL
+         ORDER BY COALESCE(t.next_follow_up_at, t.sales_updated_at, t.created_at) DESC`),
+      q(`SELECT dl.id, dl.business_giro AS name, dl.contact_name, dl.phone_enc,
+                dl.phone_country, dl.phone_calling_code, dl.business_giro AS detail, dl.sales_stage,
+                dl.next_follow_up_at, dl.sales_updated_at, dl.created_at,
+                COALESCE(s.activity_count, 0)::int AS activity_count, s.last_activity_at,
+                COALESCE(s.last_note, '') AS last_note
+         FROM demo_leads dl
+         LEFT JOIN LATERAL (
+           SELECT COUNT(*)::int AS activity_count, MAX(a.created_at) AS last_activity_at,
+             (ARRAY_AGG(a.note ORDER BY a.created_at DESC) FILTER (WHERE a.note <> ''))[1] AS last_note
+           FROM sales_followup_activities a WHERE a.demo_lead_id = dl.id
+         ) s ON true
+         ORDER BY COALESCE(dl.next_follow_up_at, dl.sales_updated_at, dl.created_at) DESC`),
+    ]);
+
+    const mapRows = (rows, entityType) => rows.map((row) => {
+      const phone = describeStoredPhone(decrypt(row.phone_enc) || '', row.phone_country, row.phone_calling_code);
+      return {
+        ...row,
+        entity_type: entityType,
+        phone: phone.international,
+        phone_e164: phone.e164,
+        phone_digits: phone.digits,
+        phone_valid: phone.valid,
+        phone_country: phone.country,
+        phone_country_name: phone.countryName,
+        phone_calling_code: phone.callingCode,
+      };
+    });
+    const items = [...mapRows(tenants.rows, 'tenant'), ...mapRows(leads.rows, 'demo_lead')];
+    res.json({ items });
+  } catch (e) {
+    next(e);
+  }
+});
+
+router.get('/follow-up/:type/:id/activities', requireSuperAdmin, async (req, res, next) => {
+  try {
+    const subject = parseSalesSubject(req.params.type, req.params.id);
+    if (!subject) return res.status(400).json({ error: 'Contacto inválido' });
+    const cfg = followupSubjectConfig(subject.type);
+    const rows = await q(
+      `SELECT id, activity_type, note, stage_from, stage_to, follow_up_at, created_by, created_at
+       FROM sales_followup_activities WHERE ${cfg.foreignKey} = $1 ORDER BY created_at DESC, id DESC`,
+      [subject.id]
+    );
+    res.json({ activities: rows.rows });
+  } catch (e) {
+    next(e);
+  }
+});
+
+router.patch('/follow-up/item/:type/:id', requireSuperAdmin, async (req, res, next) => {
+  const subject = parseSalesSubject(req.params.type, req.params.id);
+  if (!subject) return res.status(400).json({ error: 'Contacto inválido' });
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const updated = await updateSalesSubject(client, subject, req.body || {}, req.superadmin.username);
+    if (!updated) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ error: 'Contacto no encontrado' });
+    }
+    await client.query('COMMIT');
+    res.json({ ok: true, updated });
+  } catch (e) {
+    try { await client.query('ROLLBACK'); } catch {}
+    if (e.status) return res.status(e.status).json({ error: e.message });
+    next(e);
+  } finally {
+    client.release();
+  }
+});
+
+router.patch('/follow-up/bulk/update', requireSuperAdmin, async (req, res, next) => {
+  const rawSubjects = Array.isArray(req.body?.subjects) ? req.body.subjects : [];
+  const subjects = [...new Map(rawSubjects.map((item) => {
+    const parsed = parseSalesSubject(item?.type, item?.id);
+    return parsed ? [`${parsed.type}:${parsed.id}`, parsed] : null;
+  }).filter(Boolean)).values()];
+  if (!subjects.length || subjects.length > 200) return res.status(400).json({ error: 'Selecciona entre 1 y 200 contactos válidos' });
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const updated = [];
+    for (const subject of subjects) {
+      const result = await updateSalesSubject(client, subject, req.body || {}, req.superadmin.username);
+      if (!result) throw Object.assign(new Error(`No se encontró ${subject.type} #${subject.id}`), { status: 404 });
+      updated.push(result);
+    }
+    await client.query('COMMIT');
+    res.json({ ok: true, updated, count: updated.length });
+  } catch (e) {
+    try { await client.query('ROLLBACK'); } catch {}
+    if (e.status) return res.status(e.status).json({ error: e.message });
+    next(e);
+  } finally {
+    client.release();
+  }
+});
+
+router.delete('/follow-up/bulk', requireSuperAdmin, async (req, res, next) => {
+  const rawSubjects = Array.isArray(req.body?.subjects) ? req.body.subjects : [];
+  const subjects = [...new Map(rawSubjects.map((item) => {
+    const parsed = parseSalesSubject(item?.type, item?.id);
+    return parsed ? [`${parsed.type}:${parsed.id}`, parsed] : null;
+  }).filter(Boolean)).values()];
+  if (!subjects.length || subjects.length > 200) return res.status(400).json({ error: 'Selecciona entre 1 y 200 contactos válidos' });
+
+  const tenantIds = subjects.filter((item) => item.type === 'tenant').map((item) => item.id);
+  const leadIds = subjects.filter((item) => item.type === 'demo_lead').map((item) => item.id);
+  const client = await pool.connect();
+  const removedUploads = [];
+  try {
+    await client.query('BEGIN');
+    let tenantRows = [];
+    let leadRows = [];
+    if (tenantIds.length) {
+      const found = await client.query(
+        `SELECT id, slug, logo, sales_stage FROM tenants
+         WHERE id = ANY($1::int[]) AND customer_since IS NULL FOR UPDATE`,
+        [tenantIds]
+      );
+      tenantRows = found.rows;
+    }
+    if (leadIds.length) {
+      const found = await client.query(
+        'SELECT id, sales_stage FROM demo_leads WHERE id = ANY($1::int[]) FOR UPDATE',
+        [leadIds]
+      );
+      leadRows = found.rows;
+    }
+    if (tenantRows.length !== tenantIds.length || leadRows.length !== leadIds.length) {
+      throw Object.assign(new Error('Uno o más contactos ya no existen o ya son clientes'), { status: 409 });
+    }
+    const unsafe = [...tenantRows, ...leadRows].find((row) => !BULK_DELETE_STAGES.has(row.sales_stage));
+    if (unsafe) throw Object.assign(new Error('La eliminación masiva solo permite contactos en No interesado o Cierre no exitoso'), { status: 409 });
+
+    if (tenantIds.length) {
+      await client.query('DELETE FROM tenant_payments WHERE tenant_id = ANY($1::int[])', [tenantIds]);
+      await client.query('DELETE FROM users WHERE tenant_id = ANY($1::int[])', [tenantIds]);
+      await client.query('DELETE FROM tenants WHERE id = ANY($1::int[])', [tenantIds]);
+      for (const tenant of tenantRows) {
+        await client.query(`DROP SCHEMA IF EXISTS "${schemaName(tenant.slug)}" CASCADE`);
+        if (tenant.logo) removedUploads.push(tenant.logo);
+      }
+    }
+    if (leadIds.length) await client.query('DELETE FROM demo_leads WHERE id = ANY($1::int[])', [leadIds]);
+    await client.query('COMMIT');
+    for (const upload of removedUploads) {
+      try { await deleteManagedUpload(upload); } catch {}
+    }
+    res.json({ ok: true, deleted: subjects.length });
+  } catch (e) {
+    try { await client.query('ROLLBACK'); } catch {}
+    if (e.status) return res.status(e.status).json({ error: e.message });
+    next(e);
+  } finally {
+    client.release();
   }
 });
 
@@ -990,7 +1258,7 @@ router.post('/tenants/:id/payment', requireSuperAdmin, async (req, res, next) =>
     }
 
     await client.query('BEGIN');
-    const tenantResult = await client.query('SELECT id, customer_since FROM tenants WHERE id = $1 FOR UPDATE', [tenantId]);
+    const tenantResult = await client.query('SELECT id, customer_since, sales_stage FROM tenants WHERE id = $1 FOR UPDATE', [tenantId]);
     const tenant = tenantResult.rows[0];
     if (!tenant) {
       await client.query('ROLLBACK');
@@ -1012,6 +1280,9 @@ router.post('/tenants/:id/payment', requireSuperAdmin, async (req, res, next) =>
            account_status = 'active',
            billing_due_date = $1::date,
            customer_since = COALESCE(customer_since, $2::date),
+           sales_stage = 'won',
+           next_follow_up_at = NULL,
+           sales_updated_at = now(),
            notes = CASE
              WHEN COALESCE(notes, '') = '' THEN $3
              ELSE notes || E'\n' || $3
@@ -1024,6 +1295,15 @@ router.post('/tenants/:id/payment', requireSuperAdmin, async (req, res, next) =>
         tenantId,
       ]
     );
+
+    if (!tenant.customer_since) {
+      await client.query(
+        `INSERT INTO sales_followup_activities
+          (tenant_id, activity_type, note, stage_from, stage_to, created_by)
+         VALUES ($1, 'close_won', $2, $3, 'won', $4)`,
+        [tenantId, `Cierre exitoso por primer pago de ${amount.toFixed(2)} (${method})`, tenant.sales_stage || 'new', req.superadmin.username]
+      );
+    }
 
     await client.query('COMMIT');
     res.json({ ok: true, nextDueDate, becameClient: !tenant.customer_since });
