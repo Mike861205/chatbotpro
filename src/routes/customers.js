@@ -26,11 +26,11 @@ router.get('/', async (req, res, next) => {
 
     if (startDate && validDate.test(String(startDate))) {
       params.push(String(startDate));
-      dateFilters.push(`(created_at AT TIME ZONE 'America/Mexico_City')::date >= $${params.length}::date`);
+      dateFilters.push(`(created_at AT TIME ZONE '${req.timezone}')::date >= $${params.length}::date`);
     }
     if (endDate && validDate.test(String(endDate))) {
       params.push(String(endDate));
-      dateFilters.push(`(created_at AT TIME ZONE 'America/Mexico_City')::date <= $${params.length}::date`);
+      dateFilters.push(`(created_at AT TIME ZONE '${req.timezone}')::date <= $${params.length}::date`);
     }
 
     const sortMap = {
@@ -53,11 +53,11 @@ router.get('/', async (req, res, next) => {
          c.id,
          c.name_enc,
          c.phone_enc,
-         to_char(c.created_at AT TIME ZONE 'America/Mexico_City', 'DD Mon YYYY') AS customer_since,
+         to_char(c.created_at AT TIME ZONE '${req.timezone}', 'DD Mon YYYY') AS customer_since,
          COUNT(fo.id)::int AS orders_count,
          COALESCE(SUM(fo.total), 0)::float AS total_spent,
          MAX(fo.created_at) AS last_order_raw,
-         to_char(MAX(fo.created_at) AT TIME ZONE 'America/Mexico_City', 'DD Mon YYYY, HH24:MI') AS last_order_at,
+         to_char(MAX(fo.created_at) AT TIME ZONE '${req.timezone}', 'DD Mon YYYY, HH24:MI') AS last_order_at,
          lower(coalesce(c.name_enc, '')) AS customer_name
        FROM {s}.customers c
        LEFT JOIN filtered_orders fo ON fo.customer_id = c.id

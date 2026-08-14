@@ -11,7 +11,7 @@
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/fill/style.css" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/duotone/style.css" />
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-  <link rel="stylesheet" href="/static/css/styles.css?v=20260811sidebar2026" />
+  <link rel="stylesheet" href="/static/css/styles.css?v=20260814regionalclock" />
   <link rel="icon" type="image/svg+xml" href="/static/favicon.svg" />
   <link rel="icon" type="image/png" href="/static/chatbotpro100.png" />
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
@@ -52,6 +52,7 @@
         <a href="#config" data-view="config" data-color="amber"><span class="nav-ic"><i class="ph-duotone ph-buildings"></i></span><span>Mi negocio</span></a>
         <a href="#suscripciones" data-view="suscripciones" data-color="violet"><span class="nav-ic"><i class="ph-duotone ph-seal-check"></i></span><span>Suscripciones</span></a>
         <a href="/notificaciones" target="_blank" data-color="violet" style="color:#a78bfa"><span class="nav-ic"><i class="ph-duotone ph-broadcast"></i></span><span>Pedidos en vivo</span> <span style="font-size:9px;background:#6c47ff;color:#fff;padding:2px 6px;border-radius:10px;margin-left:auto">PWA</span></a>
+        <a href="#instrucciones" data-view="instrucciones" data-color="lime"><span class="nav-ic"><i class="ph-duotone ph-book-open-text"></i></span><span>Instrucciones</span></a>
       </nav>
       <div class="foot">
         <div class="user-chip">
@@ -73,6 +74,11 @@
           </div>
         </div>
         <div class="topbar-actions">
+          <div class="tenant-clock" id="tenantClock" title="Fecha y hora local configuradas para este negocio">
+            <div class="tenant-clock-row"><i class="ph-bold ph-calendar-blank"></i><span id="tenantLocalDate">—</span></div>
+            <div class="tenant-clock-row tenant-clock-time"><i class="ph-bold ph-clock"></i><strong id="tenantLocalTime">—</strong></div>
+            <small><i class="ph-bold ph-globe-hemisphere-west"></i><span id="tenantTimezoneLabel">—</span></small>
+          </div>
           <a class="btn btn-primary" id="openChatLink" href="#" target="_blank"><i class="ph-bold ph-chat-circle-dots"></i> Ver mi chatbot</a>
           <div class="pos-sort-wrap" id="posSortWrap" hidden>
             <label for="posSortSelect"><i class="ph-bold ph-sort-ascending"></i> Orden catálogo</label>
@@ -976,6 +982,11 @@
                 </select>
               </div>
               <div class="field">
+                <label><i class="ph-bold ph-globe-hemisphere-west"></i> Zona horaria local</label>
+                <select id="cfgTimezone"></select>
+                <div class="hint" id="cfgTimezoneNow">Se asigna automáticamente según el país y puedes cambiarla cuando lo necesites.</div>
+              </div>
+              <div class="field">
                 <label><i class="ph-bold ph-credit-card"></i> Medios de pago en chatbot</label>
                 <div class="hint" style="margin-bottom:8px">Configura por separado los pagos para domicilio y para recoger en sucursal.</div>
                 <div class="pay-method-group">
@@ -1273,7 +1284,49 @@
           </div>
         </div>
       </section>
+
+      <!-- ──────── Instrucciones / capacitación inicial ──────── -->
+      <section class="section" id="view-instrucciones">
+        <div class="onboarding-guide-hero">
+          <div class="onboarding-guide-copy">
+            <span class="onboarding-eyebrow"><i class="ph-fill ph-graduation-cap"></i> Capacitación rápida</span>
+            <h2>Configura y prueba ChatBotPro en 6 pasos</h2>
+            <p>Completa este recorrido para conocer el flujo esencial del sistema y dejar tu negocio listo para recibir pedidos.</p>
+          </div>
+          <button type="button" class="btn btn-ghost" id="reopenOnboarding"><i class="ph-bold ph-presentation-chart"></i> Ver introducción</button>
+        </div>
+        <div id="instructionsSteps" class="onboarding-steps-grid"></div>
+        <div class="onboarding-more-modules">
+          <div class="onboarding-more-icon"><i class="ph-fill ph-squares-four"></i></div>
+          <div>
+            <h3>Después explora los demás módulos</h3>
+            <p>Revisa reportes, ventas, costos de ventas, inventarios, stock por sucursal, compras, clientes y productividad. Todos siguen la misma lógica sencilla para darte control completo de tu negocio.</p>
+          </div>
+        </div>
+      </section>
     </main>
+  </div>
+
+  <!-- Introducción mostrada una sola vez a propietarios recién registrados -->
+  <div class="modal-bg onboarding-intro-bg" id="onboardingIntro" role="dialog" aria-modal="true" aria-labelledby="onboardingIntroTitle">
+    <div class="onboarding-intro-panel">
+      <div class="onboarding-intro-head">
+        <div>
+          <span class="onboarding-eyebrow onboarding-neon-title"><i class="ph-fill ph-sparkle"></i> Bienvenido a ChatBotPro <span>+ Punto de venta + Reportes + Tickets y comandas + Costo de venta y mucho más</span></span>
+          <h2 id="onboardingIntroTitle">Tu negocio listo en 6 pasos</h2>
+          <p>Esta guía breve te ayudará a configurar, probar y entender el flujo principal del sistema.</p>
+        </div>
+        <button type="button" class="modal-close" id="onboardingIntroClose" aria-label="Cerrar introducción"><i class="ph-bold ph-x"></i></button>
+      </div>
+      <div id="onboardingIntroSteps" class="onboarding-intro-steps"></div>
+      <div class="onboarding-intro-foot">
+        <p><i class="ph-fill ph-confetti"></i> <b>¡Bienvenido!</b> Si tienes alguna duda, esta información siempre estará disponible en el módulo <b>Instrucciones</b> de tu sistema.</p>
+        <div>
+          <button type="button" class="btn btn-ghost" id="onboardingEnterDashboard">Entrar al panel</button>
+          <button type="button" class="btn btn-primary" id="onboardingStart"><i class="ph-bold ph-arrow-right"></i> Comenzar en Mi negocio</button>
+        </div>
+      </div>
+    </div>
   </div>
 
   <!-- Modal: exportar costo de ventas -->
@@ -2290,6 +2343,6 @@
     </div>
   </div>
 
-  <script src="/static/js/app.js?v=20260811ordersweek"></script>
+  <script src="/static/js/app.js?v=20260814regionalclock"></script>
 </body>
 </html>

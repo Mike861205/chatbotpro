@@ -83,7 +83,7 @@
   }
 
   function timeLabel(date) {
-    try { return new Intl.DateTimeFormat('es-MX', { hour: '2-digit', minute: '2-digit', hour12: false }).format(new Date(date)); }
+    try { return new Intl.DateTimeFormat('es-MX', { timeZone: payload?.tenant?.timezone || undefined, hour: '2-digit', minute: '2-digit', hour12: false }).format(new Date(date)); }
     catch { return '--:--'; }
   }
 

@@ -118,7 +118,12 @@ router.get('/stats', async (req, res, next) => {
   try {
     const t = req.tdb;
     const period = normalizePeriod(String(req.query.period || 'day'));
-    const meta = PERIOD_META[period];
+    const template = PERIOD_META[period];
+    const meta = {
+      ...template,
+      whereSql: template.whereSql.replaceAll(TZ, req.timezone),
+      seriesSql: template.seriesSql.replaceAll(TZ, req.timezone),
+    };
 
     const today = await t.get(
       `SELECT COUNT(*)::int AS count, COALESCE(SUM(total),0)::float AS sales

@@ -156,6 +156,72 @@ if (document.body) {
 const fmtMoney = (n, c) =>
   new Intl.NumberFormat('es-MX', { style: 'currency', currency: c || (SETTINGS && SETTINGS.currency) || 'MXN' }).format(n || 0);
 
+function businessTimeZone() {
+  return String(SETTINGS?.timezone || 'America/Mexico_City');
+}
+
+function businessIsoDate(value = new Date()) {
+  const date = value instanceof Date ? value : new Date(value);
+  try {
+    const parts = new Intl.DateTimeFormat('en-CA', {
+      timeZone: businessTimeZone(), year: 'numeric', month: '2-digit', day: '2-digit',
+    }).formatToParts(date);
+    const pick = (type) => parts.find((part) => part.type === type)?.value || '';
+    return `${pick('year')}-${pick('month')}-${pick('day')}`;
+  } catch {
+    return date.toISOString().slice(0, 10);
+  }
+}
+
+function fmtBusinessDateTime(value = new Date(), options = {}) {
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value || '');
+  try {
+    return new Intl.DateTimeFormat('es-MX', {
+      timeZone: businessTimeZone(),
+      dateStyle: 'short',
+      timeStyle: 'short',
+      ...options,
+    }).format(date);
+  } catch {
+    return date.toLocaleString('es-MX');
+  }
+}
+
+let tenantClockTimer = null;
+function updateTenantClock() {
+  const dateEl = $('#tenantLocalDate');
+  const timeEl = $('#tenantLocalTime');
+  const zoneEl = $('#tenantTimezoneLabel');
+  const clock = $('#tenantClock');
+  if (!dateEl || !timeEl || !zoneEl || !clock || !SETTINGS) return;
+  const timezone = businessTimeZone();
+  const now = new Date();
+  try {
+    dateEl.textContent = new Intl.DateTimeFormat('es-MX', {
+      timeZone: timezone, weekday: 'short', day: '2-digit', month: 'short', year: 'numeric',
+    }).format(now);
+    timeEl.textContent = new Intl.DateTimeFormat('es-MX', {
+      timeZone: timezone, hour: '2-digit', minute: '2-digit', second: '2-digit',
+    }).format(now);
+    const option = SETTINGS?.regional?.timezones?.find((item) => item.value === timezone);
+    const zoneLabel = option?.label || timezone;
+    zoneEl.textContent = `${zoneLabel} · ${timezone}`;
+    clock.title = `Fecha y hora local de ${ME?.tenant?.businessName || 'este negocio'} · ${timezone}`;
+    clock.setAttribute('aria-label', `${dateEl.textContent}, ${timeEl.textContent}, zona horaria ${zoneLabel}`);
+  } catch {
+    dateEl.textContent = now.toLocaleDateString('es-MX');
+    timeEl.textContent = now.toLocaleTimeString('es-MX');
+    zoneEl.textContent = timezone;
+  }
+}
+
+function startTenantClock() {
+  if (tenantClockTimer) clearInterval(tenantClockTimer);
+  updateTenantClock();
+  tenantClockTimer = setInterval(updateTenantClock, 1000);
+}
+
 function getAuthScope() {
   try {
     const val = String(sessionStorage.getItem(AUTH_SCOPE_KEY) || '').trim().toLowerCase();
@@ -235,10 +301,7 @@ function toast(msg, isErr = false) {
 }
 
 function orderDayKeyLocal() {
-  const now = new Date();
-  const m = String(now.getMonth() + 1).padStart(2, '0');
-  const d = String(now.getDate()).padStart(2, '0');
-  return `${now.getFullYear()}-${m}-${d}`;
+  return businessIsoDate();
 }
 
 function orderDateKeyLocal(date) {
@@ -248,7 +311,7 @@ function orderDateKeyLocal(date) {
 }
 
 function defaultOrdersWeekRange() {
-  const end = new Date();
+  const end = new Date(`${businessIsoDate()}T12:00:00`);
   const start = new Date(end);
   start.setDate(start.getDate() - 6);
   return {
@@ -494,6 +557,113 @@ function askCancelReason(orderId, initialValue = '') {
 }
 
 /* ===== Navegación ===== */
+const ONBOARDING_STEPS = [
+  {
+    number: 1,
+    icon: 'ph-buildings',
+    title: 'Configura la identidad de tu negocio',
+    description: 'Entra a Mi negocio y completa la información con la que operará tu sistema.',
+    details: ['Nombre, logo, color y dirección', 'Horarios, moneda y cuentas para transferencias', 'Sucursales, cajeros y accesos de caja'],
+    action: 'config',
+    actionLabel: 'Ir a Mi negocio',
+  },
+  {
+    number: 2,
+    icon: 'ph-robot',
+    title: 'Prepara tu chatbot',
+    description: 'En Mi chatbot configura cómo atenderás a tus clientes y cómo recibirás sus pedidos.',
+    details: ['Número de WhatsApp que recibirá los pedidos', 'Servicio a domicilio, recolección y formas de pago', 'Mesas y opciones especiales si aplican a tu negocio'],
+    action: 'chatbot',
+    actionLabel: 'Configurar chatbot',
+  },
+  {
+    number: 3,
+    icon: 'ph-cooking-pot',
+    title: 'Da de alta categorías y productos',
+    description: 'Construye el catálogo que tus clientes verán al abrir el chatbot.',
+    details: ['Crea primero las categorías del menú', 'Agrega nombre, descripción, precio e imagen', 'Configura variantes e ingredientes cuando los necesites'],
+    action: 'productos',
+    actionLabel: 'Agregar productos',
+  },
+  {
+    number: 4,
+    icon: 'ph-chat-circle-dots',
+    title: 'Haz un pedido real en tu chatbot',
+    description: 'Pulsa Ver mi chatbot y realiza un pedido completo como lo haría uno de tus clientes.',
+    details: ['Comprueba el menú y el proceso de compra', 'Finaliza el pedido con datos reales de prueba', 'Confirma que llegue al WhatsApp configurado'],
+    action: 'chatbot-preview',
+    actionLabel: 'Ver mi chatbot',
+  },
+  {
+    number: 5,
+    icon: 'ph-cash-register',
+    title: 'Prueba el Punto de venta',
+    description: 'Crea pedidos manuales desde el POS para conocer el flujo de caja y comprobar qué sencillo es operar.',
+    details: ['Abre la caja o selecciona una sucursal', 'Agrega productos y cobra un pedido de prueba', 'Revisa el ticket y el movimiento en tus reportes'],
+    action: 'pos',
+    actionLabel: 'Abrir Punto de venta',
+  },
+  {
+    number: 6,
+    icon: 'ph-monitor-play',
+    title: 'Habilita y abre una pantalla KDS',
+    description: 'Configura un área de preparación y mira en tiempo real lo que vería tu cocinero, la barra o el encargado de pedidos.',
+    details: ['Crea o habilita un área de preparación', 'Asigna categorías y productos al área', 'Abre su pantalla KDS y envía un pedido de prueba'],
+    action: 'kds',
+    actionLabel: 'Configurar KDS',
+  },
+];
+
+function onboardingStepMarkup(step, compact = false) {
+  return `<article class="onboarding-step-card step-${step.number} ${compact ? 'compact' : ''}">
+    <div class="onboarding-step-number">${step.number}</div>
+    <div class="onboarding-step-icon"><i class="ph-fill ${step.icon}"></i></div>
+    <div class="onboarding-step-content">
+      <span>Paso ${step.number}</span>
+      <h3>${esc(step.title)}</h3>
+      <p>${esc(step.description)}</p>
+      <ul>${step.details.map((detail) => `<li><i class="ph-bold ph-check"></i>${esc(detail)}</li>`).join('')}</ul>
+      <button type="button" class="btn btn-sm onboarding-action-btn action-${step.action}" data-onboarding-action="${step.action}">${esc(step.actionLabel)} <i class="ph-bold ph-arrow-right"></i></button>
+    </div>
+  </article>`;
+}
+
+function renderInstructions() {
+  const moduleTarget = $('#instructionsSteps');
+  const introTarget = $('#onboardingIntroSteps');
+  if (moduleTarget) moduleTarget.innerHTML = ONBOARDING_STEPS.map((step) => onboardingStepMarkup(step)).join('');
+  if (introTarget) introTarget.innerHTML = ONBOARDING_STEPS.map((step) => onboardingStepMarkup(step, true)).join('');
+}
+
+async function completeOnboarding() {
+  if (!ME || ME.onboardingCompleted) return;
+  await api('/api/auth/onboarding/complete', { method: 'POST' });
+  ME.onboardingCompleted = true;
+  ME.onboardingRequired = false;
+}
+
+function openOnboardingIntro() {
+  renderInstructions();
+  $('#onboardingIntro')?.classList.add('show');
+  document.body.classList.add('onboarding-open');
+}
+
+async function closeOnboardingIntro() {
+  await completeOnboarding();
+  $('#onboardingIntro')?.classList.remove('show');
+  document.body.classList.remove('onboarding-open');
+}
+
+async function runOnboardingAction(action, fromIntro = false) {
+  if (fromIntro) await closeOnboardingIntro();
+  if (action === 'chatbot-preview') {
+    const url = $('#openChatLink')?.href || `/${ME?.tenant?.slug || ''}`;
+    window.open(url, '_blank', 'noopener');
+    return;
+  }
+  if (VIEW_META[action]) await navigate(action);
+}
+
 const VIEW_META = {
   dashboard: ['Dashboard', 'Resumen de tu negocio', 'ph-chart-pie-slice'],
   pedidos: ['Pedidos', 'Administra y actualiza tus pedidos', 'ph-receipt'],
@@ -510,6 +680,7 @@ const VIEW_META = {
   chatbot: ['Mi chatbot', 'Configura el flujo y comparte tu liga', 'ph-chat-circle-dots'],
   config: ['Mi negocio', 'Identidad, branding y contacto', 'ph-storefront'],
   suscripciones: ['Suscripciones', 'Planes, beneficios y pago seguro', 'ph-crown'],
+  instrucciones: ['Instrucciones', 'Guía rápida para configurar y probar tu sistema', 'ph-book-open-text'],
 };
 
 const VIEW_LOADERS = {
@@ -528,6 +699,7 @@ const VIEW_LOADERS = {
   chatbot: fillBotForm,
   config: fillConfigForm,
   suscripciones: () => {},
+  instrucciones: renderInstructions,
 };
 
 let CURRENT_VIEW = 'dashboard';
@@ -636,6 +808,27 @@ globalThis.addEventListener('hashchange', () => {
   const view = normalizeView((location.hash || '#dashboard').slice(1));
   if (view !== CURRENT_VIEW) navigate(view);
 });
+
+document.addEventListener('click', (event) => {
+  const actionButton = event.target.closest('[data-onboarding-action]');
+  if (!actionButton) return;
+  const fromIntro = Boolean(actionButton.closest('#onboardingIntro'));
+  runOnboardingAction(actionButton.dataset.onboardingAction, fromIntro).catch((error) => toast(error.message, true));
+});
+
+$('#reopenOnboarding')?.addEventListener('click', openOnboardingIntro);
+$('#onboardingIntroClose')?.addEventListener('click', () => closeOnboardingIntro().catch((error) => toast(error.message, true)));
+$('#onboardingEnterDashboard')?.addEventListener('click', () => closeOnboardingIntro().catch((error) => toast(error.message, true)));
+$('#onboardingStart')?.addEventListener('click', () => runOnboardingAction('config', true).catch((error) => toast(error.message, true)));
+$('#onboardingIntro')?.addEventListener('click', (event) => {
+  if (event.target?.id === 'onboardingIntro') closeOnboardingIntro().catch((error) => toast(error.message, true));
+});
+document.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape' && $('#onboardingIntro')?.classList.contains('show')) {
+    closeOnboardingIntro().catch((error) => toast(error.message, true));
+  }
+});
+
 function closeSidebar() {
   $('#sidebar').classList.remove('open');
   $('#scrim').classList.remove('show');
@@ -1629,7 +1822,7 @@ function exportCostingExcel() {
     ['Reporte', 'Costo de ventas'],
     ['Negocio', ME?.tenant?.businessName || SETTINGS?.business_name || 'Negocio'],
     ['Filtro', costingExportScopeLabel(rows)],
-    ['Generado', new Date().toLocaleString('es-MX')],
+    ['Generado', fmtBusinessDateTime()],
   ]);
   const data = rows.map((row) => Object.fromEntries(columns.map((column) => [column.label, row[column.key]])));
   const sheet = XLSX.utils.json_to_sheet(data);
@@ -1659,7 +1852,7 @@ function exportCostingPdf() {
   doc.setFontSize(8);
   doc.setTextColor(100, 116, 139);
   doc.text(costingExportScopeLabel(rows), 14, 27);
-  doc.text(`Generado: ${new Date().toLocaleString('es-MX')}`, 14, 32);
+  doc.text(`Generado: ${fmtBusinessDateTime()}`, 14, 32);
   doc.autoTable({
     startY: 37,
     theme: 'striped',
@@ -1991,7 +2184,7 @@ function openPurchasePrintDocument(title, subtitle, content) {
   const business = esc(ME?.tenant?.businessName || SETTINGS?.business_name || 'Negocio');
   popup.document.open();
   popup.document.write(`<!doctype html><html lang="es"><head><meta charset="utf-8"><title>${esc(title)}</title><style>
-    @page{margin:12mm}body{font-family:Arial,sans-serif;color:#111827;margin:0;font-size:12px}h1{margin:0;font-size:22px}h2{margin:4px 0 18px;font-size:15px;color:#475569}.meta{display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin-bottom:18px}.meta div{padding:9px;border:1px solid #dbe3ed;border-radius:8px}.meta small{display:block;margin-bottom:3px;color:#64748b;font-size:9px;font-weight:700;text-transform:uppercase}table{width:100%;border-collapse:collapse}th,td{padding:8px 6px;border-bottom:1px solid #dbe3ed;text-align:left}th{font-size:9px;text-transform:uppercase;background:#f1f5f9}.num{text-align:right}.total{margin-top:14px;text-align:right;font-size:17px}.notes{margin-top:16px;padding:10px;border:1px solid #cbd5e1;border-radius:8px}.footer{margin-top:24px;color:#64748b;font-size:9px}@media print{body{print-color-adjust:exact;-webkit-print-color-adjust:exact}}</style></head><body><h1>${business}</h1><h2>${esc(subtitle)}</h2>${content}<div class="footer">Documento generado desde ChatBotPro · ${esc(new Date().toLocaleString('es-MX'))}</div><script>window.onload=()=>{window.print();}</script></body></html>`);
+    @page{margin:12mm}body{font-family:Arial,sans-serif;color:#111827;margin:0;font-size:12px}h1{margin:0;font-size:22px}h2{margin:4px 0 18px;font-size:15px;color:#475569}.meta{display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin-bottom:18px}.meta div{padding:9px;border:1px solid #dbe3ed;border-radius:8px}.meta small{display:block;margin-bottom:3px;color:#64748b;font-size:9px;font-weight:700;text-transform:uppercase}table{width:100%;border-collapse:collapse}th,td{padding:8px 6px;border-bottom:1px solid #dbe3ed;text-align:left}th{font-size:9px;text-transform:uppercase;background:#f1f5f9}.num{text-align:right}.total{margin-top:14px;text-align:right;font-size:17px}.notes{margin-top:16px;padding:10px;border:1px solid #cbd5e1;border-radius:8px}.footer{margin-top:24px;color:#64748b;font-size:9px}@media print{body{print-color-adjust:exact;-webkit-print-color-adjust:exact}}</style></head><body><h1>${business}</h1><h2>${esc(subtitle)}</h2>${content}<div class="footer">Documento generado desde ChatBotPro · ${esc(fmtBusinessDateTime())}</div><script>window.onload=()=>{window.print();}</script></body></html>`);
   popup.document.close();
 }
 
@@ -2417,7 +2610,7 @@ function openOrderComandaPrintWindow(order) {
   const customerPhone = esc(order?.customer?.phone || '');
   const delivery = esc(buildOrderDeliveryLabel(order));
   const branch = esc(order?.delivery === 'domicilio' ? (order?.service_branch_name || '—') : (order?.pickup_branch_name || '—'));
-  const createdAt = esc(order?.created_at || new Date().toLocaleString('es-MX'));
+  const createdAt = esc(order?.created_at || fmtBusinessDateTime());
   const notes = esc(operationalOrderNote(order));
 
   const html = `<!doctype html>
@@ -2849,7 +3042,7 @@ function exportOrdersPdf() {
   doc.setFontSize(14);
   doc.text(`Pedidos - ${ME?.tenant?.businessName || 'Negocio'}`, 14, 14);
   doc.setFontSize(10);
-  doc.text(`Generado: ${new Date().toLocaleString('es-MX')}`, 14, 20);
+  doc.text(`Generado: ${fmtBusinessDateTime()}`, 14, 20);
   doc.autoTable({
     startY: 24,
     head: [['Pedido', 'Cliente', 'Telefono', 'Productos', 'Entrega', 'Ubicacion', 'Motivo cancelacion', 'Metodo pago', 'Total', 'Estatus', 'Fecha']],
@@ -3211,7 +3404,7 @@ function buildPosTicketData() {
     };
     return {
       id: null,
-      createdAt: new Date().toLocaleString('es-MX'),
+      createdAt: fmtBusinessDateTime(),
       paymentMethod: POS_PAYMENT_METHOD,
       items,
       subtotal,
@@ -3228,7 +3421,7 @@ function buildPosTicketData() {
   if (LAST_POS_SALE) {
     return {
       id: LAST_POS_SALE.id,
-      createdAt: new Date().toLocaleString('es-MX'),
+      createdAt: fmtBusinessDateTime(),
       paymentMethod: LAST_POS_SALE.paymentMethod,
       items: LAST_POS_SALE.items.map((item) => ({
         qty: item.qty,
@@ -3385,7 +3578,7 @@ function printTableRoundTicket(round, account, accumulatedTotal) {
     tableNumber: account.table_number,
     roundNumber: round.roundNumber,
     waiterName: account.waiter_name,
-    createdAt: round.createdAt || new Date().toLocaleString('es-MX'),
+    createdAt: round.createdAt || fmtBusinessDateTime(),
     items: items.map((item) => ({
       qty: Number(item.qty || 0), name: String(item.name || ''), price: Number(item.price || 0),
       total: moneyNum(Number(item.qty || 0) * Number(item.price || 0)),
@@ -3409,7 +3602,7 @@ function printPosSaleById(id) {
   const items = Array.isArray(sale.items) ? sale.items : [];
   const ticket = {
     id: sale.id,
-    createdAt: sale.created_at || new Date().toLocaleString('es-MX'),
+    createdAt: sale.created_at || fmtBusinessDateTime(),
     paymentMethod: sale.payment_method,
     items: items.map((it) => ({
       qty: Number(it.qty || 0),
@@ -3446,7 +3639,7 @@ function exportPosClosePdf(closeResult) {
 
   const doc = new globalThis.jspdf.jsPDF({ orientation: 'portrait' });
   const bizName = SETTINGS?.business_name || ME?.tenant?.businessName || 'Negocio';
-  const now = new Date().toLocaleString('es-MX');
+  const now = fmtBusinessDateTime();
   const closedBy = closeResult?.closedSession?.closed_by || ME?.username || 'cajero';
 
   doc.setFontSize(15);
@@ -3535,7 +3728,7 @@ function printPosCloseReport(closeResult) {
   const delivery = totals.delivery || {};
   const tables = totals.tables || {};
   const biz = esc(SETTINGS?.business_name || ME?.tenant?.businessName || 'Negocio');
-  const now = new Date().toLocaleString('es-MX');
+  const now = fmtBusinessDateTime();
   const closedBy = esc(closeResult?.closedSession?.closed_by || ME?.username || 'cajero');
 
   const html = `<!doctype html>
@@ -4370,9 +4563,7 @@ function renderPosClosings() {
 }
 
 function getLocalIsoDate() {
-  const now = new Date();
-  const local = new Date(now.getTime() - now.getTimezoneOffset() * 60000);
-  return local.toISOString().slice(0, 10);
+  return businessIsoDate();
 }
 
 function syncPosSalesFilterUI() {
@@ -7298,13 +7489,45 @@ function renderSwatches() {
   });
 }
 
+function renderRegionalSettingsOptions() {
+  const currencies = Array.isArray(SETTINGS?.regional?.currencies) ? SETTINGS.regional.currencies : [];
+  const timezones = Array.isArray(SETTINGS?.regional?.timezones) ? SETTINGS.regional.timezones : [];
+  if (currencies.length) {
+    $('#cfgCurrency').innerHTML = currencies.map((item) =>
+      `<option value="${esc(item.code)}">${esc(item.flag)} ${esc(item.code)} — ${esc(item.name)}</option>`
+    ).join('');
+  }
+  $('#cfgTimezone').innerHTML = timezones.map((item) =>
+    `<option value="${esc(item.value)}">${esc(item.label)} · ${esc(item.value)}</option>`
+  ).join('');
+}
+
+function updateTimezonePreview() {
+  const timezone = $('#cfgTimezone')?.value || businessTimeZone();
+  const preview = $('#cfgTimezoneNow');
+  if (!preview) return;
+  try {
+    const local = new Intl.DateTimeFormat('es-MX', {
+      timeZone: timezone,
+      weekday: 'long', day: '2-digit', month: 'long', year: 'numeric',
+      hour: '2-digit', minute: '2-digit', second: '2-digit',
+    }).format(new Date());
+    preview.textContent = `Hora local del negocio: ${local}`;
+  } catch {
+    preview.textContent = 'Selecciona una zona horaria válida.';
+  }
+}
+
 function fillConfigForm() {
   if (!SETTINGS) return;
+  renderRegionalSettingsOptions();
   $('#cfgName').value = SETTINGS.business_name || '';
   $('#cfgColor').value = SETTINGS.primary_color || '#ff6b35';
   $('#cfgAddress').value = SETTINGS.address || '';
   $('#cfgHours').value = SETTINGS.hours || '';
   $('#cfgCurrency').value = SETTINGS.currency || 'MXN';
+  $('#cfgTimezone').value = SETTINGS.timezone || 'America/Mexico_City';
+  updateTimezonePreview();
   $('#cfgChatPayDeliveryCash').checked = (SETTINGS.chatbot_payment_delivery_cash || '1') === '1';
   $('#cfgChatPayDeliveryTransfer').checked = (SETTINGS.chatbot_payment_delivery_transfer || '0') === '1';
   $('#cfgChatPayDeliveryCard').checked = (SETTINGS.chatbot_payment_delivery_card || '0') === '1';
@@ -7392,6 +7615,7 @@ $('#contactForm').addEventListener('submit', async (e) => {
   fd.append('address', $('#cfgAddress').value);
   fd.append('hours', $('#cfgHours').value);
   fd.append('currency', $('#cfgCurrency').value);
+  fd.append('timezone', $('#cfgTimezone').value);
   fd.append('chatbot_payment_delivery_cash', $('#cfgChatPayDeliveryCash').checked ? '1' : '0');
   fd.append('chatbot_payment_delivery_transfer', $('#cfgChatPayDeliveryTransfer').checked ? '1' : '0');
   fd.append('chatbot_payment_delivery_card', $('#cfgChatPayDeliveryCard').checked ? '1' : '0');
@@ -7801,10 +8025,12 @@ async function boot(navigateToHash = true) {
     history.replaceState(null, '', cleanUrl);
   }
 
-  ME = await api('/api/auth/me');
+  [ME, SETTINGS] = await Promise.all([
+    api('/api/auth/me'),
+    api('/api/settings'),
+  ]);
   if (ME?.role === 'cashier') setAuthScope('cashier');
   if (ME?.role === 'owner') setAuthScope('owner');
-  SETTINGS = await api('/api/settings');
   POS_PRODUCT_SORT = normalizePosSortMode(SETTINGS?.pos_catalog_sort_mode || readStoredPosSortMode());
   saveStoredPosSortMode(POS_PRODUCT_SORT);
   applyUserScopeUI();
@@ -7823,6 +8049,8 @@ async function boot(navigateToHash = true) {
   $('#userBizName').textContent = cashier ? (ME.branchName || ME.tenant.businessName) : ME.tenant.businessName;
   $('#userName').textContent = cashier ? `@${ME.username} · cajero` : `@${ME.username}`;
   $('#openChatLink').href = `/${ME.tenant.slug}`;
+  startTenantClock();
+  renderInstructions();
   loadOrderSoundPreference();
   syncOrdersSoundToggleUI();
   startOrdersRealtimeMonitor();
@@ -7834,7 +8062,9 @@ async function boot(navigateToHash = true) {
     document.body.setAttribute('data-current-view', view);
     navigate(view);
   }
+  if (!cashier && ME.onboardingRequired) setTimeout(openOnboardingIntro, 180);
 }
+$('#cfgTimezone')?.addEventListener('change', updateTimezonePreview);
 
 boot()
   .catch(() => (location.href = '/login'))
@@ -10371,7 +10601,7 @@ function csvEscape(v) {
 
 function exportInvCSV(summary, movements, opts) {
   const lines = [];
-  const now = new Date().toLocaleString('es-MX');
+  const now = fmtBusinessDateTime();
 
   if (opts.includeSummary) {
     lines.push(`Reporte de Inventario — ${now}`);
@@ -10408,7 +10638,7 @@ function exportInvCSV(summary, movements, opts) {
 }
 
 function exportInvPDF(summary, movements, opts) {
-  const now = new Date().toLocaleString('es-MX');
+  const now = fmtBusinessDateTime();
   const biz = ME?.tenant?.business_name || 'ChatBotPro';
 
   const summaryHTML = opts.includeSummary ? `

@@ -91,8 +91,8 @@ async function systemSalesProductivityRows(t, year, month, employeeId = 0) {
             COUNT(*)::int AS order_count
      FROM {s}.orders
      WHERE status!='cancelado'
-       AND EXTRACT(YEAR FROM created_at AT TIME ZONE 'America/Mexico_City')=$1
-       AND EXTRACT(MONTH FROM created_at AT TIME ZONE 'America/Mexico_City')=$2
+       AND EXTRACT(YEAR FROM created_at AT TIME ZONE '${t.timezone || 'America/Mexico_City'}')=$1
+       AND EXTRACT(MONTH FROM created_at AT TIME ZONE '${t.timezone || 'America/Mexico_City'}')=$2
      GROUP BY COALESCE(service_branch_id,pickup_branch_id)`,
     [year, month]
   );
@@ -690,8 +690,8 @@ router.post('/productivity/sync-sales', async (req, res, next) => {
          COUNT(*)::int AS order_count
        FROM {s}.orders
        WHERE status NOT IN ('cancelado')
-         AND EXTRACT(YEAR FROM created_at AT TIME ZONE 'America/Mexico_City') = $1
-         AND EXTRACT(MONTH FROM created_at AT TIME ZONE 'America/Mexico_City') = $2
+         AND EXTRACT(YEAR FROM created_at AT TIME ZONE '${req.timezone}') = $1
+         AND EXTRACT(MONTH FROM created_at AT TIME ZONE '${req.timezone}') = $2
          AND COALESCE(service_branch_id,pickup_branch_id) = $3`,
       [y, m, employee.branch_id]
     );

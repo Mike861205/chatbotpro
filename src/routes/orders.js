@@ -40,7 +40,7 @@ router.get('/', async (req, res, next) => {
       delivery_fee::float AS delivery_fee, delivery_zone_name, cancel_note, status, channel, delivery, notes, order_notes, payment_method,
         pickup_branch_name, service_branch_name, customer_location_lat, customer_location_lng, customer_location_text,
         customer_location_resolved,
-                      to_char(created_at AT TIME ZONE 'America/Mexico_City', 'DD Mon YYYY, HH24:MI') AS created_at
+                      to_char(created_at AT TIME ZONE '${req.timezone}', 'DD Mon YYYY, HH24:MI') AS created_at
                FROM {s}.orders`;
     const params = [];
     const where = [];
@@ -52,16 +52,16 @@ router.get('/', async (req, res, next) => {
 
     const isTodayOnly = String(todayOnly || '').toLowerCase() === '1' || String(todayOnly || '').toLowerCase() === 'true';
     if (isTodayOnly) {
-      where.push(`(created_at AT TIME ZONE 'America/Mexico_City')::date = (now() AT TIME ZONE 'America/Mexico_City')::date`);
+      where.push(`(created_at AT TIME ZONE '${req.timezone}')::date = (now() AT TIME ZONE '${req.timezone}')::date`);
     } else {
       const validDate = /^\d{4}-\d{2}-\d{2}$/;
       if (startDate && validDate.test(String(startDate))) {
         params.push(String(startDate));
-        where.push(`(created_at AT TIME ZONE 'America/Mexico_City')::date >= $${params.length}::date`);
+        where.push(`(created_at AT TIME ZONE '${req.timezone}')::date >= $${params.length}::date`);
       }
       if (endDate && validDate.test(String(endDate))) {
         params.push(String(endDate));
-        where.push(`(created_at AT TIME ZONE 'America/Mexico_City')::date <= $${params.length}::date`);
+        where.push(`(created_at AT TIME ZONE '${req.timezone}')::date <= $${params.length}::date`);
       }
     }
 

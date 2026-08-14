@@ -9,6 +9,8 @@
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/bold/style.css" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/fill/style.css" />
   <link rel="stylesheet" href="/static/css/styles.css?v=20260811-6" />
+  <link rel="prefetch" href="/app" as="document" />
+  <link rel="prefetch" href="/static/js/app.js?v=20260814regionalclock" as="script" />
   <link rel="icon" type="image/svg+xml" href="/static/favicon.svg" />
   <link rel="icon" type="image/png" href="/static/chatbotpro100.png" />
 </head>
@@ -122,6 +124,7 @@
   <script>
     CBPPhoneInput.setup({ countryId: 'phoneCountry', callingCodeId: 'phoneCallingCode', phoneId: 'phone' })
       .catch(() => { document.getElementById('errorMsg').textContent = 'No se pudo cargar la lista de países. Recarga la página.'; document.getElementById('error').classList.add('show'); });
+    fetch('/api/auth/register-ready', { cache: 'no-store' }).catch(() => {});
     const slugInput = document.getElementById('slug');
     const bizInput = document.getElementById('businessName');
     const slugify = (s) => s.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '')
@@ -141,7 +144,10 @@
       const errBox = document.getElementById('error');
       errBox.classList.remove('show');
       const btn = document.getElementById('btn');
+      const defaultButtonMarkup = btn.innerHTML;
       btn.disabled = true;
+      btn.innerHTML = '<i class="ph-bold ph-spinner-gap" style="animation:spin .8s linear infinite"></i> Preparando tu panel…';
+      btn.setAttribute('aria-busy', 'true');
       try {
         const phoneData = CBPPhoneInput.values({ countryId: 'phoneCountry', phoneId: 'phone' });
         const res = await fetch('/api/auth/register', {
@@ -155,16 +161,19 @@
             slug: slugInput.value,
             username: document.getElementById('username').value,
             password: document.getElementById('password').value,
+            timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || '',
           }),
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || 'Error');
         try { sessionStorage.setItem('cbp_auth_scope', 'owner'); } catch {}
-        location.href = '/app';
+        location.replace('/app');
       } catch (err) {
         document.getElementById('errorMsg').textContent = err.message;
         errBox.classList.add('show');
         btn.disabled = false;
+        btn.innerHTML = defaultButtonMarkup;
+        btn.removeAttribute('aria-busy');
       }
     });
   </script>

@@ -105,7 +105,7 @@ router.get('/audit', async (req, res, next) => {
     const params = []; let where = "WHERE entity_type='branch_stock'";
     if (Number(req.query.branch) > 0) { params.push(Number(req.query.branch)); where += ` AND entity_id=$${params.length}`; }
     const rows = await req.tdb.all(`SELECT id,entity_id,action,payload,actor,
-      to_char(created_at AT TIME ZONE 'America/Mexico_City','DD/MM/YYYY HH24:MI') AS created_at
+      to_char(created_at AT TIME ZONE '${req.timezone}','DD/MM/YYYY HH24:MI') AS created_at
       FROM {s}.purchase_audit_log ${where} ORDER BY id DESC LIMIT 300`, params);
     res.json(rows.map((row) => { let payload = {}; try { payload = JSON.parse(row.payload || '{}'); } catch {} return { id: Number(row.id), branchId: Number(row.entity_id), action: row.action, payload, actor: row.actor, createdAt: row.created_at }; }));
   } catch (error) { next(error); }

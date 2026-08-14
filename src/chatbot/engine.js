@@ -685,7 +685,7 @@ async function showProducts(t, state, categoryId, labels = RESTAURANT_LABELS) {
       image: p.image,
       qty: qtyById.get(Number(p.id)) || 0,
     })),
-    options: [{ label: '⬅️ Volver', value: 'start' }, ...(state.cart.length ? mainOptions(state.cart, [], labels).slice(1) : [])],
+    options: [{ label: '⬅️ Volver', value: state.currentCategoryId ? 'menu' : 'start' }, ...(state.cart.length ? mainOptions(state.cart, [], labels).slice(1) : [])],
   };
 }
 

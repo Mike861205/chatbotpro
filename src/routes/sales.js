@@ -66,6 +66,7 @@ function branchSql(rawBranch, params) {
 
 router.get('/report', async (req, res, next) => {
   try {
+    const TZ = req.timezone;
     const now = new Date();
     const year = parseInteger(req.query.year, now.getFullYear(), 2000, 2100);
     const month = parseInteger(req.query.month, now.getMonth() + 1, 1, 12);
@@ -320,6 +321,7 @@ router.get('/report', async (req, res, next) => {
 
 router.get('/detail', async (req, res, next) => {
   try {
+    const TZ = req.timezone;
     res.set('Cache-Control', 'no-store');
     const startDate = parseIsoDate(req.query.startDate);
     const endDate = parseIsoDate(req.query.endDate);

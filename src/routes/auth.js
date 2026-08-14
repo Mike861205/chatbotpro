@@ -4,9 +4,10 @@ const crypto = require('node:crypto');
 const config = require('../config');
 const { q, tdb, initTenantDefaults } = require('../db');
 const { encrypt, decrypt, lookupHash } = require('../utils/crypto');
-const { signToken, setAuthCookie, clearAuthCookie, requireAuth } = require('../middleware/auth');
+const { signToken, setAuthCookie, clearAuthCookie, requireAuth, requireOwner } = require('../middleware/auth');
 const { createRateLimiter } = require('../middleware/security');
 const { normalizeInternationalPhone, phoneCountries } = require('../utils/phone');
+const { regionalDefaults, isSupportedTimeZone } = require('../utils/regional');
 
 const router = express.Router();
 
@@ -37,6 +38,7 @@ const TRACKABLE_MODULES = new Set([
   'chatbot',
   'config',
   'suscripciones',
+  'instrucciones',
 ]);
 
 function supportWhatsappUrl() {
@@ -154,13 +156,25 @@ router.get('/phone-countries', (req, res) => {
   res.json({ countries: phoneCountries(), defaultCountry: 'MX' });
 });
 
+// Despierta la conexión serverless mientras el usuario completa el formulario.
+router.get('/register-ready', async (req, res, next) => {
+  try {
+    await q('SELECT 1');
+    res.status(204).end();
+  } catch (error) {
+    next(error);
+  }
+});
+
 router.post('/register', authAttemptLimiter, async (req, res, next) => {
   try {
-    const { ownerName, phone, phoneCountry, businessName, slug, username, password } = req.body || {};
+    const { ownerName, phone, phoneCountry, businessName, slug, username, password, timezone } = req.body || {};
     if (!ownerName || !phone || !phoneCountry || !businessName || !slug || !username || !password) {
       return res.status(400).json({ error: 'Todos los campos marcados son obligatorios' });
     }
     const normalizedPhone = normalizeInternationalPhone(phone, phoneCountry);
+    const regional = regionalDefaults(normalizedPhone.country);
+    if (isSupportedTimeZone(timezone)) regional.timezone = String(timezone).trim();
     const cleanSlug = String(slug).trim().toLowerCase();
     const cleanUser = String(username).trim().toLowerCase();
     const cleanOwnerName = normalizeLeadText(ownerName, 120);
@@ -175,27 +189,51 @@ router.post('/register', authAttemptLimiter, async (req, res, next) => {
     if (cleanPassword.length < 8 || cleanPassword.length > 128) {
       return res.status(400).json({ error: 'La contraseña debe tener entre 8 y 128 caracteres' });
     }
-    const dupSlug = await q('SELECT 1 FROM tenants WHERE slug = $1', [cleanSlug]);
-    if (dupSlug.rows.length) return res.status(409).json({ error: 'Ese slug ya está registrado, elige otro' });
-    const dupUser = await q('SELECT 1 FROM users WHERE lower(username) = $1', [cleanUser]);
-    if (dupUser.rows.length) return res.status(409).json({ error: 'Ese usuario ya existe' });
+    const [conflictResult, passwordHash] = await Promise.all([
+      q(
+        `SELECT
+           EXISTS (SELECT 1 FROM tenants WHERE slug = $1) AS slug_exists,
+           EXISTS (SELECT 1 FROM users WHERE lower(username) = $2) AS user_exists`,
+        [cleanSlug, cleanUser]
+      ),
+      bcrypt.hash(cleanPassword, 12),
+    ]);
+    const conflicts = conflictResult.rows[0] || {};
+    if (conflicts.slug_exists) return res.status(409).json({ error: 'Ese slug ya está registrado, elige otro' });
+    if (conflicts.user_exists) return res.status(409).json({ error: 'Ese usuario ya existe' });
 
-    const passwordHash = await bcrypt.hash(cleanPassword, 12);
-    const t = await q(
-      `INSERT INTO tenants (slug, business_name, owner_name, phone_enc, phone_country, phone_calling_code)
-       VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
-      [cleanSlug, cleanBusinessName, cleanOwnerName, encrypt(normalizedPhone.e164), normalizedPhone.country, normalizedPhone.callingCode]
+    // Tenant y propietario se crean de forma atómica y en un solo viaje a Neon.
+    const created = await q(
+      `WITH new_tenant AS (
+         INSERT INTO tenants (slug, business_name, owner_name, phone_enc, phone_country, phone_calling_code, timezone)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)
+         RETURNING *
+       ), new_user AS (
+         INSERT INTO users (tenant_id, username, password_hash, onboarding_completed)
+         SELECT id, $8, $9, 0 FROM new_tenant
+         RETURNING *
+       )
+       SELECT row_to_json(new_tenant) AS tenant, row_to_json(new_user) AS owner
+       FROM new_tenant CROSS JOIN new_user`,
+      [
+        cleanSlug,
+        cleanBusinessName,
+        cleanOwnerName,
+        encrypt(normalizedPhone.e164),
+        normalizedPhone.country,
+        normalizedPhone.callingCode,
+        regional.timezone,
+        cleanUser,
+        passwordHash,
+      ]
     );
-    const tenant = t.rows[0];
-    const u = await q(
-      'INSERT INTO users (tenant_id, username, password_hash) VALUES ($1, $2, $3) RETURNING *',
-      [tenant.id, cleanUser, passwordHash]
-    );
+    const tenant = created.rows[0].tenant;
+    const owner = created.rows[0].owner;
 
     // Crea el SCHEMA AISLADO del tenant en Neon con valores por defecto
-    await initTenantDefaults(cleanSlug, cleanBusinessName);
+    await initTenantDefaults(cleanSlug, cleanBusinessName, regional);
 
-    setAuthCookie(res, signToken(u.rows[0], tenant), 'owner');
+    setAuthCookie(res, signToken(owner, tenant), 'owner');
     res.json({ ok: true, slug: cleanSlug });
   } catch (e) {
     next(e);
@@ -470,6 +508,8 @@ router.get('/me', requireAuth, (req, res) => {
     branchId: req.user.branchId,
     branchName: req.user.branchName,
     cashierSlug: req.user.cashierSlug,
+    onboardingCompleted: req.user.onboardingCompleted,
+    onboardingRequired: req.user.role === 'owner' && !req.user.onboardingCompleted && !req.user.impersonated,
     tenant: {
       slug: req.tenant.slug,
       businessName: req.tenant.business_name,
@@ -479,6 +519,15 @@ router.get('/me', requireAuth, (req, res) => {
       primaryColor: req.tenant.primary_color,
     },
   });
+});
+
+router.post('/onboarding/complete', requireAuth, requireOwner, async (req, res, next) => {
+  try {
+    await q('UPDATE users SET onboarding_completed = 1 WHERE id = $1', [req.user.uid]);
+    res.json({ ok: true });
+  } catch (e) {
+    next(e);
+  }
 });
 
 module.exports = router;

@@ -99,6 +99,34 @@ function fakeCatalogTenantDb(initialState) {
   };
 }
 
+function fakeMenuTenantDb(initialState) {
+  let savedState = structuredClone(initialState);
+  const categories = [{ id: 1, name: 'Pollo asado', sort: 1 }, { id: 2, name: 'Bebidas', sort: 2 }];
+  const products = [
+    { id: 11, name: '1 pollo', description: '', price: 180, image: '', category: 'Pollo asado' },
+    { id: 22, name: 'Refresco', description: '', price: 35, image: '', category: 'Bebidas' },
+  ];
+  return {
+    get savedState() { return savedState; },
+    async get(sql, params) {
+      if (sql.includes('chat_sessions')) return { state: JSON.stringify(savedState) };
+      if (sql.includes('settings')) return params[0] === 'whatsapp' ? { value: '526141234567' } : null;
+      if (sql.includes('SELECT name FROM {s}.categories')) return categories.find((row) => row.id === Number(params[0])) || null;
+      throw new Error(`Consulta get inesperada: ${sql}`);
+    },
+    async all(sql) {
+      if (sql.includes('SELECT * FROM {s}.categories')) return categories;
+      if (sql.includes('FROM {s}.products p LEFT JOIN {s}.categories')) return products;
+      throw new Error(`Consulta all inesperada: ${sql}`);
+    },
+    async run(sql, params) {
+      if (!sql.includes('chat_sessions')) throw new Error(`Consulta run inesperada: ${sql}`);
+      savedState = JSON.parse(params[1]);
+      return { changes: 1 };
+    },
+  };
+}
+
 test('una opción con máximo 1 completa el ingrediente inmediatamente', async () => {
   const group = {
     id: 5,
@@ -210,6 +238,20 @@ test('la interfaz acumula ingredientes localmente y los envía juntos', () => {
   assert.match(chatHtml, /send\(`mod_apply_\$\{ids\}`/);
   assert.match(chatHtml, /Mín\. \$\{min\} · Máx\. \$\{max\}/);
   assert.match(chatHtml, /submitButton\.disabled = selected\.size < min \|\| selected\.size > max/);
+});
+
+test('volver desde los productos de una categoría regresa directo a las categorías', async () => {
+  const db = fakeMenuTenantDb({ step: 'choosing_category', cart: [], customer: {}, currency: 'MXN', aiHistory: [] });
+
+  const productsReply = await handleMessage(db, 'restaurante', 'session-menu-back', 'cat_1');
+  const backOption = productsReply.options.find((option) => option.label.includes('Volver'));
+  assert.equal(backOption?.value, 'menu');
+  assert.equal(db.savedState.currentCategoryId, 1);
+
+  const categoriesReply = await handleMessage(db, 'restaurante', 'session-menu-back', backOption.value);
+  assert.equal(db.savedState.step, 'choosing_category');
+  assert.deepEqual(categoriesReply.options.map((option) => option.value), ['cat_1', 'cat_2']);
+  assert.equal(categoriesReply.products, null);
 });
 
 test('configura automáticamente varios productos con variantes, ingredientes o ambos', async () => {

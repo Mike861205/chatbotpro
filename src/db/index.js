@@ -52,7 +52,7 @@ function schemaName(slug) {
 function tdb(slug) {
   const s = schemaName(slug);
   const fix = (sql) => sql.split('{s}').join(`"${s}"`);
-  return {
+  const tenantDb = {
     schema: s,
     all: async (sql, p = []) => (await q(fix(sql), p)).rows,
     get: async (sql, p = []) => (await q(fix(sql), p)).rows[0],
@@ -61,6 +61,7 @@ function tdb(slug) {
       const client = await pool.connect();
       const scoped = {
         schema: s,
+        timezone: tenantDb.timezone,
         all: async (sql, p = []) => (await client.query(fix(sql), p)).rows,
         get: async (sql, p = []) => (await client.query(fix(sql), p)).rows[0],
         run: async (sql, p = []) => client.query(fix(sql), p),
@@ -78,6 +79,7 @@ function tdb(slug) {
       }
     },
   };
+  return tenantDb;
 }
 
 async function initMaster() {
@@ -90,6 +92,7 @@ async function initMaster() {
       phone_enc TEXT,
       phone_country TEXT DEFAULT '',
       phone_calling_code TEXT DEFAULT '',
+      timezone TEXT NOT NULL DEFAULT 'America/Mexico_City',
       logo TEXT,
       primary_color TEXT DEFAULT '#ff6b35',
       account_status TEXT DEFAULT 'active',
@@ -128,6 +131,7 @@ async function initMaster() {
       branch_id INTEGER,
       cashier_slug TEXT,
       active INTEGER DEFAULT 1,
+      onboarding_completed INTEGER NOT NULL DEFAULT 1,
       created_at TIMESTAMPTZ DEFAULT now()
     );
     CREATE TABLE IF NOT EXISTS superadmin_users (
@@ -188,6 +192,25 @@ async function initMaster() {
   await q(`ALTER TABLE tenants ADD COLUMN IF NOT EXISTS notes TEXT DEFAULT ''`);
   await q(`ALTER TABLE tenants ADD COLUMN IF NOT EXISTS phone_country TEXT DEFAULT ''`);
   await q(`ALTER TABLE tenants ADD COLUMN IF NOT EXISTS phone_calling_code TEXT DEFAULT ''`);
+  await q(`ALTER TABLE tenants ADD COLUMN IF NOT EXISTS timezone TEXT`);
+  await q(`
+    UPDATE tenants SET timezone = CASE phone_country
+      WHEN 'GT' THEN 'America/Guatemala' WHEN 'BZ' THEN 'America/Belize'
+      WHEN 'SV' THEN 'America/El_Salvador' WHEN 'HN' THEN 'America/Tegucigalpa'
+      WHEN 'NI' THEN 'America/Managua' WHEN 'CR' THEN 'America/Costa_Rica'
+      WHEN 'PA' THEN 'America/Panama' WHEN 'CU' THEN 'America/Havana'
+      WHEN 'DO' THEN 'America/Santo_Domingo' WHEN 'PR' THEN 'America/Puerto_Rico'
+      WHEN 'HT' THEN 'America/Port-au-Prince' WHEN 'CO' THEN 'America/Bogota'
+      WHEN 'VE' THEN 'America/Caracas' WHEN 'EC' THEN 'America/Guayaquil'
+      WHEN 'PE' THEN 'America/Lima' WHEN 'BO' THEN 'America/La_Paz'
+      WHEN 'PY' THEN 'America/Asuncion' WHEN 'CL' THEN 'America/Santiago'
+      WHEN 'AR' THEN 'America/Argentina/Buenos_Aires' WHEN 'UY' THEN 'America/Montevideo'
+      WHEN 'BR' THEN 'America/Sao_Paulo' WHEN 'ES' THEN 'Europe/Madrid'
+      WHEN 'US' THEN 'America/New_York' ELSE 'America/Mexico_City' END
+    WHERE timezone IS NULL OR timezone = ''
+  `);
+  await q(`ALTER TABLE tenants ALTER COLUMN timezone SET DEFAULT 'America/Mexico_City'`);
+  await q(`ALTER TABLE tenants ALTER COLUMN timezone SET NOT NULL`);
   await q(`ALTER TABLE tenants ADD COLUMN IF NOT EXISTS sales_stage TEXT NOT NULL DEFAULT 'new'`);
   await q(`ALTER TABLE tenants ADD COLUMN IF NOT EXISTS next_follow_up_at TIMESTAMPTZ`);
   await q(`ALTER TABLE tenants ADD COLUMN IF NOT EXISTS sales_updated_at TIMESTAMPTZ DEFAULT now()`);
@@ -229,6 +252,7 @@ async function initMaster() {
   await q(`ALTER TABLE users ADD COLUMN IF NOT EXISTS branch_id INTEGER`);
   await q(`ALTER TABLE users ADD COLUMN IF NOT EXISTS cashier_slug TEXT`);
   await q(`ALTER TABLE users ADD COLUMN IF NOT EXISTS active INTEGER DEFAULT 1`);
+  await q(`ALTER TABLE users ADD COLUMN IF NOT EXISTS onboarding_completed INTEGER NOT NULL DEFAULT 1`);
   await q(`CREATE UNIQUE INDEX IF NOT EXISTS idx_users_cashier_slug_unique ON users (cashier_slug) WHERE cashier_slug IS NOT NULL AND cashier_slug <> ''`);
   await q(`CREATE UNIQUE INDEX IF NOT EXISTS idx_module_usage_tenant_module ON module_usage (tenant_id, module_key) WHERE demo_lead_id IS NULL`);
   await q(`CREATE UNIQUE INDEX IF NOT EXISTS idx_module_usage_lead_module ON module_usage (demo_lead_id, module_key) WHERE demo_lead_id IS NOT NULL`);
@@ -731,13 +755,14 @@ async function createTenantSchema(slug) {
   `);
 }
 
-async function ensureTenantDefaults(slug, businessName = slug) {
+async function ensureTenantDefaults(slug, businessName = slug, regional = {}) {
   const t = tdb(slug);
   const defaults = {
     business_name: businessName,
     welcome_message: `¡Hola! 👋 Bienvenido a ${businessName}. Soy tu asistente virtual y estoy aquí para tomar tu pedido.`,
     whatsapp: '',
-    currency: 'MXN',
+    currency: regional.currency || 'MXN',
+    timezone: regional.timezone || 'America/Mexico_City',
     address: '',
     hours: '',
     delivery_enabled: '1',
@@ -766,9 +791,14 @@ async function ensureTenantDefaults(slug, businessName = slug) {
     ticket_mobile_zoom_percent: '100',
     pos_catalog_sort_mode: 'top_sold',
   };
-  for (const [k, v] of Object.entries(defaults)) {
-    await t.run('INSERT INTO {s}.settings (key, value) VALUES ($1, $2) ON CONFLICT (key) DO NOTHING', [k, v]);
-  }
+  const entries = Object.entries(defaults);
+  await t.run(
+    `INSERT INTO {s}.settings (key, value)
+     SELECT default_key, default_value
+     FROM unnest($1::text[], $2::text[]) AS defaults(default_key, default_value)
+     ON CONFLICT (key) DO NOTHING`,
+    [entries.map(([key]) => key), entries.map(([, value]) => value)]
+  );
 }
 
 async function getSetting(t, key, fallback = '') {
@@ -821,9 +851,9 @@ async function refreshTenantBillingStatuses() {
   };
 }
 
-async function initTenantDefaults(slug, businessName) {
+async function initTenantDefaults(slug, businessName, regional = {}) {
   await createTenantSchema(slug);
-  await ensureTenantDefaults(slug, businessName);
+  await ensureTenantDefaults(slug, businessName, regional);
   const t = tdb(slug);
   return t;
 }

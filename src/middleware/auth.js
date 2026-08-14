@@ -1,6 +1,7 @@
 const jwt = require('jsonwebtoken');
 const config = require('../config');
 const { q, tdb } = require('../db');
+const { normalizeTimeZone } = require('../utils/regional');
 
 const COOKIE_NAME = 'cbp_token';
 const OWNER_COOKIE_NAME = 'cbp_owner_token';
@@ -95,17 +96,24 @@ async function requireAuth(req, res, next) {
       audience: `cbp:${tokenScope}`,
     });
     if (payload.typ !== tokenScope) return res.status(401).json({ error: 'Sesión inválida o expirada' });
-    const userResult = await q('SELECT * FROM users WHERE id = $1', [payload.uid]);
-    const authUser = userResult.rows[0];
+    const authResult = await q(
+      `SELECT row_to_json(u) AS auth_user, row_to_json(t) AS tenant
+       FROM users u
+       LEFT JOIN tenants t ON t.id = u.tenant_id AND t.id = $2
+       WHERE u.id = $1
+       LIMIT 1`,
+      [payload.uid, payload.tid]
+    );
+    const authUser = authResult.rows[0]?.auth_user;
+    const tenant = authResult.rows[0]?.tenant;
     if (!authUser || !Number(authUser.active)) {
       return res.status(401).json({ error: 'Usuario inactivo o no encontrado' });
     }
-    const { rows } = await q('SELECT * FROM tenants WHERE id = $1', [payload.tid]);
-    if (!rows[0]) return res.status(401).json({ error: 'Tenant no encontrado' });
-    if (rows[0].account_status !== 'active') {
+    if (!tenant) return res.status(401).json({ error: 'Tenant no encontrado' });
+    if (tenant.account_status !== 'active') {
       return res.status(403).json({ error: 'La cuenta del negocio está inactiva. Contacta al administrador.' });
     }
-    if (rows[0].billing_status === 'suspended') {
+    if (tenant.billing_status === 'suspended') {
       return res.status(403).json({
         error: 'Suspendido por falta de pago. Ponte en contacto con tu asesor.',
         errorCode: 'BILLING_SUSPENDED',
@@ -113,8 +121,10 @@ async function requireAuth(req, res, next) {
         whatsappUrl: supportWhatsappUrl(),
       });
     }
-    req.tenant = rows[0];
-    req.tdb = tdb(rows[0].slug); // schema aislado del tenant autenticado
+    req.tenant = tenant;
+    req.tdb = tdb(tenant.slug); // schema aislado del tenant autenticado
+    req.timezone = normalizeTimeZone(tenant.timezone);
+    req.tdb.timezone = req.timezone;
     let branchName = '';
     const branchId = Number.isInteger(Number(authUser.branch_id)) && Number(authUser.branch_id) > 0 ? Number(authUser.branch_id) : null;
     if (branchId) {
@@ -123,8 +133,8 @@ async function requireAuth(req, res, next) {
     }
     req.user = {
       uid: authUser.id,
-      tid: rows[0].id,
-      slug: rows[0].slug,
+      tid: tenant.id,
+      slug: tenant.slug,
       username: authUser.username,
       role: authUser.role || 'owner',
       displayName: authUser.display_name || authUser.username,
@@ -132,6 +142,7 @@ async function requireAuth(req, res, next) {
       branchName,
       cashierSlug: authUser.cashier_slug || '',
       active: Number(authUser.active || 0),
+      onboardingCompleted: Number(authUser.onboarding_completed || 0) === 1,
       demoLeadId: Number.isInteger(Number(payload.dlid)) && Number(payload.dlid) > 0 ? Number(payload.dlid) : null,
       impersonated: payload.imp === true,
     };

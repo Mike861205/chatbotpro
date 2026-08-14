@@ -175,6 +175,7 @@ router.post('/orders', async (req, res, next) => {
 
 router.get('/orders', async (req, res, next) => {
   try {
+    const TZ = req.timezone;
     res.set('Cache-Control','no-store');
     const params=[]; const where=[];
     const start=validDate(req.query.startDate); const end=validDate(req.query.endDate);
@@ -338,7 +339,7 @@ router.get('/transfer-stock', async (req, res, next) => {
 });
 
 router.get('/transfers',async(req,res,next)=>{
-  try{const rows=await req.tdb.all(`SELECT it.*,to_char(it.created_at AT TIME ZONE '${TZ}','DD/MM/YYYY HH24:MI') AS created_at FROM {s}.inventory_transfers it ORDER BY it.id DESC LIMIT 300`);const ids=rows.map(r=>Number(r.id));const itemRows=ids.length?await req.tdb.all(`SELECT * FROM {s}.inventory_transfer_items WHERE transfer_id=ANY($1::int[]) ORDER BY id`,[ids]):[];const map=new Map();for(const item of itemRows){if(!map.has(Number(item.transfer_id)))map.set(Number(item.transfer_id),[]);map.get(Number(item.transfer_id)).push({productId:Number(item.product_id),productName:item.product_name,quantity:Number(item.quantity)});}res.json(rows.map(row=>({...row,id:Number(row.id),from_branch_id:Number(row.from_branch_id),to_branch_id:Number(row.to_branch_id),items:map.get(Number(row.id))||[]})));}catch(error){next(error);}
+  try{const TZ=req.timezone;const rows=await req.tdb.all(`SELECT it.*,to_char(it.created_at AT TIME ZONE '${TZ}','DD/MM/YYYY HH24:MI') AS created_at FROM {s}.inventory_transfers it ORDER BY it.id DESC LIMIT 300`);const ids=rows.map(r=>Number(r.id));const itemRows=ids.length?await req.tdb.all(`SELECT * FROM {s}.inventory_transfer_items WHERE transfer_id=ANY($1::int[]) ORDER BY id`,[ids]):[];const map=new Map();for(const item of itemRows){if(!map.has(Number(item.transfer_id)))map.set(Number(item.transfer_id),[]);map.get(Number(item.transfer_id)).push({productId:Number(item.product_id),productName:item.product_name,quantity:Number(item.quantity)});}res.json(rows.map(row=>({...row,id:Number(row.id),from_branch_id:Number(row.from_branch_id),to_branch_id:Number(row.to_branch_id),items:map.get(Number(row.id))||[]})));}catch(error){next(error);}
 });
 
 router.post('/transfers', async (req, res, next) => {
@@ -429,13 +430,13 @@ router.post('/transfers', async (req, res, next) => {
 });
 
 router.get('/report',async(req,res,next)=>{
-  try{res.set('Cache-Control','no-store');const start=validDate(req.query.startDate),end=validDate(req.query.endDate);if(!start||!end||start>end)return res.status(400).json({error:'Rango de fechas inválido'});const params=[start,end];let branchClause='';if(Number(req.query.branch)>0){params.push(Number(req.query.branch));branchClause=`AND po.branch_id=$${params.length}`;}
+  try{const TZ=req.timezone;res.set('Cache-Control','no-store');const start=validDate(req.query.startDate),end=validDate(req.query.endDate);if(!start||!end||start>end)return res.status(400).json({error:'Rango de fechas inválido'});const params=[start,end];let branchClause='';if(Number(req.query.branch)>0){params.push(Number(req.query.branch));branchClause=`AND po.branch_id=$${params.length}`;}
     const rows=await req.tdb.all(`SELECT po.id,po.order_number,po.supplier_name,po.branch_name,po.total::float AS total,to_char(po.received_at AT TIME ZONE '${TZ}','YYYY-MM-DD') AS purchase_date,poi.product_id,poi.product_name,poi.quantity::float AS quantity,poi.unit_cost::float AS unit_cost,poi.line_total::float AS line_total FROM {s}.purchase_orders po JOIN {s}.purchase_order_items poi ON poi.purchase_order_id=po.id WHERE po.status='received' AND (po.received_at AT TIME ZONE '${TZ}')::date BETWEEN $1::date AND $2::date ${branchClause} ORDER BY po.received_at,po.id,poi.id`,params);
     const seriesMap=new Map(),productMap=new Map(),orderSet=new Set();for(const row of rows){orderSet.add(Number(row.id));const day=row.purchase_date;const series=seriesMap.get(day)||{date:day,total:0,quantity:0,orders:new Set()};series.total+=Number(row.line_total);series.quantity+=Number(row.quantity);series.orders.add(Number(row.id));seriesMap.set(day,series);const key=Number(row.product_id);const product=productMap.get(key)||{productId:key,productName:row.product_name,quantity:0,total:0,orders:new Set()};product.quantity+=Number(row.quantity);product.total+=Number(row.line_total);product.orders.add(Number(row.id));productMap.set(key,product);}
     const total=money(rows.reduce((sum,row)=>sum+Number(row.line_total),0));const quantity=Number(rows.reduce((sum,row)=>sum+Number(row.quantity),0).toFixed(4));res.json({filters:{startDate:start,endDate:end,branch:String(req.query.branch||'all')},summary:{total,quantity,orders:orderSet.size,products:productMap.size,averageOrder:orderSet.size?money(total/orderSet.size):0},series:[...seriesMap.values()].map(r=>({date:r.date,total:money(r.total),quantity:Number(r.quantity.toFixed(4)),orders:r.orders.size})),products:[...productMap.values()].map(r=>({productId:r.productId,productName:r.productName,quantity:Number(r.quantity.toFixed(4)),total:money(r.total),orders:r.orders.size})).sort((a,b)=>b.total-a.total)});
   }catch(error){next(error);}
 });
 
-router.get('/audit/:entity/:id',async(req,res,next)=>{try{const entity=['purchase_order','supplier','transfer'].includes(req.params.entity)?req.params.entity:'';if(!entity)return res.status(400).json({error:'Entidad inválida'});const rows=await req.tdb.all(`SELECT id,action,payload,actor,to_char(created_at AT TIME ZONE '${TZ}','DD/MM/YYYY HH24:MI') AS created_at FROM {s}.purchase_audit_log WHERE entity_type=$1 AND entity_id=$2 ORDER BY id DESC`,[entity,Number(req.params.id)]);res.json(rows.map(row=>({...row,id:Number(row.id),payload:(()=>{try{return JSON.parse(row.payload||'{}')}catch{return{}}})()})));}catch(error){next(error);}});
+router.get('/audit/:entity/:id',async(req,res,next)=>{try{const TZ=req.timezone;const entity=['purchase_order','supplier','transfer'].includes(req.params.entity)?req.params.entity:'';if(!entity)return res.status(400).json({error:'Entidad inválida'});const rows=await req.tdb.all(`SELECT id,action,payload,actor,to_char(created_at AT TIME ZONE '${TZ}','DD/MM/YYYY HH24:MI') AS created_at FROM {s}.purchase_audit_log WHERE entity_type=$1 AND entity_id=$2 ORDER BY id DESC`,[entity,Number(req.params.id)]);res.json(rows.map(row=>({...row,id:Number(row.id),payload:(()=>{try{return JSON.parse(row.payload||'{}')}catch{return{}}})()})));}catch(error){next(error);}});
 
 module.exports=router;

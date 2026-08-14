@@ -4,6 +4,7 @@ const { q, tdb } = require('../db');
 const { requireAuth, requireOwner } = require('../middleware/auth');
 const { decrypt } = require('../utils/crypto');
 const { operationalOrderNote } = require('../utils/orderNotes');
+const { normalizeTimeZone } = require('../utils/regional');
 
 const router = express.Router();
 const KDS_STATUSES = new Set(['pending', 'preparing', 'ready', 'completed']);
@@ -50,13 +51,15 @@ function publicAreaPath(slug, token) {
 
 async function resolvePublicArea(slug, token) {
   const tenantResult = await q(
-    `SELECT id, slug, business_name, logo, primary_color, account_status, billing_status
+    `SELECT id, slug, business_name, logo, primary_color, account_status, billing_status, timezone
      FROM tenants WHERE slug = $1 LIMIT 1`,
     [cleanSlug(slug)]
   );
   const tenant = tenantResult.rows[0];
   if (!tenant || tenant.account_status !== 'active' || tenant.billing_status === 'suspended') return null;
   const tenantDb = tdb(tenant.slug);
+  tenant.timezone = normalizeTimeZone(tenant.timezone);
+  tenantDb.timezone = tenant.timezone;
   const area = await tenantDb.get(
     `SELECT a.id, a.name, a.branch_id, a.color, a.active, b.name AS branch_name
      FROM {s}.kds_areas a
@@ -99,7 +102,7 @@ async function buildKdsPayload(tenant, tenantDb, area) {
        LEFT JOIN {s}.kds_ticket_states s ON s.order_id = o.id AND s.area_id = $1
        WHERE o.status <> 'cancelado'
          AND o.table_account_id IS NULL
-         AND (o.created_at AT TIME ZONE 'America/Mexico_City')::date = (now() AT TIME ZONE 'America/Mexico_City')::date
+         AND (o.created_at AT TIME ZONE '${tenant.timezone}')::date = (now() AT TIME ZONE '${tenant.timezone}')::date
          AND ($2::int IS NULL OR o.service_branch_id = $2 OR o.pickup_branch_id = $2)
        ORDER BY o.created_at ASC`,
       [area.id, area.branch_id || null]
@@ -115,12 +118,12 @@ async function buildKdsPayload(tenant, tenantDb, area) {
        JOIN {s}.table_accounts ta ON ta.id = tr.account_id
        LEFT JOIN {s}.branches b ON b.id = NULLIF(ta.branch_id, 0)
        LEFT JOIN {s}.kds_ticket_states s ON s.order_id = -tr.id AND s.area_id = $1
-       WHERE (tr.created_at AT TIME ZONE 'America/Mexico_City')::date = (now() AT TIME ZONE 'America/Mexico_City')::date
+       WHERE (tr.created_at AT TIME ZONE '${tenant.timezone}')::date = (now() AT TIME ZONE '${tenant.timezone}')::date
          AND ($2::int IS NULL OR ta.branch_id = $2)
        ORDER BY tr.created_at ASC`,
       [area.id, area.branch_id || null]
     ),
-    tenantDb.all("SELECT key, value FROM {s}.settings WHERE key IN ('business_name','currency')"),
+    tenantDb.all("SELECT key, value FROM {s}.settings WHERE key IN ('business_name','currency','timezone')"),
   ]);
 
   const parsedOrders = [...orderRows, ...tableRoundRows].map((row) => ({ ...row, parsedItems: parseItems(row.items) }));
@@ -208,6 +211,7 @@ async function buildKdsPayload(tenant, tenantDb, area) {
       logo: tenant.logo || '',
       primaryColor: tenant.primary_color || '#ff6b35',
       currency: settings.currency || 'MXN',
+      timezone: tenant.timezone,
     },
     area: {
       id: Number(area.id),

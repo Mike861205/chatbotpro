@@ -540,7 +540,7 @@ router.get('/movements', async (req, res, next) => {
                 m.unit_cost::float AS unit_cost, m.total_cost::float AS total_cost,
                 m.notes, m.created_by, COALESCE(m.source_type, 'manual') AS source_type,
                 m.purchase_order_id, m.branch_id, COALESCE(b.name, '') AS branch_name,
-                to_char(m.created_at AT TIME ZONE 'America/Mexico_City', 'DD/MM/YYYY HH24:MI') AS created_at
+                to_char(m.created_at AT TIME ZONE '${req.timezone}', 'DD/MM/YYYY HH24:MI') AS created_at
          FROM {s}.inventory_movements m
          JOIN {s}.products p ON p.id = m.product_id
          LEFT JOIN {s}.branches b ON b.id = m.branch_id
@@ -559,7 +559,7 @@ router.get('/movements', async (req, res, next) => {
                 m.unit_cost::float AS unit_cost, m.total_cost::float AS total_cost,
                 m.notes, m.created_by, COALESCE(m.source_type, 'manual') AS source_type,
                 m.purchase_order_id, m.branch_id, COALESCE(b.name, '') AS branch_name,
-                to_char(m.created_at AT TIME ZONE 'America/Mexico_City', 'DD/MM/YYYY HH24:MI') AS created_at
+                to_char(m.created_at AT TIME ZONE '${req.timezone}', 'DD/MM/YYYY HH24:MI') AS created_at
          FROM {s}.inventory_movements m
          JOIN {s}.products p ON p.id = m.product_id
          LEFT JOIN {s}.branches b ON b.id = m.branch_id
@@ -636,7 +636,7 @@ router.get('/count-history', async (req, res, next) => {
     const rows = await t.all(
       `SELECT ic.id, ic.product_id, p.name AS product_name, ic.physical_qty::float AS physical_qty,
               ic.notes, ic.counted_by,
-              to_char(ic.counted_at AT TIME ZONE 'America/Mexico_City', 'DD/MM/YYYY HH24:MI') AS counted_at
+              to_char(ic.counted_at AT TIME ZONE '${req.timezone}', 'DD/MM/YYYY HH24:MI') AS counted_at
        FROM {s}.inventory_counts ic
        JOIN {s}.products p ON p.id = ic.product_id
        WHERE ic.product_id = $1 ${branchId ? 'AND ic.branch_id=$2' : 'AND ic.branch_id IS NULL'} ORDER BY ic.counted_at DESC LIMIT 50`,
@@ -657,7 +657,7 @@ router.get('/export', async (req, res, next) => {
     let movSql =
       `SELECT m.id, m.product_id, p.name AS product_name, m.type, m.quantity::float AS quantity,
               m.notes, m.created_by, COALESCE(m.source_type, 'manual') AS source_type,
-              to_char(m.created_at AT TIME ZONE 'America/Mexico_City', 'DD/MM/YYYY HH24:MI') AS created_at
+              to_char(m.created_at AT TIME ZONE '${req.timezone}', 'DD/MM/YYYY HH24:MI') AS created_at
        FROM {s}.inventory_movements m
        JOIN {s}.products p ON p.id = m.product_id
        WHERE 1=1`;
@@ -674,7 +674,7 @@ router.get('/export', async (req, res, next) => {
       t.all(movSql, movParams),
       t.all(
         `SELECT DISTINCT ON (product_id) id, product_id, physical_qty::float AS physical_qty, notes, counted_by,
-                to_char(counted_at AT TIME ZONE 'America/Mexico_City', 'DD/MM/YYYY HH24:MI') AS counted_at
+                to_char(counted_at AT TIME ZONE '${req.timezone}', 'DD/MM/YYYY HH24:MI') AS counted_at
          FROM {s}.inventory_counts ${branchId?'WHERE branch_id=$1':'WHERE branch_id IS NULL'} ORDER BY product_id, counted_at DESC`, branchId?[branchId]:[]
       ),
       getInventoryGlobalBaseline(t),

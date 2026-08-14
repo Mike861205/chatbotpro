@@ -128,7 +128,7 @@ router.get('/expenses', async (req, res, next) => {
          SELECT e.id, 'manual'::text AS source, e.expense_date,
                 e.branch_id, COALESCE(NULLIF(e.branch_name, ''), b.name, 'Sin sucursal') AS branch_name,
                 e.concept, e.amount::float AS amount, e.notes, e.created_by,
-                to_char(e.created_at AT TIME ZONE 'America/Mexico_City', 'DD/MM/YYYY HH24:MI') AS created_at
+                to_char(e.created_at AT TIME ZONE '${req.timezone}', 'DD/MM/YYYY HH24:MI') AS created_at
          FROM {s}.business_expenses e
          LEFT JOIN {s}.branches b ON b.id = e.branch_id
          WHERE EXTRACT(YEAR FROM e.expense_date)::int = $1
@@ -136,17 +136,17 @@ router.get('/expenses', async (req, res, next) => {
            ${manualBranch}
          UNION ALL
          SELECT -m.id AS id, 'pos'::text AS source,
-                (m.created_at AT TIME ZONE 'America/Mexico_City')::date AS expense_date,
+                (m.created_at AT TIME ZONE '${req.timezone}')::date AS expense_date,
                 ps.branch_id, COALESCE(NULLIF(ps.branch_name, ''), b.name, 'Sin sucursal') AS branch_name,
                 COALESCE(NULLIF(m.note, ''), 'Gasto de caja') AS concept,
                 m.amount::float AS amount, ''::text AS notes, m.created_by,
-                to_char(m.created_at AT TIME ZONE 'America/Mexico_City', 'DD/MM/YYYY HH24:MI') AS created_at
+                to_char(m.created_at AT TIME ZONE '${req.timezone}', 'DD/MM/YYYY HH24:MI') AS created_at
          FROM {s}.pos_cash_movements m
          JOIN {s}.pos_sessions ps ON ps.id = m.session_id
          LEFT JOIN {s}.branches b ON b.id = ps.branch_id
          WHERE m.kind = 'expense'
-           AND EXTRACT(YEAR FROM m.created_at AT TIME ZONE 'America/Mexico_City')::int = $1
-           AND EXTRACT(MONTH FROM m.created_at AT TIME ZONE 'America/Mexico_City')::int = $2
+           AND EXTRACT(YEAR FROM m.created_at AT TIME ZONE '${req.timezone}')::int = $1
+           AND EXTRACT(MONTH FROM m.created_at AT TIME ZONE '${req.timezone}')::int = $2
            ${posBranch}
        ) expenses
        ORDER BY expense_date DESC, id DESC`,

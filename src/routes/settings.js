@@ -1,7 +1,8 @@
 const express = require('express');
-const { q, getSetting, setSetting } = require('../db');
+const { q, setSetting } = require('../db');
 const { requireAuth, requireOwner } = require('../middleware/auth');
 const { createImageUpload, deleteManagedUpload, optimizeUploadedImage, safeUnlink } = require('../utils/uploads');
+const { CURRENCIES, TIME_ZONES, regionalDefaults, isSupportedCurrency, isSupportedTimeZone } = require('../utils/regional');
 
 const router = express.Router();
 router.use(requireAuth);
@@ -17,6 +18,7 @@ const SETTING_KEYS = [
   'welcome_message',
   'whatsapp',
   'currency',
+  'timezone',
   'address',
   'hours',
   'delivery_enabled',
@@ -73,8 +75,16 @@ function normalizeBankAccounts(raw) {
 
 router.get('/', async (req, res, next) => {
   try {
-    const out = {};
-    for (const k of SETTING_KEYS) out[k] = await getSetting(req.tdb, k);
+    const out = Object.fromEntries(SETTING_KEYS.map((key) => [key, '']));
+    const rows = await req.tdb.all(
+      'SELECT key, value FROM {s}.settings WHERE key = ANY($1::text[])',
+      [SETTING_KEYS]
+    );
+    for (const row of rows) out[row.key] = row.value;
+    const automatic = regionalDefaults(req.tenant.phone_country);
+    out.currency = out.currency || automatic.currency;
+    out.timezone = out.timezone || req.tenant.timezone || automatic.timezone;
+    out.regional = { currencies: CURRENCIES, timezones: TIME_ZONES, country: req.tenant.phone_country || '' };
     out.logo = req.tenant.logo;
     out.primary_color = req.tenant.primary_color;
     out.slug = req.tenant.slug;
@@ -87,6 +97,14 @@ router.put('/', upload.single('logo'), async (req, res, next) => {
   try {
     if (req.user.role !== 'owner') return res.status(403).json({ error: 'No tienes permiso para modificar la configuración' });
     const body = req.body || {};
+    if (body.currency !== undefined) {
+      body.currency = String(body.currency || '').trim().toUpperCase();
+      if (!isSupportedCurrency(body.currency)) return res.status(400).json({ error: 'Selecciona una moneda válida' });
+    }
+    if (body.timezone !== undefined) {
+      body.timezone = String(body.timezone || '').trim();
+      if (!isSupportedTimeZone(body.timezone)) return res.status(400).json({ error: 'Selecciona una zona horaria válida' });
+    }
     if (body.chatbot_bank_accounts_json !== undefined) {
       try {
         body.chatbot_bank_accounts_json = JSON.stringify(normalizeBankAccounts(body.chatbot_bank_accounts_json));
@@ -102,6 +120,9 @@ router.put('/', upload.single('logo'), async (req, res, next) => {
     }
     if (body.primary_color && /^#[0-9a-fA-F]{6}$/.test(body.primary_color)) {
       await q('UPDATE tenants SET primary_color = $1 WHERE id = $2', [body.primary_color, req.tenant.id]);
+    }
+    if (body.timezone) {
+      await q('UPDATE tenants SET timezone = $1 WHERE id = $2', [body.timezone, req.tenant.id]);
     }
     if (req.file) {
       nextLogoPath = await optimizeUploadedImage(req.file, { scope: req.tenant.slug, outputPrefix: 'logo', maxWidth: 1200, quality: 82 });

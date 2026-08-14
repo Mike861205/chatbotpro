@@ -23,7 +23,7 @@ router.use(async (req, res, next) => {
 
 const PAYMENT_METHODS = new Set(['cash', 'card', 'transfer', 'mixed']);
 const MOVEMENT_KINDS = new Set(['income', 'withdrawal', 'expense']);
-const TZ = 'America/Mexico_City';
+const tenantTimeZone = (tenantDb) => tenantDb?.timezone || 'America/Mexico_City';
 const SALES_HISTORY_FILTERS = new Set(['today', 'week', 'month', 'custom']);
 const CHATBOT_IMPORTABLE_STATUSES = new Set(['pendiente', 'confirmado', 'preparando', 'enviado']);
 
@@ -86,7 +86,7 @@ async function listTableRounds(t, accountIds = []) {
   if (!ids.length) return [];
   const rows = await t.all(
     `SELECT id, account_id, round_number, items, subtotal::float AS subtotal, notes, created_by,
-            to_char(created_at AT TIME ZONE '${TZ}', 'DD Mon YYYY, HH24:MI') AS created_at
+            to_char(created_at AT TIME ZONE '${tenantTimeZone(t)}', 'DD Mon YYYY, HH24:MI') AS created_at
      FROM {s}.table_rounds
      WHERE account_id = ANY($1::int[])
      ORDER BY account_id, round_number`,
@@ -100,8 +100,8 @@ async function getTableAccountWithRounds(t, accountId) {
     `SELECT id, table_id, table_number, table_label, branch_id, waiter_name, items,
             subtotal::float AS subtotal, total::float AS total, status, opened_session_id,
             closed_session_id, order_id, opened_by, closed_by,
-            to_char(opened_at AT TIME ZONE '${TZ}', 'DD Mon YYYY, HH24:MI') AS opened_at,
-            to_char(closed_at AT TIME ZONE '${TZ}', 'DD Mon YYYY, HH24:MI') AS closed_at
+            to_char(opened_at AT TIME ZONE '${tenantTimeZone(t)}', 'DD Mon YYYY, HH24:MI') AS opened_at,
+            to_char(closed_at AT TIME ZONE '${tenantTimeZone(t)}', 'DD Mon YYYY, HH24:MI') AS closed_at
      FROM {s}.table_accounts WHERE id = $1 LIMIT 1`,
     [accountId]
   );
@@ -114,8 +114,8 @@ async function getSessionTableSummary(t, sessionId) {
   const branchId = Number(session?.branch_id || 0);
   const closedRows = await t.all(
     `SELECT id, table_number, table_label, waiter_name, total::float AS total, order_id,
-            to_char(opened_at AT TIME ZONE '${TZ}', 'DD Mon YYYY, HH24:MI') AS opened_at,
-            to_char(closed_at AT TIME ZONE '${TZ}', 'DD Mon YYYY, HH24:MI') AS closed_at
+            to_char(opened_at AT TIME ZONE '${tenantTimeZone(t)}', 'DD Mon YYYY, HH24:MI') AS opened_at,
+            to_char(closed_at AT TIME ZONE '${tenantTimeZone(t)}', 'DD Mon YYYY, HH24:MI') AS closed_at
      FROM {s}.table_accounts
      WHERE closed_session_id = $1 AND status = 'closed'
      ORDER BY closed_at, table_number`,
@@ -123,7 +123,7 @@ async function getSessionTableSummary(t, sessionId) {
   );
   const openRows = await t.all(
     `SELECT id, table_number, table_label, waiter_name, items, subtotal::float AS subtotal, total::float AS total,
-            to_char(opened_at AT TIME ZONE '${TZ}', 'DD Mon YYYY, HH24:MI') AS opened_at
+            to_char(opened_at AT TIME ZONE '${tenantTimeZone(t)}', 'DD Mon YYYY, HH24:MI') AS opened_at
      FROM {s}.table_accounts
      WHERE status = 'open' AND branch_id = $1
      ORDER BY table_number`,
@@ -163,8 +163,8 @@ async function getOpenSession(t, { forUsername = null, forBranchId = null } = {}
             expected_amount::float AS expected_amount, difference_amount::float AS difference_amount,
             branch_id, branch_name,
             notes, opened_by, closed_by,
-            to_char(opened_at AT TIME ZONE '${TZ}', 'DD Mon YYYY, HH24:MI') AS opened_at,
-            to_char(closed_at AT TIME ZONE '${TZ}', 'DD Mon YYYY, HH24:MI') AS closed_at
+            to_char(opened_at AT TIME ZONE '${tenantTimeZone(t)}', 'DD Mon YYYY, HH24:MI') AS opened_at,
+            to_char(closed_at AT TIME ZONE '${tenantTimeZone(t)}', 'DD Mon YYYY, HH24:MI') AS closed_at
      FROM {s}.pos_sessions`;
 
   const branchId = Number.isInteger(Number(forBranchId)) && Number(forBranchId) > 0 ? Number(forBranchId) : null;
@@ -182,8 +182,8 @@ async function getLastClosedSession(t, { forUsername = null, forBranchId = null 
             expected_amount::float AS expected_amount, difference_amount::float AS difference_amount,
             branch_id, branch_name,
             notes, opened_by, closed_by,
-            to_char(opened_at AT TIME ZONE '${TZ}', 'DD Mon YYYY, HH24:MI') AS opened_at,
-            to_char(closed_at AT TIME ZONE '${TZ}', 'DD Mon YYYY, HH24:MI') AS closed_at
+            to_char(opened_at AT TIME ZONE '${tenantTimeZone(t)}', 'DD Mon YYYY, HH24:MI') AS opened_at,
+            to_char(closed_at AT TIME ZONE '${tenantTimeZone(t)}', 'DD Mon YYYY, HH24:MI') AS closed_at
      FROM {s}.pos_sessions`;
 
   const branchId = Number.isInteger(Number(forBranchId)) && Number(forBranchId) > 0 ? Number(forBranchId) : null;
@@ -336,7 +336,7 @@ async function loadChatbotOrderForImport(t, orderId) {
     `SELECT o.id, o.customer_id, o.items, o.total::float AS total, o.status, o.channel, o.delivery, o.notes, o.order_notes,
             o.payment_method, o.pickup_branch_name, o.customer_location_text, o.customer_location_resolved,
             o.delivery_fee::float AS delivery_fee, o.delivery_zone_name, o.service_branch_id, o.service_branch_name,o.branch_stock_applied,
-            to_char(o.created_at AT TIME ZONE '${TZ}', 'DD Mon YYYY, HH24:MI') AS created_at,
+            to_char(o.created_at AT TIME ZONE '${tenantTimeZone(t)}', 'DD Mon YYYY, HH24:MI') AS created_at,
             c.name_enc, c.phone_enc, c.address_enc
      FROM {s}.orders o
      LEFT JOIN {s}.customers c ON c.id = o.customer_id
@@ -377,7 +377,7 @@ async function listRecentSales(t, sessionId = null) {
   const rows = await t.all(
     `SELECT id, total::float AS total, status, payment_method, payment_breakdown, cash_received::float AS cash_received,
             cash_change::float AS cash_change, COALESCE(NULLIF(order_notes, ''), notes) AS notes, items, table_account_id, table_number, waiter_name,
-            to_char(created_at AT TIME ZONE '${TZ}', 'DD Mon YYYY, HH24:MI') AS created_at
+            to_char(created_at AT TIME ZONE '${tenantTimeZone(t)}', 'DD Mon YYYY, HH24:MI') AS created_at
      FROM {s}.orders
      ${where}
      ORDER BY id DESC LIMIT $${params.length}`,
@@ -403,7 +403,7 @@ async function listSalesHistoryPage(t, options = {}) {
   const safePage = Math.max(1, Number(page) || 1);
   const safeSize = 10;
   const safeFilter = SALES_HISTORY_FILTERS.has(filter) ? filter : 'today';
-  const localCreatedAt = `(created_at AT TIME ZONE '${TZ}')`;
+  const localCreatedAt = `(created_at AT TIME ZONE '${tenantTimeZone(t)}')`;
 
   const params = [];
   const where = [`channel = 'pos'`];
@@ -414,20 +414,20 @@ async function listSalesHistoryPage(t, options = {}) {
   }
 
   if (safeFilter === 'today') {
-    where.push(`${localCreatedAt}::date = (now() AT TIME ZONE '${TZ}')::date`);
+    where.push(`${localCreatedAt}::date = (now() AT TIME ZONE '${tenantTimeZone(t)}')::date`);
   }
 
   if (safeFilter === 'week') {
     where.push(
-      `${localCreatedAt} >= date_trunc('week', now() AT TIME ZONE '${TZ}')`,
-      `${localCreatedAt} < date_trunc('week', now() AT TIME ZONE '${TZ}') + INTERVAL '1 week'`
+      `${localCreatedAt} >= date_trunc('week', now() AT TIME ZONE '${tenantTimeZone(t)}')`,
+      `${localCreatedAt} < date_trunc('week', now() AT TIME ZONE '${tenantTimeZone(t)}') + INTERVAL '1 week'`
     );
   }
 
   if (safeFilter === 'month') {
     where.push(
-      `${localCreatedAt} >= date_trunc('month', now() AT TIME ZONE '${TZ}')`,
-      `${localCreatedAt} < date_trunc('month', now() AT TIME ZONE '${TZ}') + INTERVAL '1 month'`
+      `${localCreatedAt} >= date_trunc('month', now() AT TIME ZONE '${tenantTimeZone(t)}')`,
+      `${localCreatedAt} < date_trunc('month', now() AT TIME ZONE '${tenantTimeZone(t)}') + INTERVAL '1 month'`
     );
   }
 
@@ -455,7 +455,7 @@ async function listSalesHistoryPage(t, options = {}) {
   const rows = await t.all(
     `SELECT id, total::float AS total, status, payment_method, payment_breakdown, cash_received::float AS cash_received,
             cash_change::float AS cash_change, COALESCE(NULLIF(order_notes, ''), notes) AS notes, items, table_account_id, table_number, waiter_name,
-            to_char(created_at AT TIME ZONE '${TZ}', 'DD Mon YYYY, HH24:MI') AS created_at
+            to_char(created_at AT TIME ZONE '${tenantTimeZone(t)}', 'DD Mon YYYY, HH24:MI') AS created_at
      FROM {s}.orders
      ${whereSql}
      ORDER BY id DESC
@@ -485,7 +485,7 @@ async function listRecentMovements(t, sessionId) {
   if (!sessionId) return [];
   return t.all(
     `SELECT id, kind, amount::float AS amount, note, created_by,
-            to_char(created_at AT TIME ZONE '${TZ}', 'DD Mon YYYY, HH24:MI') AS created_at
+            to_char(created_at AT TIME ZONE '${tenantTimeZone(t)}', 'DD Mon YYYY, HH24:MI') AS created_at
      FROM {s}.pos_cash_movements
      WHERE session_id = $1
      ORDER BY id DESC LIMIT 20`,
@@ -650,7 +650,7 @@ async function listRestaurantTables(t, session = null, includeDisabled = false) 
     `SELECT rt.id, rt.table_number, rt.label, rt.branch_id, rt.position_x, rt.position_y, rt.shape, rt.enabled,
             ta.id AS account_id, ta.waiter_name, ta.items, ta.subtotal::float AS account_subtotal,
             ta.total::float AS account_total,
-            to_char(ta.opened_at AT TIME ZONE '${TZ}', 'DD Mon YYYY, HH24:MI') AS account_opened_at
+            to_char(ta.opened_at AT TIME ZONE '${tenantTimeZone(t)}', 'DD Mon YYYY, HH24:MI') AS account_opened_at
      FROM {s}.restaurant_tables rt
      ${accountJoin}
      ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
@@ -1018,7 +1018,7 @@ router.get('/chatbot-orders', async (req, res, next) => {
        WHERE o.channel = 'chatbot'
          AND o.status = ANY($1::text[])
          ${branchFilter}
-         AND (o.created_at AT TIME ZONE '${TZ}')::date = (now() AT TIME ZONE '${TZ}')::date`,
+         AND (o.created_at AT TIME ZONE '${req.timezone}')::date = (now() AT TIME ZONE '${req.timezone}')::date`,
       countParams
     );
     const total = Number(totalRow?.c || 0);
@@ -1040,14 +1040,14 @@ router.get('/chatbot-orders', async (req, res, next) => {
       `SELECT o.id, o.items, o.total::float AS total, o.status, o.delivery, o.notes, o.order_notes, o.payment_method,
               o.pickup_branch_name, o.customer_location_text, o.customer_location_resolved,
               o.service_branch_id, o.service_branch_name,
-              to_char(o.created_at AT TIME ZONE '${TZ}', 'DD Mon YYYY, HH24:MI') AS created_at,
+              to_char(o.created_at AT TIME ZONE '${req.timezone}', 'DD Mon YYYY, HH24:MI') AS created_at,
               c.name_enc, c.phone_enc
        FROM {s}.orders o
        LEFT JOIN {s}.customers c ON c.id = o.customer_id
        WHERE o.channel = 'chatbot'
          AND o.status = ANY($1::text[])
          ${branchFilter}
-         AND (o.created_at AT TIME ZONE '${TZ}')::date = (now() AT TIME ZONE '${TZ}')::date
+         AND (o.created_at AT TIME ZONE '${req.timezone}')::date = (now() AT TIME ZONE '${req.timezone}')::date
        ORDER BY o.id ASC
        LIMIT $${limitIndex} OFFSET $${offsetIndex}`,
       rowParams
@@ -1102,7 +1102,7 @@ router.post('/chatbot-orders/:id/import', async (req, res, next) => {
       `SELECT 1 AS ok
        FROM {s}.orders
        WHERE id = $1
-         AND (created_at AT TIME ZONE '${TZ}')::date = (now() AT TIME ZONE '${TZ}')::date
+         AND (created_at AT TIME ZONE '${req.timezone}')::date = (now() AT TIME ZONE '${req.timezone}')::date
        LIMIT 1`,
       [id]
     );
@@ -1143,10 +1143,10 @@ router.post('/chatbot-orders/:id/import', async (req, res, next) => {
        WHERE id = $5
          AND channel = 'chatbot'
          AND status = ANY($6::text[])
-         AND (created_at AT TIME ZONE '${TZ}')::date = (now() AT TIME ZONE '${TZ}')::date
+         AND (created_at AT TIME ZONE '${req.timezone}')::date = (now() AT TIME ZONE '${req.timezone}')::date
        RETURNING id, total::float AS total, payment_method, payment_breakdown, cash_received::float AS cash_received,
                  cash_change::float AS cash_change, notes, order_notes, items,
-                 to_char(created_at AT TIME ZONE '${TZ}', 'DD Mon YYYY, HH24:MI') AS created_at`,
+                 to_char(created_at AT TIME ZONE '${req.timezone}', 'DD Mon YYYY, HH24:MI') AS created_at`,
       [session.id, paymentMethod, JSON.stringify(paymentBreakdown), mergedNote, id, Array.from(CHATBOT_IMPORTABLE_STATUSES), session.branch_id || null, session.branch_name || null, JSON.stringify(costedSourceItems), cogsTotal]
     );
 
@@ -1161,7 +1161,7 @@ router.post('/chatbot-orders/:id/import', async (req, res, next) => {
       `SELECT id, subtotal::float AS subtotal, total::float AS total, delivery_fee::float AS delivery_fee,
               status, payment_method, payment_breakdown, cash_received::float AS cash_received,
               cash_change::float AS cash_change, notes, order_notes, items,
-              to_char(created_at AT TIME ZONE '${TZ}', 'DD Mon YYYY, HH24:MI') AS created_at
+              to_char(created_at AT TIME ZONE '${req.timezone}', 'DD Mon YYYY, HH24:MI') AS created_at
        FROM {s}.orders
        WHERE id = $1`,
       [id]
@@ -1393,7 +1393,7 @@ router.post('/sales/:id/cancel', async (req, res, next) => {
     if (sale.status === 'cancelado') return res.status(409).json({ error: 'La venta ya está cancelada' });
 
     const reason = String(req.body?.reason || '').trim().slice(0, 180);
-    const stamp = new Date().toLocaleString('es-MX', { timeZone: TZ });
+    const stamp = new Date().toLocaleString('es-MX', { timeZone: req.timezone });
     const cancelText = reason
       ? `[CANCELADO ${stamp}] ${reason}`
       : `[CANCELADO ${stamp}] Cancelación manual en caja`;
@@ -1453,7 +1453,7 @@ router.put('/sales/:id/payment', async (req, res, next) => {
       `SELECT id, total::float AS total, status, payment_method, payment_breakdown,
               cash_received::float AS cash_received, cash_change::float AS cash_change,
               notes, items,
-              to_char(created_at AT TIME ZONE '${TZ}', 'DD Mon YYYY, HH24:MI') AS created_at
+              to_char(created_at AT TIME ZONE '${req.timezone}', 'DD Mon YYYY, HH24:MI') AS created_at
        FROM {s}.orders
        WHERE id = $1`,
       [id]
