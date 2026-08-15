@@ -753,18 +753,47 @@
                 <label class="switch"><input type="checkbox" id="botPickup" /><span class="track"></span></label>
               </div>
               <div class="toggle-row">
+                <div class="t-info"><i class="ph-bold ph-fork-knife"></i><div><b>Comer en sucursal</b><span>El cliente elige la sucursal donde consumirá</span></div></div>
+                <label class="switch"><input type="checkbox" id="botDineIn" /><span class="track"></span></label>
+              </div>
+              <div class="toggle-row">
                 <div class="t-info"><i class="ph-bold ph-map-pin-line"></i><div><b>Solicitar ubicación del cliente</b><span>Permite compartir ubicación al confirmar pedido</span></div></div>
                 <label class="switch"><input type="checkbox" id="botLocation" /><span class="track"></span></label>
+              </div>
+              <div class="field" style="margin-top:18px">
+                <label><i class="ph-bold ph-plus-circle"></i> Crear otra modalidad</label>
+                <div class="hint" style="margin-bottom:10px">Agrega opciones como “Autoservicio”, “Entrega programada” o cualquier modalidad propia.</div>
+                <input type="hidden" id="botReceivingModeId" />
+                <div class="row-2">
+                  <div class="field" style="margin:0">
+                    <label>Nombre del botón</label>
+                    <input type="text" id="botReceivingModeLabel" maxlength="42" placeholder="Ej. Pasar por autoservicio" />
+                  </div>
+                  <div class="field" style="margin:0">
+                    <label>Datos que solicitará</label>
+                    <select id="botReceivingModeBehavior">
+                      <option value="simple">Continuar sin datos adicionales</option>
+                      <option value="branch">Elegir una sucursal</option>
+                      <option value="delivery">Pedir domicilio de entrega</option>
+                    </select>
+                  </div>
+                </div>
+                <div class="upsell-actions-row" style="margin-top:10px">
+                  <button class="btn btn-ghost" type="button" id="botReceivingModeSaveBtn"><i class="ph-bold ph-plus-circle"></i> Agregar modalidad</button>
+                  <button class="btn btn-ghost" type="button" id="botReceivingModeNewBtn"><i class="ph-bold ph-broom"></i> Nueva</button>
+                </div>
+                <div class="hint" id="botReceivingModeHint" style="margin-top:8px">Las modalidades se publican al guardar el flujo.</div>
+                <div class="chatbot-info-options" id="botReceivingModesList" style="margin-top:10px"></div>
               </div>
               <div class="hint" style="margin-top:6px"><i class="ph ph-info"></i> Los cambios en estas opciones se guardan con el botón "Guardar flujo".</div>
           </div>
 
           <div class="card">
             <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
-              <h3><i class="ph-bold ph-buildings"></i> Sucursales de recogida</h3>
+              <h3><i class="ph-bold ph-buildings"></i> Sucursales para pedidos</h3>
               <button class="btn btn-primary" id="addBranchBtn"><i class="ph-bold ph-plus-circle"></i> Nueva sucursal</button>
             </div>
-            <div class="hint" style="margin-top:8px">El chatbot mostrará estas sucursales cuando el cliente elija "Recoger en sucursal".</div>
+            <div class="hint" style="margin-top:8px">El chatbot mostrará estas sucursales al recoger, comer en sucursal o usar una modalidad personalizada que solicite sucursal.</div>
             <div class="table-wrap" id="branchTable" style="margin-top:14px"></div>
           </div>
         </div>
@@ -989,7 +1018,7 @@
               </div>
               <div class="field">
                 <label><i class="ph-bold ph-credit-card"></i> Medios de pago en chatbot</label>
-                <div class="hint" style="margin-bottom:8px">Configura por separado los pagos para domicilio y para recoger en sucursal.</div>
+                <div class="hint" style="margin-bottom:8px">Configura por separado los pagos para domicilio y para las modalidades atendidas en sucursal o personalizadas.</div>
                 <div class="pay-method-group">
                   <b><i class="ph-bold ph-moped"></i> Servicio a domicilio</b>
                   <div class="pay-method-grid">
@@ -999,7 +1028,7 @@
                   </div>
                 </div>
                 <div class="pay-method-group">
-                  <b><i class="ph-bold ph-storefront"></i> Recoger en sucursal</b>
+                  <b><i class="ph-bold ph-storefront"></i> Sucursal y modalidades personalizadas</b>
                   <div class="pay-method-grid">
                     <label class="pay-method-chip"><input type="checkbox" id="cfgChatPayPickupCash" /> <span><i class="ph-bold ph-money"></i> Efectivo</span></label>
                     <label class="pay-method-chip"><input type="checkbox" id="cfgChatPayPickupTransfer" /> <span><i class="ph-bold ph-bank"></i> Transferencia</span></label>
@@ -1872,7 +1901,7 @@
       <div class="pos-tables-head">
         <div>
           <h3><i class="ph-bold ph-fork-knife"></i> Mesas del restaurante</h3>
-          <div class="hint">Selecciona una mesa libre para abrirla o una ocupada para continuar agregando consumos.</div>
+          <div class="hint" id="posTablesHint">Selecciona una mesa libre para abrirla o una ocupada para continuar agregando consumos.</div>
         </div>
         <button type="button" class="btn btn-ghost" id="posTablesClose"><i class="ph-bold ph-x"></i> Cerrar</button>
       </div>
@@ -1896,7 +1925,7 @@
         </div>
         <div class="modal-actions">
           <button type="button" class="btn btn-ghost" id="posTableOpenCancel">Cancelar</button>
-          <button type="submit" class="btn btn-primary"><i class="ph-bold ph-door-open"></i> Abrir mesa</button>
+          <button type="submit" class="btn btn-primary" id="posTableOpenSubmit"><i class="ph-bold ph-door-open"></i> Abrir mesa</button>
         </div>
       </form>
     </div>

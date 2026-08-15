@@ -155,6 +155,19 @@ async function initMaster() {
       created_by TEXT DEFAULT '',
       paid_at TIMESTAMPTZ DEFAULT now()
     );
+    CREATE TABLE IF NOT EXISTS resellers (
+      id SERIAL PRIMARY KEY,
+      slug TEXT UNIQUE NOT NULL,
+      display_name TEXT NOT NULL,
+      username TEXT UNIQUE NOT NULL,
+      password_hash TEXT NOT NULL,
+      contact_name TEXT DEFAULT '',
+      contact_phone TEXT DEFAULT '',
+      active INTEGER NOT NULL DEFAULT 1,
+      notes TEXT DEFAULT '',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
     CREATE TABLE IF NOT EXISTS module_usage (
       id SERIAL PRIMARY KEY,
       tenant_id INTEGER NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
@@ -190,6 +203,7 @@ async function initMaster() {
   await q(`ALTER TABLE tenants ADD COLUMN IF NOT EXISTS license_count INTEGER NOT NULL DEFAULT 1`);
   await q(`ALTER TABLE tenants ADD COLUMN IF NOT EXISTS branch_limit INTEGER NOT NULL DEFAULT 2`);
   await q(`ALTER TABLE tenants ADD COLUMN IF NOT EXISTS notes TEXT DEFAULT ''`);
+  await q(`ALTER TABLE tenants ADD COLUMN IF NOT EXISTS reseller_id INTEGER REFERENCES resellers(id) ON DELETE SET NULL`);
   await q(`ALTER TABLE tenants ADD COLUMN IF NOT EXISTS phone_country TEXT DEFAULT ''`);
   await q(`ALTER TABLE tenants ADD COLUMN IF NOT EXISTS phone_calling_code TEXT DEFAULT ''`);
   await q(`ALTER TABLE tenants ADD COLUMN IF NOT EXISTS timezone TEXT`);
@@ -230,6 +244,7 @@ async function initMaster() {
   await q(`ALTER TABLE demo_leads ADD COLUMN IF NOT EXISTS sales_stage TEXT NOT NULL DEFAULT 'new'`);
   await q(`ALTER TABLE demo_leads ADD COLUMN IF NOT EXISTS next_follow_up_at TIMESTAMPTZ`);
   await q(`ALTER TABLE demo_leads ADD COLUMN IF NOT EXISTS sales_updated_at TIMESTAMPTZ DEFAULT now()`);
+  await q(`ALTER TABLE demo_leads ADD COLUMN IF NOT EXISTS reseller_id INTEGER REFERENCES resellers(id) ON DELETE SET NULL`);
   await q(`CREATE UNIQUE INDEX IF NOT EXISTS idx_demo_leads_phone_hash_unique ON demo_leads (phone_hash)`);
   await q(`ALTER TABLE tenant_payments ADD COLUMN IF NOT EXISTS amount NUMERIC(12,2) NOT NULL DEFAULT 0`);
   await q(`ALTER TABLE tenant_payments ADD COLUMN IF NOT EXISTS method TEXT DEFAULT 'manual'`);
@@ -260,6 +275,8 @@ async function initMaster() {
   await q(`CREATE INDEX IF NOT EXISTS idx_module_usage_lead_last_seen ON module_usage (demo_lead_id, last_seen_at DESC) WHERE demo_lead_id IS NOT NULL`);
   await q(`CREATE INDEX IF NOT EXISTS idx_tenants_sales_stage ON tenants (sales_stage, next_follow_up_at) WHERE customer_since IS NULL`);
   await q(`CREATE INDEX IF NOT EXISTS idx_demo_leads_sales_stage ON demo_leads (sales_stage, next_follow_up_at)`);
+  await q(`CREATE INDEX IF NOT EXISTS idx_tenants_reseller ON tenants (reseller_id, created_at DESC)`);
+  await q(`CREATE INDEX IF NOT EXISTS idx_demo_leads_reseller ON demo_leads (reseller_id, last_seen_at DESC)`);
   await q(`CREATE INDEX IF NOT EXISTS idx_sales_followup_tenant ON sales_followup_activities (tenant_id, created_at DESC) WHERE tenant_id IS NOT NULL`);
   await q(`CREATE INDEX IF NOT EXISTS idx_sales_followup_demo_lead ON sales_followup_activities (demo_lead_id, created_at DESC) WHERE demo_lead_id IS NOT NULL`);
 
@@ -367,6 +384,11 @@ async function createTenantSchema(slug) {
       status TEXT DEFAULT 'pendiente',
       channel TEXT DEFAULT 'chatbot',
       delivery TEXT DEFAULT '',
+      receiving_mode_label TEXT DEFAULT '',
+      receiving_mode_behavior TEXT DEFAULT '',
+      delivery_address TEXT DEFAULT '',
+      delivery_neighborhood TEXT DEFAULT '',
+      delivery_reference TEXT DEFAULT '',
       notes TEXT DEFAULT '',
       order_notes TEXT DEFAULT '',
       created_at TIMESTAMPTZ DEFAULT now()
@@ -432,6 +454,9 @@ async function createTenantSchema(slug) {
       opened_session_id INTEGER,
       closed_session_id INTEGER,
       order_id INTEGER,
+      customer_name TEXT DEFAULT '',
+      customer_phone TEXT DEFAULT '',
+      source_channel TEXT DEFAULT '',
       opened_by TEXT DEFAULT '',
       closed_by TEXT DEFAULT '',
       opened_at TIMESTAMPTZ DEFAULT now(),
@@ -456,6 +481,9 @@ async function createTenantSchema(slug) {
       ON "${s}".table_accounts(table_id, branch_id) WHERE status = 'open';
     CREATE INDEX IF NOT EXISTS idx_${s}_table_accounts_session
       ON "${s}".table_accounts(closed_session_id, status, closed_at DESC);
+    ALTER TABLE "${s}".table_accounts ADD COLUMN IF NOT EXISTS customer_name TEXT DEFAULT '';
+    ALTER TABLE "${s}".table_accounts ADD COLUMN IF NOT EXISTS customer_phone TEXT DEFAULT '';
+    ALTER TABLE "${s}".table_accounts ADD COLUMN IF NOT EXISTS source_channel TEXT DEFAULT '';
     INSERT INTO "${s}".table_rounds (account_id, round_number, items, subtotal, notes, created_by, created_at)
     SELECT ta.id, 1, ta.items, ta.subtotal, 'Ronda inicial migrada', ta.opened_by, COALESCE(ta.updated_at, ta.opened_at)
     FROM "${s}".table_accounts ta
@@ -508,6 +536,11 @@ async function createTenantSchema(slug) {
     ALTER TABLE "${s}".orders ADD COLUMN IF NOT EXISTS customer_location_resolved TEXT;
     ALTER TABLE "${s}".orders ADD COLUMN IF NOT EXISTS delivery_fee NUMERIC(12,2) DEFAULT 0;
     ALTER TABLE "${s}".orders ADD COLUMN IF NOT EXISTS delivery_zone_name TEXT;
+    ALTER TABLE "${s}".orders ADD COLUMN IF NOT EXISTS receiving_mode_label TEXT DEFAULT '';
+    ALTER TABLE "${s}".orders ADD COLUMN IF NOT EXISTS receiving_mode_behavior TEXT DEFAULT '';
+    ALTER TABLE "${s}".orders ADD COLUMN IF NOT EXISTS delivery_address TEXT DEFAULT '';
+    ALTER TABLE "${s}".orders ADD COLUMN IF NOT EXISTS delivery_neighborhood TEXT DEFAULT '';
+    ALTER TABLE "${s}".orders ADD COLUMN IF NOT EXISTS delivery_reference TEXT DEFAULT '';
     ALTER TABLE "${s}".orders ADD COLUMN IF NOT EXISTS cancel_note TEXT;
     ALTER TABLE "${s}".orders ADD COLUMN IF NOT EXISTS payment_method TEXT DEFAULT '';
     ALTER TABLE "${s}".orders ADD COLUMN IF NOT EXISTS order_notes TEXT DEFAULT '';
@@ -767,6 +800,8 @@ async function ensureTenantDefaults(slug, businessName = slug, regional = {}) {
     hours: '',
     delivery_enabled: '1',
     pickup_enabled: '1',
+    dine_in_enabled: '1',
+    chatbot_receiving_modes_json: '[]',
     location_enabled: '1',
     chatbot_payment_delivery_cash: '1',
     chatbot_payment_delivery_transfer: '0',

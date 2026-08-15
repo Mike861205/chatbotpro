@@ -23,6 +23,8 @@ const SETTING_KEYS = [
   'hours',
   'delivery_enabled',
   'pickup_enabled',
+  'dine_in_enabled',
+  'chatbot_receiving_modes_json',
   'location_enabled',
   'chatbot_payment_delivery_cash',
   'chatbot_payment_delivery_transfer',
@@ -48,6 +50,29 @@ const SETTING_KEYS = [
   'ticket_mobile_zoom_percent',
   'pos_catalog_sort_mode',
 ];
+
+function normalizeReceivingModes(raw) {
+  let modes;
+  try {
+    modes = JSON.parse(String(raw || '[]'));
+  } catch {
+    throw new Error('La configuración de modalidades para recibir pedidos no es válida');
+  }
+  if (!Array.isArray(modes) || modes.length > 10) {
+    throw new Error('Puedes configurar hasta 10 modalidades personalizadas');
+  }
+  const used = new Set();
+  return modes.map((mode, index) => {
+    const label = String(mode?.label || '').trim().replace(/\s+/g, ' ').slice(0, 42);
+    const behavior = ['delivery', 'branch', 'simple'].includes(mode?.behavior) ? mode.behavior : 'simple';
+    let id = String(mode?.id || `custom_${index + 1}`).toLowerCase().replace(/[^a-z0-9_-]/g, '').slice(0, 36);
+    if (!id || ['domicilio', 'recoger', 'comer_sucursal'].includes(id)) id = `custom_${index + 1}`;
+    while (used.has(id)) id = `${id}_${index + 1}`.slice(0, 36);
+    used.add(id);
+    if (!label) throw new Error('Escribe el nombre de cada modalidad personalizada');
+    return { id, label, behavior, enabled: mode?.enabled !== false };
+  });
+}
 
 function normalizeBankAccounts(raw) {
   let accounts;
@@ -108,6 +133,13 @@ router.put('/', upload.single('logo'), async (req, res, next) => {
     if (body.chatbot_bank_accounts_json !== undefined) {
       try {
         body.chatbot_bank_accounts_json = JSON.stringify(normalizeBankAccounts(body.chatbot_bank_accounts_json));
+      } catch (error) {
+        return res.status(400).json({ error: error.message });
+      }
+    }
+    if (body.chatbot_receiving_modes_json !== undefined) {
+      try {
+        body.chatbot_receiving_modes_json = JSON.stringify(normalizeReceivingModes(body.chatbot_receiving_modes_json));
       } catch (error) {
         return res.status(400).json({ error: error.message });
       }

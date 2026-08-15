@@ -583,9 +583,11 @@ function renderOrder(order, isNew) {
     itemsHtml=raw.map(s=>`<li>${esc(s)}</li>`).join('')||'<li>—</li>';
   }
 
-  const tag=order.delivery==='domicilio'
-    ?`<span class="bub-tag tag-dom">🚚 Domicilio</span>`
-    :`<span class="bub-tag tag-rec">🏪 Recoger</span>`;
+  const isAddressDelivery=order.receivingModeBehavior==='delivery'||order.delivery==='domicilio';
+  const receivingLabel=order.receivingModeLabel||(isAddressDelivery?'Domicilio':order.delivery==='comer_sucursal'?'Comer en sucursal':'Recoger');
+  const tag=isAddressDelivery
+    ?`<span class="bub-tag tag-dom">🚚 ${esc(receivingLabel)}</span>`
+    :`<span class="bub-tag tag-rec">🏪 ${esc(receivingLabel)}</span>`;
 
   const waBtn=order.whatsappLink
     ?`<a class="btn-sm btn-wa" href="${esc(order.whatsappLink)}" target="_blank">💬 WhatsApp</a>`:'';

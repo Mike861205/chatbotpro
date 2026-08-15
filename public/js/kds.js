@@ -111,7 +111,7 @@
         ${ticket.customerName ? `<span><i class="ph-bold ph-user"></i> ${esc(ticket.customerName)}</span>` : ''}
         ${ticket.waiterName ? `<span><i class="ph-bold ph-identification-badge"></i> Mesero: ${esc(ticket.waiterName)}</span>` : ''}
         ${ticket.branchName ? `<span><i class="ph-bold ph-storefront"></i> ${esc(ticket.branchName)}</span>` : ''}
-        <span><i class="ph-bold ${ticket.delivery === 'domicilio' ? 'ph-scooter' : 'ph-shopping-bag-open'}"></i> ${esc(ticket.delivery || 'mostrador')}</span>
+        <span><i class="ph-bold ${ticket.receivingModeBehavior === 'delivery' || ticket.delivery === 'domicilio' ? 'ph-scooter' : (ticket.delivery === 'comer_sucursal' ? 'ph-fork-knife' : 'ph-shopping-bag-open')}"></i> ${esc(ticket.receivingModeLabel || ticket.delivery || 'mostrador')}</span>
         ${ticket.isMixed ? `<span class="mixed-badge"><i class="ph-bold ph-arrows-split"></i> Mixto: ${esc(routeNames || 'varias áreas')}</span>` : ''}
       </div>
       <ul class="ticket-items">${itemList(ticket.areaItems)}</ul>

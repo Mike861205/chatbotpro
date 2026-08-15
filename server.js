@@ -62,6 +62,7 @@ app.use('/api/cashiers', require('./src/routes/cashiers'));
 app.use('/api/pos', require('./src/routes/pos'));
 app.use('/api/chat', chatLimiter, require('./src/routes/chatbot'));
 app.use('/api/superadmin', require('./src/routes/superadmin'));
+app.use('/api/resellers', require('./src/routes/resellers'));
 app.use('/api/notifications', require('./src/routes/notifications'));
 app.use('/api/inventory', require('./src/routes/inventory'));
 app.use('/api/employees', require('./src/routes/employees'));
@@ -80,8 +81,18 @@ app.get('/caja/:slug', validSlug, page('cashier-login.html'));
 app.get('/kds/:slug/:token', validSlug, validKdsToken, page('kds.html'));
 app.get('/superadmin/login', page('superadmin-login.html'));
 app.get('/superadmin', page('superadmin.html'));
+app.get('/resellers/panel', page('reseller.html'));
+app.get('/resellers/:slug', validSlug, page('reseller-login.html'));
 app.get('/c/:slug', validSlug, page('chat.html'));
-app.get('/:slug', validSlug, page('chat.html'));
+app.get('/:slug', validSlug, async (req, res, next) => {
+  try {
+    const found = await q('SELECT id FROM resellers WHERE slug = $1 AND active = 1 LIMIT 1', [req.params.slug]);
+    if (found.rows[0]) return res.redirect(302, `/?reseller=${encodeURIComponent(req.params.slug)}`);
+    return res.sendFile(path.join(__dirname, 'public', 'chat.html'));
+  } catch (error) {
+    next(error);
+  }
+});
 
 // Manejador central de errores (mensajes amigables, sin stack al cliente)
 app.use((err, req, res, next) => {

@@ -77,7 +77,7 @@
           <i class="ph-fill ph-warning-circle"></i><span id="demoErrorMsg"></span>
         </div>
         <div class="auth-landing-actions">
-          <a class="btn btn-primary btn-block" href="/register"><i class="ph-bold ph-rocket-launch"></i> Crear mi cuenta gratis</a>
+          <a class="btn btn-primary btn-block" href="/register" id="registerLink"><i class="ph-bold ph-rocket-launch"></i> Crear mi cuenta gratis</a>
           <button class="btn btn-demo btn-block" type="button" id="demoBtn"><i class="ph-bold ph-rocket-launch"></i> Ver demo del panel</button>
           <a class="btn btn-ghost btn-block" href="/login"><i class="ph-bold ph-sign-in"></i> Ya tengo cuenta</a>
         </div>
@@ -126,6 +126,10 @@
   </a>
   <script src="/static/js/phone-input.js?v=20260811-3"></script>
   <script>
+    const resellerRef = new URLSearchParams(location.search).get('reseller') || '';
+    if (/^[a-z0-9][a-z0-9-]{1,38}[a-z0-9]$/.test(resellerRef)) {
+      document.getElementById('registerLink').href = `/register?reseller=${encodeURIComponent(resellerRef)}`;
+    }
     const demoBtn = document.getElementById('demoBtn');
     demoBtn.hidden = true;
     fetch('/api/auth/demo-status')
@@ -189,6 +193,7 @@
             phoneCountry: phoneData.phoneCountry,
             businessGiro: document.getElementById('demoLeadGiro').value,
             sourcePage: 'landing',
+            reseller: resellerRef,
           }),
         });
         const data = await res.json().catch(() => ({}));

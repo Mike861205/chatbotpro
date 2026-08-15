@@ -13,7 +13,7 @@ const router = express.Router();
 
 const SLUG_RE = /^[a-z0-9](?:[a-z0-9-]{1,38}[a-z0-9])?$/;
 const USERNAME_RE = /^[a-z0-9._-]{3,60}$/;
-const RESERVED = new Set(['api', 'app', 'login', 'register', 'admin', 'uploads', 'c', 'static']);
+const RESERVED = new Set(['api', 'app', 'login', 'register', 'admin', 'superadmin', 'resellers', 'uploads', 'c', 'static']);
 const SUPPORT_WHATSAPP = '526241370820';
 const SUPPORT_MESSAGE = 'tengo suspendiedo mi servicio y quiero realizar mi pago para activarlo';
 const authAttemptLimiter = createRateLimiter({
@@ -49,7 +49,14 @@ function normalizeLeadText(raw, maxLength = 120) {
   return String(raw || '').trim().replace(/\s+/g, ' ').slice(0, maxLength);
 }
 
-async function saveDemoLead({ contactName, phone, phoneCountry, businessGiro, sourcePage, tenantSlug }) {
+async function resolveActiveResellerId(rawSlug) {
+  const slug = String(rawSlug || '').trim().toLowerCase();
+  if (!SLUG_RE.test(slug)) return null;
+  const found = await q('SELECT id FROM resellers WHERE slug = $1 AND active = 1 LIMIT 1', [slug]);
+  return found.rows[0]?.id || null;
+}
+
+async function saveDemoLead({ contactName, phone, phoneCountry, businessGiro, sourcePage, tenantSlug, resellerSlug }) {
   const cleanName = normalizeLeadText(contactName, 120);
   const normalizedPhone = normalizeInternationalPhone(phone, phoneCountry);
   const cleanGiro = normalizeLeadText(businessGiro, 120);
@@ -65,6 +72,7 @@ async function saveDemoLead({ contactName, phone, phoneCountry, businessGiro, so
 
   const phoneHash = lookupHash(normalizedPhone.digits);
   const phoneEnc = encrypt(normalizedPhone.e164);
+  const resellerId = await resolveActiveResellerId(resellerSlug);
   const legacyHashes = [...new Set([
     phoneHash,
     lookupHash(normalizedPhone.nationalNumber),
@@ -92,18 +100,19 @@ async function saveDemoLead({ contactName, phone, phoneCountry, businessGiro, so
            source_page = $7,
            demo_count = COALESCE(demo_count, 0) + 1,
            last_seen_at = now(),
-           last_demo_tenant_slug = $8
-       WHERE id = $9`,
-      [cleanName, phoneEnc, phoneHash, normalizedPhone.country, normalizedPhone.callingCode, cleanGiro, cleanSource, tenantSlug || '', row.id]
+           last_demo_tenant_slug = $8,
+           reseller_id = COALESCE(reseller_id, $9)
+       WHERE id = $10`,
+      [cleanName, phoneEnc, phoneHash, normalizedPhone.country, normalizedPhone.callingCode, cleanGiro, cleanSource, tenantSlug || '', resellerId, row.id]
     );
     return { id: row.id, demo_count: Number(row.demo_count || 1) + 1 };
   }
 
   const inserted = await q(
-    `INSERT INTO demo_leads (contact_name, phone_enc, phone_hash, phone_country, phone_calling_code, business_giro, source_page, demo_count, first_seen_at, last_seen_at, last_demo_tenant_slug)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, 1, now(), now(), $8)
+    `INSERT INTO demo_leads (contact_name, phone_enc, phone_hash, phone_country, phone_calling_code, business_giro, source_page, demo_count, first_seen_at, last_seen_at, last_demo_tenant_slug, reseller_id)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, 1, now(), now(), $8, $9)
      RETURNING id, demo_count`,
-    [cleanName, phoneEnc, phoneHash, normalizedPhone.country, normalizedPhone.callingCode, cleanGiro, cleanSource, tenantSlug || '']
+    [cleanName, phoneEnc, phoneHash, normalizedPhone.country, normalizedPhone.callingCode, cleanGiro, cleanSource, tenantSlug || '', resellerId]
   );
   return inserted.rows[0] || { id: null, demo_count: 1 };
 }
@@ -168,7 +177,7 @@ router.get('/register-ready', async (req, res, next) => {
 
 router.post('/register', authAttemptLimiter, async (req, res, next) => {
   try {
-    const { ownerName, phone, phoneCountry, businessName, slug, username, password, timezone } = req.body || {};
+    const { ownerName, phone, phoneCountry, businessName, slug, username, password, timezone, reseller } = req.body || {};
     if (!ownerName || !phone || !phoneCountry || !businessName || !slug || !username || !password) {
       return res.status(400).json({ error: 'Todos los campos marcados son obligatorios' });
     }
@@ -192,21 +201,24 @@ router.post('/register', authAttemptLimiter, async (req, res, next) => {
     const [conflictResult, passwordHash] = await Promise.all([
       q(
         `SELECT
-           EXISTS (SELECT 1 FROM tenants WHERE slug = $1) AS slug_exists,
-           EXISTS (SELECT 1 FROM users WHERE lower(username) = $2) AS user_exists`,
-        [cleanSlug, cleanUser]
+           (EXISTS (SELECT 1 FROM tenants WHERE slug = $1)
+             OR EXISTS (SELECT 1 FROM resellers WHERE slug = $1)) AS slug_exists,
+           EXISTS (SELECT 1 FROM users WHERE lower(username) = $2) AS user_exists,
+           (SELECT id FROM resellers WHERE slug = $3 AND active = 1 LIMIT 1) AS reseller_id`,
+        [cleanSlug, cleanUser, String(reseller || '').trim().toLowerCase()]
       ),
       bcrypt.hash(cleanPassword, 12),
     ]);
     const conflicts = conflictResult.rows[0] || {};
+    const resellerId = conflicts.reseller_id || null;
     if (conflicts.slug_exists) return res.status(409).json({ error: 'Ese slug ya está registrado, elige otro' });
     if (conflicts.user_exists) return res.status(409).json({ error: 'Ese usuario ya existe' });
 
     // Tenant y propietario se crean de forma atómica y en un solo viaje a Neon.
     const created = await q(
       `WITH new_tenant AS (
-         INSERT INTO tenants (slug, business_name, owner_name, phone_enc, phone_country, phone_calling_code, timezone)
-         VALUES ($1, $2, $3, $4, $5, $6, $7)
+         INSERT INTO tenants (slug, business_name, owner_name, phone_enc, phone_country, phone_calling_code, timezone, reseller_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $10)
          RETURNING *
        ), new_user AS (
          INSERT INTO users (tenant_id, username, password_hash, onboarding_completed)
@@ -225,6 +237,7 @@ router.post('/register', authAttemptLimiter, async (req, res, next) => {
         regional.timezone,
         cleanUser,
         passwordHash,
+        resellerId,
       ]
     );
     const tenant = created.rows[0].tenant;
@@ -304,6 +317,7 @@ router.post('/demo-login', authAttemptLimiter, async (req, res, next) => {
         businessGiro,
         sourcePage,
         tenantSlug: String(config.DEMO_TENANT_SLUG || '').trim().toLowerCase(),
+        resellerSlug: body.reseller ?? body.referrer ?? '',
       });
     } catch (e) {
       if (e?.status === 400) {

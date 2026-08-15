@@ -6,6 +6,7 @@ let SA_CLIENT_FILTER = 'all';
 let SA_CLIENT_SUMMARY = null;
 let SA_DEMO_LEADS = [];
 let SA_FOLLOW_UP = [];
+let SA_RESELLERS = [];
 let SA_FOLLOWUP_TARGETS = [];
 const SA_SELECTED = new Set();
 let SA_PAYMENT_TENANT_ID = null;
@@ -278,11 +279,14 @@ function matchesTenantFilter(tenant, filter) {
 function getFilteredTenants() {
   const search = String($('#saTenantSearch')?.value || '').trim().toLowerCase();
   const stage = String($('#saTenantStageFilter')?.value || 'all');
+  const reseller = String($('#saTenantResellerFilter')?.value || 'all');
   return SA_TENANTS.filter((t) => {
     if (!matchesTenantFilter(t, SA_FILTER)) return false;
     if (stage !== 'all' && String(t.sales_stage || 'new') !== stage) return false;
+    if (reseller === 'direct' && t.reseller_id) return false;
+    if (!['all', 'direct'].includes(reseller) && String(t.reseller_id || '') !== reseller) return false;
     if (!search) return true;
-    return [t.slug, t.business_name, t.owner_name, t.phone, t.phone_country_name, t.phone_calling_code].join(' ').toLowerCase().includes(search);
+    return [t.slug, t.business_name, t.owner_name, t.phone, t.phone_country_name, t.phone_calling_code, t.reseller_name].join(' ').toLowerCase().includes(search);
   });
 }
 
@@ -359,7 +363,7 @@ function renderTenantTable() {
 
   const allChecked = filtered.length > 0 && filtered.every((item) => SA_SELECTED.has(salesSubjectKey('tenant', item.id)));
   table.innerHTML = `<div class="table-wrap"><table><thead><tr>
-    <th class="sa-select-col"><input type="checkbox" data-sa-select-all="tenant" ${allChecked ? 'checked' : ''} aria-label="Seleccionar prospectos visibles" /></th><th>Prospecto</th><th>Dueño</th><th>Etapa</th><th>Registro</th><th>Acceso</th><th>Plan de interés</th><th>Módulos</th><th>Acciones</th>
+    <th class="sa-select-col"><input type="checkbox" data-sa-select-all="tenant" ${allChecked ? 'checked' : ''} aria-label="Seleccionar prospectos visibles" /></th><th>Prospecto</th><th>Dueño</th><th>Reseller</th><th>Etapa</th><th>Registro</th><th>Acceso</th><th>Plan de interés</th><th>Módulos</th><th>Acciones</th>
   </tr></thead><tbody>${filtered
     .map((t) => {
       const waUrl = t.phone_valid && t.phone_digits ? `https://wa.me/${t.phone_digits}` : '';
@@ -372,6 +376,7 @@ function renderTenantTable() {
         <div class="meta">${countryFlag(t.phone_country)} ${esc(country)} · Lada ${t.phone_calling_code ? `+${esc(t.phone_calling_code)}` : '—'}</div>
         <div class="meta">${esc(t.phone || '—')}${t.phone && !t.phone_valid ? ' · Revisar número histórico' : ''}</div>
       </td>
+      <td>${t.reseller_name ? `<b>${esc(t.reseller_name)}</b><div class="meta">/${esc(t.reseller_slug)}</div>` : '<span class="meta">Directo</span>'}</td>
       <td>${salesStageChip(t.sales_stage)}${t.next_follow_up_at ? `<div class="meta">Próximo: ${fmtDateTime(t.next_follow_up_at)}</div>` : ''}</td>
       <td>${fmtDate(t.created_at)}</td>
       <td>${statusChip('account', t.account_status)}</td>
@@ -1419,6 +1424,88 @@ function getSelectedOpenAiModel() {
   return presetValue || 'gpt-4o-mini';
 }
 
+function renderResellerFilter() {
+  const select = $('#saTenantResellerFilter');
+  if (!select) return;
+  const current = select.value || 'all';
+  select.innerHTML = '<option value="all">Todos los resellers</option><option value="direct">Registro directo</option>'
+    + SA_RESELLERS.map((item) => `<option value="${Number(item.id)}">${esc(item.display_name)}</option>`).join('');
+  select.value = [...select.options].some((option) => option.value === current) ? current : 'all';
+}
+
+function renderResellers() {
+  const table = $('#saResellersTable');
+  if (!table) return;
+  if (!SA_RESELLERS.length) {
+    table.innerHTML = '<div class="empty"><i class="ph ph-users-four"></i><b>Sin resellers</b><p>Crea el primer acceso y comparte su enlace de captación.</p></div>';
+    return;
+  }
+  table.innerHTML = `<div class="table-wrap"><table><thead><tr><th>Reseller</th><th>Contacto</th><th>Enlaces</th><th>Prospectos</th><th>Clientes</th><th>Leads demo</th><th>Estado</th><th>Acciones</th></tr></thead><tbody>${SA_RESELLERS.map((item) => {
+    const referral = `${location.origin}/${item.slug}`;
+    const login = `${location.origin}/resellers/${item.slug}`;
+    return `<tr><td><b>${esc(item.display_name)}</b><div class="meta">Usuario: ${esc(item.username)}</div></td><td>${esc(item.contact_name || '—')}<div class="meta">${esc(item.contact_phone || '')}</div></td><td><div class="meta">Clientes: /${esc(item.slug)}</div><div class="meta">Acceso: /resellers/${esc(item.slug)}</div></td><td><b>${Number(item.prospect_count || 0)}</b></td><td><b>${Number(item.client_count || 0)}</b></td><td><b>${Number(item.demo_lead_count || 0)}</b></td><td><span class="tag">${Number(item.active) ? 'Activo' : 'Inactivo'}</span></td><td><div class="sa-row-actions"><button class="btn btn-ghost" type="button" data-reseller-copy="${esc(referral)}"><i class="ph-bold ph-copy"></i> Link clientes</button><button class="btn btn-ghost" type="button" data-reseller-copy="${esc(login)}"><i class="ph-bold ph-sign-in"></i> Link acceso</button><button class="btn btn-ghost" type="button" data-reseller-edit="${item.id}"><i class="ph-bold ph-pencil"></i> Editar</button><button class="btn ${Number(item.active) ? 'btn-danger' : 'btn-primary'}" type="button" data-reseller-toggle="${item.id}">${Number(item.active) ? 'Desactivar' : 'Activar'}</button></div></td></tr>`;
+  }).join('')}</tbody></table></div>`;
+  document.querySelectorAll('[data-reseller-copy]').forEach((button) => button.onclick = async () => { await navigator.clipboard.writeText(button.dataset.resellerCopy); toast('Enlace copiado'); });
+  document.querySelectorAll('[data-reseller-edit]').forEach((button) => button.onclick = () => openResellerModal(Number(button.dataset.resellerEdit)));
+  document.querySelectorAll('[data-reseller-toggle]').forEach((button) => button.onclick = () => toggleReseller(Number(button.dataset.resellerToggle)).catch((error) => toast(error.message, true)));
+}
+
+async function loadResellers() {
+  const payload = await api('/api/superadmin/resellers');
+  SA_RESELLERS = Array.isArray(payload.resellers) ? payload.resellers : [];
+  renderResellers();
+  renderResellerFilter();
+  renderTenantTable();
+}
+
+function openResellerModal(id = null) {
+  const item = id ? SA_RESELLERS.find((entry) => Number(entry.id) === Number(id)) : null;
+  $('#saResellerId').value = item ? String(item.id) : '';
+  $('#saResellerName').value = item?.display_name || '';
+  $('#saResellerSlug').value = item?.slug || '';
+  $('#saResellerUsername').value = item?.username || '';
+  $('#saResellerPassword').value = '';
+  $('#saResellerContact').value = item?.contact_name || '';
+  $('#saResellerPhone').value = item?.contact_phone || '';
+  $('#saResellerNotes').value = item?.notes || '';
+  $('#saResellerSlug').readOnly = Boolean(item);
+  $('#saResellerUsername').readOnly = Boolean(item);
+  $('#saResellerPassword').required = !item;
+  $('#saResellerPasswordHint').textContent = item ? '(vacía para conservar)' : '*';
+  $('#saResellerModalTitle').textContent = item ? 'Editar reseller' : 'Nuevo reseller';
+  $('#saResellerModal').classList.add('show');
+}
+
+function closeResellerModal() { $('#saResellerModal')?.classList.remove('show'); }
+
+async function saveReseller(event) {
+  event.preventDefault();
+  const id = Number($('#saResellerId').value || 0);
+  const payload = {
+    displayName: $('#saResellerName').value,
+    contactName: $('#saResellerContact').value,
+    contactPhone: $('#saResellerPhone').value,
+    notes: $('#saResellerNotes').value,
+  };
+  if ($('#saResellerPassword').value) payload.password = $('#saResellerPassword').value;
+  if (!id) {
+    payload.slug = $('#saResellerSlug').value.trim().toLowerCase();
+    payload.username = $('#saResellerUsername').value.trim().toLowerCase();
+  }
+  await api(id ? `/api/superadmin/resellers/${id}` : '/api/superadmin/resellers', { method: id ? 'PATCH' : 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+  closeResellerModal();
+  await loadResellers();
+  toast(id ? 'Reseller actualizado' : 'Reseller creado');
+}
+
+async function toggleReseller(id) {
+  const item = SA_RESELLERS.find((entry) => Number(entry.id) === Number(id));
+  if (!item) return;
+  await api(`/api/superadmin/resellers/${id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ active: !Number(item.active) }) });
+  await loadResellers();
+  toast(Number(item.active) ? 'Reseller desactivado' : 'Reseller activado');
+}
+
 $('#saOpenAiModelPreset')?.addEventListener('change', () => {
   const presetValue = $('#saOpenAiModelPreset').value;
   if (presetValue === 'custom') {
@@ -1454,6 +1541,7 @@ function setView(view) {
   const isClients = view === 'clients';
   const isDemoLeads = view === 'demo-leads';
   const isFollowUp = view === 'follow-up';
+  const isResellers = view === 'resellers';
   let title = '<i class="ph-bold ph-plugs-connected"></i> Integraciones';
   let subtitle = 'Configuración central de OpenAI y APIs del chatbot.';
   if (isTenants) {
@@ -1468,6 +1556,9 @@ function setView(view) {
   } else if (isFollowUp) {
     title = '<i class="ph-bold ph-path"></i> Seguimiento';
     subtitle = 'Pipeline comercial de candidatos con potencial de compra.';
+  } else if (isResellers) {
+    title = '<i class="ph-bold ph-users-four"></i> Resellers';
+    subtitle = 'Accesos, enlaces de captación y resultados por revendedor.';
   }
   $('#saViewTenants').hidden = !isTenants;
   $('#saViewTenants').classList.toggle('active', isTenants);
@@ -1477,8 +1568,10 @@ function setView(view) {
   $('#saViewDemoLeads').classList.toggle('active', isDemoLeads);
   $('#saViewFollowUp').hidden = !isFollowUp;
   $('#saViewFollowUp').classList.toggle('active', isFollowUp);
-  $('#saViewIntegrations').hidden = isTenants || isClients || isDemoLeads || isFollowUp;
-  $('#saViewIntegrations').classList.toggle('active', !isTenants && !isClients && !isDemoLeads && !isFollowUp);
+  $('#saViewResellers').hidden = !isResellers;
+  $('#saViewResellers').classList.toggle('active', isResellers);
+  $('#saViewIntegrations').hidden = isTenants || isClients || isDemoLeads || isFollowUp || isResellers;
+  $('#saViewIntegrations').classList.toggle('active', !isTenants && !isClients && !isDemoLeads && !isFollowUp && !isResellers);
   $('#saTitle').innerHTML = title;
   $('#saSub').textContent = subtitle;
   document.querySelectorAll('[data-sa-view]').forEach((a) => a.classList.toggle('active', a.dataset.saView === view));
@@ -1490,7 +1583,7 @@ async function boot() {
     $('#saUserName').textContent = me.username || 'superadmin';
     startSuperAdminClock();
     initSalesStageControls();
-    await Promise.all([loadTenants(), loadClients(), loadDemoLeads(), loadFollowUp(), loadIntegrations(), loadDeployStatus(), loadGitDeployStatus()]);
+    await Promise.all([loadTenants(), loadClients(), loadDemoLeads(), loadFollowUp(), loadResellers(), loadIntegrations(), loadDeployStatus(), loadGitDeployStatus()]);
   } catch (err) {
     toast(err.message, true);
   }
@@ -1505,6 +1598,7 @@ $('#saUploadBrandLogo')?.addEventListener('click', () => uploadSuperAdminLogo().
 
 $('#saTenantSearch')?.addEventListener('input', renderTenantTable);
 $('#saTenantStageFilter')?.addEventListener('change', renderTenantTable);
+$('#saTenantResellerFilter')?.addEventListener('change', renderTenantTable);
 $('#saReloadTenants')?.addEventListener('click', () => loadTenants().catch((e) => toast(e.message, true)));
 $('#saClientSearch')?.addEventListener('input', renderClientsTable);
 $('#saReloadClients')?.addEventListener('click', () => loadClients().catch((e) => toast(e.message, true)));
@@ -1591,7 +1685,12 @@ $('#saFollowUpActivityType')?.addEventListener('change', (e) => {
   if (type === 'contact' && stage.value === 'new') stage.value = 'contacted';
 });
 
-const SA_INITIAL_VIEW = ['tenants', 'clients', 'demo-leads', 'follow-up', 'integrations'].includes((location.hash || '#tenants').slice(1))
+$('#saNewReseller')?.addEventListener('click', () => openResellerModal());
+$('#saResellerCancel')?.addEventListener('click', closeResellerModal);
+$('#saResellerModal')?.addEventListener('click', (event) => { if (event.target?.id === 'saResellerModal') closeResellerModal(); });
+$('#saResellerForm')?.addEventListener('submit', (event) => saveReseller(event).catch((error) => toast(error.message, true)));
+
+const SA_INITIAL_VIEW = ['tenants', 'clients', 'demo-leads', 'follow-up', 'resellers', 'integrations'].includes((location.hash || '#tenants').slice(1))
   ? (location.hash || '#tenants').slice(1)
   : 'tenants';
 setView(SA_INITIAL_VIEW);

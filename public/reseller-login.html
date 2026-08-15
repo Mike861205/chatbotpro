@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Acceso reseller — ChatBotPro</title>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/bold/style.css" />
+  <link rel="stylesheet" href="/static/css/styles.css" />
+  <link rel="icon" type="image/png" href="/static/chatbotpro100.png" />
+</head>
+<body>
+  <div class="auth-wrap">
+    <div class="auth-hero">
+      <div class="glow"></div>
+      <div class="mark mark-logo"><img src="/static/chatbotpro100.png" alt="ChatBotPro" /></div>
+      <h1>Tu cartera comercial, <em>en un solo lugar</em></h1>
+      <p>Consulta prospectos, clientes y solicitudes de demo generadas desde tu enlace personal.</p>
+      <div class="feats">
+        <div class="feat"><span class="fi"><i class="ph-bold ph-link"></i></span><span>Enlace de captación exclusivo</span></div>
+        <div class="feat"><span class="fi"><i class="ph-bold ph-users-three"></i></span><span>Prospectos y clientes atribuidos</span></div>
+        <div class="feat"><span class="fi"><i class="ph-bold ph-kanban"></i></span><span>Seguimiento comercial centralizado</span></div>
+      </div>
+    </div>
+    <div class="auth-panel">
+      <div class="auth-card">
+        <div class="logo"><span class="dot dot-logo"><img src="/static/chatbotpro100.png" alt="" /></span> ChatBotPro</div>
+        <h2>Portal de reseller</h2>
+        <p class="sub">Canal: <b id="resellerChannel">—</b></p>
+        <div class="error-box" id="error"><i class="ph-bold ph-warning-circle"></i><span id="errorMsg"></span></div>
+        <form id="loginForm">
+          <div class="field"><label for="username"><i class="ph-bold ph-user"></i> Usuario</label><input id="username" autocomplete="username" required /></div>
+          <div class="field"><label for="password"><i class="ph-bold ph-lock-key"></i> Contraseña</label><input id="password" type="password" autocomplete="current-password" required /></div>
+          <button class="btn btn-primary btn-block" id="loginBtn" type="submit"><i class="ph-bold ph-sign-in"></i> Ingresar</button>
+        </form>
+      </div>
+    </div>
+  </div>
+  <script>
+    const slug = decodeURIComponent(location.pathname.split('/').filter(Boolean).pop() || '').toLowerCase();
+    document.getElementById('resellerChannel').textContent = slug;
+    document.getElementById('loginForm').addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const button = document.getElementById('loginBtn');
+      const errorBox = document.getElementById('error');
+      errorBox.classList.remove('show');
+      button.disabled = true;
+      try {
+        const response = await fetch('/api/resellers/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ slug, username: document.getElementById('username').value, password: document.getElementById('password').value }),
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(data.error || 'No fue posible iniciar sesión');
+        try { sessionStorage.setItem('cbp_reseller_slug', slug); } catch {}
+        location.replace(data.redirect || '/resellers/panel');
+      } catch (error) {
+        document.getElementById('errorMsg').textContent = error.message;
+        errorBox.classList.add('show');
+        button.disabled = false;
+      }
+    });
+  </script>
+</body>
+</html>

@@ -95,7 +95,7 @@ async function buildKdsPayload(tenant, tenantDb, area) {
     tenantDb.all('SELECT category_id FROM {s}.kds_area_categories WHERE area_id = $1', [area.id]),
     tenantDb.all('SELECT product_id FROM {s}.kds_area_products WHERE area_id = $1', [area.id]),
     tenantDb.all(
-      `SELECT o.id, o.customer_id, o.items, o.status AS order_status, o.channel, o.delivery, o.notes, o.order_notes,
+      `SELECT o.id, o.customer_id, o.items, o.status AS order_status, o.channel, o.delivery, o.receiving_mode_label, o.receiving_mode_behavior, o.notes, o.order_notes,
               o.service_branch_id, o.service_branch_name, o.pickup_branch_id, o.pickup_branch_name, o.created_at,
               s.status AS kds_status, s.started_at, s.ready_at, s.completed_at, s.updated_at
        FROM {s}.orders o
@@ -113,7 +113,7 @@ async function buildKdsPayload(tenant, tenantDb, area) {
               NULLIF(ta.branch_id, 0) AS service_branch_id, b.name AS service_branch_name,
               NULL::int AS pickup_branch_id, NULL::text AS pickup_branch_name, tr.created_at,
               s.status AS kds_status, s.started_at, s.ready_at, s.completed_at, s.updated_at,
-              ta.table_number, tr.round_number, ta.waiter_name
+              ta.table_number, tr.round_number, ta.waiter_name, ta.customer_name AS table_customer_name
        FROM {s}.table_rounds tr
        JOIN {s}.table_accounts ta ON ta.id = tr.account_id
        LEFT JOIN {s}.branches b ON b.id = NULLIF(ta.branch_id, 0)
@@ -187,9 +187,11 @@ async function buildKdsPayload(tenant, tenantDb, area) {
       orderStatus: order.order_status,
       channel: order.channel,
       delivery: order.delivery,
+      receivingModeLabel: order.receiving_mode_label || (order.delivery === 'comer_sucursal' ? 'Comer en sucursal' : ''),
+      receivingModeBehavior: order.receiving_mode_behavior || '',
       notes: operationalOrderNote(order),
       branchName: order.service_branch_name || order.pickup_branch_name || '',
-      customerName: customerById.get(Number(order.customer_id)) || '',
+      customerName: customerById.get(Number(order.customer_id)) || order.table_customer_name || '',
       createdAt: order.created_at,
       startedAt: order.started_at,
       readyAt: order.ready_at,

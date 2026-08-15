@@ -127,6 +127,15 @@ Recomendación:
 - Usa un `DATABASE_URL` distinto para test y producción.
 - No subas `.env*` al repo (excepto `.env.example`).
 
+## Portal de resellers
+
+1. Entra a `/superadmin` y abre **Resellers**.
+2. Crea el reseller con nombre, clave de enlace, usuario y contraseña.
+3. Comparte con el reseller su acceso: `/resellers/<clave>`.
+4. El reseller comparte con sus clientes: `/<clave>`.
+
+Los registros y solicitudes de demo iniciados desde ese último enlace quedan atribuidos al reseller. Su panel privado contiene Prospectos, Clientes, Leads demo y Seguimiento; no expone Integraciones. El aislamiento también se valida en la API mediante `reseller_id`.
+
 ## 🗂️ Estructura
 
 ```

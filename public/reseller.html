@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Portal reseller — ChatBotPro</title>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/regular/style.css" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/bold/style.css" />
+  <link rel="stylesheet" href="/static/css/styles.css" />
+  <link rel="icon" type="image/png" href="/static/chatbotpro100.png" />
+  <style>
+    .reseller-link{display:flex;gap:8px;align-items:center;padding:12px;background:var(--bg);border:1px solid var(--line);border-radius:12px;flex-wrap:wrap}.reseller-link code{flex:1;min-width:210px;overflow-wrap:anywhere}.reseller-summary{display:grid;grid-template-columns:repeat(4,minmax(150px,1fr));gap:12px;margin-bottom:14px}.reseller-stat{padding:16px}.reseller-stat span{display:block;color:var(--ink-2);font-size:13px}.reseller-stat b{font-size:28px}.reseller-toolbar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:12px}.reseller-toolbar input,.reseller-toolbar select{max-width:360px}.reseller-actions{display:flex;gap:6px;flex-wrap:wrap}.reseller-view[hidden]{display:none!important}@media(max-width:850px){.reseller-summary{grid-template-columns:repeat(2,1fr)}}
+  </style>
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <div class="brand"><div class="logo-wrap"><div class="logo-dot has-image"><img src="/static/chatbotpro100.png" alt="ChatBotPro" /></div></div><div><h2 id="resellerName">Reseller</h2><small>Portal comercial</small></div></div>
+      <nav>
+        <a href="#prospects" data-view="prospects" class="active"><span class="nav-ic"><i class="ph-bold ph-buildings"></i></span><span>Prospectos</span></a>
+        <a href="#clients" data-view="clients"><span class="nav-ic"><i class="ph-bold ph-handshake"></i></span><span>Clientes</span></a>
+        <a href="#demo-leads" data-view="demo-leads"><span class="nav-ic"><i class="ph-bold ph-rocket-launch"></i></span><span>Leads demo</span></a>
+        <a href="#follow-up" data-view="follow-up"><span class="nav-ic"><i class="ph-bold ph-kanban"></i></span><span>Seguimiento</span></a>
+      </nav>
+      <div class="user-pill" style="margin-top:auto"><div class="avatar"><i class="ph-bold ph-user-circle"></i></div><div><b id="resellerUser">—</b><small>Reseller</small></div><button class="btn btn-ghost" id="logout" type="button" title="Salir"><i class="ph-bold ph-sign-out"></i></button></div>
+    </aside>
+    <main class="main">
+      <header class="topbar"><div><h1 id="viewTitle"><i class="ph-bold ph-buildings"></i> Prospectos</h1><p id="viewSubtitle" class="muted">Negocios registrados desde tu enlace.</p></div><button class="btn btn-ghost" id="reload"><i class="ph-bold ph-arrows-clockwise"></i> Actualizar</button></header>
+      <div class="reseller-summary">
+        <div class="card reseller-stat"><span>Prospectos</span><b id="countProspects">0</b></div>
+        <div class="card reseller-stat"><span>Clientes</span><b id="countClients">0</b></div>
+        <div class="card reseller-stat"><span>Leads demo</span><b id="countDemos">0</b></div>
+        <div class="card reseller-stat"><span>Seguimientos pendientes</span><b id="countFollowUp">0</b></div>
+      </div>
+      <div class="card" style="padding:14px;margin-bottom:14px"><div class="reseller-link"><i class="ph-bold ph-link"></i><code id="referralUrl">—</code><button class="btn btn-primary" id="copyLink" type="button"><i class="ph-bold ph-copy"></i> Copiar enlace</button></div></div>
+
+      <section class="reseller-view" id="viewProspects"><div class="card" style="padding:16px"><div class="reseller-toolbar"><input type="search" data-search="prospects" placeholder="Buscar prospecto, dueño o teléfono" /></div><div id="prospectsTable"></div></div></section>
+      <section class="reseller-view" id="viewClients" hidden><div class="card" style="padding:16px"><div class="reseller-toolbar"><input type="search" data-search="clients" placeholder="Buscar cliente, dueño o teléfono" /></div><div id="clientsTable"></div></div></section>
+      <section class="reseller-view" id="viewDemoLeads" hidden><div class="card" style="padding:16px"><div class="reseller-toolbar"><input type="search" data-search="demo-leads" placeholder="Buscar lead, giro o teléfono" /></div><div id="demoLeadsTable"></div></div></section>
+      <section class="reseller-view" id="viewFollowUp" hidden><div class="card" style="padding:16px"><div class="reseller-toolbar"><input type="search" data-search="follow-up" placeholder="Buscar contacto o nota" /><select id="stageFilter"><option value="active">Candidatos activos</option><option value="all">Todas las etapas</option><option value="new">Nuevo</option><option value="contacted">Contactado</option><option value="interested">Interesado</option><option value="potential">Potencial a compra</option><option value="follow_up">En seguimiento</option><option value="won">Cierre exitoso</option><option value="not_interested">No interesado</option><option value="lost">Cierre no exitoso</option></select></div><div id="followUpTable"></div></div></section>
+    </main>
+  </div>
+  <div id="toast"><i class="ph-bold ph-check-circle"></i><span id="toastMsg"></span></div>
+  <div class="modal-bg" id="followUpModal"><div class="modal" style="max-width:720px"><h3><i class="ph-bold ph-note-pencil"></i> Gestión comercial</h3><p class="hint" id="followUpSubject"></p><form id="followUpForm"><input type="hidden" id="followUpType" /><input type="hidden" id="followUpId" /><div class="row-2"><div class="field"><label>Etapa</label><select id="followUpStage" required><option value="new">Nuevo</option><option value="contacted">Contactado</option><option value="interested">Interesado</option><option value="potential">Potencial a compra</option><option value="follow_up">En seguimiento</option><option value="won">Cierre exitoso</option><option value="not_interested">No interesado</option><option value="lost">Cierre no exitoso</option></select></div><div class="field"><label>Tipo de gestión</label><select id="followUpActivity"><option value="contact">Contactación</option><option value="follow_up">Seguimiento</option><option value="note">Nota</option><option value="close_won">Cierre exitoso</option><option value="close_lost">Cierre no exitoso</option></select></div></div><div class="field"><label>Próximo seguimiento</label><input id="followUpDate" type="datetime-local" /></div><div class="field"><label>Nota</label><textarea id="followUpNote" rows="4" maxlength="4000" placeholder="Resultado del contacto y siguiente acción"></textarea></div><div class="modal-actions"><button type="button" class="btn btn-ghost" id="followUpCancel">Cancelar</button><button class="btn btn-primary" type="submit"><i class="ph-bold ph-floppy-disk"></i> Guardar</button></div></form><div id="followUpHistory"></div></div></div>
+  <script src="/static/js/reseller.js"></script>
+</body>
+</html>

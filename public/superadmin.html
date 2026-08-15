@@ -27,6 +27,7 @@
         <a href="#clients" data-sa-view="clients" data-color="green"><span class="nav-ic"><i class="ph-fill ph-handshake"></i></span><span>Clientes</span><span class="sa-module-icon"><i class="ph-bold ph-identification-card"></i></span></a>
         <a href="#demo-leads" data-sa-view="demo-leads" data-color="violet"><span class="nav-ic"><i class="ph-fill ph-rocket-launch"></i></span><span>Leads demo</span><span class="sa-module-icon"><i class="ph-bold ph-phone-call"></i></span></a>
         <a href="#follow-up" data-sa-view="follow-up" data-color="cyan"><span class="nav-ic"><i class="ph-fill ph-path"></i></span><span>Seguimiento</span><span class="sa-module-icon"><i class="ph-bold ph-kanban"></i></span></a>
+        <a href="#resellers" data-sa-view="resellers" data-color="green"><span class="nav-ic"><i class="ph-fill ph-users-four"></i></span><span>Resellers</span><span class="sa-module-icon"><i class="ph-bold ph-link"></i></span></a>
         <a href="#integrations" data-sa-view="integrations" data-color="amber"><span class="nav-ic"><i class="ph-fill ph-plugs-connected"></i></span><span>Integraciones</span><span class="sa-module-icon"><i class="ph-bold ph-gear-six"></i></span></a>
       </nav>
       <div class="user-pill" style="margin-top:auto">
@@ -70,6 +71,7 @@
             </div>
             <input id="saTenantSearch" type="search" placeholder="Buscar por negocio, país, lada o teléfono" style="max-width:360px" />
             <select id="saTenantStageFilter" class="sa-stage-filter" aria-label="Filtrar por etapa comercial"></select>
+            <select id="saTenantResellerFilter" aria-label="Filtrar prospectos por reseller"><option value="all">Todos los resellers</option></select>
             <button type="button" class="btn btn-primary" id="saReloadTenants"><i class="ph-bold ph-arrows-clockwise"></i> Actualizar</button>
           </div>
           <div id="saTenantBulkBar" class="sa-bulk-bar" hidden></div>
@@ -164,6 +166,14 @@
           <div id="saFollowUpBulkBar" class="sa-bulk-bar" hidden></div>
           <div id="saFollowUpTable"></div>
         </div>
+      </section>
+
+      <section id="saViewResellers" class="section" hidden>
+        <div class="card clients-hero-card" style="padding:18px;margin-bottom:14px">
+          <div><span class="clients-hero-kicker"><i class="ph-bold ph-users-four"></i> Canales comerciales</span><h3>Administración de resellers</h3><p>Crea accesos, comparte enlaces de captación y consulta el rendimiento de cada revendedor.</p></div>
+          <button type="button" class="btn btn-primary" id="saNewReseller"><i class="ph-bold ph-plus"></i> Nuevo reseller</button>
+        </div>
+        <div class="card" style="padding:16px"><div id="saResellersTable"></div></div>
       </section>
 
       <section id="saViewIntegrations" class="section" hidden>
@@ -423,6 +433,19 @@
         <h3><i class="ph-bold ph-clock-counter-clockwise"></i> Historial</h3>
         <div id="saFollowUpHistory"></div>
       </div>
+    </div>
+  </div>
+  <div class="modal-bg" id="saResellerModal">
+    <div class="modal" style="max-width:620px">
+      <h3><i class="ph-bold ph-user-plus"></i> <span id="saResellerModalTitle">Nuevo reseller</span></h3>
+      <form id="saResellerForm">
+        <input type="hidden" id="saResellerId" />
+        <div class="row-2"><div class="field"><label>Nombre comercial *</label><input id="saResellerName" maxlength="120" required /></div><div class="field"><label>Clave del enlace *</label><input id="saResellerSlug" pattern="[a-z0-9-]{3,40}" maxlength="40" placeholder="venezuela" required /></div></div>
+        <div class="row-2"><div class="field"><label>Usuario *</label><input id="saResellerUsername" maxlength="60" autocomplete="off" required /></div><div class="field"><label>Contraseña <span id="saResellerPasswordHint">*</span></label><input id="saResellerPassword" type="password" minlength="8" maxlength="128" autocomplete="new-password" /></div></div>
+        <div class="row-2"><div class="field"><label>Nombre de contacto</label><input id="saResellerContact" maxlength="120" /></div><div class="field"><label>Teléfono</label><input id="saResellerPhone" maxlength="40" /></div></div>
+        <div class="field"><label>Notas</label><textarea id="saResellerNotes" rows="3" maxlength="2000"></textarea></div>
+        <div class="modal-actions"><button type="button" class="btn btn-ghost" id="saResellerCancel">Cancelar</button><button type="submit" class="btn btn-primary"><i class="ph-bold ph-floppy-disk"></i> Guardar reseller</button></div>
+      </form>
     </div>
   </div>
   <script src="/static/js/superadmin.js"></script>

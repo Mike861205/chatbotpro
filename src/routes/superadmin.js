@@ -21,6 +21,8 @@ const router = express.Router();
 const SALES_STAGES = new Set(['new', 'contacted', 'interested', 'potential', 'follow_up', 'won', 'not_interested', 'lost']);
 const SALES_ACTIVITY_TYPES = new Set(['note', 'contact', 'follow_up', 'close_won', 'close_lost', 'stage_change']);
 const BULK_DELETE_STAGES = new Set(['not_interested', 'lost']);
+const RESELLER_SLUG_RE = /^[a-z0-9](?:[a-z0-9-]{1,38}[a-z0-9])?$/;
+const RESELLER_USERNAME_RE = /^[a-z0-9._-]{3,60}$/;
 const superadminLoginLimiter = createRateLimiter({
   windowMs: 15 * 60 * 1000,
   max: 10,
@@ -407,6 +409,95 @@ router.get('/me', requireSuperAdmin, (req, res) => {
   res.json({ username: req.superadmin.username, role: 'superadmin' });
 });
 
+router.get('/resellers', requireSuperAdmin, async (req, res, next) => {
+  try {
+    const rows = await q(`
+      SELECT r.id, r.slug, r.display_name, r.username, r.contact_name, r.contact_phone,
+             r.active, r.notes, r.created_at, r.updated_at,
+             COUNT(DISTINCT t.id) FILTER (WHERE t.customer_since IS NULL)::int AS prospect_count,
+             COUNT(DISTINCT t.id) FILTER (WHERE t.customer_since IS NOT NULL)::int AS client_count,
+             COUNT(DISTINCT dl.id)::int AS demo_lead_count
+      FROM resellers r
+      LEFT JOIN tenants t ON t.reseller_id = r.id
+      LEFT JOIN demo_leads dl ON dl.reseller_id = r.id
+      GROUP BY r.id
+      ORDER BY r.created_at DESC, r.id DESC`);
+    res.json({ resellers: rows.rows });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post('/resellers', requireSuperAdmin, async (req, res, next) => {
+  try {
+    const slug = String(req.body?.slug || '').trim().toLowerCase();
+    const displayName = String(req.body?.displayName || '').trim().slice(0, 120);
+    const username = String(req.body?.username || '').trim().toLowerCase();
+    const password = String(req.body?.password || '');
+    const contactName = String(req.body?.contactName || '').trim().slice(0, 120);
+    const contactPhone = String(req.body?.contactPhone || '').trim().slice(0, 40);
+    const notes = String(req.body?.notes || '').trim().slice(0, 2000);
+    if (!RESELLER_SLUG_RE.test(slug) || ['api', 'app', 'login', 'register', 'superadmin', 'resellers', 'static', 'uploads'].includes(slug)) {
+      return res.status(400).json({ error: 'Clave de enlace inválida o reservada' });
+    }
+    if (!displayName || !RESELLER_USERNAME_RE.test(username)) {
+      return res.status(400).json({ error: 'Nombre y usuario válidos son obligatorios' });
+    }
+    if (password.length < 8 || password.length > 128) {
+      return res.status(400).json({ error: 'La contraseña debe tener entre 8 y 128 caracteres' });
+    }
+    const tenantConflict = await q('SELECT id FROM tenants WHERE slug = $1 LIMIT 1', [slug]);
+    if (tenantConflict.rows[0]) return res.status(409).json({ error: 'La clave del enlace ya pertenece a un tenant' });
+    const hash = await bcrypt.hash(password, 12);
+    const inserted = await q(
+      `INSERT INTO resellers (slug, display_name, username, password_hash, contact_name, contact_phone, notes)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
+       RETURNING id, slug, display_name, username, contact_name, contact_phone, active, notes, created_at`,
+      [slug, displayName, username, hash, contactName, contactPhone, notes]
+    );
+    res.status(201).json({ ok: true, reseller: inserted.rows[0] });
+  } catch (error) {
+    if (error.code === '23505') return res.status(409).json({ error: 'La clave de enlace o el usuario ya existen' });
+    next(error);
+  }
+});
+
+router.patch('/resellers/:id', requireSuperAdmin, async (req, res, next) => {
+  try {
+    const resellerId = Number(req.params.id);
+    if (!Number.isInteger(resellerId) || resellerId <= 0) return res.status(400).json({ error: 'Reseller inválido' });
+    const updates = [];
+    const values = [];
+    const push = (column, value) => { values.push(value); updates.push(`${column} = $${values.length}`); };
+    if (req.body?.displayName !== undefined) {
+      const value = String(req.body.displayName || '').trim().slice(0, 120);
+      if (!value) return res.status(400).json({ error: 'El nombre es obligatorio' });
+      push('display_name', value);
+    }
+    if (req.body?.contactName !== undefined) push('contact_name', String(req.body.contactName || '').trim().slice(0, 120));
+    if (req.body?.contactPhone !== undefined) push('contact_phone', String(req.body.contactPhone || '').trim().slice(0, 40));
+    if (req.body?.notes !== undefined) push('notes', String(req.body.notes || '').trim().slice(0, 2000));
+    if (req.body?.active !== undefined) push('active', req.body.active ? 1 : 0);
+    if (req.body?.password) {
+      const password = String(req.body.password);
+      if (password.length < 8 || password.length > 128) return res.status(400).json({ error: 'La contraseña debe tener entre 8 y 128 caracteres' });
+      push('password_hash', await bcrypt.hash(password, 12));
+    }
+    if (!updates.length) return res.status(400).json({ error: 'Sin cambios para actualizar' });
+    updates.push('updated_at = now()');
+    values.push(resellerId);
+    const updated = await q(
+      `UPDATE resellers SET ${updates.join(', ')} WHERE id = $${values.length}
+       RETURNING id, slug, display_name, username, contact_name, contact_phone, active, notes, created_at, updated_at`,
+      values
+    );
+    if (!updated.rows[0]) return res.status(404).json({ error: 'Reseller no encontrado' });
+    res.json({ ok: true, reseller: updated.rows[0] });
+  } catch (error) {
+    next(error);
+  }
+});
+
 router.get('/integrations', requireSuperAdmin, async (req, res, next) => {
   try {
     const enabled = await getSuperAdminSetting('openai_enabled', '0');
@@ -533,6 +624,9 @@ router.get('/tenants', requireSuperAdmin, async (req, res, next) => {
         t.next_follow_up_at,
         t.sales_updated_at,
         t.created_at,
+        t.reseller_id,
+        COALESCE(r.display_name, '') AS reseller_name,
+        COALESCE(r.slug, '') AS reseller_slug,
         COALESCE(u.username, '') AS owner_username,
         COALESCE(usage_stats.module_count, 0)::int AS module_count,
         COALESCE(usage_stats.module_views, 0)::int AS module_views,
@@ -542,6 +636,7 @@ router.get('/tenants', requireSuperAdmin, async (req, res, next) => {
         followup_stats.last_activity_at,
         COALESCE(followup_stats.last_note, '') AS last_note
       FROM tenants t
+      LEFT JOIN resellers r ON r.id = t.reseller_id
       LEFT JOIN LATERAL (
         SELECT username FROM users WHERE tenant_id = t.id ORDER BY id ASC LIMIT 1
       ) u ON true
@@ -615,6 +710,9 @@ router.get('/demo-leads', requireSuperAdmin, async (req, res, next) => {
         dl.sales_stage,
         dl.next_follow_up_at,
         dl.sales_updated_at,
+        dl.reseller_id,
+        COALESCE(r.display_name, '') AS reseller_name,
+        COALESCE(r.slug, '') AS reseller_slug,
         COALESCE(usage_stats.module_count, 0)::int AS module_count,
         COALESCE(usage_stats.module_views, 0)::int AS module_views,
         usage_stats.module_last_seen,
@@ -623,6 +721,7 @@ router.get('/demo-leads', requireSuperAdmin, async (req, res, next) => {
         followup_stats.last_activity_at,
         COALESCE(followup_stats.last_note, '') AS last_note
       FROM demo_leads dl
+      LEFT JOIN resellers r ON r.id = dl.reseller_id
       LEFT JOIN LATERAL (
         SELECT
           COUNT(*)::int AS module_count,
@@ -713,6 +812,9 @@ router.get('/clients', requireSuperAdmin, async (req, res, next) => {
         t.license_count,
         t.notes,
         t.created_at,
+        t.reseller_id,
+        COALESCE(r.display_name, '') AS reseller_name,
+        COALESCE(r.slug, '') AS reseller_slug,
         CASE WHEN t.billing_due_date IS NULL THEN NULL ELSE (t.billing_due_date - CURRENT_DATE)::int END AS days_to_due,
         CASE WHEN t.billing_due_date IS NULL OR t.billing_due_date >= CURRENT_DATE THEN 0 ELSE (CURRENT_DATE - t.billing_due_date)::int END AS mora_days,
         COALESCE(u.username, '') AS owner_username,
@@ -726,6 +828,7 @@ router.get('/clients', requireSuperAdmin, async (req, res, next) => {
         usage_stats.module_last_seen,
         COALESCE(usage_stats.modules, '[]'::json) AS modules
       FROM tenants t
+      LEFT JOIN resellers r ON r.id = t.reseller_id
       LEFT JOIN LATERAL (
         SELECT username FROM users WHERE tenant_id = t.id ORDER BY id ASC LIMIT 1
       ) u ON true
@@ -797,9 +900,11 @@ router.get('/follow-up', requireSuperAdmin, async (req, res, next) => {
       q(`SELECT t.id, t.business_name AS name, t.owner_name AS contact_name, t.phone_enc,
                 t.phone_country, t.phone_calling_code, t.plan_name AS detail, t.sales_stage,
                 t.next_follow_up_at, t.sales_updated_at, t.created_at,
+                t.reseller_id, COALESCE(r.display_name, '') AS reseller_name, COALESCE(r.slug, '') AS reseller_slug,
                 COALESCE(s.activity_count, 0)::int AS activity_count, s.last_activity_at,
                 COALESCE(s.last_note, '') AS last_note
          FROM tenants t
+         LEFT JOIN resellers r ON r.id = t.reseller_id
          LEFT JOIN LATERAL (
            SELECT COUNT(*)::int AS activity_count, MAX(a.created_at) AS last_activity_at,
              (ARRAY_AGG(a.note ORDER BY a.created_at DESC) FILTER (WHERE a.note <> ''))[1] AS last_note
@@ -810,9 +915,11 @@ router.get('/follow-up', requireSuperAdmin, async (req, res, next) => {
       q(`SELECT dl.id, dl.business_giro AS name, dl.contact_name, dl.phone_enc,
                 dl.phone_country, dl.phone_calling_code, dl.business_giro AS detail, dl.sales_stage,
                 dl.next_follow_up_at, dl.sales_updated_at, dl.created_at,
+                dl.reseller_id, COALESCE(r.display_name, '') AS reseller_name, COALESCE(r.slug, '') AS reseller_slug,
                 COALESCE(s.activity_count, 0)::int AS activity_count, s.last_activity_at,
                 COALESCE(s.last_note, '') AS last_note
          FROM demo_leads dl
+         LEFT JOIN resellers r ON r.id = dl.reseller_id
          LEFT JOIN LATERAL (
            SELECT COUNT(*)::int AS activity_count, MAX(a.created_at) AS last_activity_at,
              (ARRAY_AGG(a.note ORDER BY a.created_at DESC) FILTER (WHERE a.note <> ''))[1] AS last_note

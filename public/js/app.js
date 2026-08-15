@@ -79,7 +79,7 @@ const DASHBOARD_PERIOD_LABELS = {
   month: 'del mes',
   year: 'del año',
 };
-let POS_PAYMENT_FORM = { cashReceived: '', cash: '', card: '', transfer: '', notes: '' };
+let POS_PAYMENT_FORM = { cashReceived: '', cash: '', card: '', transfer: '', notes: '', deliveryAddress: '', deliveryNeighborhood: '', deliveryReference: '' };
 let LAST_POS_SALE = null;
 let POS_SALES_PAGE = 1;
 const POS_SALES_PAGE_SIZE = 10;
@@ -95,6 +95,7 @@ let POS_CHATBOT_QUEUE = [];
 let POS_CHATBOT_PAGE = 1;
 let POS_CHATBOT_TOTAL_PAGES = 1;
 const POS_CHATBOT_IMPORTING = new Set();
+let POS_CHATBOT_TABLE_ORDER_ID = null;
 let POS_TABLE_ACCOUNT = null;
 let TABLES_CONFIG = [];
 let TABLES_CONFIG_BRANCHES = [];
@@ -104,6 +105,7 @@ let CHATBOT_UPSELL_PRODUCTS = [];
 let CHATBOT_UPSELL_SELECTED = new Set();
 let CHATBOT_UPSELL_OFFERS = [];
 let CHATBOT_INFO_OPTIONS = [];
+let CHATBOT_RECEIVING_MODES = [];
 let DELIVERY_ZONES = [];
 let DELIVERY_ZONE_MAP = null;
 let DELIVERY_ZONE_LAYER = null;
@@ -244,6 +246,32 @@ function setAuthScope(scope) {
 
 function isCashierUser() {
   return ME?.role === 'cashier';
+}
+
+function posManagedBranchStorageKey() {
+  return `chatbotpro:pos:managed-branch:${ME?.tenant?.slug || 'default'}`;
+}
+
+function getManagedPosBranchId() {
+  if (isCashierUser()) return null;
+  try {
+    const branchId = Number(sessionStorage.getItem(posManagedBranchStorageKey()));
+    return Number.isInteger(branchId) && branchId > 0 ? branchId : null;
+  } catch {
+    return null;
+  }
+}
+
+function setManagedPosBranchId(branchId) {
+  if (isCashierUser()) return;
+  try {
+    const value = Number(branchId);
+    if (Number.isInteger(value) && value > 0) {
+      sessionStorage.setItem(posManagedBranchStorageKey(), String(value));
+    } else {
+      sessionStorage.removeItem(posManagedBranchStorageKey());
+    }
+  } catch {}
 }
 
 function normalizePosSortMode(mode) {
@@ -471,6 +499,8 @@ async function api(path, opts = {}) {
   const headers = new Headers(opts.headers || {});
   const scope = getAuthScope();
   if (scope) headers.set('x-cbp-auth-scope', scope);
+  const managedBranchId = String(path || '').startsWith('/api/pos') ? getManagedPosBranchId() : null;
+  if (managedBranchId) headers.set('x-cbp-pos-branch-id', String(managedBranchId));
   const res = await fetch(path, { ...opts, headers });
   if (res.status === 401) {
     location.href = '/login';
@@ -2568,9 +2598,12 @@ function orderPaymentLabel(method) {
 }
 
 function buildOrderDeliveryLabel(order) {
-  if (order?.delivery === 'domicilio') return 'Domicilio';
+  const configuredLabel = String(order?.receiving_mode_label || '').trim();
+  const isAddressDelivery = order?.receiving_mode_behavior === 'delivery' || order?.delivery === 'domicilio';
+  if (isAddressDelivery) return configuredLabel || 'Domicilio';
   const pickup = String(order?.pickup_branch_name || '').trim();
-  return pickup ? `Recoger · ${pickup}` : 'Recoger';
+  const label = configuredLabel || (order?.delivery === 'comer_sucursal' ? 'Comer en sucursal' : 'Recoger');
+  return pickup ? `${label} · ${pickup}` : label;
 }
 
 function buildOrderComandaItems(order) {
@@ -2620,9 +2653,14 @@ function openOrderComandaPrintWindow(order) {
   const customerName = esc(order?.customer?.name || 'Mostrador');
   const customerPhone = esc(order?.customer?.phone || '');
   const delivery = esc(buildOrderDeliveryLabel(order));
-  const branch = esc(order?.delivery === 'domicilio' ? (order?.service_branch_name || '—') : (order?.pickup_branch_name || '—'));
+  const addressDelivery = order?.receiving_mode_behavior === 'delivery' || order?.delivery === 'domicilio';
+  const branch = esc(addressDelivery ? (order?.service_branch_name || '—') : (order?.pickup_branch_name || '—'));
   const createdAt = esc(order?.created_at || fmtBusinessDateTime());
   const notes = esc(operationalOrderNote(order));
+  const deliveryAddress = esc(order?.delivery_address || order?.customer?.address || '');
+  const deliveryNeighborhood = esc(order?.delivery_neighborhood || '');
+  const deliveryReference = esc(order?.delivery_reference || (order?.channel === 'chatbot' ? order?.notes : '') || '');
+  const deliveryLocation = esc(order?.customer_location_text || order?.customer_location_resolved || '');
 
   const html = `<!doctype html>
 <html lang="es">
@@ -2649,6 +2687,7 @@ function openOrderComandaPrintWindow(order) {
     .headline { font-size: ${Math.max(fontPx + 2, 14)}px; font-weight: 800; letter-spacing: 0.5px; }
     .order-note { margin: 9px 0; padding: 8px; border: 3px double #000; font-size: ${Math.max(fontPx + 2, 14)}px; font-weight: 900; line-height: 1.35; text-align: center; overflow-wrap: anywhere; }
     .order-note span { display: block; margin-bottom: 3px; font-size: ${Math.max(fontPx - 2, 10)}px; letter-spacing: .7px; }
+    .delivery-block { margin: 7px 0; padding: 7px; border: 2px solid #000; overflow-wrap: anywhere; }
   </style>
 </head>
 <body>
@@ -2663,6 +2702,12 @@ function openOrderComandaPrintWindow(order) {
     <div class="meta"><b>Cliente:</b> ${customerName}${customerPhone ? ` · ${customerPhone}` : ''}</div>
     <div class="meta"><b>Entrega:</b> ${delivery}</div>
     <div class="meta"><b>Sucursal:</b> ${branch}</div>
+    ${addressDelivery && (deliveryAddress || deliveryNeighborhood || deliveryReference || deliveryLocation) ? `<div class="delivery-block">
+      <div><b>DOMICILIO:</b> ${deliveryAddress || '—'}</div>
+      ${deliveryNeighborhood ? `<div><b>COLONIA / BARRIO:</b> ${deliveryNeighborhood}</div>` : ''}
+      ${deliveryReference ? `<div><b>REFERENCIA:</b> ${deliveryReference}</div>` : ''}
+      ${deliveryLocation && deliveryLocation !== deliveryAddress ? `<div><b>UBICACIÓN:</b> ${deliveryLocation}</div>` : ''}
+    </div>` : ''}
     ${notes ? `<div class="order-note"><span>⚠ NOTA DEL PEDIDO</span>${notes}</div>` : ''}
     <div class="sep"></div>
     <table>
@@ -2704,12 +2749,10 @@ function ordersTableHTML(orders, editable = true) {
             ${STATUSES.map((st) => `<option value="${st}" ${st === o.status ? 'selected' : ''}>${st[0].toUpperCase() + st.slice(1)}</option>`).join('')}
           </select>`
         : `<span class="badge b-${o.status}">${o.status}</span>`;
-      const deliveryText =
-        o.delivery === 'domicilio'
-          ? '<i class="ph-bold ph-moped" style="color:var(--blue)"></i> Domicilio'
-          : `<i class="ph-bold ph-storefront" style="color:var(--violet)"></i> Recoger${o.pickup_branch_name ? ` · ${esc(o.pickup_branch_name)}` : ''}`;
+      const isAddressDelivery = o.receiving_mode_behavior === 'delivery' || o.delivery === 'domicilio';
+      const deliveryText = `<i class="ph-bold ${isAddressDelivery ? 'ph-moped' : (o.delivery === 'comer_sucursal' ? 'ph-fork-knife' : 'ph-storefront')}" style="color:${isAddressDelivery ? 'var(--blue)' : 'var(--violet)'}"></i> ${esc(buildOrderDeliveryLabel(o))}`;
       const deliveryFeeText =
-        o.delivery === 'domicilio' && Number(o.delivery_fee || 0) > 0
+        isAddressDelivery && Number(o.delivery_fee || 0) > 0
           ? `<div style="font-size:12px;color:var(--ink-3);margin-top:3px"><i class="ph-bold ph-coins"></i> Envío: ${fmtMoney(Number(o.delivery_fee || 0))}${o.delivery_zone_name ? ` · ${esc(o.delivery_zone_name)}` : ''}</div>`
           : '';
       const resolvedLocationText = o.customer_location_resolved
@@ -2734,7 +2777,7 @@ function ordersTableHTML(orders, editable = true) {
         <td><div class="cust">${custAvatar(o.customer?.name)}<div class="cmeta"><b>${esc(o.customer?.name || '—')}</b><span>${esc(o.customer?.phone || '')}</span></div></div></td>
         <td style="max-width:280px">${esc(items)}${noteCallout}</td>
         <td style="white-space:nowrap">${deliveryText}${deliveryFeeText}${locationText}${cancelNoteText}</td>
-        <td style="white-space:nowrap;font-size:13px"><b>${esc(o.delivery === 'domicilio' ? (o.service_branch_name || '—') : (o.pickup_branch_name || '—'))}</b></td>
+        <td style="white-space:nowrap;font-size:13px"><b>${esc(isAddressDelivery ? (o.service_branch_name || '—') : (o.pickup_branch_name || '—'))}</b></td>
         <td><b>${fmtMoney(o.total)}</b></td>
         <td>${paymentText}</td>
         <td>${statusCell}</td>
@@ -3003,13 +3046,14 @@ $('#customersClearFilters')?.addEventListener('click', () => {
 
 function formatExportRows(orders) {
   return orders.map((o) => {
-    const sucursal = o.delivery === 'domicilio' ? (o.service_branch_name || '—') : (o.pickup_branch_name || '—');
+    const isAddressDelivery = o.receiving_mode_behavior === 'delivery' || o.delivery === 'domicilio';
+    const sucursal = isAddressDelivery ? (o.service_branch_name || '—') : (o.pickup_branch_name || '—');
     return {
       pedido: `#${o.id}`,
       cliente: o.customer?.name || '—',
       telefono: o.customer?.phone || '',
       productos: o.items.map((it) => `${it.qty}x ${it.name}`).join(', '),
-      entrega: o.delivery === 'domicilio' ? 'Domicilio' : `Recoger${o.pickup_branch_name ? ` (${o.pickup_branch_name})` : ''}`,
+      entrega: buildOrderDeliveryLabel(o),
       sucursal: sucursal,
       ubicacion: o.customer_location_text || '',
       motivo_cancelacion: o.cancel_note || '',
@@ -3351,7 +3395,7 @@ function setPosPaymentDefaults() {
 
 function resetPosPaymentForm() {
   POS_PAYMENT_METHOD = 'cash';
-  POS_PAYMENT_FORM = { cashReceived: '', cash: '', card: '', transfer: '', notes: '' };
+  POS_PAYMENT_FORM = { cashReceived: '', cash: '', card: '', transfer: '', notes: '', deliveryAddress: '', deliveryNeighborhood: '', deliveryReference: '' };
   POS_IS_DELIVERY = false;
   POS_DELIVERY_FEE = '';
 }
@@ -3427,6 +3471,10 @@ function buildPosTicketData() {
         ? Math.max(moneyNum(POS_PAYMENT_FORM.cashReceived || 0) - total, 0)
         : 0,
       notes: POS_PAYMENT_FORM.notes || '',
+      delivery: POS_IS_DELIVERY ? 'domicilio' : 'mostrador',
+      deliveryAddress: POS_IS_DELIVERY ? POS_PAYMENT_FORM.deliveryAddress || '' : '',
+      deliveryNeighborhood: POS_IS_DELIVERY ? POS_PAYMENT_FORM.deliveryNeighborhood || '' : '',
+      deliveryReference: POS_IS_DELIVERY ? POS_PAYMENT_FORM.deliveryReference || '' : '',
     };
   }
   if (LAST_POS_SALE) {
@@ -3447,6 +3495,10 @@ function buildPosTicketData() {
       cashReceived: moneyNum(LAST_POS_SALE.cashReceived || 0),
       cashChange: moneyNum(LAST_POS_SALE.cashChange || 0),
       notes: LAST_POS_SALE.notes || '',
+      delivery: LAST_POS_SALE.delivery || '',
+      deliveryAddress: LAST_POS_SALE.deliveryAddress || LAST_POS_SALE.delivery_address || '',
+      deliveryNeighborhood: LAST_POS_SALE.deliveryNeighborhood || LAST_POS_SALE.delivery_neighborhood || '',
+      deliveryReference: LAST_POS_SALE.deliveryReference || LAST_POS_SALE.delivery_reference || '',
       tableNumber: LAST_POS_SALE.tableNumber || null,
       waiterName: LAST_POS_SALE.waiterName || '',
       rounds: Array.isArray(LAST_POS_SALE.rounds) ? LAST_POS_SALE.rounds : [],
@@ -3506,6 +3558,10 @@ function openThermalPrintWindow(ticket) {
 
   const subtotal = Number(ticket.subtotal || ticket.total || 0);
   const total = Number(ticket.total || 0);
+  const deliveryAddress = esc(ticket.deliveryAddress || ticket.delivery_address || '');
+  const deliveryNeighborhood = esc(ticket.deliveryNeighborhood || ticket.delivery_neighborhood || '');
+  const deliveryReference = esc(ticket.deliveryReference || ticket.delivery_reference || '');
+  const hasDeliveryData = Boolean(deliveryAddress || deliveryNeighborhood || deliveryReference);
   const html = `<!doctype html>
 <html lang="es">
 <head>
@@ -3532,6 +3588,7 @@ function openThermalPrintWindow(ticket) {
     .logo img { max-width: 46mm; max-height: 22mm; object-fit: contain; }
     .order-note { margin: 9px 0; padding: 8px; border: 3px double #000; font-size: ${Math.max(fontPx + 2, 14)}px; font-weight: 900; line-height: 1.35; text-align: center; overflow-wrap: anywhere; }
     .order-note span { display: block; margin-bottom: 3px; font-size: ${Math.max(fontPx - 2, 10)}px; letter-spacing: .7px; }
+    .delivery-block { margin: 7px 0; padding: 7px; border: 2px solid #000; overflow-wrap: anywhere; }
   </style>
 </head>
 <body>
@@ -3546,6 +3603,11 @@ function openThermalPrintWindow(ticket) {
   <div class="center meta">Cajero: ${seller}</div>
   ${isRoundTicket ? `<div class="center meta"><b>Mesero: ${esc(ticket.waiterName || '—')}</b></div><div class="center meta"><b>COMANDA DE RONDA</b></div>` : ''}
   ${!isRoundTicket && ticket.tableNumber ? `<div class="center meta"><b>Mesa ${esc(String(ticket.tableNumber))} · Mesero: ${esc(ticket.waiterName || '—')}</b></div>` : ''}
+  ${hasDeliveryData ? `<div class="delivery-block"><div class="center"><b>ENTREGA A DOMICILIO</b></div>
+    ${deliveryAddress ? `<div><b>DOMICILIO:</b> ${deliveryAddress}</div>` : ''}
+    ${deliveryNeighborhood ? `<div><b>COLONIA / BARRIO:</b> ${deliveryNeighborhood}</div>` : ''}
+    ${deliveryReference ? `<div><b>REFERENCIA:</b> ${deliveryReference}</div>` : ''}
+  </div>` : ''}
   <div class="sep"></div>
   <table>${groupedRoundRows || itemRows}</table>
   <div class="sep"></div>
@@ -3621,7 +3683,8 @@ function printPosSaleById(id) {
       price: Number(it.price || 0),
       total: moneyNum(Number(it.qty || 0) * Number(it.price || 0)),
     })),
-    subtotal: Number(sale.total || 0),
+    subtotal: Number(sale.total || 0) - Number(sale.delivery_fee || 0),
+    deliveryFee: Number(sale.delivery_fee || 0),
     total: Number(sale.total || 0),
     paymentBreakdown: sale.payment_breakdown || null,
     cashReceived: moneyNum(sale.cash_received || 0),
@@ -3630,6 +3693,10 @@ function printPosSaleById(id) {
     tableNumber: sale.table_number || null,
     waiterName: sale.waiter_name || '',
     rounds: Array.isArray(sale.rounds) ? sale.rounds : [],
+    delivery: sale.delivery || '',
+    deliveryAddress: sale.delivery_address || '',
+    deliveryNeighborhood: sale.delivery_neighborhood || '',
+    deliveryReference: sale.delivery_reference || '',
   };
   openThermalPrintWindow(ticket);
 }
@@ -3819,6 +3886,13 @@ function printPosCloseReport(closeResult) {
 
 async function loadPos() {
   POS_OVERVIEW = await api('/api/pos/overview');
+  const managedBranchId = getManagedPosBranchId();
+  const managedSessionStillOpen = (POS_OVERVIEW?.openSessions || [])
+    .some((session) => Number(session.branch_id) === Number(managedBranchId));
+  if (managedBranchId && !POS_OVERVIEW?.activeSession && !managedSessionStillOpen) {
+    setManagedPosBranchId(null);
+    POS_OVERVIEW = await api('/api/pos/overview');
+  }
   if (!POS_PRODUCT_SORT || POS_PRODUCT_SORT === 'top_sold') {
     const tenantMode = normalizePosSortMode(SETTINGS?.pos_catalog_sort_mode || '');
     const localMode = readStoredPosSortMode();
@@ -4087,13 +4161,18 @@ function renderPosTablesLayout() {
   const tables = Array.isArray(POS_OVERVIEW?.tables) ? POS_OVERVIEW.tables : [];
   const busy = tables.filter((table) => table.account).length;
   $('#posTablesCounts').textContent = `${tables.length} mesas · ${busy} abiertas`;
+  if ($('#posTablesHint')) {
+    $('#posTablesHint').textContent = POS_CHATBOT_TABLE_ORDER_ID
+      ? `Selecciona una mesa libre para abrir la cuenta del pedido chatbot #${POS_CHATBOT_TABLE_ORDER_ID}.`
+      : 'Selecciona una mesa libre para abrirla o una ocupada para continuar agregando consumos.';
+  }
   host.innerHTML = tables.length
     ? tables.map((table) => {
         const account = table.account;
         const label = table.label || `Mesa ${table.tableNumber}`;
         return `<button type="button" class="pos-table-node ${esc(table.shape)} ${account ? 'busy' : ''}" data-pos-table="${table.id}" style="--x:${table.positionX}%;--y:${table.positionY}%">
           <b>${esc(label)}</b>
-          <small>${account ? `${esc(account.waiter_name || 'Cuenta abierta')} · ${(account.rounds || []).length} ronda(s)` : 'Disponible'}</small>
+          <small>${account ? `${esc(account.customer_name || account.waiter_name || 'Cuenta abierta')} · ${(account.rounds || []).length} ronda(s)` : 'Disponible'}</small>
           ${account ? `<span class="table-total">${fmtMoney(account.total || 0)}</span>` : ''}
         </button>`;
       }).join('')
@@ -4101,17 +4180,24 @@ function renderPosTablesLayout() {
   host.querySelectorAll('[data-pos-table]').forEach((button) => button.addEventListener('click', () => {
     const table = tables.find((item) => Number(item.id) === Number(button.dataset.posTable));
     if (!table) return;
+    if (POS_CHATBOT_TABLE_ORDER_ID && table.account) return toast('Selecciona una mesa libre para este pedido', true);
     if (table.account) return selectPosTableAccount(table.account);
     $('#posTableOpenId').value = String(table.id);
-    $('#posTableOpenTitle').textContent = table.label || `Mesa ${table.tableNumber}`;
+    $('#posTableOpenTitle').textContent = `${table.label || `Mesa ${table.tableNumber}`}${POS_CHATBOT_TABLE_ORDER_ID ? ` · Pedido #${POS_CHATBOT_TABLE_ORDER_ID}` : ''}`;
     $('#posTableWaiterName').value = ME?.displayName || ME?.username || '';
+    if ($('#posTableOpenSubmit')) $('#posTableOpenSubmit').innerHTML = POS_CHATBOT_TABLE_ORDER_ID
+      ? '<i class="ph-bold ph-fork-knife"></i> Abrir cuenta con pedido'
+      : '<i class="ph-bold ph-door-open"></i> Abrir mesa';
     $('#posTableOpenModal').classList.add('show');
     setTimeout(() => $('#posTableWaiterName')?.focus(), 40);
   }));
 }
 
-function openPosTablesModal() {
+function openPosTablesModal({ chatbotOrderId = null } = {}) {
   if (!POS_OVERVIEW?.activeSession) return toast('Abre una caja antes de operar mesas', true);
+  POS_CHATBOT_TABLE_ORDER_ID = Number.isInteger(Number(chatbotOrderId)) && Number(chatbotOrderId) > 0
+    ? Number(chatbotOrderId)
+    : null;
   renderPosTablesLayout();
   $('#posTablesModal').classList.add('show');
 }
@@ -4236,6 +4322,7 @@ function renderPosSession() {
   const session = POS_OVERVIEW?.activeSession;
   if (!session) {
     const branches = Array.isArray(POS_OVERVIEW?.branches) ? POS_OVERVIEW.branches : [];
+    const openSessions = Array.isArray(POS_OVERVIEW?.openSessions) ? POS_OVERVIEW.openSessions : [];
     const blockedIds = new Set((POS_OVERVIEW?.blockedBranchIds || []).map(Number));
     const cashierBranchId = isCashierUser() ? String(ME?.branchId || '') : '';
 
@@ -4251,6 +4338,21 @@ function renderPosSession() {
         </div>`;
       return;
     }
+
+    const openSessionsHtml = !isCashierUser() && openSessions.length
+      ? `<div style="margin-bottom:20px">
+          <h3><i class="ph-bold ph-monitor"></i> Cajas abiertas en sucursales</h3>
+          <p class="hint" style="margin:-8px 0 12px">Selecciona una caja para administrarla, registrar movimientos o realizar su cierre.</p>
+          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:10px">
+            ${openSessions.map((openSession) => `
+              <div style="border:1px solid var(--line);border-radius:12px;padding:12px;background:var(--surface)">
+                <b><i class="ph-bold ph-storefront"></i> ${esc(openSession.branch_name || 'Sucursal general')}</b>
+                <div class="hint" style="margin:5px 0 10px">Abierta por ${esc(openSession.opened_by || '—')} · ${esc(openSession.opened_at || '')}</div>
+                ${openSession.branch_id ? `<button type="button" class="btn btn-primary" data-manage-pos-branch="${esc(String(openSession.branch_id))}"><i class="ph-bold ph-arrow-square-in"></i> Administrar caja</button>` : ''}
+              </div>`).join('')}
+          </div>
+        </div>`
+      : '';
 
     const branchField = branches.length
       ? isCashierUser()
@@ -4275,6 +4377,7 @@ function renderPosSession() {
       : '<div class="hint" style="margin-bottom:12px">No hay sucursales activas configuradas. La caja operará como general.</div>';
     el.style.display = 'block';
     el.innerHTML = `
+      ${openSessionsHtml}
       <h3><i class="ph-bold ph-lock-key-open"></i> Apertura de caja</h3>
       <p class="hint" style="margin:-8px 0 18px">Abre una caja para empezar a registrar ventas, ingresos, retiros y gastos del turno.</p>
       <form id="posOpenForm">
@@ -4291,9 +4394,15 @@ function renderPosSession() {
         </div>
         <button class="btn btn-primary" type="submit"><i class="ph-bold ph-play"></i> Abrir caja</button>
       </form>`;
+    el.querySelectorAll('[data-manage-pos-branch]').forEach((button) => button.addEventListener('click', async () => {
+      setManagedPosBranchId(Number(button.dataset.managePosBranch));
+      await loadPos();
+      toast('Caja seleccionada para administración');
+    }));
     $('#posOpenForm')?.addEventListener('submit', async (e) => {
       e.preventDefault();
       try {
+        setManagedPosBranchId(null);
         await api('/api/pos/session/open', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -4311,12 +4420,29 @@ function renderPosSession() {
     });
     return;
   }
+  const openSessions = Array.isArray(POS_OVERVIEW?.openSessions) ? POS_OVERVIEW.openSessions : [];
+  const branchSessionOptions = !isCashierUser()
+    ? openSessions.filter((openSession) => openSession.branch_id).map((openSession) => `
+        <option value="${esc(String(openSession.branch_id))}" ${Number(openSession.branch_id) === Number(session.branch_id) ? 'selected' : ''}>
+          ${esc(openSession.branch_name || 'Sucursal')} · ${esc(openSession.opened_by || 'sin usuario')}
+        </option>`).join('')
+    : '';
   el.style.display = 'block';
   el.innerHTML = `
     <div class="pos-session-active">
       <h3><i class="ph-bold ph-storefront"></i> Caja activa</h3>
       <div class="hint">${session.branch_name ? `Sucursal: ${esc(session.branch_name)}` : 'Sucursal general'} · Abierta por ${esc(session.opened_by || '—')}</div>
+      ${branchSessionOptions ? `
+        <div class="field" style="max-width:460px;margin-top:12px">
+          <label><i class="ph-bold ph-arrows-left-right"></i> Administrar otra caja abierta</label>
+          <select id="posManagedBranchSelect">${branchSessionOptions}</select>
+        </div>` : ''}
     </div>`;
+  $('#posManagedBranchSelect')?.addEventListener('change', async (event) => {
+    setManagedPosBranchId(Number(event.target.value));
+    await loadPos();
+    toast('Caja seleccionada para administración');
+  });
 }
 
 function renderPosCatalog() {
@@ -4440,10 +4566,22 @@ function renderPosCart() {
           <label><i class="ph-bold ph-currency-circle-dollar"></i> Costo de envío</label>
           <input type="number" id="posDeliveryFee" step="0.01" min="0" value="${esc(String(POS_DELIVERY_FEE || ''))}" placeholder="0.00" />
           <div class="hint">Se suma al total y suma al turno en el rubro domicilios.</div>
+        </div>
+        <div class="field">
+          <label><i class="ph-bold ph-map-pin"></i> Domicilio *</label>
+          <textarea id="posDeliveryAddress" rows="2" maxlength="300" required placeholder="Calle, número exterior/interior">${esc(POS_PAYMENT_FORM.deliveryAddress || '')}</textarea>
+        </div>
+        <div class="field">
+          <label><i class="ph-bold ph-map-trifold"></i> Colonia / barrio / sector *</label>
+          <input id="posDeliveryNeighborhood" maxlength="160" required value="${esc(POS_PAYMENT_FORM.deliveryNeighborhood || '')}" placeholder="Nombre de la colonia o barrio" />
+        </div>
+        <div class="field">
+          <label><i class="ph-bold ph-signpost"></i> Referencias de entrega</label>
+          <textarea id="posDeliveryReference" rows="2" maxlength="240" placeholder="Color de casa, portón, esquina, negocio cercano...">${esc(POS_PAYMENT_FORM.deliveryReference || '')}</textarea>
         </div>` : ''}
         <div class="field">
           <label><i class="ph-bold ph-note"></i> ${tableAccount ? 'Nota de la ronda' : 'Nota de venta'}</label>
-          <textarea id="posSaleNotes" rows="2" placeholder="${tableAccount ? 'Ej. Sin cebolla, término medio...' : POS_IS_DELIVERY ? 'Dirección, referencia de entrega...' : 'Mesa 4, venta rápida, pedido interno...'}">${esc(POS_PAYMENT_FORM.notes || '')}</textarea>
+          <textarea id="posSaleNotes" rows="2" placeholder="${tableAccount ? 'Ej. Sin cebolla, término medio...' : POS_IS_DELIVERY ? 'Indicaciones de preparación: sin cebolla, salsa aparte...' : 'Mesa 4, venta rápida, pedido interno...'}">${esc(POS_PAYMENT_FORM.notes || '')}</textarea>
         </div>
         <div style="display:flex;gap:10px;flex-wrap:wrap">
           <button class="btn btn-primary" type="submit" ${submitDisabled}><i class="ph-bold ph-check-circle"></i> ${tableAccount ? 'Cerrar y cobrar cuenta' : 'Cobrar venta'}</button>
@@ -4457,7 +4595,7 @@ function renderPosCart() {
   const tableContext = tableAccount ? `
     <div class="pos-table-context">
       <div class="pos-table-context-head">
-        <div><b><i class="ph-bold ph-fork-knife"></i> Mesa ${esc(String(tableNumber || ''))}</b><small>Mesero: ${esc(tableAccount.waiter_name || '—')} · La cuenta se acumula hasta cobrarla.</small></div>
+        <div><b><i class="ph-bold ph-fork-knife"></i> Mesa ${esc(String(tableNumber || ''))}${tableAccount.customer_name ? ` · ${esc(tableAccount.customer_name)}` : ''}</b><small>${tableAccount.customer_phone ? `Cliente: ${esc(tableAccount.customer_phone)} · ` : ''}Mesero: ${esc(tableAccount.waiter_name || '—')} · La cuenta se acumula hasta cobrarla.</small></div>
         <button class="btn btn-ghost btn-icon" type="button" id="posExitTable" title="Salir de la mesa"><i class="ph-bold ph-x"></i></button>
       </div>
     </div>` : '';
@@ -4503,6 +4641,9 @@ function renderPosCart() {
     updatePosMixedHint();
   });
   $('#posSaleNotes')?.addEventListener('input', (e) => (POS_PAYMENT_FORM.notes = e.target.value));
+  $('#posDeliveryAddress')?.addEventListener('input', (e) => (POS_PAYMENT_FORM.deliveryAddress = e.target.value));
+  $('#posDeliveryNeighborhood')?.addEventListener('input', (e) => (POS_PAYMENT_FORM.deliveryNeighborhood = e.target.value));
+  $('#posDeliveryReference')?.addEventListener('input', (e) => (POS_PAYMENT_FORM.deliveryReference = e.target.value));
   $('#posDeliveryToggle')?.addEventListener('change', (e) => {
     POS_IS_DELIVERY = e.target.checked;
     if (!POS_IS_DELIVERY) POS_DELIVERY_FEE = '';
@@ -4538,6 +4679,9 @@ function renderPosCart() {
         notes: $('#posSaleNotes')?.value || '',
         isDelivery: POS_IS_DELIVERY,
         deliveryFee: POS_IS_DELIVERY ? Number($('#posDeliveryFee')?.value || 0) : 0,
+        deliveryAddress: POS_IS_DELIVERY ? ($('#posDeliveryAddress')?.value || '') : '',
+        deliveryNeighborhood: POS_IS_DELIVERY ? ($('#posDeliveryNeighborhood')?.value || '') : '',
+        deliveryReference: POS_IS_DELIVERY ? ($('#posDeliveryReference')?.value || '') : '',
       };
       if (!tableAccount) payload.items = posCartPayload();
       let checkoutAccount = tableAccount;
@@ -4678,8 +4822,7 @@ function chatbotOrderStatusBadge(status) {
 }
 
 function chatbotDeliveryLabel(order) {
-  if (order.delivery === 'domicilio') return 'Domicilio';
-  return `Recoger${order.pickup_branch_name ? ` (${order.pickup_branch_name})` : ''}`;
+  return buildOrderDeliveryLabel(order);
 }
 
 function chatbotChargeStatusBadge(orderId) {
@@ -4724,7 +4867,8 @@ async function loadPosChatbotQueue(page = 1) {
       .map((order) => {
         const items = (order.items || []).map((it) => `${it.qty}x ${it.name}`).join(', ');
         const isImporting = POS_CHATBOT_IMPORTING.has(Number(order.id));
-        const locationText = order.customer_location_text || order.customer_location_resolved || '—';
+        const isDineIn = order.delivery === 'comer_sucursal';
+        const locationText = [order.delivery_address, order.delivery_neighborhood, order.delivery_reference].filter(Boolean).join(' · ') || order.customer_location_text || order.customer_location_resolved || '—';
         const noteText = String(order.notes || '').trim();
         return `<article class="pos-chatbot-card">
           <div class="pos-chatbot-card-head">
@@ -4741,24 +4885,24 @@ async function loadPosChatbotQueue(page = 1) {
             <div class="pos-chatbot-kv"><span>Fecha</span><div>${esc(order.created_at || '')}</div></div>
             ${noteText ? `<div class="order-note-callout" style="grid-column:1/-1"><span><i class="ph-fill ph-warning-circle"></i> Nota del pedido</span><b>${esc(noteText)}</b></div>` : ''}
           </div>
-          <button type="button" class="btn-pos-charge" data-import-chatbot-order="${order.id}" ${isImporting ? 'disabled' : ''}><i class="ph-bold ph-cash-register"></i> ${isImporting ? 'Procesando...' : 'Cobrar en POS'}</button>
+          <button type="button" class="btn-pos-charge" data-import-chatbot-order="${order.id}" ${isImporting ? 'disabled' : ''}><i class="ph-bold ${isDineIn ? 'ph-fork-knife' : 'ph-cash-register'}"></i> ${isImporting ? 'Procesando...' : (isDineIn ? 'Abrir en mesa' : 'Cobrar en POS')}</button>
         </article>`;
       })
       .join('')}</div>`;
   } else {
-    table.innerHTML = `<table class="pos-chatbot-table" style="width:1580px;min-width:1580px;table-layout:fixed"><thead><tr><th class="th-pedido">Pedido</th><th class="th-action">Cobrar</th><th class="th-cliente">Cliente</th><th class="th-productos">Productos</th><th class="th-entrega">Entrega</th><th class="th-pago">Pago</th><th class="th-total">Total</th><th class="th-estado">Estado</th><th class="th-fecha">Fecha</th><th class="th-cobro">Cobro</th></tr></thead><tbody>${POS_CHATBOT_QUEUE
+    table.innerHTML = `<table class="pos-chatbot-table" style="width:1580px;min-width:1580px;table-layout:fixed"><thead><tr><th class="th-pedido">Pedido</th><th class="th-action">Acción</th><th class="th-cliente">Cliente</th><th class="th-productos">Productos</th><th class="th-entrega">Entrega</th><th class="th-pago">Pago</th><th class="th-total">Total</th><th class="th-estado">Estado</th><th class="th-fecha">Fecha</th><th class="th-cobro">Cobro</th></tr></thead><tbody>${POS_CHATBOT_QUEUE
       .map((order) => {
         const items = (order.items || []).map((it) => `${it.qty}x ${it.name}`).join(', ');
         const isImporting = POS_CHATBOT_IMPORTING.has(Number(order.id));
-        const locationLine = order.customer_location_text
-          ? `<div style="font-size:12px;color:var(--ink-3)">${esc(order.customer_location_text)}</div>`
-          : (order.customer_location_resolved ? `<div style="font-size:12px;color:var(--ink-3)">${esc(order.customer_location_resolved)}</div>` : '');
+        const isDineIn = order.delivery === 'comer_sucursal';
+        const deliveryLocation = [order.delivery_address, order.delivery_neighborhood, order.delivery_reference].filter(Boolean).join(' · ') || order.customer_location_text || order.customer_location_resolved || '';
+        const locationLine = deliveryLocation ? `<div style="font-size:12px;color:var(--ink-3)">${esc(deliveryLocation)}</div>` : '';
         const noteLine = order.notes
           ? `<div class="order-note-callout"><span><i class="ph-fill ph-warning-circle"></i> Nota del pedido</span><b>${esc(order.notes)}</b></div>`
           : '';
         return `<tr>
           <td class="td-pedido"><b>#${order.id}</b></td>
-          <td class="td-action"><button type="button" class="btn-pos-charge" data-import-chatbot-order="${order.id}" ${isImporting ? 'disabled' : ''}><i class="ph-bold ph-cash-register"></i> ${isImporting ? 'Procesando...' : 'Cobrar en POS'}</button></td>
+          <td class="td-action"><button type="button" class="btn-pos-charge" data-import-chatbot-order="${order.id}" ${isImporting ? 'disabled' : ''}><i class="ph-bold ${isDineIn ? 'ph-fork-knife' : 'ph-cash-register'}"></i> ${isImporting ? 'Procesando...' : (isDineIn ? 'Abrir en mesa' : 'Cobrar en POS')}</button></td>
           <td class="td-cliente"><b>${esc(order.customer_name || 'Cliente')}</b><div style="font-size:12px;color:var(--ink-3)">${esc(order.customer_phone || '—')}</div></td>
           <td class="td-productos">${esc(items || '—')}</td>
           <td class="td-entrega">${esc(chatbotDeliveryLabel(order))}${locationLine}${noteLine}</td>
@@ -4787,6 +4931,15 @@ async function importChatbotOrderToPos(orderId) {
   const id = Number(orderId);
   if (!Number.isInteger(id) || id <= 0) return;
   if (POS_CHATBOT_IMPORTING.has(id)) return;
+  const queueOrder = POS_CHATBOT_QUEUE.find((order) => Number(order.id) === id);
+  if (queueOrder?.delivery === 'comer_sucursal') {
+    const availableTables = (POS_OVERVIEW?.tables || []).filter((table) => !table.account);
+    if (!availableTables.length) return toast('No hay mesas libres para abrir este pedido', true);
+    $('#posChatbotQueueModal')?.classList.remove('show');
+    openPosTablesModal({ chatbotOrderId: id });
+    toast(`Selecciona la mesa para el pedido #${id}`);
+    return;
+  }
   const ok = await askConfirm(
     '¿Pasar pedido a caja?',
     `El pedido #${id} se convertirá en venta POS para cobrar ticket y sumarse al cierre.`,
@@ -4814,6 +4967,10 @@ async function importChatbotOrderToPos(orderId) {
       cashReceived: Number(sale.cash_received || 0),
       cashChange: Number(sale.cash_change || 0),
       notes: String(sale.notes || ''),
+      delivery: sale.delivery || '',
+      deliveryAddress: sale.delivery_address || '',
+      deliveryNeighborhood: sale.delivery_neighborhood || '',
+      deliveryReference: sale.delivery_reference || '',
     };
     toast(`Pedido #${id} integrado a caja`);
     await loadPos();
@@ -4983,22 +5140,38 @@ $('#posMovementKinds')?.addEventListener('click', (e) => {
 
 $('#posMovementCancel')?.addEventListener('click', () => $('#posMovementModal').classList.remove('show'));
 $('#posCloseCancel')?.addEventListener('click', () => $('#posCloseModal').classList.remove('show'));
-$('#posTablesClose')?.addEventListener('click', () => $('#posTablesModal').classList.remove('show'));
+$('#posTablesClose')?.addEventListener('click', () => {
+  $('#posTablesModal').classList.remove('show');
+  POS_CHATBOT_TABLE_ORDER_ID = null;
+});
 $('#posTableOpenCancel')?.addEventListener('click', () => $('#posTableOpenModal').classList.remove('show'));
 $('#posTableOpenForm')?.addEventListener('submit', async (e) => {
   e.preventDefault();
+  const chatbotOrderId = POS_CHATBOT_TABLE_ORDER_ID;
   try {
     const tableId = Number($('#posTableOpenId')?.value || 0);
-    const result = await api(`/api/pos/tables/${tableId}/open`, {
+    const waiterName = $('#posTableWaiterName')?.value || '';
+    if (chatbotOrderId) POS_CHATBOT_IMPORTING.add(chatbotOrderId);
+    const result = await api(chatbotOrderId
+      ? `/api/pos/chatbot-orders/${chatbotOrderId}/import`
+      : `/api/pos/tables/${tableId}/open`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ waiterName: $('#posTableWaiterName')?.value || '' }),
+      body: JSON.stringify(chatbotOrderId ? { tableId, waiterName } : { waiterName }),
     });
     $('#posTableOpenModal').classList.remove('show');
+    $('#posTablesModal').classList.remove('show');
+    POS_CHATBOT_TABLE_ORDER_ID = null;
     await loadPos();
     selectPosTableAccount(result.account);
+    if (chatbotOrderId) {
+      toast(`Pedido #${chatbotOrderId} abierto en mesa ${result.account?.table_number || ''}`);
+      await loadPosChatbotQueue(POS_CHATBOT_PAGE);
+    }
   } catch (err) {
     toast(err.message, true);
+  } finally {
+    if (chatbotOrderId) POS_CHATBOT_IMPORTING.delete(chatbotOrderId);
   }
 });
 $('#posSalesHistoryClose')?.addEventListener('click', () => $('#posSalesHistoryModal').classList.remove('show'));
@@ -5122,6 +5295,7 @@ $('#posCloseFormModal')?.addEventListener('submit', async (e) => {
     });
     POS_TABLE_ACCOUNT = null;
     clearPosCart();
+    setManagedPosBranchId(null);
     $('#posCloseModal').classList.remove('show');
     toast(`Caja cerrada. Diferencia: ${fmtMoney(result.differenceAmount)}`);
     exportPosClosePdf(result);
@@ -6522,6 +6696,94 @@ function normalizeInfoUrl(raw) {
   return '';
 }
 
+function parseChatbotReceivingModes(raw) {
+  const text = String(raw || '').trim();
+  if (!text) return [];
+  try {
+    const parsed = JSON.parse(text);
+    if (!Array.isArray(parsed)) return [];
+    const used = new Set();
+    return parsed.slice(0, 10).map((mode, idx) => {
+      const label = String(mode?.label || '').trim().replace(/\s+/g, ' ').slice(0, 42);
+      const behavior = ['delivery', 'branch', 'simple'].includes(mode?.behavior) ? mode.behavior : 'simple';
+      let id = String(mode?.id || `custom_${idx + 1}`).toLowerCase().replace(/[^a-z0-9_-]/g, '').slice(0, 36);
+      if (!id || ['domicilio', 'recoger', 'comer_sucursal'].includes(id)) id = `custom_${idx + 1}`;
+      while (used.has(id)) id = `${id}_${idx + 1}`.slice(0, 36);
+      used.add(id);
+      return label ? { id, label, behavior, enabled: mode?.enabled !== false } : null;
+    }).filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+function receivingModeBehaviorLabel(behavior) {
+  if (behavior === 'delivery') return 'Solicita domicilio';
+  if (behavior === 'branch') return 'Solicita sucursal';
+  return 'Sin datos adicionales';
+}
+
+function resetReceivingModeEditor() {
+  $('#botReceivingModeId').value = '';
+  $('#botReceivingModeLabel').value = '';
+  $('#botReceivingModeBehavior').value = 'simple';
+  $('#botReceivingModeSaveBtn').innerHTML = '<i class="ph-bold ph-plus-circle"></i> Agregar modalidad';
+  $('#botReceivingModeHint').textContent = 'Las modalidades se publican al guardar el flujo.';
+}
+
+function setReceivingModeEditor(mode) {
+  $('#botReceivingModeId').value = mode.id;
+  $('#botReceivingModeLabel').value = mode.label;
+  $('#botReceivingModeBehavior').value = mode.behavior;
+  $('#botReceivingModeSaveBtn').innerHTML = '<i class="ph-bold ph-floppy-disk"></i> Guardar cambios';
+  $('#botReceivingModeHint').textContent = 'Editando modalidad. Guarda el flujo para publicar los cambios.';
+}
+
+function renderReceivingModesList() {
+  const host = $('#botReceivingModesList');
+  if (!host) return;
+  if (!CHATBOT_RECEIVING_MODES.length) {
+    host.innerHTML = emptyHTML('ph-path', 'Sin modalidades adicionales', 'Las tres modalidades principales se administran con sus interruptores.');
+    return;
+  }
+  host.innerHTML = CHATBOT_RECEIVING_MODES.map((mode) => `
+    <div class="chatbot-info-item">
+      <div class="meta">
+        <div class="label">${esc(mode.label)}</div>
+        <div class="message">${esc(receivingModeBehaviorLabel(mode.behavior))} · ${mode.enabled ? 'Activa' : 'Inactiva'}</div>
+      </div>
+      <div class="actions">
+        <button class="btn btn-ghost btn-icon" type="button" data-mode-toggle="${esc(mode.id)}" title="${mode.enabled ? 'Desactivar' : 'Activar'}"><i class="ph-bold ${mode.enabled ? 'ph-toggle-right' : 'ph-toggle-left'}"></i></button>
+        <button class="btn btn-ghost btn-icon" type="button" data-mode-edit="${esc(mode.id)}" title="Editar"><i class="ph-bold ph-pencil-simple"></i></button>
+        <button class="btn btn-danger btn-icon" type="button" data-mode-del="${esc(mode.id)}" title="Eliminar"><i class="ph-bold ph-trash"></i></button>
+      </div>
+    </div>
+  `).join('');
+  host.querySelectorAll('[data-mode-toggle]').forEach((button) => button.addEventListener('click', () => {
+    const id = String(button.dataset.modeToggle || '');
+    CHATBOT_RECEIVING_MODES = CHATBOT_RECEIVING_MODES.map((mode) => mode.id === id ? { ...mode, enabled: !mode.enabled } : mode);
+    renderReceivingModesList();
+  }));
+  host.querySelectorAll('[data-mode-edit]').forEach((button) => button.addEventListener('click', () => {
+    const mode = CHATBOT_RECEIVING_MODES.find((item) => item.id === button.dataset.modeEdit);
+    if (mode) setReceivingModeEditor(mode);
+  }));
+  host.querySelectorAll('[data-mode-del]').forEach((button) => button.addEventListener('click', async () => {
+    const id = String(button.dataset.modeDel || '');
+    const mode = CHATBOT_RECEIVING_MODES.find((item) => item.id === id);
+    if (!(await askConfirm('¿Eliminar modalidad?', `Se eliminará “${mode?.label || 'sin nombre'}”.`))) return;
+    CHATBOT_RECEIVING_MODES = CHATBOT_RECEIVING_MODES.filter((item) => item.id !== id);
+    if ($('#botReceivingModeId').value === id) resetReceivingModeEditor();
+    renderReceivingModesList();
+  }));
+}
+
+function fillReceivingModesFromSettings() {
+  CHATBOT_RECEIVING_MODES = parseChatbotReceivingModes(SETTINGS?.chatbot_receiving_modes_json || '[]');
+  resetReceivingModeEditor();
+  renderReceivingModesList();
+}
+
 function parseChatbotInfoOptions(raw) {
   const text = String(raw || '').trim();
   if (!text) return [];
@@ -7183,8 +7445,10 @@ async function fillBotForm() {
   $('#botWhatsapp').value = SETTINGS.whatsapp || '';
   $('#botDelivery').checked = SETTINGS.delivery_enabled === '1';
   $('#botPickup').checked = SETTINGS.pickup_enabled === '1';
+  $('#botDineIn').checked = SETTINGS.dine_in_enabled !== '0';
   $('#botLocation').checked = SETTINGS.location_enabled !== '0';
   fillChatbotInfoOptionsFromSettings();
+  fillReceivingModesFromSettings();
   DELIVERY_ZONES = parseDeliveryZones(SETTINGS.delivery_zones_geojson || '[]');
   DELIVERY_ZONES_PAGE = 1;
   DELIVERY_ZONE_FILTER_BRANCH = 'all';
@@ -7216,20 +7480,46 @@ $('#copyLinkBtn').addEventListener('click', () => {
 });
 $('#botForm').addEventListener('submit', async (e) => {
   e.preventDefault();
-  if (!$('#botDelivery').checked && !$('#botPickup').checked) {
-    return toast('Activa al menos una opción de entrega', true);
+  const hasCustomMode = CHATBOT_RECEIVING_MODES.some((mode) => mode.enabled);
+  if (!$('#botDelivery').checked && !$('#botPickup').checked && !$('#botDineIn').checked && !hasCustomMode) {
+    return toast('Activa al menos una modalidad para recibir pedidos', true);
   }
   const fd = new FormData();
   fd.append('welcome_message', $('#botWelcome').value);
   fd.append('whatsapp', $('#botWhatsapp').value);
   fd.append('delivery_enabled', $('#botDelivery').checked ? '1' : '0');
   fd.append('pickup_enabled', $('#botPickup').checked ? '1' : '0');
+  fd.append('dine_in_enabled', $('#botDineIn').checked ? '1' : '0');
+  fd.append('chatbot_receiving_modes_json', JSON.stringify(CHATBOT_RECEIVING_MODES));
   fd.append('location_enabled', $('#botLocation').checked ? '1' : '0');
   fd.append('chatbot_extra_options_json', JSON.stringify(CHATBOT_INFO_OPTIONS));
   await api('/api/settings', { method: 'PUT', body: fd });
   toast('Flujo del chatbot guardado');
   SETTINGS = await api('/api/settings');
 });
+
+$('#botReceivingModeSaveBtn')?.addEventListener('click', () => {
+  const editId = String($('#botReceivingModeId')?.value || '').trim();
+  const label = String($('#botReceivingModeLabel')?.value || '').trim().replace(/\s+/g, ' ').slice(0, 42);
+  const behavior = String($('#botReceivingModeBehavior')?.value || 'simple');
+  if (!label) return toast('Escribe el nombre de la modalidad', true);
+  if (!['delivery', 'branch', 'simple'].includes(behavior)) return toast('Selecciona los datos que solicitará', true);
+  if (!editId && CHATBOT_RECEIVING_MODES.length >= 10) return toast('Puedes crear hasta 10 modalidades personalizadas', true);
+  const payload = {
+    id: editId || `custom_${Date.now().toString(36)}`,
+    label,
+    behavior,
+    enabled: editId ? CHATBOT_RECEIVING_MODES.find((mode) => mode.id === editId)?.enabled !== false : true,
+  };
+  if (editId) CHATBOT_RECEIVING_MODES = CHATBOT_RECEIVING_MODES.map((mode) => mode.id === editId ? payload : mode);
+  else CHATBOT_RECEIVING_MODES.push(payload);
+  CHATBOT_RECEIVING_MODES = parseChatbotReceivingModes(JSON.stringify(CHATBOT_RECEIVING_MODES));
+  resetReceivingModeEditor();
+  renderReceivingModesList();
+  toast(editId ? 'Modalidad actualizada; falta guardar el flujo' : 'Modalidad agregada; falta guardar el flujo');
+});
+
+$('#botReceivingModeNewBtn')?.addEventListener('click', resetReceivingModeEditor);
 
 $('#botInfoOptionSaveBtn')?.addEventListener('click', () => {
   const editId = String($('#botInfoOptionId')?.value || '').trim();
@@ -7612,7 +7902,7 @@ $('#contactForm').addEventListener('submit', async (e) => {
     return toast('Activa al menos un medio de pago para domicilio', true);
   }
   if (pickupEnabled && !hasPickupPayment) {
-    return toast('Activa al menos un medio de pago para recoger en sucursal', true);
+    return toast('Activa al menos un medio de pago para sucursal o modalidades personalizadas', true);
   }
   const transferEnabled = $('#cfgChatPayDeliveryTransfer').checked || $('#cfgChatPayPickupTransfer').checked;
   BANK_ACCOUNTS = readBankAccountInputs();
@@ -7968,9 +8258,11 @@ function syncCashierLinkPreview() {
     : 'La caja estará disponible en /caja/...';
 }
 
-function cashiersTableHTML(rows) {
-  if (!rows.length) return emptyHTML('ph-users-three', 'Aún no hay cajeros', 'Crea un cajero por sucursal para abrir una caja dedicada con su propia liga.');
-  const body = rows.map((cashier) => `
+function cashiersTableHTML(rows, branches = []) {
+  const assignedBranchIds = new Set(rows.map((cashier) => Number(cashier.branchId)));
+  const missingBranches = branches.filter((branch) => Number(branch.active) !== 0 && !assignedBranchIds.has(Number(branch.id)));
+  if (!rows.length && !missingBranches.length) return emptyHTML('ph-users-three', 'Aún no hay cajeros', 'Crea un cajero por sucursal para abrir una caja dedicada con su propia liga.');
+  const cashierRows = rows.map((cashier) => `
     <tr>
       <td><b>${esc(cashier.displayName || cashier.username)}</b><div style="font-size:12px;color:var(--ink-3)">@${esc(cashier.username)}</div></td>
       <td><span class="cashier-chip"><i class="ph-bold ph-storefront"></i>${esc(cashier.branchName || 'Sin sucursal')}</span></td>
@@ -7982,7 +8274,15 @@ function cashiersTableHTML(rows) {
         <button class="btn btn-danger btn-icon" type="button" data-del-cashier="${cashier.id}" title="Eliminar cajero"><i class="ph-bold ph-trash"></i></button>
       </td>
     </tr>`).join('');
-  return `<table><thead><tr><th>Cajero</th><th>Sucursal</th><th>Liga de caja</th><th>Estatus</th><th style="text-align:right">Acciones</th></tr></thead><tbody>${body}</tbody></table>`;
+  const missingRows = missingBranches.map((branch) => `
+    <tr>
+      <td><b>Sin cajero asignado</b><div style="font-size:12px;color:var(--ink-3)">Configura un acceso independiente</div></td>
+      <td><span class="cashier-chip"><i class="ph-bold ph-storefront"></i>${esc(branch.name)}</span></td>
+      <td><span class="hint">Sin liga</span></td>
+      <td><span class="badge b-pendiente">Pendiente</span></td>
+      <td style="text-align:right"><button class="btn btn-primary" type="button" data-create-cashier-branch="${esc(String(branch.id))}"><i class="ph-bold ph-user-plus"></i> Crear acceso</button></td>
+    </tr>`).join('');
+  return `<table><thead><tr><th>Cajero</th><th>Sucursal</th><th>Liga de caja</th><th>Estatus</th><th style="text-align:right">Acciones</th></tr></thead><tbody>${cashierRows}${missingRows}</tbody></table>`;
 }
 
 async function loadCashiers() {
@@ -7991,7 +8291,7 @@ async function loadCashiers() {
   CASHIERS = await api('/api/cashiers');
   const host = $('#cashiersTable');
   if (!host) return;
-  host.innerHTML = cashiersTableHTML(CASHIERS);
+  host.innerHTML = cashiersTableHTML(CASHIERS, BRANCHES);
   document.querySelectorAll('[data-copy-cashier-link]').forEach((button) =>
     button.addEventListener('click', async () => {
       await navigator.clipboard.writeText(cashierLinkUrl(button.dataset.copyCashierLink));
@@ -8000,6 +8300,9 @@ async function loadCashiers() {
   );
   document.querySelectorAll('[data-edit-cashier]').forEach((button) =>
     button.addEventListener('click', () => openCashierModal(CASHIERS.find((item) => Number(item.id) === Number(button.dataset.editCashier))))
+  );
+  document.querySelectorAll('[data-create-cashier-branch]').forEach((button) =>
+    button.addEventListener('click', () => openCashierModal(null, Number(button.dataset.createCashierBranch)))
   );
   document.querySelectorAll('[data-del-cashier]').forEach((button) =>
     button.addEventListener('click', async () => {
@@ -8012,7 +8315,7 @@ async function loadCashiers() {
   );
 }
 
-function openCashierModal(cashier = null) {
+function openCashierModal(cashier = null, branchId = null) {
   $('#cashierModalTitle').innerHTML = cashier
     ? '<i class="ph-bold ph-pencil-simple"></i> Editar cajero'
     : '<i class="ph-bold ph-user-plus"></i> Nuevo cajero';
@@ -8022,7 +8325,7 @@ function openCashierModal(cashier = null) {
   $('#cashierSlug').value = cashier ? cashier.cashierSlug : '';
   $('#cashierPassword').value = '';
   $('#cashierActive').checked = cashier ? Boolean(cashier.active) : true;
-  syncCashierBranchOptions(cashier?.branchId ? String(cashier.branchId) : '');
+  syncCashierBranchOptions(cashier?.branchId ? String(cashier.branchId) : (branchId ? String(branchId) : ''));
   syncCashierLinkPreview();
   $('#cashierModal').classList.add('show');
 }
