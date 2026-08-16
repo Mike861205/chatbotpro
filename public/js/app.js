@@ -738,8 +738,12 @@ const VIEW_LOADERS = {
 
 let CURRENT_VIEW = 'dashboard';
 
+const CASHIER_ALLOWED_VIEWS = new Set(['pos', 'pedidos', 'cancelaciones', 'cortes']);
+
 function normalizeView(view) {
-  if (isCashierUser()) return 'pos';
+  if (isCashierUser()) {
+    return CASHIER_ALLOWED_VIEWS.has(view) ? view : 'pos';
+  }
   return VIEW_META[view] ? view : 'dashboard';
 }
 
@@ -766,8 +770,19 @@ function applyUserScopeUI() {
   const cashierMode = isCashierUser();
   document.body.classList.toggle('cashier-mode', cashierMode);
   document.querySelectorAll('.sidebar nav a').forEach((a) => {
-    const allowed = !cashierMode || a.dataset.view === 'pos';
+    if (!a.dataset.view) {
+      a.hidden = cashierMode;
+      return;
+    }
+    const allowed = !cashierMode || CASHIER_ALLOWED_VIEWS.has(a.dataset.view);
     a.hidden = !allowed;
+  });
+  document.querySelectorAll('.sidebar nav .nav-label').forEach((lbl) => {
+    if (cashierMode) {
+      lbl.hidden = !lbl.classList.contains('nav-label-principal');
+    } else {
+      lbl.hidden = false;
+    }
   });
   const chatLink = $('#openChatLink');
   if (chatLink) chatLink.hidden = cashierMode;
@@ -776,8 +791,6 @@ function applyUserScopeUI() {
   const bannerLabel = $('#cashierBranchLabel');
   if (bannerLabel && cashierMode) bannerLabel.textContent = ME?.branchName ? `Sucursal: ${ME.branchName}` : 'Punto de venta';
   if (cashierMode) {
-    $('#viewTitle').innerHTML = '<i class="ph-bold ph-cash-register"></i> Punto de venta';
-    $('#viewSub').textContent = ME?.branchName ? `Sucursal ${ME.branchName}` : 'Caja operativa';
     $('#brandName').textContent = ME?.branchName || ME?.tenant?.businessName || 'Caja';
   }
   syncPosSortControlVisibility();
@@ -846,12 +859,9 @@ document.querySelectorAll('.sidebar nav a').forEach((a) =>
 );
 
 globalThis.addEventListener('hashchange', () => {
-  if (isCashierUser()) {
-    history.replaceState(null, '', '#pos');
-    return;
-  }
-  const view = normalizeView((location.hash || '#dashboard').slice(1));
-  if (view !== CURRENT_VIEW) navigate(view);
+  const targetView = (location.hash || '').replace(/^#/, '');
+  const nextView = normalizeView(targetView || (isCashierUser() ? 'pos' : 'dashboard'));
+  if (nextView !== CURRENT_VIEW) navigate(nextView);
 });
 
 document.addEventListener('click', (event) => {
@@ -1067,30 +1077,86 @@ function renderSalesReportStats() {
   const marginPercent = dailyMode ? summary.selectedMonthMarginPercent : summary.yearMarginPercent;
   const periodLabel = dailyMode ? `${salesMonthName(SALES_REPORT_MONTH)} ${SALES_REPORT_YEAR}` : `Año ${SALES_REPORT_YEAR}`;
 
+  const payments = dailyMode ? summary.selectedMonthPayments : summary.yearPayments;
+  const cashCollected = payments?.cash ?? (dailyMode ? summary.selectedMonthCash : summary.yearCash) ?? 0;
+  const cardCollected = payments?.card ?? (dailyMode ? summary.selectedMonthCard : summary.yearCard) ?? 0;
+  const transferCollected = payments?.transfer ?? (dailyMode ? summary.selectedMonthTransfer : summary.yearTransfer) ?? 0;
+
+  const totalSales = Number(sales || 0);
+  const pct = (val) => totalSales > 0 ? ` (${((Number(val || 0) / totalSales) * 100).toFixed(0)}%)` : '';
+
   host.innerHTML = `
     <div class="card sales-report-stat sales-report-stat-primary">
-      <span class="sales-report-stat-icon"><i class="ph-bold ph-currency-dollar"></i></span>
-      <div><small>Ingresos · ${esc(periodLabel)}</small><strong>${fmtMoney(sales)}</strong><span>${tickets} venta${Number(tickets) === 1 ? '' : 's'} · ${esc(salesScopeLabel())}</span></div>
+      <div class="sales-stat-top">
+        <small>Ingresos · ${esc(periodLabel)}</small>
+        <i class="sales-stat-icon-free ph-duotone ph-chart-line-up icon-emerald"></i>
+      </div>
+      <strong>${fmtMoney(sales)}</strong>
+      <span>${tickets} venta${Number(tickets) === 1 ? '' : 's'} · ${esc(salesScopeLabel())}</span>
     </div>
     <div class="card sales-report-stat">
-      <span class="sales-report-stat-icon blue"><i class="ph-bold ph-package"></i></span>
-      <div><small>Costo de ventas</small><strong>${fmtMoney(cogs)}</strong><span>Costo de las unidades vendidas</span></div>
+      <div class="sales-stat-top">
+        <small>Efectivo cobrado</small>
+        <i class="sales-stat-icon-free ph-duotone ph-money icon-emerald"></i>
+      </div>
+      <strong>${fmtMoney(cashCollected)}</strong>
+      <span>${pct(cashCollected)} cobrado en caja / chatbot</span>
     </div>
     <div class="card sales-report-stat">
-      <span class="sales-report-stat-icon violet"><i class="ph-bold ph-receipt"></i></span>
-      <div><small>Gastos</small><strong>${fmtMoney(expenses)}</strong><span>Manuales y registrados en caja</span></div>
+      <div class="sales-stat-top">
+        <small>Tarjeta cobrada</small>
+        <i class="sales-stat-icon-free ph-duotone ph-credit-card icon-blue"></i>
+      </div>
+      <strong>${fmtMoney(cardCollected)}</strong>
+      <span>${pct(cardCollected)} pagos con terminal / tarjeta</span>
     </div>
     <div class="card sales-report-stat">
-      <span class="sales-report-stat-icon blue"><i class="ph-bold ph-shopping-cart-simple"></i></span>
-      <div><small>Compras recibidas</small><strong>${fmtMoney(purchases)}</strong><span>Entrada de inventario; no duplica el costo vendido</span></div>
+      <div class="sales-stat-top">
+        <small>Transferencias</small>
+        <i class="sales-stat-icon-free ph-duotone ph-bank icon-cyan"></i>
+      </div>
+      <strong>${fmtMoney(transferCollected)}</strong>
+      <span>${pct(transferCollected)} transferencias bancarias</span>
+    </div>
+    <div class="card sales-report-stat">
+      <div class="sales-stat-top">
+        <small>Costo de ventas</small>
+        <i class="sales-stat-icon-free ph-duotone ph-package icon-indigo"></i>
+      </div>
+      <strong>${fmtMoney(cogs)}</strong>
+      <span>Costo de las unidades vendidas</span>
     </div>
     <div class="card sales-report-stat ${Number(netProfit) < 0 ? 'sales-report-stat-loss' : ''}">
-      <span class="sales-report-stat-icon amber"><i class="ph-bold ${Number(netProfit) < 0 ? 'ph-trend-down' : 'ph-trend-up'}"></i></span>
-      <div><small>${Number(netProfit) < 0 ? 'Pérdida neta' : 'Utilidad neta'}</small><strong>${fmtMoney(netProfit)}</strong><span>Margen neto ${Number(marginPercent || 0).toFixed(1)}%</span></div>
+      <div class="sales-stat-top">
+        <small>${Number(netProfit) < 0 ? 'Pérdida neta' : 'Utilidad neta'}</small>
+        <i class="sales-stat-icon-free ph-duotone ${Number(netProfit) < 0 ? 'ph-trend-down icon-rose' : 'ph-trend-up icon-amber'}"></i>
+      </div>
+      <strong>${fmtMoney(netProfit)}</strong>
+      <span>Margen neto ${Number(marginPercent || 0).toFixed(1)}%</span>
+    </div>
+    <div class="card sales-report-stat">
+      <div class="sales-stat-top">
+        <small>Gastos</small>
+        <i class="sales-stat-icon-free ph-duotone ph-receipt icon-violet"></i>
+      </div>
+      <strong>${fmtMoney(expenses)}</strong>
+      <span>Manuales y registrados en caja</span>
+    </div>
+    <div class="card sales-report-stat">
+      <div class="sales-stat-top">
+        <small>Compras recibidas</small>
+        <i class="sales-stat-icon-free ph-duotone ph-shopping-cart-simple icon-sky"></i>
+      </div>
+      <strong>${fmtMoney(purchases)}</strong>
+      <span>Entrada de inventario; no duplica costo</span>
     </div>
     <div class="card sales-report-stat ${Number(cashResult) < 0 ? 'sales-report-stat-loss' : ''}">
-      <span class="sales-report-stat-icon amber"><i class="ph-bold ph-wallet"></i></span>
-      <div><small>Resultado de efectivo</small><strong>${fmtMoney(cashResult)}</strong><span>Ventas menos compras y gastos</span></div>
+      <div class="sales-stat-top">
+        <small>Resultado de efectivo</small>
+        <i class="sales-stat-icon-free ph-duotone ph-wallet ${Number(cashResult) < 0 ? 'icon-rose' : 'icon-amber'}"></i>
+      </div>
+      <strong>${fmtMoney(cashResult)}</strong>
+      <span>Ventas menos compras y gastos</span>
     </div>`;
 }
 
@@ -1114,11 +1180,25 @@ function renderSalesCalendar() {
     const hasSales = Number(row.sales) > 0;
     const isBest = row.date === bestDate;
     const classes = ['sales-calendar-day', hasSales ? 'has-sales' : 'no-sales', isBest ? 'is-best' : ''].filter(Boolean).join(' ');
+    const cash = Number(row.cash || 0);
+    const card = Number(row.card || 0);
+    const transfer = Number(row.transfer || 0);
+
+    const paymentBadges = [];
+    if (cash > 0) paymentBadges.push(`<span class="sales-pay-chip sales-pay-cash" title="Efectivo: ${fmtMoney(cash)}"><i class="ph-bold ph-money"></i> Efec ${fmtMoney(cash)}</span>`);
+    if (card > 0) paymentBadges.push(`<span class="sales-pay-chip sales-pay-card" title="Tarjeta: ${fmtMoney(card)}"><i class="ph-bold ph-credit-card"></i> Tarj ${fmtMoney(card)}</span>`);
+    if (transfer > 0) paymentBadges.push(`<span class="sales-pay-chip sales-pay-transfer" title="Transferencia: ${fmtMoney(transfer)}"><i class="ph-bold ph-bank"></i> Transf ${fmtMoney(transfer)}</span>`);
+    if (Number(row.other || 0) > 0) paymentBadges.push(`<span class="sales-pay-chip sales-pay-other" title="Otros: ${fmtMoney(row.other)}"><i class="ph-bold ph-dots-three-circle"></i> Otro ${fmtMoney(row.other)}</span>`);
+
+    const paymentsHtml = paymentBadges.length
+      ? `<div class="sales-calendar-payments">${paymentBadges.join('')}</div>`
+      : (hasSales ? `<div class="sales-calendar-payments"><span class="sales-pay-chip sales-pay-cash"><i class="ph-bold ph-money"></i> Efec ${fmtMoney(row.sales)}</span></div>` : '');
+
     return `<article class="${classes}" role="button" tabindex="0" data-sales-detail-date="${row.date}" title="Ver detalle e imprimir este día">
       <div class="sales-calendar-day-head"><b>${row.day}</b>${isBest ? '<span><i class="ph-fill ph-trophy"></i> Mejor día</span>' : ''}</div>
       <strong>${fmtMoney(row.sales)}</strong>
       <small>${row.tickets} ${Number(row.tickets) === 1 ? 'venta' : 'ventas'} · Costo ${fmtMoney(row.cogs)}</small>
-      <small>Compras ${fmtMoney(row.purchases)} · Efectivo ${fmtMoney(row.cashResult)}</small>
+      ${paymentsHtml}
       <span class="sales-calendar-result ${Number(row.netProfit) < 0 ? 'loss' : 'profit'}">${Number(row.netProfit) < 0 ? 'Pérdida' : 'Utilidad'} ${fmtMoney(row.netProfit)}</span>
     </article>`;
   });
@@ -1201,14 +1281,13 @@ function renderSalesBranchBreakdown() {
   const host = $('#salesBranchBreakdown');
   if (!host || !SALES_REPORT_DATA) return;
   const rows = SALES_REPORT_DATA.branchBreakdown || [];
-  const total = Number(SALES_REPORT_DATA.summary?.selectedMonthSales || 0);
   if (!rows.length) {
     host.innerHTML = emptyHTML('ph-storefront', 'Sin ventas en este mes', 'No hay operaciones registradas para el filtro seleccionado.');
     return;
   }
-  host.innerHTML = `<table class="sales-branch-table"><thead><tr><th>Sucursal</th><th>Ventas</th><th>Costo vendido</th><th>Compras</th><th>Gastos</th><th>Utilidad / pérdida</th><th>Resultado efectivo</th></tr></thead><tbody>${rows.map((row) => {
-    return `<tr><td><b>${esc(row.name)}</b><small>${row.tickets} operaciones</small></td><td><b>${fmtMoney(row.sales)}</b></td><td>${fmtMoney(row.cogs)}</td><td>${fmtMoney(row.purchases)}</td><td>${fmtMoney(row.expenses)}</td><td><b class="${Number(row.netProfit) < 0 ? 'sales-value-loss' : 'sales-value-profit'}">${fmtMoney(row.netProfit)}</b><small>${Number(row.marginPercent || 0).toFixed(1)}%</small></td><td><b class="${Number(row.cashResult) < 0 ? 'sales-value-loss' : 'sales-value-profit'}">${fmtMoney(row.cashResult)}</b></td></tr>`;
-  }).join('')}</tbody></table>`;
+  host.innerHTML = `<div class="table-wrap"><table class="sales-branch-table"><thead><tr><th>Sucursal</th><th>Ventas</th><th>Efectivo</th><th>Tarjeta</th><th>Transferencia</th><th>Costo vendido</th><th>Compras</th><th>Gastos</th><th>Utilidad / pérdida</th><th>Resultado efectivo</th></tr></thead><tbody>${rows.map((row) => {
+    return `<tr><td><b>${esc(row.name)}</b><small>${row.tickets} operaciones</small></td><td><b>${fmtMoney(row.sales)}</b></td><td><span class="sales-pay-chip sales-pay-cash">${fmtMoney(row.cash || 0)}</span></td><td><span class="sales-pay-chip sales-pay-card">${fmtMoney(row.card || 0)}</span></td><td><span class="sales-pay-chip sales-pay-transfer">${fmtMoney(row.transfer || 0)}</span></td><td>${fmtMoney(row.cogs)}</td><td>${fmtMoney(row.purchases)}</td><td>${fmtMoney(row.expenses)}</td><td><b class="${Number(row.netProfit) < 0 ? 'sales-value-loss' : 'sales-value-profit'}">${fmtMoney(row.netProfit)}</b><small>${Number(row.marginPercent || 0).toFixed(1)}%</small></td><td><b class="${Number(row.cashResult) < 0 ? 'sales-value-loss' : 'sales-value-profit'}">${fmtMoney(row.cashResult)}</b></td></tr>`;
+  }).join('')}</tbody></table></div>`;
 }
 
 function renderSalesMonthly() {
@@ -1217,14 +1296,29 @@ function renderSalesMonthly() {
   $('#salesMonthlyScope').textContent = salesScopeLabel();
   const host = $('#salesMonthGrid');
   const bestMonth = SALES_REPORT_DATA.summary?.bestMonth?.sales > 0 ? Number(SALES_REPORT_DATA.summary.bestMonth.month) : 0;
-  host.innerHTML = SALES_REPORT_DATA.monthly.map((row) => `
-    <article class="card sales-month-card ${Number(row.month) === bestMonth ? 'is-best' : ''}" role="button" tabindex="0" data-sales-detail-month="${row.month}" title="Ver detalle e imprimir este mes">
-      <div><span>${esc(row.label)}</span>${Number(row.month) === bestMonth ? '<i class="ph-fill ph-trophy" title="Mejor mes"></i>' : ''}</div>
-      <strong>${fmtMoney(row.sales)}</strong>
-      <small>${row.tickets} ${Number(row.tickets) === 1 ? 'venta' : 'ventas'} · Costo ${fmtMoney(row.cogs)}</small>
-      <small>Compras ${fmtMoney(row.purchases)} · Efectivo ${fmtMoney(row.cashResult)}</small>
-      <span class="sales-month-result ${Number(row.netProfit) < 0 ? 'loss' : 'profit'}">${Number(row.netProfit) < 0 ? 'Pérdida' : 'Utilidad'} ${fmtMoney(row.netProfit)}</span>
-    </article>`).join('');
+  host.innerHTML = SALES_REPORT_DATA.monthly.map((row) => {
+    const cash = Number(row.cash || 0);
+    const card = Number(row.card || 0);
+    const transfer = Number(row.transfer || 0);
+    const paymentBadges = [];
+    if (cash > 0) paymentBadges.push(`<span class="sales-pay-chip sales-pay-cash" title="Efectivo: ${fmtMoney(cash)}"><i class="ph-bold ph-money"></i> Efec ${fmtMoney(cash)}</span>`);
+    if (card > 0) paymentBadges.push(`<span class="sales-pay-chip sales-pay-card" title="Tarjeta: ${fmtMoney(card)}"><i class="ph-bold ph-credit-card"></i> Tarj ${fmtMoney(card)}</span>`);
+    if (transfer > 0) paymentBadges.push(`<span class="sales-pay-chip sales-pay-transfer" title="Transferencia: ${fmtMoney(transfer)}"><i class="ph-bold ph-bank"></i> Transf ${fmtMoney(transfer)}</span>`);
+    if (Number(row.other || 0) > 0) paymentBadges.push(`<span class="sales-pay-chip sales-pay-other" title="Otros: ${fmtMoney(row.other)}"><i class="ph-bold ph-dots-three-circle"></i> Otro ${fmtMoney(row.other)}</span>`);
+
+    const paymentsHtml = paymentBadges.length
+      ? `<div class="sales-calendar-payments">${paymentBadges.join('')}</div>`
+      : (Number(row.sales) > 0 ? `<div class="sales-calendar-payments"><span class="sales-pay-chip sales-pay-cash"><i class="ph-bold ph-money"></i> Efec ${fmtMoney(row.sales)}</span></div>` : '');
+
+    return `
+      <article class="card sales-month-card ${Number(row.month) === bestMonth ? 'is-best' : ''}" role="button" tabindex="0" data-sales-detail-month="${row.month}" title="Ver detalle e imprimir este mes">
+        <div><span>${esc(row.label)}</span>${Number(row.month) === bestMonth ? '<i class="ph-fill ph-trophy" title="Mejor mes"></i>' : ''}</div>
+        <strong>${fmtMoney(row.sales)}</strong>
+        <small>${row.tickets} ${Number(row.tickets) === 1 ? 'venta' : 'ventas'} · Costo ${fmtMoney(row.cogs)}</small>
+        ${paymentsHtml}
+        <span class="sales-month-result ${Number(row.netProfit) < 0 ? 'loss' : 'profit'}">${Number(row.netProfit) < 0 ? 'Pérdida' : 'Utilidad'} ${fmtMoney(row.netProfit)}</span>
+      </article>`;
+  }).join('');
   host.querySelectorAll('[data-sales-detail-month]').forEach((card) => {
     const open = () => {
       const month = Number(card.dataset.salesDetailMonth);
@@ -7685,6 +7779,142 @@ async function fillBotForm() {
   }
   await loadBranches();
 }
+let AI_PROMO_IDEAS = [];
+
+function openAiPromoModal() {
+  openModal('aiPromoModal');
+  if (!AI_PROMO_IDEAS.length) {
+    generateAiPromoTexts();
+  }
+}
+
+async function generateAiPromoTexts() {
+  const goal = $('#aiPromoGoal')?.value || 'general';
+  const tone = $('#aiPromoTone')?.value || 'friendly';
+  const details = ($('#aiPromoDetails')?.value || '').trim();
+  const link = $('#chatLink')?.value || (SETTINGS?.slug ? `${location.origin}/${SETTINGS.slug}` : location.origin);
+
+  const btn = $('#aiPromoGenerateBtn');
+  const btnText = $('#aiPromoBtnText');
+  const resultsContainer = $('#aiPromoResults');
+  const regenBtn = $('#aiPromoRegenerateBtn');
+
+  if (btn) btn.disabled = true;
+  if (btnText) btnText.textContent = 'Generando ideas con IA…';
+  if (resultsContainer) {
+    resultsContainer.innerHTML = `
+      <div class="ai-promo-empty" style="border-style:solid;background:#fff">
+        <div class="spinner" style="margin:0 auto 12px"></div>
+        <h4>Creando textos personalizados con IA…</h4>
+        <p>Redactando copies con emojis y tu liga oficial para WhatsApp, Estados y Redes Sociales.</p>
+      </div>`;
+  }
+
+  try {
+    const res = await api('/api/settings/ai-promo-texts', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ goal, tone, details, link }),
+    });
+    AI_PROMO_IDEAS = res.ideas || [];
+    renderAiPromoResults(AI_PROMO_IDEAS);
+    if (regenBtn) regenBtn.style.display = 'inline-flex';
+  } catch (err) {
+    if (resultsContainer) {
+      resultsContainer.innerHTML = `
+        <div class="ai-promo-empty" style="border-color:#fca5a5;background:#fef2f2">
+          <i class="ph-bold ph-warning-circle" style="color:#ef4444"></i>
+          <h4>No se pudieron generar los textos</h4>
+          <p>${esc(err?.message || 'Ocurrió un error al contactar al generador de IA. Inténtalo de nuevo.')}</p>
+        </div>`;
+    }
+  } finally {
+    if (btn) btn.disabled = false;
+    if (btnText) btnText.textContent = 'Generar textos con IA';
+  }
+}
+
+function renderAiPromoResults(ideas) {
+  const resultsContainer = $('#aiPromoResults');
+  if (!resultsContainer) return;
+  if (!Array.isArray(ideas) || !ideas.length) {
+    resultsContainer.innerHTML = `
+      <div class="ai-promo-empty">
+        <i class="ph-bold ph-magic-wand"></i>
+        <h4>Sin resultados</h4>
+        <p>Intenta con otro objetivo o agrega más detalles.</p>
+      </div>`;
+    return;
+  }
+
+  const badgeMap = {
+    whatsapp: { cls: 'whatsapp', icon: 'ph-bold ph-whatsapp-logo' },
+    promo: { cls: 'promo', icon: 'ph-bold ph-tag' },
+    weekend: { cls: 'weekend', icon: 'ph-bold ph-sparkle' },
+    social: { cls: 'social', icon: 'ph-bold ph-share-network' },
+  };
+
+  resultsContainer.innerHTML = ideas.map((idea, index) => {
+    const badgeKey = String(idea.badge || '').toLowerCase().includes('whats')
+      ? 'whatsapp'
+      : String(idea.badge || '').toLowerCase().includes('promo')
+      ? 'promo'
+      : String(idea.badge || '').toLowerCase().includes('fin')
+      ? 'weekend'
+      : 'social';
+    const badgeInfo = badgeMap[badgeKey] || { cls: 'social', icon: 'ph-bold ph-sparkle' };
+
+    return `
+      <div class="ai-promo-card" data-promo-index="${index}">
+        <div class="ai-promo-card-head">
+          <span class="ai-promo-card-badge ${badgeInfo.cls}"><i class="${badgeInfo.icon}"></i> ${esc(idea.badge || idea.title || 'Idea')}</span>
+          <b class="ai-promo-card-title">${esc(idea.title || `Opción ${index + 1}`)}</b>
+        </div>
+        <div class="ai-promo-text-wrap">
+          <textarea class="ai-promo-textarea" rows="5">${esc(idea.text)}</textarea>
+        </div>
+        <div class="ai-promo-card-actions">
+          <button type="button" class="btn btn-primary btn-sm ai-promo-copy-btn">
+            <i class="ph-bold ph-copy"></i> <span>Copiar texto</span>
+          </button>
+          <a href="https://wa.me/?text=${encodeURIComponent(idea.text)}" target="_blank" class="btn btn-sm btn-ghost ai-promo-wa-btn">
+            <i class="ph-bold ph-whatsapp-logo"></i> Compartir en WhatsApp
+          </a>
+        </div>
+      </div>`;
+  }).join('');
+
+  resultsContainer.querySelectorAll('.ai-promo-card').forEach((card) => {
+    const textarea = card.querySelector('.ai-promo-textarea');
+    const copyBtn = card.querySelector('.ai-promo-copy-btn');
+    const copyBtnSpan = copyBtn?.querySelector('span');
+    const waLink = card.querySelector('.ai-promo-wa-btn');
+
+    textarea?.addEventListener('input', () => {
+      const updatedText = textarea.value;
+      if (waLink) waLink.href = `https://wa.me/?text=${encodeURIComponent(updatedText)}`;
+    });
+
+    copyBtn?.addEventListener('click', () => {
+      const textToCopy = textarea ? textarea.value : '';
+      navigator.clipboard.writeText(textToCopy);
+      if (copyBtnSpan) copyBtnSpan.textContent = '¡Copiado! ✓';
+      toast('¡Texto copiado al portapapeles!');
+      setTimeout(() => {
+        if (copyBtnSpan) copyBtnSpan.textContent = 'Copiar texto';
+      }, 2000);
+    });
+  });
+}
+
+$('#openAiPromoBtn')?.addEventListener('click', () => openAiPromoModal());
+$('#openAiPromoQuickBtn')?.addEventListener('click', () => openAiPromoModal());
+$('#aiPromoForm')?.addEventListener('submit', (e) => {
+  e.preventDefault();
+  generateAiPromoTexts();
+});
+$('#aiPromoRegenerateBtn')?.addEventListener('click', () => generateAiPromoTexts());
+
 $('#copyLinkBtn').addEventListener('click', () => {
   navigator.clipboard.writeText($('#chatLink').value);
   toast('¡Liga copiada al portapapeles!');
@@ -8159,6 +8389,9 @@ async function loadAuditLog(page = 1) {
     if ($('#auditStartDate')) $('#auditStartDate').value = AUDIT_START_DATE;
     if ($('#auditEndDate')) $('#auditEndDate').value = AUDIT_END_DATE;
   }
+  if (isCashierUser()) {
+    AUDIT_BRANCH = ME?.branchId ? String(ME.branchId) : 'general';
+  }
   const query = new URLSearchParams({
     page: String(Math.max(1, page)), pageSize: String(AUDIT_PAGE_SIZE), filter: AUDIT_FILTER,
     search: AUDIT_SEARCH, branchId: AUDIT_BRANCH,
@@ -8172,16 +8405,25 @@ async function loadAuditLog(page = 1) {
   AUDIT_PAGE_SIZE = Number(data.pageSize || AUDIT_PAGE_SIZE);
   AUDIT_CACHE = Array.isArray(data.rows) ? data.rows : [];
   const summary = data.summary || {};
-  const scope = AUDIT_BRANCH === 'all' ? 'Todas las sucursales' : ($('#auditBranchFilter')?.selectedOptions?.[0]?.textContent || 'Sucursal');
+  const scope = isCashierUser()
+    ? (ME?.branchName || 'Mi sucursal')
+    : (AUDIT_BRANCH === 'all' ? 'Todas las sucursales' : ($('#auditBranchFilter')?.selectedOptions?.[0]?.textContent || 'Sucursal'));
   $('#auditSummaryCards').innerHTML = `
     <article class="audit-summary-card total"><i class="ph-bold ph-shield-check"></i><div><span>Eventos auditados</span><b>${Number(summary.total || 0)}</b><small>${esc(scope)}</small></div></article>
     <article class="audit-summary-card cancelled"><i class="ph-bold ph-x-circle"></i><div><span>Ventas canceladas</span><b>${Number(summary.cancellations || 0)}</b><small>${fmtMoney(summary.cancelled_amount || 0)}</small></div></article>
     <article class="audit-summary-card corrected"><i class="ph-bold ph-pencil-simple"></i><div><span>Rondas corregidas</span><b>${Number(summary.round_edits || 0)}</b><small>Impacto ${fmtMoney(summary.corrected_amount || 0)}</small></div></article>
     <article class="audit-summary-card payments"><i class="ph-bold ph-credit-card"></i><div><span>Cambios de pago</span><b>${Number(summary.payment_edits || 0)}</b><small>Movimientos registrados</small></div></article>`;
   const branchSelect = $('#auditBranchFilter');
-  if (branchSelect && branchSelect.options.length <= 2) {
-    branchSelect.innerHTML = `<option value="all">Todas las sucursales</option><option value="general">General</option>${(data.branches || []).map((branch) => `<option value="${branch.id}">${esc(branch.name)}</option>`).join('')}`;
-    branchSelect.value = AUDIT_BRANCH;
+  if (branchSelect) {
+    if (isCashierUser()) {
+      branchSelect.innerHTML = `<option value="${AUDIT_BRANCH}">${esc(ME?.branchName || 'Mi sucursal')}</option>`;
+      branchSelect.value = AUDIT_BRANCH;
+      branchSelect.disabled = true;
+    } else if (branchSelect.options.length <= 2) {
+      branchSelect.innerHTML = `<option value="all">Todas las sucursales</option><option value="general">General</option>${(data.branches || []).map((branch) => `<option value="${branch.id}">${esc(branch.name)}</option>`).join('')}`;
+      branchSelect.value = AUDIT_BRANCH;
+      branchSelect.disabled = false;
+    }
   }
   $('#auditResultSummary').innerHTML = `<span><i class="ph-bold ph-file-magnifying-glass"></i>${Number(data.total || 0)} resultado${Number(data.total || 0) === 1 ? '' : 's'}</span><span><i class="ph-bold ph-calendar"></i>${auditPeriodLabel()}</span>`;
   $('#auditLogTable').innerHTML = AUDIT_CACHE.length ? `<table class="audit-table"><thead><tr><th class="audit-head-date"><i class="ph-bold ph-calendar-blank"></i> Fecha</th><th class="audit-head-event"><i class="ph-bold ph-lightning"></i> Evento</th><th class="audit-head-branch"><i class="ph-bold ph-storefront"></i> Sucursal</th><th class="audit-head-reference"><i class="ph-bold ph-link"></i> Referencia</th><th class="audit-head-amount"><i class="ph-bold ph-coins"></i> Impacto</th><th class="audit-head-user"><i class="ph-bold ph-user-circle"></i> Responsable</th><th class="audit-head-reason"><i class="ph-bold ph-note-pencil"></i> Motivo</th><th class="audit-head-actions"></th></tr></thead><tbody>${AUDIT_CACHE.map(renderAuditRow).join('')}</tbody></table>` : emptyHTML('ph-file-magnifying-glass', 'Sin movimientos auditados', 'Cambia el periodo, sucursal o búsqueda para consultar otros eventos.');
@@ -8265,6 +8507,9 @@ function printAuditEvent(id) {
 }
 
 async function loadCutsHistory(page = 1) {
+  if (isCashierUser()) {
+    CUTS_BRANCH = ME?.branchId ? String(ME.branchId) : 'general';
+  }
   const query = new URLSearchParams({
     page: String(Math.max(1, page)),
     pageSize: String(CUTS_PAGE_SIZE),
@@ -8276,9 +8521,16 @@ async function loadCutsHistory(page = 1) {
   CUTS_PAGE_SIZE = Number(data.pageSize || CUTS_PAGE_SIZE);
   CUTS_CACHE = Array.isArray(data.rows) ? data.rows : [];
   const branchSelect = $('#cutsBranchFilter');
-  if (branchSelect && branchSelect.options.length <= 2) {
-    branchSelect.innerHTML = `<option value="all">Todas las sucursales</option><option value="general">General</option>${(data.branches || []).map((branch) => `<option value="${branch.id}">${esc(branch.name)}</option>`).join('')}`;
-    branchSelect.value = CUTS_BRANCH;
+  if (branchSelect) {
+    if (isCashierUser()) {
+      branchSelect.innerHTML = `<option value="${CUTS_BRANCH}">${esc(ME?.branchName || 'Mi sucursal')}</option>`;
+      branchSelect.value = CUTS_BRANCH;
+      branchSelect.disabled = true;
+    } else if (branchSelect.options.length <= 2) {
+      branchSelect.innerHTML = `<option value="all">Todas las sucursales</option><option value="general">General</option>${(data.branches || []).map((branch) => `<option value="${branch.id}">${esc(branch.name)}</option>`).join('')}`;
+      branchSelect.value = CUTS_BRANCH;
+      branchSelect.disabled = false;
+    }
   }
   $('#cutsResultSummary').innerHTML = `<span><i class="ph-bold ph-receipt"></i> ${Number(data.total || 0)} corte${Number(data.total || 0) === 1 ? '' : 's'}</span><span><i class="ph-bold ph-files"></i> Página ${CUTS_PAGE} de ${Number(data.totalPages || 1)}</span>`;
   $('#cutsHistoryTable').innerHTML = CUTS_CACHE.length ? `<table class="cuts-table"><thead><tr><th class="cut-head-id"><i class="ph-bold ph-hash"></i> Corte</th><th class="cut-head-branch"><i class="ph-bold ph-storefront"></i> Sucursal</th><th class="cut-head-user"><i class="ph-bold ph-user-circle"></i> Usuario</th><th class="cut-head-open"><i class="ph-bold ph-door-open"></i> Apertura</th><th class="cut-head-close"><i class="ph-bold ph-lock-key"></i> Cierre</th><th class="cut-head-sales"><i class="ph-bold ph-chart-line-up"></i> Ventas</th><th class="cut-head-expected"><i class="ph-bold ph-calculator"></i> Esperado</th><th class="cut-head-counted"><i class="ph-bold ph-money"></i> Contado</th><th class="cut-head-difference"><i class="ph-bold ph-scales"></i> Diferencia</th><th class="cut-head-actions"><i class="ph-bold ph-dots-three"></i></th></tr></thead><tbody>${CUTS_CACHE.map(renderCutRow).join('')}</tbody></table>` : emptyHTML('ph-safe', 'Sin cortes encontrados', 'Cambia la búsqueda o los filtros para consultar otros turnos.');
@@ -8851,7 +9103,7 @@ async function boot(navigateToHash = true) {
   if (navigateToHash) {
     const fallbackView = cashier ? 'pos' : 'dashboard';
     const hashView = (location.hash || '').slice(1);
-    const view = cashier ? 'pos' : (VIEW_META[hashView] ? hashView : fallbackView);
+    const view = normalizeView(hashView || fallbackView);
     document.body.setAttribute('data-current-view', view);
     navigate(view);
   }

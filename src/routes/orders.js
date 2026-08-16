@@ -1,5 +1,5 @@
 const express = require('express');
-const { requireAuth, requireOwner } = require('../middleware/auth');
+const { requireAuth } = require('../middleware/auth');
 const { decrypt } = require('../utils/crypto');
 const { ensurePurchasingSchema } = require('../utils/purchasing');
 const { ensureBranchStockSchema, initializeBranchStock, applyBranchSaleStock, restoreBranchSaleStock } = require('../utils/branchStock');
@@ -7,8 +7,16 @@ const { operationalOrderNote } = require('../utils/orderNotes');
 
 const router = express.Router();
 router.use(requireAuth);
-router.use(requireOwner);
-router.use(async (req,res,next)=>{try{await ensurePurchasingSchema(req.tdb);await ensureBranchStockSchema(req.tdb);await initializeBranchStock(req.tdb,req.user?.username||'system');next();}catch(error){next(error);}});
+router.use(async (req, res, next) => {
+  try {
+    await ensurePurchasingSchema(req.tdb);
+    await ensureBranchStockSchema(req.tdb);
+    await initializeBranchStock(req.tdb, req.user?.username || 'system');
+    next();
+  } catch (error) {
+    next(error);
+  }
+});
 
 const STATUSES = ['pendiente', 'confirmado', 'preparando', 'enviado', 'entregado', 'cancelado'];
 
@@ -48,6 +56,15 @@ router.get('/', async (req, res, next) => {
     const params = [];
     const where = ["channel <> 'table_account'"];
 
+    if (req.user?.role === 'cashier') {
+      if (req.user.branchId) {
+        params.push(Number(req.user.branchId));
+        where.push(`COALESCE(service_branch_id, pickup_branch_id) = $${params.length}`);
+      } else {
+        where.push('COALESCE(service_branch_id, pickup_branch_id) IS NULL');
+      }
+    }
+
     if (status && STATUSES.includes(status)) {
       params.push(status);
       where.push(`status = $${params.length}`);
@@ -84,15 +101,45 @@ router.patch('/:id', async (req, res, next) => {
     const { status, cancel_note } = req.body || {};
     if (!STATUSES.includes(status)) return res.status(400).json({ error: 'Estatus inválido' });
 
+    if (req.user?.role === 'cashier') {
+      const existing = await req.tdb.get('SELECT id, service_branch_id, pickup_branch_id FROM {s}.orders WHERE id = $1', [req.params.id]);
+      if (!existing) return res.status(404).json({ error: 'Pedido no encontrado' });
+      const orderBranch = existing.service_branch_id || existing.pickup_branch_id;
+      if (req.user.branchId) {
+        if (Number(orderBranch || 0) !== Number(req.user.branchId)) {
+          return res.status(403).json({ error: 'No tienes permiso para modificar pedidos de otra sucursal' });
+        }
+      } else if (orderBranch != null) {
+        return res.status(403).json({ error: 'No tienes permiso para modificar pedidos de otra sucursal' });
+      }
+    }
+
     if (status === 'cancelado') {
       const note = String(cancel_note || '').trim();
       if (note.length < 3) return res.status(400).json({ error: 'Escribe un motivo de cancelación válido' });
-      const changed=await req.tdb.tx(async tx=>{const order=await tx.get('SELECT id,status,items,service_branch_id,pickup_branch_id,branch_stock_applied FROM {s}.orders WHERE id=$1 FOR UPDATE',[req.params.id]);if(!order)return false;if(order.status!=='cancelado'&&Number(order.branch_stock_applied))await restoreBranchSaleStock(tx,order.service_branch_id||order.pickup_branch_id,order.items);await tx.run('UPDATE {s}.orders SET status=$1,cancel_note=$2,branch_stock_applied=0 WHERE id=$3',[status,note.slice(0,280),req.params.id]);return true;});
+      const changed = await req.tdb.tx(async (tx) => {
+        const order = await tx.get('SELECT id,status,items,service_branch_id,pickup_branch_id,branch_stock_applied FROM {s}.orders WHERE id=$1 FOR UPDATE', [req.params.id]);
+        if (!order) return false;
+        if (order.status !== 'cancelado' && Number(order.branch_stock_applied)) {
+          await restoreBranchSaleStock(tx, order.service_branch_id || order.pickup_branch_id, order.items);
+        }
+        await tx.run('UPDATE {s}.orders SET status=$1,cancel_note=$2,branch_stock_applied=0 WHERE id=$3', [status, note.slice(0, 280), req.params.id]);
+        return true;
+      });
       if (!changed) return res.status(404).json({ error: 'Pedido no encontrado' });
       return res.json({ ok: true });
     }
 
-    const changed=await req.tdb.tx(async tx=>{const order=await tx.get('SELECT id,status,items,service_branch_id,pickup_branch_id,branch_stock_applied FROM {s}.orders WHERE id=$1 FOR UPDATE',[req.params.id]);if(!order)return false;let applied=Number(order.branch_stock_applied);if(order.status==='cancelado'&&!applied&&await applyBranchSaleStock(tx,order.service_branch_id||order.pickup_branch_id,order.items))applied=1;await tx.run('UPDATE {s}.orders SET status=$1,cancel_note=NULL,branch_stock_applied=$2 WHERE id=$3',[status,applied,req.params.id]);return true;});
+    const changed = await req.tdb.tx(async (tx) => {
+      const order = await tx.get('SELECT id,status,items,service_branch_id,pickup_branch_id,branch_stock_applied FROM {s}.orders WHERE id=$1 FOR UPDATE', [req.params.id]);
+      if (!order) return false;
+      let applied = Number(order.branch_stock_applied);
+      if (order.status === 'cancelado' && !applied && await applyBranchSaleStock(tx, order.service_branch_id || order.pickup_branch_id, order.items)) {
+        applied = 1;
+      }
+      await tx.run('UPDATE {s}.orders SET status=$1,cancel_note=NULL,branch_stock_applied=$2 WHERE id=$3', [status, applied, req.params.id]);
+      return true;
+    });
     if (!changed) return res.status(404).json({ error: 'Pedido no encontrado' });
     res.json({ ok: true });
   } catch (e) { next(e); }

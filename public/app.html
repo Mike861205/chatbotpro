@@ -11,7 +11,7 @@
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/fill/style.css" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/duotone/style.css" />
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-  <link rel="stylesheet" href="/static/css/styles.css?v=20260816posclosev2" />
+  <link rel="stylesheet" href="/static/css/styles.css?v=20260816ventashfixed" />
   <link rel="icon" type="image/svg+xml" href="/static/favicon.svg" />
   <link rel="icon" type="image/png" href="/static/chatbotpro100.png" />
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
@@ -723,6 +723,15 @@
                 <input type="text" id="chatLink" readonly />
                 <button class="btn btn-primary" id="copyLinkBtn"><i class="ph-bold ph-copy"></i> Copiar</button>
                 <a class="btn btn-ghost" id="waShareBtn" target="_blank" href="#" style="background:rgba(255,255,255,0.07);border-color:rgba(255,255,255,0.18);color:#fff"><i class="ph-bold ph-whatsapp-logo"></i> Compartir</a>
+                <button class="btn btn-ghost ai-promo-hero-btn" id="openAiPromoBtn" type="button"><i class="ph-bold ph-sparkle"></i> Crear texto con IA</button>
+              </div>
+              <div class="share-ai-tip-bar" id="shareHeroAiTip">
+                <div class="share-ai-tip-icon"><i class="ph-bold ph-sparkle"></i></div>
+                <div class="share-ai-tip-content">
+                  <b>Generador de publicaciones con IA</b>
+                  <span>Crea textos cortos y con iconos para tus estados de WhatsApp, Instagram y Facebook con tu link listo para que tus clientes ordenen.</span>
+                </div>
+                <button class="btn btn-sm btn-ai-sparkle-pill" id="openAiPromoQuickBtn" type="button"><i class="ph-bold ph-magic-wand"></i> Crear ideas</button>
               </div>
             </div>
             <div class="qr-box">
@@ -1722,6 +1731,67 @@
     </div>
   </div>
 
+  <!-- ════════ Modal Generador de Textos con IA para Liga / Redes ════════ -->
+  <div class="modal-bg" id="aiPromoModal">
+    <div class="modal ai-promo-modal" style="max-width:840px">
+      <div class="ai-promo-modal-head">
+        <div class="ai-promo-modal-head-title">
+          <span class="ai-promo-sparkle-pill"><i class="ph-bold ph-sparkle"></i> IA de Redes y WhatsApp</span>
+          <h3>Generador de textos para tu liga</h3>
+          <p>Crea copies cortos, con emojis y tu enlace oficial listos para publicar en tus estados de WhatsApp, Instagram, Facebook o enviar a tus clientes.</p>
+        </div>
+        <button class="modal-close" type="button" onclick="closeModal('aiPromoModal')" aria-label="Cerrar"><i class="ph-bold ph-x"></i></button>
+      </div>
+
+      <form id="aiPromoForm" class="ai-promo-controls">
+        <div class="row-2">
+          <div class="field">
+            <label><i class="ph-bold ph-target"></i> Objetivo / Momento</label>
+            <select id="aiPromoGoal">
+              <option value="general">🚀 General / Antojo del día</option>
+              <option value="promo">🔥 Promoción u oferta especial</option>
+              <option value="whatsapp_status">📱 Estado de WhatsApp / Historias</option>
+              <option value="weekend">🎉 Fin de semana & Convivio</option>
+              <option value="new_menu">🆕 Menú / Nuevos platillos</option>
+            </select>
+          </div>
+          <div class="field">
+            <label><i class="ph-bold ph-chat-circle-dots"></i> Tono de voz</label>
+            <select id="aiPromoTone">
+              <option value="friendly">😄 Amigable y antojable</option>
+              <option value="direct">⚡ Directo y persuasivo</option>
+              <option value="urgent">⏰ Oferta por tiempo limitado</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="field">
+          <label><i class="ph-bold ph-note-pencil"></i> Detalle o promoción especial (opcional)</label>
+          <input type="text" id="aiPromoDetails" placeholder="Ej. 2x1 en hamburguesas los martes, envío gratis en pedidos mayores a $200, combo alitas $189..." maxlength="180" />
+        </div>
+
+        <div class="ai-promo-submit-bar">
+          <button type="submit" class="btn btn-primary" id="aiPromoGenerateBtn">
+            <i class="ph-bold ph-sparkle"></i> <span id="aiPromoBtnText">Generar textos con IA</span>
+          </button>
+        </div>
+      </form>
+
+      <div class="ai-promo-results" id="aiPromoResults">
+        <div class="ai-promo-empty" id="aiPromoEmptyState">
+          <i class="ph-bold ph-magic-wand"></i>
+          <h4>Genera ideas de textos en 1 clic</h4>
+          <p>Selecciona el objetivo y haz clic en "Generar textos con IA". Obtendrás opciones optimizadas para WhatsApp, Estados y Redes Sociales con tu enlace.</p>
+        </div>
+      </div>
+
+      <div class="modal-actions" style="margin-top:16px;justify-content:space-between">
+        <button class="btn btn-ghost" type="button" onclick="closeModal('aiPromoModal')">Cerrar</button>
+        <button class="btn btn-ghost" type="button" id="aiPromoRegenerateBtn" style="display:none"><i class="ph-bold ph-arrows-clockwise"></i> Generar nuevas ideas</button>
+      </div>
+    </div>
+  </div>
+
   <!-- ════════ Modal importación IA de menú ════════ -->
   <div class="modal-bg" id="aiProductModal">
     <div class="modal" style="max-width:860px">
@@ -2533,6 +2603,6 @@
     </div>
   </div>
 
-  <script src="/static/js/app.js?v=20260816posclosev2"></script>
+  <script src="/static/js/app.js?v=20260816ventashfixed"></script>
 </body>
 </html>

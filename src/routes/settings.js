@@ -1,6 +1,9 @@
 const express = require('express');
 const bcrypt = require('bcryptjs');
-const { q, setSetting } = require('../db');
+const OpenAI = require('openai');
+const config = require('../config');
+const { q, setSetting, getSuperAdminSetting } = require('../db');
+const { decrypt } = require('../utils/crypto');
 const { requireAuth, requireOwner } = require('../middleware/auth');
 const { createImageUpload, deleteManagedUpload, optimizeUploadedImage, safeUnlink } = require('../utils/uploads');
 const { CURRENCIES, TIME_ZONES, regionalDefaults, isSupportedCurrency, isSupportedTimeZone } = require('../utils/regional');
@@ -190,4 +193,140 @@ router.put('/', upload.single('logo'), async (req, res, next) => {
   }
 });
 
+function buildFallbackPromoTexts({ businessName, link, productNames = [], categoryNames = [], goal = 'general', details = '' }) {
+  const sampleProducts = productNames.length ? productNames.slice(0, 3).join(', ') : '';
+  const businessTag = businessName.replace(/[^a-zA-Z0-9áéíóúÁÉÍÓÚñÑ]/g, '');
+
+  return [
+    {
+      title: 'WhatsApp y Estados Directos',
+      badge: 'WhatsApp & Estados',
+      text: `🍔 ¡Hoy no te quedes con el antojo! En *${businessName}* estamos listos para consentirte 😋✨${sampleProducts ? `\n\nPrueba nuestros favoritos: *${sampleProducts}*` : ''}${details ? `\n\n💥 *Nota especial:* ${details}` : ''}\n\nHaz tu pedido fácil y rápido desde nuestra liga oficial:\n👉 ${link}\n\n🛵 ¡Directo a tu puerta o listo para recoger! 🚀`,
+      hook: '¡Hoy no te quedes con el antojo!',
+    },
+    {
+      title: 'Promoción y Oferta Especial',
+      badge: 'Promo & Descuento',
+      text: `🔥 ¡ATENCIÓN AMIGOS! 💥${details ? `\n\n🎁 *${details}*` : `\n\n🤤 Aprovecha las mejores promociones que tenemos hoy para ti en *${businessName}*.`}\n\nOrdena desde tu celular con 1 solo clic aquí:\n📲 ${link}\n\n¡No te quedes sin el tuyo, haz tu pedido ahora! 🛵💨`,
+      hook: '¡Promoción especial por tiempo limitado!',
+    },
+    {
+      title: 'Fin de Semana & Convivio',
+      badge: 'Fin de semana',
+      text: `🎉 ¡El plan perfecto para hoy es con *${businessName}*! 🥳🍕\n\nOlvídate de las filas y pide tus platillos favoritos en segundos:\n👇 Entra aquí para ver el menú y ordenar:\n🔗 ${link}\n\n¡Te lo preparamos con todo el sabor! 👨‍🍳🔥`,
+      hook: '¡El plan perfecto para hoy!',
+    },
+    {
+      title: 'Publicación para Instagram y Facebook',
+      badge: 'Redes Sociales',
+      text: `✨ ¡Pide en línea sin complicaciones! 📲 En *${businessName}* estrenamos pedidos directos por WhatsApp.\n\n1️⃣ Entra al link\n2️⃣ Elige lo que se te antoje\n3️⃣ ¡Y listo, nosotros nos encargamos del resto! 🛵🏠\n\n👉 Haz tu pedido aquí: ${link}\n\n#${businessTag || 'Food'} #PideEnLinea #ComidaDeliciosa #MenuDigital #Antojo`,
+      hook: '¡Pide en línea sin complicaciones!',
+    },
+  ];
+}
+
+router.post('/ai-promo-texts', async (req, res, next) => {
+  try {
+    const { goal = 'general', details = '', tone = 'friendly', link: clientLink = '' } = req.body || {};
+    const businessName = req.tenant.business_name || 'Mi Negocio';
+    const slug = req.tenant.slug;
+    const origin = req.get('origin') || `${req.protocol}://${req.get('host')}`;
+    const link = clientLink || `${origin}/${slug}`;
+
+    let productNames = [];
+    let categoryNames = [];
+    try {
+      const products = await req.tdb.all(`
+        SELECT p.name, c.name AS category_name, p.price::float AS price
+        FROM {s}.products p
+        LEFT JOIN {s}.categories c ON c.id = p.category_id
+        WHERE p.active = 1
+        ORDER BY p.id DESC
+        LIMIT 10
+      `);
+      productNames = (products || []).map((p) => p.name).filter(Boolean).slice(0, 8);
+      categoryNames = [...new Set((products || []).map((p) => p.category_name).filter(Boolean))].slice(0, 5);
+    } catch (dbErr) {
+      console.warn('[ai-promo-texts] Error leyendo productos:', dbErr?.message || dbErr);
+    }
+
+    const [modelRaw, baseUrlRaw, keyEncRaw, enabledRaw] = await Promise.all([
+      getSuperAdminSetting('openai_model', 'gpt-4o-mini'),
+      getSuperAdminSetting('openai_base_url', ''),
+      getSuperAdminSetting('openai_api_key_enc', ''),
+      getSuperAdminSetting('openai_enabled', '1'),
+    ]);
+    const key = decrypt(keyEncRaw || '') || config.OPENAI_API_KEY || '';
+    const model = String(modelRaw || 'gpt-4o-mini').trim() || 'gpt-4o-mini';
+    const baseUrl = String(baseUrlRaw || '').trim();
+    const enabled = enabledRaw !== '0';
+
+    let results = [];
+
+    if (enabled && key) {
+      try {
+        const openai = new OpenAI(baseUrl ? { apiKey: key, baseURL: baseUrl } : { apiKey: key });
+
+        const prompt = `Eres un copywriter experto en marketing digital gastronómico y redes sociales.
+Genera exactamente 4 ideas de textos cortos y llamativos para que los clientes de "${businessName}" hagan pedidos en línea usando su liga.
+
+DATOS DEL NEGOCIO:
+- Nombre: ${businessName}
+- Liga para ordenar: ${link}
+${productNames.length ? `- Productos de muestra: ${productNames.join(', ')}` : ''}
+${categoryNames.length ? `- Categorías: ${categoryNames.join(', ')}` : ''}
+- Objetivo de la publicación: ${goal}
+- Tono deseado: ${tone}
+${details ? `- Detalles o promoción adicional: ${details}` : ''}
+
+REGLAS:
+1. Cada variación debe ser corta, persuasiva, con emojis llamativos y bien espaciada.
+2. Cada variación DEBE incluir la liga exacta: "${link}".
+3. Una idea debe ser ideal para Estados de WhatsApp, otra para Promo/Urgencia, otra para Fin de semana/Antojo y otra para Redes Sociales (Instagram/Facebook).
+4. Devuelve ÚNICAMENTE un JSON con la clave "ideas" conteniendo un array de 4 objetos con la siguiente estructura:
+{
+  "ideas": [
+    {
+      "title": "Nombre corto de la idea (ej: WhatsApp y Estados)",
+      "badge": "WhatsApp | Promo | Fin de semana | Redes",
+      "text": "El texto completo con emojis y el link incluido listo para enviar o publicar",
+      "hook": "Frase gancho inicial"
+    }
+  ]
+}`;
+
+        const response = await openai.chat.completions.create({
+          model,
+          messages: [
+            { role: 'system', content: 'Eres un generador de copies publicitarios gastronómicos para WhatsApp y redes sociales. Responde únicamente en JSON válido.' },
+            { role: 'user', content: prompt },
+          ],
+          response_format: { type: 'json_object' },
+          temperature: 0.8,
+          max_tokens: 1200,
+        });
+
+        const rawContent = response.choices?.[0]?.message?.content || '{}';
+        let parsed = JSON.parse(rawContent);
+        if (Array.isArray(parsed)) results = parsed;
+        else if (Array.isArray(parsed.ideas)) results = parsed.ideas;
+        else if (Array.isArray(parsed.variations)) results = parsed.variations;
+        else if (Array.isArray(parsed.messages)) results = parsed.messages;
+        else if (Array.isArray(parsed.copies)) results = parsed.copies;
+      } catch (aiErr) {
+        console.warn('[ai-promo-texts] Error en OpenAI, usando generador inteligente:', aiErr?.message || aiErr);
+      }
+    }
+
+    if (!results || !results.length) {
+      results = buildFallbackPromoTexts({ businessName, link, productNames, categoryNames, goal, details });
+    }
+
+    res.json({ ok: true, ideas: results, businessName, link });
+  } catch (e) {
+    next(e);
+  }
+});
+
 module.exports = router;
+

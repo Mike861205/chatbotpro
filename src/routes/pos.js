@@ -1737,14 +1737,17 @@ router.put('/sales/:id/payment', async (req, res, next) => {
 router.post('/sales', createPosSale);
 router.post('/checkout', createPosSale);
 
-router.get('/audit-log', requireOwner, async (req, res, next) => {
+router.get('/audit-log', async (req, res, next) => {
   try {
+    const isCashier = req.user?.role === 'cashier';
     const requestedPage = Math.max(1, Number(req.query.page) || 1);
     const requestedPageSize = Number(req.query.pageSize) || 10;
     const pageSize = [10, 20, 50].includes(requestedPageSize) ? requestedPageSize : 10;
     const filter = SALES_HISTORY_FILTERS.has(req.query.filter) ? req.query.filter : 'month';
     const search = String(req.query.search || '').trim().slice(0, 80);
-    const branchId = String(req.query.branchId || 'all').trim();
+    const branchId = isCashier
+      ? (req.user?.branchId ? String(req.user.branchId) : 'general')
+      : String(req.query.branchId || 'all').trim();
     const startDate = normalizeIsoDate(req.query.startDate);
     const endDate = normalizeIsoDate(req.query.endDate);
     if (req.query.startDate && !startDate) throw badRequest('La fecha inicial no es válida');
@@ -1797,7 +1800,9 @@ router.get('/audit-log', requireOwner, async (req, res, next) => {
        ${whereSql} ORDER BY sal.id DESC LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
       [...params, pageSize, (page - 1) * pageSize]
     );
-    const branches = await req.tdb.all('SELECT id, name FROM {s}.branches ORDER BY active DESC, name');
+    const branches = isCashier
+      ? (req.user?.branchId ? [{ id: Number(req.user.branchId), name: req.user.branchName || 'Mi sucursal' }] : [{ id: 'general', name: 'General' }])
+      : await req.tdb.all('SELECT id, name FROM {s}.branches ORDER BY active DESC, name');
     res.json({ rows, branches, summary, page, pageSize, total, totalPages, filter, startDate, endDate, search, branchId });
   } catch (e) {
     if (e.statusCode === 400) return res.status(400).json({ error: e.message });
@@ -1805,13 +1810,16 @@ router.get('/audit-log', requireOwner, async (req, res, next) => {
   }
 });
 
-router.get('/cuts', requireOwner, async (req, res, next) => {
+router.get('/cuts', async (req, res, next) => {
   try {
+    const isCashier = req.user?.role === 'cashier';
     const requestedPage = Math.max(1, Number(req.query.page) || 1);
     const requestedPageSize = Number(req.query.pageSize) || 10;
     const pageSize = [10, 20, 40, 60].includes(requestedPageSize) ? requestedPageSize : 10;
     const search = String(req.query.search || '').trim().slice(0, 80);
-    const branchId = String(req.query.branchId || 'all').trim();
+    const branchId = isCashier
+      ? (req.user?.branchId ? String(req.user.branchId) : 'general')
+      : String(req.query.branchId || 'all').trim();
     const params = [];
     const where = [];
     if (search) {
@@ -1846,7 +1854,9 @@ router.get('/cuts', requireOwner, async (req, res, next) => {
         totals,
       };
     }));
-    const branches = await req.tdb.all('SELECT id, name FROM {s}.branches ORDER BY active DESC, name');
+    const branches = isCashier
+      ? (req.user?.branchId ? [{ id: Number(req.user.branchId), name: req.user.branchName || 'Mi sucursal' }] : [{ id: 'general', name: 'General' }])
+      : await req.tdb.all('SELECT id, name FROM {s}.branches ORDER BY active DESC, name');
     res.json({ rows: enriched, branches, page, pageSize, total, totalPages, search, branchId });
   } catch (e) { next(e); }
 });

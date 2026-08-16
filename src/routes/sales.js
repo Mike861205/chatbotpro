@@ -75,7 +75,30 @@ router.get('/report', async (req, res, next) => {
 
     const costedOrdersCte = `costed_orders AS (
       SELECT o.*,
-             COALESCE(o.cogs_total, item_cost.cogs, 0)::numeric AS calculated_cogs
+             COALESCE(o.cogs_total, item_cost.cogs, 0)::numeric AS calculated_cogs,
+             CASE
+               WHEN o.payment_method IN ('mixed', 'multiple') OR (o.payment_breakdown IS NOT NULL AND o.payment_breakdown ~ '^\\s*\\{.*\\}\\s*$') THEN
+                 COALESCE((NULLIF(o.payment_breakdown, '')::jsonb ->> 'cash')::numeric, 0)
+               WHEN o.payment_method = 'cash' THEN o.total::numeric
+               ELSE 0::numeric
+             END AS payment_cash,
+             CASE
+               WHEN o.payment_method IN ('mixed', 'multiple') OR (o.payment_breakdown IS NOT NULL AND o.payment_breakdown ~ '^\\s*\\{.*\\}\\s*$') THEN
+                 COALESCE((NULLIF(o.payment_breakdown, '')::jsonb ->> 'card')::numeric, 0)
+               WHEN o.payment_method = 'card' THEN o.total::numeric
+               ELSE 0::numeric
+             END AS payment_card,
+             CASE
+               WHEN o.payment_method IN ('mixed', 'multiple') OR (o.payment_breakdown IS NOT NULL AND o.payment_breakdown ~ '^\\s*\\{.*\\}\\s*$') THEN
+                 COALESCE((NULLIF(o.payment_breakdown, '')::jsonb ->> 'transfer')::numeric, 0)
+               WHEN o.payment_method = 'transfer' THEN o.total::numeric
+               ELSE 0::numeric
+             END AS payment_transfer,
+             CASE
+               WHEN o.payment_method NOT IN ('cash', 'card', 'transfer', 'mixed', 'multiple') AND (o.payment_breakdown IS NULL OR NOT (o.payment_breakdown ~ '^\\s*\\{.*\\}\\s*$')) THEN
+                 o.total::numeric
+               ELSE 0::numeric
+             END AS payment_other
       FROM {s}.orders o
       LEFT JOIN LATERAL (
         SELECT COALESCE(SUM(
@@ -113,6 +136,10 @@ router.get('/report', async (req, res, next) => {
       SELECT to_char(d.sale_date, 'YYYY-MM-DD') AS date,
              COALESCE(SUM(o.total), 0)::float AS sales,
              COALESCE(SUM(o.calculated_cogs), 0)::float AS cogs,
+             COALESCE(SUM(o.payment_cash), 0)::float AS cash,
+             COALESCE(SUM(o.payment_card), 0)::float AS card,
+             COALESCE(SUM(o.payment_transfer), 0)::float AS transfer,
+             COALESCE(SUM(o.payment_other), 0)::float AS other,
              COUNT(o.id)::int AS tickets
       FROM days d
       LEFT JOIN costed_orders o
@@ -136,6 +163,10 @@ router.get('/report', async (req, res, next) => {
       SELECT EXTRACT(MONTH FROM m.sale_month)::int AS month,
              COALESCE(SUM(o.total), 0)::float AS sales,
              COALESCE(SUM(o.calculated_cogs), 0)::float AS cogs,
+             COALESCE(SUM(o.payment_cash), 0)::float AS cash,
+             COALESCE(SUM(o.payment_card), 0)::float AS card,
+             COALESCE(SUM(o.payment_transfer), 0)::float AS transfer,
+             COALESCE(SUM(o.payment_other), 0)::float AS other,
              COUNT(o.id)::int AS tickets
       FROM months m
       LEFT JOIN costed_orders o
@@ -158,6 +189,10 @@ router.get('/report', async (req, res, next) => {
              ) AS name,
              COALESCE(SUM(o.total), 0)::float AS sales,
              COALESCE(SUM(o.calculated_cogs), 0)::float AS cogs,
+             COALESCE(SUM(o.payment_cash), 0)::float AS cash,
+             COALESCE(SUM(o.payment_card), 0)::float AS card,
+             COALESCE(SUM(o.payment_transfer), 0)::float AS transfer,
+             COALESCE(SUM(o.payment_other), 0)::float AS other,
              COUNT(o.id)::int AS tickets
       FROM costed_orders o
       CROSS JOIN input i
@@ -242,17 +277,53 @@ router.get('/report', async (req, res, next) => {
     const daily = dailyRows.map((row) => {
       const sales = Number(row.sales || 0);
       const cogs = Number(row.cogs || 0);
+      const cash = Number(row.cash || 0);
+      const card = Number(row.card || 0);
+      const transfer = Number(row.transfer || 0);
+      const other = Number(row.other || 0);
       const expenses = dailyExpenseMap.get(row.date) || 0;
       const purchases = dailyPurchaseMap.get(row.date) || 0;
-      return { date: row.date, day: Number(String(row.date).slice(-2)), sales, cogs, expenses, purchases, cashResult: money(sales - expenses - purchases), tickets: Number(row.tickets || 0), ...withProfit(sales, cogs, expenses) };
+      return {
+        date: row.date,
+        day: Number(String(row.date).slice(-2)),
+        sales,
+        cogs,
+        cash,
+        card,
+        transfer,
+        other,
+        expenses,
+        purchases,
+        cashResult: money(sales - expenses - purchases),
+        tickets: Number(row.tickets || 0),
+        ...withProfit(sales, cogs, expenses),
+      };
     });
     const monthly = monthlyRows.map((row) => {
       const monthNumber = Number(row.month);
       const sales = Number(row.sales || 0);
       const cogs = Number(row.cogs || 0);
+      const cash = Number(row.cash || 0);
+      const card = Number(row.card || 0);
+      const transfer = Number(row.transfer || 0);
+      const other = Number(row.other || 0);
       const expenses = monthlyExpenseMap.get(monthNumber) || 0;
       const purchases = monthlyPurchaseMap.get(monthNumber) || 0;
-      return { month: monthNumber, label: MONTH_NAMES[monthNumber - 1], sales, cogs, expenses, purchases, cashResult: money(sales - expenses - purchases), tickets: Number(row.tickets || 0), ...withProfit(sales, cogs, expenses) };
+      return {
+        month: monthNumber,
+        label: MONTH_NAMES[monthNumber - 1],
+        sales,
+        cogs,
+        cash,
+        card,
+        transfer,
+        other,
+        expenses,
+        purchases,
+        cashResult: money(sales - expenses - purchases),
+        tickets: Number(row.tickets || 0),
+        ...withProfit(sales, cogs, expenses),
+      };
     });
 
     const selectedMonthSales = daily.reduce((sum, row) => sum + row.sales, 0);
@@ -270,6 +341,16 @@ router.get('/report', async (req, res, next) => {
     const bestDay = daily.reduce((best, row) => (row.sales > (best?.sales || 0) ? row : best), null);
     const bestMonth = monthly.reduce((best, row) => (row.sales > (best?.sales || 0) ? row : best), null);
 
+    const selectedMonthCash = money(daily.reduce((sum, row) => sum + row.cash, 0));
+    const selectedMonthCard = money(daily.reduce((sum, row) => sum + row.card, 0));
+    const selectedMonthTransfer = money(daily.reduce((sum, row) => sum + row.transfer, 0));
+    const selectedMonthOther = money(daily.reduce((sum, row) => sum + row.other, 0));
+
+    const yearCash = money(monthly.reduce((sum, row) => sum + row.cash, 0));
+    const yearCard = money(monthly.reduce((sum, row) => sum + row.card, 0));
+    const yearTransfer = money(monthly.reduce((sum, row) => sum + row.transfer, 0));
+    const yearOther = money(monthly.reduce((sum, row) => sum + row.other, 0));
+
     res.json({
       filters: { year, month, branch: branchFilter.key },
       branches: branches.map((row) => ({ id: Number(row.id), name: row.name, active: Number(row.active) })),
@@ -284,6 +365,16 @@ router.get('/report', async (req, res, next) => {
         selectedMonthGrossProfit: selectedMonthProfit.grossProfit,
         selectedMonthNetProfit: selectedMonthProfit.netProfit,
         selectedMonthMarginPercent: selectedMonthProfit.marginPercent,
+        selectedMonthCash,
+        selectedMonthCard,
+        selectedMonthTransfer,
+        selectedMonthOther,
+        selectedMonthPayments: {
+          cash: selectedMonthCash,
+          card: selectedMonthCard,
+          transfer: selectedMonthTransfer,
+          other: selectedMonthOther,
+        },
         yearSales,
         yearTickets,
         yearAverage: yearTickets ? yearSales / yearTickets : 0,
@@ -294,6 +385,16 @@ router.get('/report', async (req, res, next) => {
         yearGrossProfit: yearProfit.grossProfit,
         yearNetProfit: yearProfit.netProfit,
         yearMarginPercent: yearProfit.marginPercent,
+        yearCash,
+        yearCard,
+        yearTransfer,
+        yearOther,
+        yearPayments: {
+          cash: yearCash,
+          card: yearCard,
+          transfer: yearTransfer,
+          other: yearOther,
+        },
         bestDay,
         bestMonth,
       },
@@ -301,17 +402,33 @@ router.get('/report', async (req, res, next) => {
       monthly,
       branchBreakdown: (() => {
         const map = new Map();
-        for (const row of branchRows) map.set(row.key, { key: row.key, name: row.name, sales: Number(row.sales || 0), cogs: Number(row.cogs || 0), expenses: 0, purchases: 0, tickets: Number(row.tickets || 0) });
+        for (const row of branchRows) map.set(row.key, {
+          key: row.key,
+          name: row.name,
+          sales: Number(row.sales || 0),
+          cogs: Number(row.cogs || 0),
+          cash: Number(row.cash || 0),
+          card: Number(row.card || 0),
+          transfer: Number(row.transfer || 0),
+          other: Number(row.other || 0),
+          expenses: 0,
+          purchases: 0,
+          tickets: Number(row.tickets || 0),
+        });
         for (const row of branchExpenseRows) {
-          const current = map.get(row.key) || { key: row.key, name: row.name, sales: 0, cogs: 0, expenses: 0, purchases: 0, tickets: 0 };
+          const current = map.get(row.key) || { key: row.key, name: row.name, sales: 0, cogs: 0, cash: 0, card: 0, transfer: 0, other: 0, expenses: 0, purchases: 0, tickets: 0 };
           current.expenses = Number(row.expenses || 0);
           map.set(row.key, current);
         }
         for (const row of branchPurchaseRows) {
-          const current = map.get(row.key) || { key: row.key, name: row.name, sales: 0, cogs: 0, expenses: 0, purchases: 0, tickets: 0 };
+          const current = map.get(row.key) || { key: row.key, name: row.name, sales: 0, cogs: 0, cash: 0, card: 0, transfer: 0, other: 0, expenses: 0, purchases: 0, tickets: 0 };
           current.purchases = Number(row.purchases || 0); map.set(row.key,current);
         }
-        return [...map.values()].map((row) => ({ ...row, cashResult: money(row.sales-row.expenses-row.purchases), ...withProfit(row.sales, row.cogs, row.expenses) })).sort((a, b) => b.sales - a.sales);
+        return [...map.values()].map((row) => ({
+          ...row,
+          cashResult: money(row.sales - row.expenses - row.purchases),
+          ...withProfit(row.sales, row.cogs, row.expenses),
+        })).sort((a, b) => b.sales - a.sales);
       })(),
     });
   } catch (error) {

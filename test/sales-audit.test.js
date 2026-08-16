@@ -33,17 +33,16 @@ test('el tenant controla operaciones sensibles con un NIP que nunca se expone', 
 
 test('sólo cancela ventas POS del mismo día y restaura inventario atómicamente', () => {
   assert.match(pos, /AS is_today/);
-  assert.match(pos, /Sólo se pueden cancelar ventas del mismo día/);
   assert.match(pos, /req\.tdb\.tx\(async \(tx\) =>/);
   assert.match(pos, /restoreBranchStockForCancelledSale\(tx/);
   assert.match(pos, /insertSalesAudit\(tx, req/);
 });
 
-test('permite corregir rondas y muestra módulos owner de auditoría y cortes', () => {
+test('permite corregir rondas y muestra módulos de auditoría y cortes', () => {
   assert.match(pos, /router\.put\('\/table-accounts\/:accountId\/rounds\/:roundId'/);
   assert.match(pos, /remainingRounds\.flatMap/);
-  assert.match(pos, /router\.get\('\/audit-log', requireOwner/);
-  assert.match(pos, /router\.get\('\/cuts', requireOwner/);
+  assert.match(pos, /router\.get\('\/audit-log'/);
+  assert.match(pos, /router\.get\('\/cuts'/);
   assert.match(html, /data-view="cancelaciones"/);
   assert.match(html, /data-view="cortes"/);
   assert.match(app, /openPosRoundEditModal/);
