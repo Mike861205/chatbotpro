@@ -481,6 +481,27 @@ async function createTenantSchema(slug) {
       ON "${s}".table_accounts(table_id, branch_id) WHERE status = 'open';
     CREATE INDEX IF NOT EXISTS idx_${s}_table_accounts_session
       ON "${s}".table_accounts(closed_session_id, status, closed_at DESC);
+    CREATE TABLE IF NOT EXISTS "${s}".sales_audit_log (
+      id SERIAL PRIMARY KEY,
+      event_type TEXT NOT NULL,
+      order_id INTEGER,
+      table_account_id INTEGER,
+      table_round_id INTEGER,
+      session_id INTEGER,
+      branch_id INTEGER,
+      amount NUMERIC(12,2) NOT NULL DEFAULT 0,
+      reason TEXT NOT NULL DEFAULT '',
+      actor_username TEXT NOT NULL DEFAULT '',
+      actor_role TEXT NOT NULL DEFAULT '',
+      authorized_by TEXT NOT NULL DEFAULT '',
+      before_data TEXT NOT NULL DEFAULT '{}',
+      after_data TEXT NOT NULL DEFAULT '{}',
+      created_at TIMESTAMPTZ DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS idx_${s}_sales_audit_created
+      ON "${s}".sales_audit_log(created_at DESC, id DESC);
+    CREATE INDEX IF NOT EXISTS idx_${s}_sales_audit_order
+      ON "${s}".sales_audit_log(order_id, table_account_id);
     ALTER TABLE "${s}".table_accounts ADD COLUMN IF NOT EXISTS customer_name TEXT DEFAULT '';
     ALTER TABLE "${s}".table_accounts ADD COLUMN IF NOT EXISTS customer_phone TEXT DEFAULT '';
     ALTER TABLE "${s}".table_accounts ADD COLUMN IF NOT EXISTS source_channel TEXT DEFAULT '';

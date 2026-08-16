@@ -1,4 +1,5 @@
 const express = require('express');
+const bcrypt = require('bcryptjs');
 const { requireAuth, requireOwner } = require('../middleware/auth');
 const { getSetting } = require('../db');
 const { decrypt } = require('../utils/crypto');
@@ -27,9 +28,45 @@ const tenantTimeZone = (tenantDb) => tenantDb?.timezone || 'America/Mexico_City'
 const SALES_HISTORY_FILTERS = new Set(['today', 'week', 'month', 'custom']);
 const CHATBOT_IMPORTABLE_STATUSES = new Set(['pendiente', 'confirmado', 'preparando', 'enviado']);
 
+async function getPosPolicy(t) {
+  const keys = ['pos_round_edit_enabled', 'pos_round_edit_require_pin', 'pos_same_day_cancel_enabled', 'pos_cancel_require_pin', 'pos_authorization_pin_hash'];
+  const rows = await t.all('SELECT key, value FROM {s}.settings WHERE key = ANY($1::text[])', [keys]);
+  const values = Object.fromEntries(rows.map((row) => [row.key, row.value]));
+  return {
+    roundEditEnabled: values.pos_round_edit_enabled === '1',
+    roundEditRequirePin: values.pos_round_edit_require_pin === '1',
+    sameDayCancelEnabled: values.pos_same_day_cancel_enabled !== '0',
+    cancelRequirePin: values.pos_cancel_require_pin === '1',
+    pinHash: values.pos_authorization_pin_hash || '',
+  };
+}
+
+async function authorizePosAction(t, pin, required) {
+  if (!required) return '';
+  const policy = await getPosPolicy(t);
+  if (!policy.pinHash) throw Object.assign(new Error('Configura primero el NIP de autorización en Mi negocio'), { statusCode: 409 });
+  if (!(await bcrypt.compare(String(pin || ''), policy.pinHash))) {
+    throw Object.assign(new Error('NIP de autorización incorrecto'), { statusCode: 403 });
+  }
+  return 'NIP del negocio';
+}
+
 function n(value) {
   const num = Number(value);
   return Number.isFinite(num) ? Number(num.toFixed(2)) : 0;
+}
+
+async function insertSalesAudit(t, req, event) {
+  await t.run(
+    `INSERT INTO {s}.sales_audit_log
+     (event_type, order_id, table_account_id, table_round_id, session_id, branch_id, amount, reason,
+      actor_username, actor_role, authorized_by, before_data, after_data)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
+    [event.eventType, event.orderId || null, event.tableAccountId || null, event.tableRoundId || null,
+      event.sessionId || null, event.branchId || null, n(event.amount), event.reason || '',
+      req.user.username, req.user.role || '', event.authorizedBy || '',
+      JSON.stringify(event.before || {}), JSON.stringify(event.after || {})]
+  );
 }
 
 function normalizePublicMediaPath(raw) {
@@ -890,6 +927,57 @@ router.post('/table-accounts/:id/rounds', async (req, res, next) => {
   }
 });
 
+router.put('/table-accounts/:accountId/rounds/:roundId', async (req, res, next) => {
+  try {
+    const policy = await getPosPolicy(req.tdb);
+    if (!policy.roundEditEnabled) return res.status(403).json({ error: 'La edición de rondas está deshabilitada por el negocio' });
+    const accountId = Number(req.params.accountId);
+    const roundId = Number(req.params.roundId);
+    const reason = String(req.body?.reason || '').trim().slice(0, 180);
+    if (!reason) return res.status(400).json({ error: 'Escribe el motivo de la edición' });
+    const authorizedBy = await authorizePosAction(req.tdb, req.body?.pin, policy.roundEditRequirePin);
+    const session = await getOpenSession(req.tdb, userSessionContext(req.user, req));
+    if (!session) return res.status(400).json({ error: 'Abre una caja para editar la ronda' });
+
+    await req.tdb.tx(async (tx) => {
+      const account = await tx.get("SELECT * FROM {s}.table_accounts WHERE id=$1 AND status='open' FOR UPDATE", [accountId]);
+      if (!account) throw Object.assign(new Error('La cuenta de mesa ya no está abierta'), { statusCode: 409 });
+      if (Number(account.branch_id || 0) !== Number(session.branch_id || 0)) throw Object.assign(new Error('La cuenta pertenece a otra sucursal'), { statusCode: 409 });
+      const round = await tx.get('SELECT * FROM {s}.table_rounds WHERE id=$1 AND account_id=$2 FOR UPDATE', [roundId, accountId]);
+      if (!round) throw Object.assign(new Error('No se encontró la ronda'), { statusCode: 404 });
+      const requestedItems = Array.isArray(req.body?.items) ? req.body.items : [];
+      const nextItems = requestedItems.length ? await normalizePosItems(tx, requestedItems) : [];
+      const nextSubtotal = tableItemsTotal(nextItems);
+      const previousItems = parseJsonArray(round.items);
+
+      if (account.source_channel === 'chatbot') {
+        await restoreBranchStockForCancelledSale(tx, session.branch_id, previousItems);
+        if (nextItems.length) await decrementBranchStockForSale(tx, session.branch_id, nextItems);
+      }
+      if (nextItems.length) {
+        await tx.run('UPDATE {s}.table_rounds SET items=$1, subtotal=$2, notes=$3 WHERE id=$4', [JSON.stringify(nextItems), nextSubtotal, reason, roundId]);
+      } else {
+        await tx.run('DELETE FROM {s}.table_rounds WHERE id=$1', [roundId]);
+      }
+      const remainingRounds = await tx.all('SELECT items FROM {s}.table_rounds WHERE account_id=$1 ORDER BY round_number', [accountId]);
+      const accumulatedItems = remainingRounds.flatMap((item) => parseJsonArray(item.items));
+      const accumulatedTotal = tableItemsTotal(accumulatedItems);
+      await tx.run('UPDATE {s}.table_accounts SET items=$1, subtotal=$2, total=$2, updated_at=now() WHERE id=$3', [JSON.stringify(accumulatedItems), accumulatedTotal, accountId]);
+      await insertSalesAudit(tx, req, {
+        eventType: nextItems.length ? 'table_round_edited' : 'table_round_deleted',
+        tableAccountId: accountId, tableRoundId: roundId, sessionId: session.id, branchId: session.branch_id,
+        amount: n(Number(round.subtotal || 0) - nextSubtotal), reason, authorizedBy,
+        before: { roundNumber: round.round_number, items: previousItems, subtotal: n(round.subtotal) },
+        after: { roundNumber: round.round_number, items: nextItems, subtotal: nextSubtotal },
+      });
+    });
+    res.json({ ok: true, account: await getTableAccountWithRounds(req.tdb, accountId) });
+  } catch (e) {
+    if ([400, 403, 404, 409].includes(e.statusCode)) return res.status(e.statusCode).json({ error: e.message });
+    next(e);
+  }
+});
+
 router.post('/table-accounts/:id/checkout', async (req, res, next) => {
   try {
     const session = await getOpenSession(req.tdb, userSessionContext(req.user, req));
@@ -1022,6 +1110,7 @@ router.get('/overview', async (req, res, next) => {
       : null;
     const lastClosedSession = await getLastClosedSession(req.tdb, ctx);
     const chatbotIntegrationEnabled = await isChatbotPosIntegrationEnabled(req.tdb);
+    const policy = await getPosPolicy(req.tdb);
 
     // Sucursales bloqueadas por otras sesiones abiertas (distintas al usuario actual)
     const blockedBranchIds = allOpenSessions
@@ -1035,6 +1124,12 @@ router.get('/overview', async (req, res, next) => {
       activeSession,
       lastClosedSession,
       chatbotIntegrationEnabled,
+      policy: {
+        roundEditEnabled: policy.roundEditEnabled,
+        roundEditRequirePin: policy.roundEditRequirePin,
+        sameDayCancelEnabled: policy.sameDayCancelEnabled,
+        cancelRequirePin: policy.cancelRequirePin,
+      },
       openSessions: allOpenSessions,
       tables: await listRestaurantTables(req.tdb, activeSession, false),
       blockedBranchIds,
@@ -1533,37 +1628,44 @@ router.post('/sales/:id/cancel', async (req, res, next) => {
   try {
     const id = Number(req.params.id);
     if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: 'Venta inválida' });
-    const sale = await req.tdb.get(
-      `SELECT id, status, notes, pos_session_id, items, service_branch_id, pickup_branch_id,branch_stock_applied
-       FROM {s}.orders
-       WHERE id = $1 AND channel = 'pos'
-       LIMIT 1`,
-      [id]
-    );
-    if (!sale) return res.status(404).json({ error: 'No se encontró la venta POS' });
-    if (sale.status === 'cancelado') return res.status(409).json({ error: 'La venta ya está cancelada' });
-
+    const policy = await getPosPolicy(req.tdb);
+    if (!policy.sameDayCancelEnabled) return res.status(403).json({ error: 'La cancelación de ventas está deshabilitada por el negocio' });
     const reason = String(req.body?.reason || '').trim().slice(0, 180);
+    if (!reason) return res.status(400).json({ error: 'Escribe el motivo de la cancelación' });
+    const authorizedBy = await authorizePosAction(req.tdb, req.body?.pin, policy.cancelRequirePin);
     const stamp = new Date().toLocaleString('es-MX', { timeZone: req.timezone });
-    const cancelText = reason
-      ? `[CANCELADO ${stamp}] ${reason}`
-      : `[CANCELADO ${stamp}] Cancelación manual en caja`;
-    await req.tdb.run(
-      `UPDATE {s}.orders
-       SET status = 'cancelado',
-           branch_stock_applied = 0,
-           notes = CASE
-             WHEN COALESCE(notes, '') = '' THEN $1
-             ELSE notes || E'\n' || $1
-           END
-       WHERE id = $2`,
-      [cancelText, id]
-    );
-    if (Number(sale.branch_stock_applied)) await restoreBranchStockForCancelledSale(req.tdb, sale.service_branch_id || sale.pickup_branch_id, sale.items);
+    const cancelText = `[CANCELADO ${stamp}] ${reason}`;
+    const sale = await req.tdb.tx(async (tx) => {
+      const row = await tx.get(
+        `SELECT id, status, notes, pos_session_id, items, total::float AS total, payment_method,
+                service_branch_id, pickup_branch_id, branch_stock_applied, table_account_id,
+                ((created_at AT TIME ZONE '${tenantTimeZone(tx)}')::date = (now() AT TIME ZONE '${tenantTimeZone(tx)}')::date) AS is_today
+         FROM {s}.orders WHERE id=$1 AND channel='pos' FOR UPDATE`,
+        [id]
+      );
+      if (!row) throw Object.assign(new Error('No se encontró la venta POS'), { statusCode: 404 });
+      if (row.status === 'cancelado') throw Object.assign(new Error('La venta ya está cancelada'), { statusCode: 409 });
+      if (!row.is_today) throw Object.assign(new Error('Sólo se pueden cancelar ventas del mismo día'), { statusCode: 409 });
+      await tx.run(
+        `UPDATE {s}.orders SET status='cancelado', branch_stock_applied=0,
+         notes=CASE WHEN COALESCE(notes,'')='' THEN $1 ELSE notes || E'\n' || $1 END WHERE id=$2`,
+        [cancelText, id]
+      );
+      if (Number(row.branch_stock_applied)) await restoreBranchStockForCancelledSale(tx, row.service_branch_id || row.pickup_branch_id, row.items);
+      await insertSalesAudit(tx, req, {
+        eventType: 'sale_cancelled', orderId: id, tableAccountId: row.table_account_id,
+        sessionId: row.pos_session_id, branchId: row.service_branch_id || row.pickup_branch_id,
+        amount: row.total, reason, authorizedBy,
+        before: { status: row.status, total: n(row.total), paymentMethod: row.payment_method, items: parseJsonArray(row.items) },
+        after: { status: 'cancelado' },
+      });
+      return row;
+    });
 
     const totals = sale.pos_session_id ? await getSessionTotals(req.tdb, sale.pos_session_id) : null;
     res.json({ ok: true, saleId: id, totals });
   } catch (e) {
+    if ([400, 403, 404, 409].includes(e.statusCode)) return res.status(e.statusCode).json({ error: e.message });
     next(e);
   }
 });
@@ -1573,7 +1675,8 @@ router.put('/sales/:id/payment', async (req, res, next) => {
     const id = Number(req.params.id);
     if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: 'Venta inválida' });
     const sale = await req.tdb.get(
-      `SELECT id, total::float AS total, status, pos_session_id
+      `SELECT id, total::float AS total, status, pos_session_id, payment_method, payment_breakdown,
+              cash_received::float AS cash_received, cash_change::float AS cash_change, service_branch_id
        FROM {s}.orders
        WHERE id = $1 AND channel = 'pos'
        LIMIT 1`,
@@ -1599,6 +1702,12 @@ router.put('/sales/:id/payment', async (req, res, next) => {
         id,
       ]
     );
+    await insertSalesAudit(req.tdb, req, {
+      eventType: 'sale_payment_edited', orderId: id, sessionId: sale.pos_session_id,
+      branchId: sale.service_branch_id, amount: sale.total, reason: 'Cambio de forma de pago',
+      before: { paymentMethod: sale.payment_method, paymentBreakdown: sale.payment_breakdown, cashReceived: sale.cash_received, cashChange: sale.cash_change },
+      after: { paymentMethod: payment.method, paymentBreakdown: payment.breakdown, cashReceived: payment.cashReceived, cashChange: payment.cashChange },
+    });
 
     const updated = await req.tdb.get(
       `SELECT id, total::float AS total, status, payment_method, payment_breakdown,
@@ -1627,5 +1736,119 @@ router.put('/sales/:id/payment', async (req, res, next) => {
 
 router.post('/sales', createPosSale);
 router.post('/checkout', createPosSale);
+
+router.get('/audit-log', requireOwner, async (req, res, next) => {
+  try {
+    const requestedPage = Math.max(1, Number(req.query.page) || 1);
+    const requestedPageSize = Number(req.query.pageSize) || 10;
+    const pageSize = [10, 20, 50].includes(requestedPageSize) ? requestedPageSize : 10;
+    const filter = SALES_HISTORY_FILTERS.has(req.query.filter) ? req.query.filter : 'month';
+    const search = String(req.query.search || '').trim().slice(0, 80);
+    const branchId = String(req.query.branchId || 'all').trim();
+    const startDate = normalizeIsoDate(req.query.startDate);
+    const endDate = normalizeIsoDate(req.query.endDate);
+    if (req.query.startDate && !startDate) throw badRequest('La fecha inicial no es válida');
+    if (req.query.endDate && !endDate) throw badRequest('La fecha final no es válida');
+    const params = [];
+    const where = [];
+    const localCreatedAt = `(sal.created_at AT TIME ZONE '${tenantTimeZone(req.tdb)}')`;
+    if (search) {
+      params.push(`%${search}%`);
+      where.push(`(CAST(sal.id AS TEXT) ILIKE $${params.length} OR CAST(sal.order_id AS TEXT) ILIKE $${params.length} OR CAST(sal.table_account_id AS TEXT) ILIKE $${params.length} OR sal.actor_username ILIKE $${params.length} OR sal.reason ILIKE $${params.length} OR sal.event_type ILIKE $${params.length})`);
+    }
+    if (branchId === 'general') {
+      where.push('sal.branch_id IS NULL');
+    } else if (Number.isInteger(Number(branchId)) && Number(branchId) > 0) {
+      params.push(Number(branchId));
+      where.push(`sal.branch_id = $${params.length}`);
+    }
+    if (filter === 'today') where.push(`${localCreatedAt}::date = (now() AT TIME ZONE '${tenantTimeZone(req.tdb)}')::date`);
+    if (filter === 'week') where.push(`${localCreatedAt} >= date_trunc('week', now() AT TIME ZONE '${tenantTimeZone(req.tdb)}')`);
+    if (filter === 'month') where.push(`${localCreatedAt} >= date_trunc('month', now() AT TIME ZONE '${tenantTimeZone(req.tdb)}')`);
+    if (filter === 'custom') {
+      if (!startDate || !endDate) throw badRequest('Selecciona fecha inicial y fecha final');
+      if (startDate > endDate) throw badRequest('La fecha inicial no puede ser mayor que la fecha final');
+      params.push(startDate);
+      where.push(`${localCreatedAt}::date >= $${params.length}::date`);
+      params.push(endDate);
+      where.push(`${localCreatedAt}::date <= $${params.length}::date`);
+    }
+    const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
+    const summary = await req.tdb.get(
+      `SELECT COUNT(*)::int AS total,
+              COUNT(*) FILTER (WHERE sal.event_type='sale_cancelled')::int AS cancellations,
+              COUNT(*) FILTER (WHERE sal.event_type IN ('table_round_edited','table_round_deleted'))::int AS round_edits,
+              COUNT(*) FILTER (WHERE sal.event_type='sale_payment_edited')::int AS payment_edits,
+              COALESCE(SUM(sal.amount) FILTER (WHERE sal.event_type='sale_cancelled'),0)::float AS cancelled_amount,
+              COALESCE(SUM(ABS(sal.amount)) FILTER (WHERE sal.event_type IN ('table_round_edited','table_round_deleted')),0)::float AS corrected_amount
+       FROM {s}.sales_audit_log sal ${whereSql}`,
+      params
+    );
+    const total = Number(summary?.total || 0);
+    const totalPages = Math.max(1, Math.ceil(total / pageSize));
+    const page = Math.min(requestedPage, totalPages);
+    const rows = await req.tdb.all(
+      `SELECT sal.id, sal.event_type, sal.order_id, sal.table_account_id, sal.table_round_id, sal.session_id, sal.branch_id,
+              sal.amount::float AS amount, sal.reason, sal.actor_username, sal.actor_role, sal.authorized_by,
+              sal.before_data, sal.after_data, COALESCE(b.name, 'General') AS branch_name,
+              to_char(sal.created_at AT TIME ZONE '${tenantTimeZone(req.tdb)}', 'DD Mon YYYY, HH24:MI') AS created_at
+       FROM {s}.sales_audit_log sal
+       LEFT JOIN {s}.branches b ON b.id=sal.branch_id
+       ${whereSql} ORDER BY sal.id DESC LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
+      [...params, pageSize, (page - 1) * pageSize]
+    );
+    const branches = await req.tdb.all('SELECT id, name FROM {s}.branches ORDER BY active DESC, name');
+    res.json({ rows, branches, summary, page, pageSize, total, totalPages, filter, startDate, endDate, search, branchId });
+  } catch (e) {
+    if (e.statusCode === 400) return res.status(400).json({ error: e.message });
+    next(e);
+  }
+});
+
+router.get('/cuts', requireOwner, async (req, res, next) => {
+  try {
+    const requestedPage = Math.max(1, Number(req.query.page) || 1);
+    const requestedPageSize = Number(req.query.pageSize) || 10;
+    const pageSize = [10, 20, 40, 60].includes(requestedPageSize) ? requestedPageSize : 10;
+    const search = String(req.query.search || '').trim().slice(0, 80);
+    const branchId = String(req.query.branchId || 'all').trim();
+    const params = [];
+    const where = [];
+    if (search) {
+      params.push(`%${search}%`);
+      where.push(`(CAST(id AS TEXT) ILIKE $${params.length} OR opened_by ILIKE $${params.length} OR closed_by ILIKE $${params.length} OR COALESCE(branch_name, 'General') ILIKE $${params.length})`);
+    }
+    if (branchId === 'general') {
+      where.push('branch_id IS NULL');
+    } else if (Number.isInteger(Number(branchId)) && Number(branchId) > 0) {
+      params.push(Number(branchId));
+      where.push(`branch_id = $${params.length}`);
+    }
+    const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
+    const totalRow = await req.tdb.get(`SELECT COUNT(*)::int AS total FROM {s}.pos_sessions ${whereSql}`, params);
+    const total = Number(totalRow?.total || 0);
+    const totalPages = Math.max(1, Math.ceil(total / pageSize));
+    const page = Math.min(requestedPage, totalPages);
+    const rows = await req.tdb.all(
+      `SELECT id, status, opening_amount::float AS opening_amount, closing_amount::float AS closing_amount,
+              expected_amount::float AS expected_amount, difference_amount::float AS difference_amount,
+              branch_id, branch_name, notes, opened_by, closed_by,
+              to_char(opened_at AT TIME ZONE '${tenantTimeZone(req.tdb)}', 'DD Mon YYYY, HH24:MI') AS opened_at,
+              to_char(closed_at AT TIME ZONE '${tenantTimeZone(req.tdb)}', 'DD Mon YYYY, HH24:MI') AS closed_at
+       FROM {s}.pos_sessions ${whereSql} ORDER BY opened_at DESC LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
+      [...params, pageSize, (page - 1) * pageSize]
+    );
+    const enriched = await Promise.all(rows.map(async (row) => {
+      const totals = await getSessionTotals(req.tdb, row.id);
+      return {
+        ...row,
+        expected_cash: row.status === 'closed' ? n(row.expected_amount) : expectedCashForSession(row, totals),
+        totals,
+      };
+    }));
+    const branches = await req.tdb.all('SELECT id, name FROM {s}.branches ORDER BY active DESC, name');
+    res.json({ rows: enriched, branches, page, pageSize, total, totalPages, search, branchId });
+  } catch (e) { next(e); }
+});
 
 module.exports = router;

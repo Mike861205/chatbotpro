@@ -11,7 +11,7 @@
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/fill/style.css" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/duotone/style.css" />
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-  <link rel="stylesheet" href="/static/css/styles.css?v=20260814regionalclock2" />
+  <link rel="stylesheet" href="/static/css/styles.css?v=20260816posclosev2" />
   <link rel="icon" type="image/svg+xml" href="/static/favicon.svg" />
   <link rel="icon" type="image/png" href="/static/chatbotpro100.png" />
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
@@ -39,6 +39,8 @@
         <a href="#pos" data-view="pos" data-color="emerald"><span class="nav-ic"><i class="ph-duotone ph-cash-register"></i></span><span>Punto de venta</span></a>
         <a href="#kds" data-view="kds" data-color="orange"><span class="nav-ic"><i class="ph-duotone ph-monitor-play"></i></span><span>Pantallas KDS</span></a>
         <a href="#ventas" data-view="ventas" data-color="blue"><span class="nav-ic"><i class="ph-duotone ph-chart-line-up"></i></span><span>Ventas</span></a>
+        <a href="#cancelaciones" data-view="cancelaciones" data-color="rose"><span class="nav-ic"><i class="ph-duotone ph-file-magnifying-glass"></i></span><span>Cancelaciones</span></a>
+        <a href="#cortes" data-view="cortes" data-color="emerald"><span class="nav-ic"><i class="ph-duotone ph-safe"></i></span><span>Cortes</span></a>
         <a href="#productos" data-view="productos" data-color="rose"><span class="nav-ic"><i class="ph-duotone ph-cooking-pot"></i></span><span>Productos</span></a>
         <a href="#costos" data-view="costos" data-color="amber"><span class="nav-ic"><i class="ph-duotone ph-chart-pie-slice"></i></span><span>Costo de ventas</span></a>
         <a href="#inventarios" data-view="inventarios" data-color="teal"><span class="nav-ic"><i class="ph-duotone ph-package"></i></span><span>Inventarios</span></a>
@@ -362,6 +364,47 @@
             <div class="sales-chart-wrap sales-chart-wrap-year"><canvas id="salesMonthlyChart"></canvas></div>
           </div>
           <div class="sales-month-grid" id="salesMonthGrid"></div>
+        </div>
+      </section>
+
+      <section class="section" id="view-cancelaciones">
+        <div class="audit-hero">
+          <div><span><i class="ph-bold ph-shield-check"></i> Trazabilidad operativa</span><h2>Auditoría de ventas</h2><p>Revisa cada cancelación, corrección de mesa y cambio de pago con responsable y autorización.</p></div>
+          <div class="audit-hero-mark"><i class="ph-duotone ph-file-magnifying-glass"></i></div>
+        </div>
+        <div class="audit-summary-grid" id="auditSummaryCards"></div>
+        <div class="card operations-report-card audit-report-card">
+          <div class="audit-period-bar">
+            <div class="segmented" id="auditPeriodFilter"><button type="button" data-audit-period="today">Hoy</button><button type="button" data-audit-period="week">Semana</button><button type="button" class="on" data-audit-period="month">Mes</button><button type="button" data-audit-period="custom">Rango</button></div>
+            <div class="audit-custom-range" id="auditCustomRange" hidden><div class="field"><label for="auditStartDate">Desde</label><input type="date" id="auditStartDate" /></div><div class="field"><label for="auditEndDate">Hasta</label><input type="date" id="auditEndDate" /></div><button class="btn btn-primary" type="button" id="auditApplyRange"><i class="ph-bold ph-funnel"></i> Aplicar</button></div>
+          </div>
+          <div class="audit-toolbar">
+            <label class="audit-search" for="auditSearch"><i class="ph-bold ph-magnifying-glass"></i><input type="search" id="auditSearch" aria-label="Buscar evento, usuario, venta, mesa o motivo" placeholder="Buscar evento, usuario, venta, mesa o motivo" autocomplete="off" /></label>
+            <div class="field"><label for="auditBranchFilter"><i class="ph-bold ph-storefront"></i> Sucursal</label><select id="auditBranchFilter"><option value="all">Todas las sucursales</option><option value="general">General</option></select></div>
+            <div class="field"><label for="auditPageSize"><i class="ph-bold ph-list-numbers"></i> Mostrar</label><select id="auditPageSize"><option value="10">10 por página</option><option value="20">20 por página</option><option value="50">50 por página</option></select></div>
+            <button class="btn btn-ghost" type="button" id="auditRefreshBtn"><i class="ph-bold ph-arrows-clockwise"></i> Actualizar</button>
+          </div>
+          <div class="audit-results-summary" id="auditResultSummary"></div>
+          <div class="table-wrap" id="auditLogTable"></div>
+          <div class="orders-pagination" id="auditLogPagination"></div>
+        </div>
+      </section>
+
+      <section class="section" id="view-cortes">
+        <div class="cuts-hero">
+          <div><span><i class="ph-bold ph-safe"></i> Control financiero</span><h2>Cortes de caja</h2><p>Consulta aperturas, ventas, efectivo contado y diferencias de cada turno.</p></div>
+          <div class="cuts-hero-mark"><i class="ph-duotone ph-receipt"></i></div>
+        </div>
+        <div class="card operations-report-card cuts-report-card">
+          <div class="cuts-toolbar">
+            <label class="cuts-search" for="cutsSearch"><i class="ph-bold ph-magnifying-glass"></i><input type="search" id="cutsSearch" aria-label="Buscar corte, usuario o sucursal" placeholder="Buscar corte, usuario o sucursal" autocomplete="off" /></label>
+            <div class="field"><label for="cutsBranchFilter"><i class="ph-bold ph-storefront"></i> Sucursal</label><select id="cutsBranchFilter"><option value="all">Todas las sucursales</option><option value="general">General</option></select></div>
+            <div class="field cuts-page-size"><label for="cutsPageSize"><i class="ph-bold ph-list-numbers"></i> Mostrar</label><select id="cutsPageSize"><option value="10">10 por página</option><option value="20">20 por página</option><option value="40">40 por página</option><option value="60">60 por página</option></select></div>
+            <button class="btn btn-ghost" type="button" id="cutsRefreshBtn" title="Actualizar cortes"><i class="ph-bold ph-arrows-clockwise"></i> Actualizar</button>
+          </div>
+          <div class="cuts-results-summary" id="cutsResultSummary"></div>
+          <div class="table-wrap" id="cutsHistoryTable"></div>
+          <div class="orders-pagination" id="cutsPagination"></div>
         </div>
       </section>
 
@@ -1106,6 +1149,28 @@
               <button class="btn btn-primary" type="submit"><i class="ph-bold ph-floppy-disk"></i> Guardar ticket</button>
             </form>
           </div>
+        </div>
+        <div class="card operation-policy-card" style="margin-top:16px">
+          <div class="operations-report-head">
+            <div><h3><i class="ph-bold ph-shield-check"></i> Control de operaciones sensibles</h3><p>Define qué correcciones permite el POS y si requieren autorización.</p></div>
+            <span class="status" id="posAuthorizationPinStatus">NIP no configurado</span>
+          </div>
+          <form id="operationPolicyForm">
+            <div class="grid-2">
+              <div>
+                <div class="toggle-row"><div class="t-info"><i class="ph-bold ph-pencil-simple"></i><div><b>Editar productos de rondas enviadas</b><span>Permite corregir cantidades o eliminar productos antes de cobrar la mesa.</span></div></div><label class="switch"><input type="checkbox" id="cfgRoundEditEnabled" /><span class="track"></span></label></div>
+                <div class="toggle-row"><div class="t-info"><i class="ph-bold ph-password"></i><div><b>Solicitar NIP al editar rondas</b><span>Exige autorización para cada corrección.</span></div></div><label class="switch"><input type="checkbox" id="cfgRoundEditRequirePin" /><span class="track"></span></label></div>
+              </div>
+              <div>
+                <div class="toggle-row"><div class="t-info"><i class="ph-bold ph-x-circle"></i><div><b>Cancelar ventas del mismo día</b><span>Las ventas de días anteriores siempre quedan protegidas.</span></div></div><label class="switch"><input type="checkbox" id="cfgSameDayCancelEnabled" /><span class="track"></span></label></div>
+                <div class="toggle-row"><div class="t-info"><i class="ph-bold ph-password"></i><div><b>Solicitar NIP al cancelar ventas</b><span>Exige autorización antes de devolver inventario y cancelar.</span></div></div><label class="switch"><input type="checkbox" id="cfgCancelRequirePin" /><span class="track"></span></label></div>
+              </div>
+            </div>
+            <div class="row-2" style="align-items:end;margin-top:14px">
+              <div class="field" style="margin:0"><label><i class="ph-bold ph-key"></i> Nuevo NIP de autorización</label><input type="password" id="cfgAuthorizationPin" inputmode="numeric" pattern="[0-9]{4,8}" maxlength="8" placeholder="Dejar vacío para conservar el actual" /><div class="hint">De 4 a 8 dígitos. Se almacena cifrado como hash.</div></div>
+              <button class="btn btn-primary" type="submit"><i class="ph-bold ph-floppy-disk"></i> Guardar controles</button>
+            </div>
+          </form>
         </div>
       </section>
 
@@ -1895,6 +1960,22 @@
     </div>
   </div>
 
+  <div class="modal-bg" id="cutsDetailModal">
+    <div class="modal cuts-detail-modal">
+      <div class="cuts-detail-head"><div><span>Reporte de turno</span><h3 id="cutsDetailTitle"><i class="ph-bold ph-receipt"></i> Corte de caja</h3></div><button class="btn btn-ghost btn-icon" type="button" id="cutsDetailClose" title="Cerrar"><i class="ph-bold ph-x"></i></button></div>
+      <div id="cutsDetailContent"></div>
+      <div class="modal-actions"><button class="btn btn-ghost" type="button" id="cutsDetailCancel">Cerrar</button><button class="btn btn-ghost" type="button" id="cutsDetailPdf"><i class="ph-bold ph-file-pdf"></i> Descargar PDF</button><button class="btn btn-primary" type="button" id="cutsDetailPrint"><i class="ph-bold ph-printer"></i> Imprimir corte</button></div>
+    </div>
+  </div>
+
+  <div class="modal-bg" id="auditDetailModal">
+    <div class="modal audit-detail-modal">
+      <div class="audit-detail-head"><div><span>Evidencia de auditoría</span><h3 id="auditDetailTitle"><i class="ph-bold ph-shield-check"></i> Movimiento auditado</h3></div><button class="btn btn-ghost btn-icon" type="button" id="auditDetailClose" title="Cerrar"><i class="ph-bold ph-x"></i></button></div>
+      <div id="auditDetailContent"></div>
+      <div class="modal-actions"><button class="btn btn-ghost" type="button" id="auditDetailCancel">Cerrar</button><button class="btn btn-primary" type="button" id="auditDetailPrint"><i class="ph-bold ph-printer"></i> Imprimir auditoría</button></div>
+    </div>
+  </div>
+
   <!-- ════════ Modal operación de mesas ════════ -->
   <div class="modal-bg" id="posTablesModal">
     <div class="modal pos-tables-modal">
@@ -1964,26 +2045,87 @@
 
   <!-- ════════ Modal cierre de caja ════════ -->
   <div class="modal-bg" id="posCloseModal">
-    <div class="modal pos-close-modal" style="max-width:760px">
-      <h3><i class="ph-bold ph-lock"></i> Cierre de caja del turno</h3>
-      <div id="posCloseSummary" class="pos-stats" style="margin-bottom:14px"></div>
-      <form id="posCloseFormModal">
-        <div class="row-2">
-          <div class="field">
-            <label><i class="ph-bold ph-calculator"></i> Efectivo final contado</label>
-            <input type="number" id="posClosingAmountModal" min="0" step="0.01" required />
+    <div class="modal pos-close-modal">
+      <div class="pos-close-head">
+        <div class="pos-close-head-title">
+          <div class="pos-close-icon-wrap">
+            <i class="ph-duotone ph-vault"></i>
           </div>
-          <div class="field">
-            <label><i class="ph-bold ph-note-pencil"></i> Nota de cierre</label>
-            <input type="text" id="posClosingNoteModal" placeholder="Cierre sin novedades" />
+          <div>
+            <h3>Cierre de caja del turno</h3>
+            <div class="pos-close-subtitle" id="posCloseSubtitle">Resumen de ventas, movimientos y arqueo de efectivo</div>
           </div>
         </div>
-        <div class="modal-actions">
-          <button type="button" class="btn btn-ghost" id="posCloseCancel">Cancelar</button>
-          <button class="btn btn-danger" type="submit"><i class="ph-bold ph-lock"></i> Confirmar cierre</button>
-        </div>
-      </form>
-      <div class="hint" id="posLastCloseHint" style="margin-top:12px"></div>
+        <button type="button" class="btn-icon-close" id="posCloseTopClose" aria-label="Cerrar modal"><i class="ph-bold ph-x"></i></button>
+      </div>
+
+      <div class="pos-close-scroll-content">
+        <div id="posCloseSummary" class="pos-close-summary-wrap"></div>
+
+        <form id="posCloseFormModal" class="pos-close-form">
+          <!-- Tarjeta destacada de Arqueo y Cuadre -->
+          <div class="pos-close-reconcile-card">
+            <div class="pos-close-reconcile-head">
+              <div class="reconcile-head-tag">
+                <i class="ph-bold ph-calculator"></i> Arqueo de Efectivo y Cuadre
+              </div>
+              <button type="button" class="btn-outline-primary" id="posCloseCopyExpectedBtn" title="Copiar el efectivo esperado al monto contado">
+                <i class="ph-bold ph-copy"></i> Usar monto esperado
+              </button>
+            </div>
+
+            <div class="pos-close-reconcile-inputs">
+              <div class="pos-close-reconcile-field">
+                <label for="posCloseExpectedDisplay">
+                  <i class="ph-bold ph-coins"></i> Efectivo esperado en sistema
+                </label>
+                <div class="pos-close-expected-box" id="posCloseExpectedBox">
+                  <span class="pos-close-expected-val" id="posCloseExpectedDisplay">$0.00</span>
+                  <small class="pos-close-expected-hint">Fondo inicial + Ventas efec. + Entradas - Salidas</small>
+                </div>
+              </div>
+
+              <div class="pos-close-reconcile-field">
+                <label for="posClosingAmountModal">
+                  <i class="ph-bold ph-hand-coins"></i> Efectivo final contado (en caja) <span class="required-star">*</span>
+                </label>
+                <div class="pos-input-currency-wrapper">
+                  <span class="pos-currency-symbol">$</span>
+                  <input type="number" id="posClosingAmountModal" min="0" step="0.01" required placeholder="0.00" class="pos-closing-input" />
+                </div>
+              </div>
+            </div>
+
+            <!-- Banner dinámico de Diferencia (Sobrante / Faltante / Exacto) -->
+            <div id="posCloseDiffCard" class="pos-close-diff-card status-exact">
+              <div class="pos-close-diff-icon-wrap" id="posCloseDiffIcon">
+                <i class="ph-fill ph-check-circle"></i>
+              </div>
+              <div class="pos-close-diff-info">
+                <div class="pos-close-diff-top">
+                  <span class="pos-close-diff-badge" id="posCloseDiffBadge">Caja Cuadrada</span>
+                  <span class="pos-close-diff-amount" id="posCloseDiffAmount">$0.00</span>
+                </div>
+                <div class="pos-close-diff-desc" id="posCloseDiffDesc">El efectivo contado coincide exactamente con el sistema.</div>
+              </div>
+            </div>
+
+            <div class="field" style="margin-bottom:0;margin-top:4px">
+              <label for="posClosingNoteModal"><i class="ph-bold ph-note-pencil"></i> Notas u observaciones de cierre</label>
+              <input type="text" id="posClosingNoteModal" maxlength="240" placeholder="Ej. Cierre sin novedades, se dejaron $300 para cambio..." />
+            </div>
+          </div>
+
+          <div class="modal-actions pos-close-actions">
+            <button type="button" class="btn btn-ghost" id="posCloseCancel"><i class="ph-bold ph-x"></i> Cancelar</button>
+            <button class="btn btn-danger btn-confirm-close" type="submit" id="posCloseSubmitBtn">
+              <i class="ph-bold ph-lock-key"></i> Confirmar Cierre de Caja
+            </button>
+          </div>
+        </form>
+
+        <div class="pos-last-close-card" id="posLastCloseHint"></div>
+      </div>
     </div>
   </div>
 
@@ -2100,11 +2242,29 @@
           <label><i class="ph-bold ph-note-pencil"></i> Motivo de cancelación</label>
           <textarea id="posCancelSaleReason" rows="3" placeholder="Ej. Cliente cambió de opinión, error en la orden, producto no disponible" required></textarea>
         </div>
+        <div class="field" id="posCancelSalePinWrap" hidden>
+          <label><i class="ph-bold ph-password"></i> NIP de autorización</label>
+          <input type="password" id="posCancelSalePin" inputmode="numeric" maxlength="8" />
+        </div>
         <div class="hint">Los motivos se registran con fecha y hora para auditoría.</div>
         <div class="modal-actions">
           <button type="button" class="btn btn-ghost" id="posCancelSaleCancel">No cancelar</button>
           <button class="btn btn-danger" type="submit"><i class="ph-bold ph-x-circle"></i> Confirmar cancelación</button>
         </div>
+      </form>
+    </div>
+  </div>
+
+  <div class="modal-bg" id="posRoundEditModal">
+    <div class="modal" style="max-width:560px">
+      <h3><i class="ph-bold ph-pencil-simple"></i> Corregir ronda</h3>
+      <form id="posRoundEditForm">
+        <input type="hidden" id="posRoundEditId" />
+        <div id="posRoundEditItems" class="round-edit-items"></div>
+        <div class="field"><label><i class="ph-bold ph-note-pencil"></i> Motivo de la corrección</label><textarea id="posRoundEditReason" rows="3" maxlength="180" required></textarea></div>
+        <div class="field" id="posRoundEditPinWrap" hidden><label><i class="ph-bold ph-password"></i> NIP de autorización</label><input type="password" id="posRoundEditPin" inputmode="numeric" maxlength="8" /></div>
+        <div class="hint">Las cantidades en cero eliminan el producto. Si todos quedan en cero, se elimina la ronda.</div>
+        <div class="modal-actions"><button type="button" class="btn btn-ghost" id="posRoundEditCancel">Cancelar</button><button class="btn btn-danger" type="submit"><i class="ph-bold ph-floppy-disk"></i> Guardar corrección</button></div>
       </form>
     </div>
   </div>
@@ -2373,6 +2533,6 @@
     </div>
   </div>
 
-  <script src="/static/js/app.js?v=20260814regionalclock2"></script>
+  <script src="/static/js/app.js?v=20260816posclosev2"></script>
 </body>
 </html>

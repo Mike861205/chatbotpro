@@ -701,6 +701,8 @@ const VIEW_META = {
   pos: ['Punto de venta', 'Caja, cobro y cierre del día', 'ph-cash-register'],
   kds: ['Pantallas KDS', 'Comandas automáticas por área de preparación', 'ph-monitor-play'],
   ventas: ['Ventas', 'Reportes diarios y mensuales por sucursal', 'ph-chart-line-up'],
+  cancelaciones: ['Cancelaciones', 'Auditoría de ventas y correcciones', 'ph-file-magnifying-glass'],
+  cortes: ['Cortes', 'Aperturas, cierres y diferencias de caja', 'ph-safe'],
   productos: ['Productos', 'Tu menú visible en el chatbot', 'ph-hamburger'],
   costos: ['Costo de ventas', 'Costos, precios, márgenes y gastos por sucursal', 'ph-coins'],
   inventarios: ['Inventarios', 'Control de stock, entradas, mermas y conteo físico', 'ph-package'],
@@ -720,6 +722,8 @@ const VIEW_LOADERS = {
   pos: loadPos,
   kds: loadKds,
   ventas: loadSalesReport,
+  cancelaciones: () => loadAuditLog(1),
+  cortes: () => loadCutsHistory(1),
   productos: loadProducts,
   costos: loadCosting,
   inventarios: loadInventarios,
@@ -3317,12 +3321,15 @@ function openPosCancelSaleModal(id) {
   $('#posCancelSaleSaleId').value = String(sale.id);
   $('#posCancelSaleTicket').value = `#${sale.id} · ${fmtMoney(sale.total)}`;
   $('#posCancelSaleReason').value = '';
+  $('#posCancelSalePin').value = '';
+  $('#posCancelSalePinWrap').hidden = !POS_OVERVIEW?.policy?.cancelRequirePin;
   $('#posCancelSaleModal').classList.add('show');
 }
 
 async function submitPosCancelSale() {
   const saleId = Number($('#posCancelSaleSaleId')?.value || 0);
   const reason = String($('#posCancelSaleReason')?.value || '').trim();
+  const pin = String($('#posCancelSalePin')?.value || '').trim();
   
   if (!saleId) return toast('Venta inválida', true);
   if (!reason) return toast('Debes indicar un motivo de cancelación', true);
@@ -3331,7 +3338,7 @@ async function submitPosCancelSale() {
     await api(`/api/pos/sales/${saleId}/cancel`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ reason }),
+      body: JSON.stringify({ reason, pin }),
     });
     $('#posCancelSaleModal').classList.remove('show');
     toast('Venta cancelada correctamente');
@@ -3718,19 +3725,22 @@ function exportPosClosePdf(closeResult) {
   const doc = new globalThis.jspdf.jsPDF({ orientation: 'portrait' });
   const bizName = SETTINGS?.business_name || ME?.tenant?.businessName || 'Negocio';
   const now = fmtBusinessDateTime();
-  const closedBy = closeResult?.closedSession?.closed_by || ME?.username || 'cajero';
+  const session = closeResult?.closedSession || {};
+  const closedBy = session.closed_by || ME?.username || 'cajero';
 
   doc.setFontSize(15);
-  doc.text(`Cierre de caja - ${bizName}`, 14, 14);
+  doc.text(`Corte de caja #${session.id || ''} - ${bizName}`, 14, 14);
   doc.setFontSize(10);
   doc.text(`Generado: ${now}`, 14, 20);
-  doc.text(`Cerrado por: ${closedBy}`, 14, 25);
+  doc.text(`Sucursal: ${session.branch_name || 'General'}`, 14, 25);
+  doc.text(`Apertura: ${session.opened_at || '—'} · Cierre: ${session.closed_at || 'Pendiente'}`, 14, 30);
+  doc.text(`Abrió: ${session.opened_by || '—'} · Cerró: ${closedBy}`, 14, 35);
 
   doc.autoTable({
-    startY: 30,
+    startY: 40,
     head: [['Concepto', 'Valor']],
     body: [
-      ['Fondo inicial', fmtMoney(closeResult?.closedSession?.opening_amount || 0)],
+      ['Fondo inicial', fmtMoney(session.opening_amount || 0)],
       ['Ventas del turno', fmtMoney(totals.totalSales || 0)],
       ['Efectivo esperado', fmtMoney(closeResult.expectedAmount || 0)],
       ['Efectivo contado', fmtMoney(closeResult.closingAmount || 0)],
@@ -3787,13 +3797,13 @@ function exportPosClosePdf(closeResult) {
     headStyles: { fillColor: [249, 115, 22] },
   });
 
-  const notes = String(closeResult?.closedSession?.notes || '').trim();
+  const notes = String(session.notes || '').trim();
   if (notes) {
     doc.setFontSize(9);
     doc.text(`Nota de cierre: ${notes}`, 14, doc.lastAutoTable.finalY + 10, { maxWidth: 180 });
   }
 
-  doc.save(`cierre_caja_${Date.now()}.pdf`);
+  doc.save(`corte_caja_${session.id || Date.now()}.pdf`);
 }
 
 function printPosCloseReport(closeResult) {
@@ -3807,14 +3817,15 @@ function printPosCloseReport(closeResult) {
   const tables = totals.tables || {};
   const biz = esc(SETTINGS?.business_name || ME?.tenant?.businessName || 'Negocio');
   const now = fmtBusinessDateTime();
-  const closedBy = esc(closeResult?.closedSession?.closed_by || ME?.username || 'cajero');
+  const session = closeResult?.closedSession || {};
+  const closedBy = esc(session.closed_by || ME?.username || 'cajero');
 
   const html = `<!doctype html>
 <html lang="es">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Cierre de caja</title>
+  <title>Corte de caja #${esc(String(session.id || ''))}</title>
   <style>
     body { font-family: ui-sans-serif, system-ui; margin: 16px; color: #111827; }
     h2 { margin: 0 0 8px; }
@@ -3826,17 +3837,20 @@ function printPosCloseReport(closeResult) {
   </style>
 </head>
 <body>
-  <h2>Cierre de caja - ${biz}</h2>
+  <h2>Corte de caja #${esc(String(session.id || ''))} - ${biz}</h2>
   <p>Generado: ${esc(now)}</p>
-  <p>Cerrado por: ${closedBy}</p>
+  <p>Sucursal: ${esc(session.branch_name || 'General')}</p>
+  <p>Apertura: ${esc(session.opened_at || '—')} · Cierre: ${esc(session.closed_at || 'Pendiente')}</p>
+  <p>Abrió: ${esc(session.opened_by || '—')} · Cerró: ${closedBy}</p>
   <table>
     <tr><th>Concepto</th><th>Valor</th></tr>
-    <tr><td>Fondo inicial</td><td>${esc(fmtMoney(closeResult?.closedSession?.opening_amount || 0))}</td></tr>
+    <tr><td>Fondo inicial</td><td>${esc(fmtMoney(session.opening_amount || 0))}</td></tr>
     <tr><td>Ventas del turno</td><td>${esc(fmtMoney(totals.totalSales || 0))}</td></tr>
     <tr><td>Efectivo esperado</td><td>${esc(fmtMoney(closeResult.expectedAmount || 0))}</td></tr>
     <tr><td>Efectivo contado</td><td>${esc(fmtMoney(closeResult.closingAmount || 0))}</td></tr>
     <tr class="tot"><td>Diferencia</td><td>${esc(fmtMoney(closeResult.differenceAmount || 0))}</td></tr>
   </table>
+  ${session.notes ? `<p><b>Notas:</b> ${esc(session.notes)}</p>` : ''}
   <table>
     <tr><th>Medio</th><th>Monto</th></tr>
     <tr><td>Efectivo</td><td>${esc(fmtMoney(salesByMethod.cash || 0))}</td></tr>
@@ -4153,6 +4167,43 @@ async function sendActiveTableRound({ silent = false } = {}) {
   renderPosActions();
   renderPosCart();
   return result;
+}
+
+function openPosRoundEditModal(roundId) {
+  const round = (POS_TABLE_ACCOUNT?.rounds || []).find((item) => Number(item.id) === Number(roundId));
+  if (!round) return toast('No se encontró la ronda', true);
+  $('#posRoundEditId').value = String(round.id);
+  $('#posRoundEditReason').value = '';
+  $('#posRoundEditPin').value = '';
+  $('#posRoundEditPinWrap').hidden = !POS_OVERVIEW?.policy?.roundEditRequirePin;
+  $('#posRoundEditItems').innerHTML = (round.items || []).map((item, index) => `
+    <div class="round-edit-item" data-round-edit-index="${index}">
+      <div><b>${esc(item.name || 'Producto')}</b><small>${fmtMoney(item.price)} c/u</small></div>
+      <input type="number" min="0" step="1" value="${Number(item.qty || 1)}" aria-label="Cantidad de ${esc(item.name || 'producto')}" />
+    </div>`).join('');
+  $('#posRoundEditModal').classList.add('show');
+}
+
+async function submitPosRoundEdit() {
+  const roundId = Number($('#posRoundEditId').value || 0);
+  const round = (POS_TABLE_ACCOUNT?.rounds || []).find((item) => Number(item.id) === roundId);
+  if (!round) return toast('No se encontró la ronda', true);
+  const reason = String($('#posRoundEditReason').value || '').trim();
+  if (!reason) return toast('Escribe el motivo de la corrección', true);
+  const quantities = [...document.querySelectorAll('#posRoundEditItems [data-round-edit-index] input')];
+  const items = (round.items || []).map((item, index) => ({ ...item, qty: Math.max(0, Number(quantities[index]?.value || 0)) })).filter((item) => item.qty > 0);
+  const result = await api(`/api/pos/table-accounts/${POS_TABLE_ACCOUNT.id}/rounds/${roundId}`, {
+    method: 'PUT', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ items, reason, pin: $('#posRoundEditPin').value || '' }),
+  });
+  POS_TABLE_ACCOUNT = result.account;
+  if (POS_PAYMENT_METHOD === 'cash') POS_PAYMENT_FORM.cashReceived = String(posGrandTotal());
+  const table = (POS_OVERVIEW?.tables || []).find((item) => Number(item.account?.id) === Number(result.account.id));
+  if (table) table.account = result.account;
+  $('#posRoundEditModal').classList.remove('show');
+  renderPosCart();
+  renderPosActions();
+  toast('Ronda corregida y registrada en auditoría');
 }
 
 function renderPosTablesLayout() {
@@ -4494,7 +4545,7 @@ function renderPosCart() {
         <div class="pos-round-card">
           <div class="pos-round-head"><b>Ronda ${round.roundNumber}</b><span>${fmtMoney(round.subtotal || 0)}</span></div>
           <div class="pos-round-items">${(round.items || []).map((item) => `<span>${Number(item.qty || 1)}× ${esc(item.name || 'Producto')}</span>`).join('')}</div>
-          <div class="pos-round-foot"><small>${esc(round.createdAt || '')}</small><button type="button" class="btn btn-ghost btn-icon" data-print-table-round="${round.id}" title="Reimprimir ronda"><i class="ph-bold ph-printer"></i></button></div>
+          <div class="pos-round-foot"><small>${esc(round.createdAt || '')}</small><div>${POS_OVERVIEW?.policy?.roundEditEnabled ? `<button type="button" class="btn btn-ghost btn-icon" data-edit-table-round="${round.id}" title="Corregir ronda"><i class="ph-bold ph-pencil-simple"></i></button>` : ''}<button type="button" class="btn btn-ghost btn-icon" data-print-table-round="${round.id}" title="Reimprimir ronda"><i class="ph-bold ph-printer"></i></button></div></div>
         </div>`).join('')}
     </div>` : (tableAccount ? '<div class="hint" style="margin-bottom:10px">Aún no se ha enviado ninguna ronda.</div>' : '');
   setPosPaymentDefaults();
@@ -4610,6 +4661,7 @@ function renderPosCart() {
     const round = tableRounds.find((item) => Number(item.id) === Number(button.dataset.printTableRound));
     printTableRoundTicket(round, tableAccount, tableAccount.total);
   }));
+  document.querySelectorAll('[data-edit-table-round]').forEach((button) => button.addEventListener('click', () => openPosRoundEditModal(button.dataset.editTableRound)));
   document.querySelectorAll('[data-pos-method]').forEach((button) =>
     button.addEventListener('click', () => {
       POS_PAYMENT_METHOD = button.dataset.posMethod;
@@ -4780,7 +4832,7 @@ async function loadPosSalesHistory(page = 1) {
               <div style="display:flex;gap:6px;flex-wrap:wrap">
                 <button type="button" class="btn btn-ghost" data-print-pos-sale="${row.id}"><i class="ph-bold ph-printer"></i> Ticket</button>
                 <button type="button" class="btn btn-ghost" data-edit-pos-payment="${row.id}" ${isCanceled ? 'disabled' : ''}><i class="ph-bold ph-credit-card"></i> Pago</button>
-                <button type="button" class="btn btn-danger" data-cancel-pos-sale="${row.id}" ${isCanceled ? 'disabled' : ''}><i class="ph-bold ph-x-circle"></i> Cancelar</button>
+                ${POS_OVERVIEW?.policy?.sameDayCancelEnabled ? `<button type="button" class="btn btn-danger" data-cancel-pos-sale="${row.id}" ${isCanceled ? 'disabled' : ''}><i class="ph-bold ph-x-circle"></i> Cancelar</button>` : ''}
               </div>
             </td>
           </tr>`;
@@ -5001,10 +5053,80 @@ function renderLastCloseHint() {
   const hint = $('#posLastCloseHint');
   if (!hint) return;
   if (!last) {
-    hint.textContent = 'Sin cierres anteriores todavía.';
+    hint.innerHTML = `
+      <div class="pos-last-close-inner">
+        <div class="pos-last-close-icon"><i class="ph-bold ph-clock-counter-clockwise"></i></div>
+        <div class="pos-last-close-details">
+          <div class="pos-last-close-top">
+            <span class="pos-last-close-date">Sin cierres anteriores registrados</span>
+          </div>
+          <div class="pos-last-close-notes">Este será el primer corte de caja registrado para este periodo o dispositivo.</div>
+        </div>
+      </div>
+    `;
     return;
   }
-  hint.textContent = `Último cierre: ${last.closed_at || '—'} · Diferencia ${fmtMoney(last.difference_amount || 0)} · ${last.notes || 'Sin notas.'}`;
+  const diff = Number(last.difference_amount || 0);
+  const isExact = Math.abs(diff) < 0.005;
+  const isSurplus = diff > 0;
+  const diffClass = isExact ? 'badge-exact' : isSurplus ? 'badge-surplus' : 'badge-shortage';
+  const diffText = isExact ? 'Cuadre exacto ($0.00)' : isSurplus ? `+${fmtMoney(diff)} (Sobrante)` : `-${fmtMoney(Math.abs(diff))} (Faltante)`;
+
+  hint.innerHTML = `
+    <div class="pos-last-close-inner">
+      <div class="pos-last-close-icon"><i class="ph-bold ph-clock-counter-clockwise"></i></div>
+      <div class="pos-last-close-details">
+        <div class="pos-last-close-top">
+          <b>Último cierre:</b>
+          <span class="pos-last-close-date">${esc(fmtBusinessDateTime(last.closed_at) || last.closed_at || '—')}</span>
+          <span class="pos-last-close-diff-tag ${diffClass}">${diffText}</span>
+        </div>
+        <div class="pos-last-close-notes">
+          <i class="ph-bold ph-chat-text"></i> ${esc(last.notes || 'Cierre registrado sin observaciones.')} · Cajero: <b>${esc(last.closed_by || '—')}</b>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function updatePosCloseDifference() {
+  const session = POS_OVERVIEW?.activeSession;
+  if (!session) return;
+  const expected = moneyNum(session.expectedCash || 0);
+  const inputEl = $('#posClosingAmountModal');
+  const rawVal = inputEl?.value?.trim();
+  const counted = (rawVal === '' || rawVal === undefined || isNaN(Number(rawVal))) ? 0 : moneyNum(Number(rawVal));
+  const diff = moneyNum(counted - expected);
+
+  const diffCard = $('#posCloseDiffCard');
+  const iconWrap = $('#posCloseDiffIcon');
+  const badgeEl = $('#posCloseDiffBadge');
+  const amountEl = $('#posCloseDiffAmount');
+  const descEl = $('#posCloseDiffDesc');
+
+  if (!diffCard || !iconWrap || !badgeEl || !amountEl || !descEl) return;
+
+  diffCard.classList.remove('status-exact', 'status-surplus', 'status-shortage');
+
+  if (Math.abs(diff) < 0.005) {
+    diffCard.classList.add('status-exact');
+    iconWrap.innerHTML = '<i class="ph-fill ph-check-circle"></i>';
+    badgeEl.textContent = 'Caja Cuadrada Exacta';
+    amountEl.textContent = fmtMoney(0);
+    descEl.textContent = `El efectivo contado coincide al 100% con el monto esperado en sistema (${fmtMoney(expected)}).`;
+  } else if (diff > 0) {
+    diffCard.classList.add('status-surplus');
+    iconWrap.innerHTML = '<i class="ph-fill ph-arrow-circle-up-right"></i>';
+    badgeEl.textContent = 'Sobrante en Caja';
+    amountEl.textContent = `+${fmtMoney(diff)}`;
+    descEl.textContent = `Hay un sobrante de +${fmtMoney(diff)} por encima del efectivo esperado (${fmtMoney(expected)}).`;
+  } else {
+    diffCard.classList.add('status-shortage');
+    iconWrap.innerHTML = '<i class="ph-fill ph-warning-circle"></i>';
+    badgeEl.textContent = 'Faltante en Caja';
+    amountEl.textContent = `-${fmtMoney(Math.abs(diff))}`;
+    descEl.textContent = `Faltan -${fmtMoney(Math.abs(diff))} para completar el efectivo esperado de ${fmtMoney(expected)}.`;
+  }
 }
 
 function openPosMovementModal() {
@@ -5061,20 +5183,44 @@ function openPosCloseModal() {
   };
   const delivery = totals.delivery || { tickets: 0, total: 0, fees: 0 };
   const tableSummary = totals.tables || { closedCount: 0, closedTotal: 0, openCount: 0, openTotal: 0, closed: [], open: [] };
+  const expectedCash = moneyNum(session.expectedCash || 0);
+
+  const subtitleEl = $('#posCloseSubtitle');
+  if (subtitleEl) {
+    subtitleEl.innerHTML = `
+      <span class="pos-meta-chip"><i class="ph-bold ph-user"></i> ${esc(session.opened_by || 'Cajero')}</span>
+      <span class="pos-meta-chip"><i class="ph-bold ph-clock"></i> ${esc(fmtBusinessDateTime(session.opened_at) || 'Turno activo')}</span>
+      <span class="pos-meta-chip"><i class="ph-bold ph-vault"></i> Fondo inicial: ${fmtMoney(session.opening_amount || 0)}</span>
+    `;
+  }
+
+  const expectedDisplay = $('#posCloseExpectedDisplay');
+  if (expectedDisplay) expectedDisplay.textContent = fmtMoney(expectedCash);
+
   $('#posCloseSummary').innerHTML = `
     <div class="pos-close-groups">
       <div class="pos-close-group neutral">
-        <h4><i class="ph-bold ph-info"></i> Datos del turno</h4>
+        <div class="pos-close-group-head">
+          <div class="pos-close-group-title">
+            <span class="pos-close-group-icon"><i class="ph-bold ph-chart-pie-slice"></i></span>
+            <span>Resumen General del Turno</span>
+          </div>
+        </div>
         <div class="pos-close-grid">
           <div class="pos-mini-stat tone-ink"><span>Fondo inicial</span><b>${fmtMoney(session.opening_amount || 0)}</b></div>
-          <div class="pos-mini-stat tone-blue"><span>Ventas del turno</span><b>${fmtMoney(totals.totalSales || 0)}</b></div>
-          <div class="pos-mini-stat tone-green"><span>Efectivo esperado</span><b>${fmtMoney(session.expectedCash || 0)}</b></div>
-          <div class="pos-mini-stat tone-violet"><span>Tickets</span><b>${Number(totals.tickets || 0)}</b></div>
-          <div class="pos-mini-stat tone-ink"><span>Abierta por</span><b>${esc(session.opened_by || '—')}</b></div>
+          <div class="pos-mini-stat tone-blue"><span>Ventas totales</span><b>${fmtMoney(totals.totalSales || 0)}</b></div>
+          <div class="pos-mini-stat tone-green"><span>Efectivo esperado</span><b>${fmtMoney(expectedCash)}</b></div>
+          <div class="pos-mini-stat tone-violet"><span>Tickets emitidos</span><b>${Number(totals.tickets || 0)}</b></div>
         </div>
       </div>
+
       <div class="pos-close-group payment">
-        <h4><i class="ph-bold ph-credit-card"></i> Ventas por medio de pago</h4>
+        <div class="pos-close-group-head">
+          <div class="pos-close-group-title">
+            <span class="pos-close-group-icon"><i class="ph-bold ph-credit-card"></i></span>
+            <span>Ventas por Medio de Pago</span>
+          </div>
+        </div>
         <div class="pos-close-grid">
           <div class="pos-mini-stat tone-green"><span>Efectivo</span><b>${fmtMoney(totals.salesByMethod?.cash || 0)}</b></div>
           <div class="pos-mini-stat tone-violet"><span>Tarjeta</span><b>${fmtMoney(totals.salesByMethod?.card || 0)}</b></div>
@@ -5082,52 +5228,112 @@ function openPosCloseModal() {
           <div class="pos-mini-stat tone-amber"><span>Mixto</span><b>${fmtMoney(totals.salesByMethod?.mixed || 0)}</b></div>
         </div>
       </div>
-      <div class="pos-close-group delivery">
-        <h4><i class="ph-bold ph-moped"></i> Servicio a domicilio</h4>
-        <div class="pos-close-grid">
-          <div class="pos-mini-stat tone-cyan"><span>Pedidos domicilio</span><b>${Number(delivery.tickets || 0)}</b></div>
-          <div class="pos-mini-stat tone-blue"><span>Total domicilio</span><b>${fmtMoney(delivery.total || 0)}</b></div>
-          <div class="pos-mini-stat tone-green"><span>Costo envíos</span><b>${fmtMoney(delivery.fees || 0)}</b></div>
-          <div class="pos-mini-stat tone-ink"><span>Cobrado efectivo</span><b>${fmtMoney(totals.collected?.cash || 0)}</b></div>
-        </div>
-      </div>
-      <div class="pos-close-group payment">
-        <h4><i class="ph-bold ph-fork-knife"></i> Mesas del turno</h4>
-        <div class="pos-close-grid">
-          <div class="pos-mini-stat tone-green"><span>Mesas cerradas</span><b>${Number(tableSummary.closedCount || 0)}</b></div>
-          <div class="pos-mini-stat tone-blue"><span>Total mesas cerradas</span><b>${fmtMoney(tableSummary.closedTotal || 0)}</b></div>
-          <div class="pos-mini-stat ${tableSummary.openCount ? 'tone-red' : 'tone-ink'}"><span>Mesas abiertas</span><b>${Number(tableSummary.openCount || 0)}</b></div>
-          <div class="pos-mini-stat tone-amber"><span>Consumo aún abierto</span><b>${fmtMoney(tableSummary.openTotal || 0)}</b></div>
-        </div>
-        ${tableSummary.openCount ? `<div class="hint" style="margin-top:9px;color:var(--red)"><i class="ph-bold ph-warning"></i> Permanecerán abiertas: ${tableSummary.open.map((row) => `Mesa ${esc(String(row.table_number))} (${esc(row.waiter_name || 'sin mesero')})`).join(', ')}.</div>` : ''}
-      </div>
+
       <div class="pos-close-group income">
-        <h4><i class="ph-bold ph-trend-up"></i> Entradas</h4>
+        <div class="pos-close-group-head">
+          <div class="pos-close-group-title">
+            <span class="pos-close-group-icon"><i class="ph-bold ph-trend-up"></i></span>
+            <span>Entradas de Efectivo</span>
+          </div>
+        </div>
         <div class="pos-close-grid">
           <div class="pos-mini-stat tone-green"><span>Ingreso manual</span><b>${fmtMoney(totals.movements.income || 0)}</b></div>
+          <div class="pos-mini-stat tone-blue"><span>Cobrado en efec.</span><b>${fmtMoney(totals.collected?.cash || 0)}</b></div>
         </div>
       </div>
+
       <div class="pos-close-group outflow">
-        <h4><i class="ph-bold ph-arrow-bend-up-left"></i> Salidas</h4>
+        <div class="pos-close-group-head">
+          <div class="pos-close-group-title">
+            <span class="pos-close-group-icon"><i class="ph-bold ph-arrow-bend-up-left"></i></span>
+            <span>Salidas y Gastos</span>
+          </div>
+        </div>
         <div class="pos-close-grid">
           <div class="pos-mini-stat tone-amber"><span>Retiros</span><b>${fmtMoney(totals.movements.withdrawal || 0)}</b></div>
           <div class="pos-mini-stat tone-red"><span>Gastos</span><b>${fmtMoney(totals.movements.expense || 0)}</b></div>
         </div>
       </div>
+
+      ${(delivery.tickets || delivery.total) ? `
+      <div class="pos-close-group delivery">
+        <div class="pos-close-group-head">
+          <div class="pos-close-group-title">
+            <span class="pos-close-group-icon"><i class="ph-bold ph-moped"></i></span>
+            <span>Servicio a Domicilio</span>
+          </div>
+        </div>
+        <div class="pos-close-grid">
+          <div class="pos-mini-stat tone-cyan"><span>Pedidos domicilio</span><b>${Number(delivery.tickets || 0)}</b></div>
+          <div class="pos-mini-stat tone-blue"><span>Total ventas</span><b>${fmtMoney(delivery.total || 0)}</b></div>
+          <div class="pos-mini-stat tone-green"><span>Costo de envíos</span><b>${fmtMoney(delivery.fees || 0)}</b></div>
+          <div class="pos-mini-stat tone-ink"><span>Cobrado efectivo</span><b>${fmtMoney(totals.collected?.cash || 0)}</b></div>
+        </div>
+      </div>` : ''}
+
+      ${(tableSummary.closedCount || tableSummary.openCount) ? `
+      <div class="pos-close-group tables">
+        <div class="pos-close-group-head">
+          <div class="pos-close-group-title">
+            <span class="pos-close-group-icon"><i class="ph-bold ph-fork-knife"></i></span>
+            <span>Mesas del Restaurante</span>
+          </div>
+        </div>
+        <div class="pos-close-grid">
+          <div class="pos-mini-stat tone-green"><span>Mesas cerradas</span><b>${Number(tableSummary.closedCount || 0)}</b></div>
+          <div class="pos-mini-stat tone-blue"><span>Total cerradas</span><b>${fmtMoney(tableSummary.closedTotal || 0)}</b></div>
+          <div class="pos-mini-stat ${tableSummary.openCount ? 'tone-red' : 'tone-ink'}"><span>Mesas abiertas</span><b>${Number(tableSummary.openCount || 0)}</b></div>
+          <div class="pos-mini-stat tone-amber"><span>Consumo abierto</span><b>${fmtMoney(tableSummary.openTotal || 0)}</b></div>
+        </div>
+        ${tableSummary.openCount ? `<div class="hint" style="margin-top:8px;color:var(--red)"><i class="ph-bold ph-warning"></i> Cuentas abiertas: ${tableSummary.open.map((row) => `Mesa ${esc(String(row.table_number))} (${esc(row.waiter_name || 'sin mesero')})`).join(', ')}.</div>` : ''}
+      </div>` : ''}
+
+      ${(totals.cancellations?.tickets || totals.cancellations?.total) ? `
       <div class="pos-close-group cancel">
-        <h4><i class="ph-bold ph-x-circle"></i> Cancelaciones</h4>
+        <div class="pos-close-group-head">
+          <div class="pos-close-group-title">
+            <span class="pos-close-group-icon"><i class="ph-bold ph-x-circle"></i></span>
+            <span>Cancelaciones</span>
+          </div>
+        </div>
         <div class="pos-close-grid">
           <div class="pos-mini-stat tone-red"><span>Tickets cancelados</span><b>${Number(totals.cancellations.tickets || 0)}</b></div>
           <div class="pos-mini-stat tone-red"><span>Total cancelado</span><b>${fmtMoney(totals.cancellations.total || 0)}</b></div>
         </div>
-      </div>
+      </div>` : ''}
     </div>
   `;
-  $('#posClosingAmountModal').value = moneyNum(session.expectedCash || 0);
+
+  const closingInput = $('#posClosingAmountModal');
+  if (closingInput) {
+    closingInput.value = expectedCash;
+  }
   $('#posClosingNoteModal').value = '';
+  updatePosCloseDifference();
   renderLastCloseHint();
   $('#posCloseModal').classList.add('show');
+
+  setTimeout(() => {
+    closingInput?.focus();
+    closingInput?.select();
+  }, 100);
 }
+
+$('#posClosingAmountModal')?.addEventListener('input', updatePosCloseDifference);
+$('#posClosingAmountModal')?.addEventListener('change', updatePosCloseDifference);
+$('#posCloseCopyExpectedBtn')?.addEventListener('click', () => {
+  const session = POS_OVERVIEW?.activeSession;
+  if (!session) return;
+  const expected = moneyNum(session.expectedCash || 0);
+  const input = $('#posClosingAmountModal');
+  if (input) {
+    input.value = expected;
+    updatePosCloseDifference();
+    input.focus();
+    input.select();
+  }
+});
+$('#posCloseTopClose')?.addEventListener('click', () => $('#posCloseModal').classList.remove('show'));
 
 $('#posMovementKinds')?.addEventListener('click', (e) => {
   const button = e.target.closest('[data-kind]');
@@ -5222,6 +5428,11 @@ $('#posPaymentEditMixTransfer')?.addEventListener('input', updatePosPaymentEditM
 $('#posPaymentEditMixCashReceived')?.addEventListener('input', updatePosPaymentEditMixedHint);
 
 $('#posPaymentEditCancel')?.addEventListener('click', () => $('#posPaymentEditModal').classList.remove('show'));
+$('#posRoundEditCancel')?.addEventListener('click', () => $('#posRoundEditModal').classList.remove('show'));
+$('#posRoundEditForm')?.addEventListener('submit', (event) => {
+  event.preventDefault();
+  submitPosRoundEdit().catch((error) => toast(error.message, true));
+});
 
 $('#posPaymentEditForm')?.addEventListener('submit', async (e) => {
   e.preventDefault();
@@ -7844,6 +8055,12 @@ function fillConfigForm() {
   renderBankAccounts();
   syncBankAccountsVisibility();
   $('#cfgPosChatIntegration').checked = (SETTINGS.chatbot_pos_integration_enabled || '0') === '1';
+  $('#cfgRoundEditEnabled').checked = (SETTINGS.pos_round_edit_enabled || '0') === '1';
+  $('#cfgRoundEditRequirePin').checked = (SETTINGS.pos_round_edit_require_pin || '0') === '1';
+  $('#cfgSameDayCancelEnabled').checked = (SETTINGS.pos_same_day_cancel_enabled || '1') === '1';
+  $('#cfgCancelRequirePin').checked = (SETTINGS.pos_cancel_require_pin || '0') === '1';
+  $('#cfgAuthorizationPin').value = '';
+  $('#posAuthorizationPinStatus').textContent = SETTINGS.authorization_pin_configured ? 'NIP configurado' : 'NIP no configurado';
   $('#cfgTicketWidth').value = String(Number(SETTINGS.ticket_width_mm || 80));
   $('#cfgTicketFont').value = String(Number(SETTINGS.ticket_font_size_px || 14));
   $('#cfgTicketLineHeight').value = String(Number(SETTINGS.ticket_line_height || 1.45));
@@ -7892,6 +8109,268 @@ $('#configForm').addEventListener('submit', async (e) => {
     toast(err.message, true);
   }
 });
+$('#operationPolicyForm')?.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const pin = String($('#cfgAuthorizationPin').value || '').trim();
+  if (($('#cfgRoundEditRequirePin').checked || $('#cfgCancelRequirePin').checked) && !pin && !SETTINGS.authorization_pin_configured) {
+    return toast('Configura un NIP antes de activar la autorización', true);
+  }
+  const fd = new FormData();
+  fd.append('pos_round_edit_enabled', $('#cfgRoundEditEnabled').checked ? '1' : '0');
+  fd.append('pos_round_edit_require_pin', $('#cfgRoundEditRequirePin').checked ? '1' : '0');
+  fd.append('pos_same_day_cancel_enabled', $('#cfgSameDayCancelEnabled').checked ? '1' : '0');
+  fd.append('pos_cancel_require_pin', $('#cfgCancelRequirePin').checked ? '1' : '0');
+  if (pin) fd.append('pos_authorization_pin', pin);
+  await api('/api/settings', { method: 'PUT', body: fd });
+  SETTINGS = await api('/api/settings');
+  fillConfigForm();
+  toast('Controles de operación guardados');
+});
+
+let AUDIT_PAGE = 1;
+let AUDIT_PAGE_SIZE = 10;
+let AUDIT_FILTER = 'month';
+let AUDIT_SEARCH = '';
+let AUDIT_BRANCH = 'all';
+let AUDIT_START_DATE = '';
+let AUDIT_END_DATE = '';
+let AUDIT_CACHE = [];
+let AUDIT_SELECTED = null;
+let AUDIT_SEARCH_TIMER = null;
+let CUTS_PAGE = 1;
+let CUTS_PAGE_SIZE = 10;
+let CUTS_SEARCH = '';
+let CUTS_BRANCH = 'all';
+let CUTS_CACHE = [];
+let CUTS_SELECTED = null;
+let CUTS_SEARCH_TIMER = null;
+
+function reportPager(host, page, totalPages, onPage) {
+  if (!host) return;
+  host.innerHTML = `<div class="orders-pagination-inner"><span>Página ${page} de ${totalPages}</span><div><button class="btn btn-ghost" type="button" data-report-prev ${page <= 1 ? 'disabled' : ''}><i class="ph-bold ph-caret-left"></i></button><button class="btn btn-ghost" type="button" data-report-next ${page >= totalPages ? 'disabled' : ''}><i class="ph-bold ph-caret-right"></i></button></div></div>`;
+  host.querySelector('[data-report-prev]')?.addEventListener('click', () => onPage(page - 1));
+  host.querySelector('[data-report-next]')?.addEventListener('click', () => onPage(page + 1));
+}
+
+async function loadAuditLog(page = 1) {
+  if (!AUDIT_END_DATE) {
+    AUDIT_END_DATE = getLocalIsoDate();
+    AUDIT_START_DATE = `${AUDIT_END_DATE.slice(0, 7)}-01`;
+    if ($('#auditStartDate')) $('#auditStartDate').value = AUDIT_START_DATE;
+    if ($('#auditEndDate')) $('#auditEndDate').value = AUDIT_END_DATE;
+  }
+  const query = new URLSearchParams({
+    page: String(Math.max(1, page)), pageSize: String(AUDIT_PAGE_SIZE), filter: AUDIT_FILTER,
+    search: AUDIT_SEARCH, branchId: AUDIT_BRANCH,
+  });
+  if (AUDIT_FILTER === 'custom') {
+    query.set('startDate', AUDIT_START_DATE);
+    query.set('endDate', AUDIT_END_DATE);
+  }
+  const data = await api(`/api/pos/audit-log?${query.toString()}`);
+  AUDIT_PAGE = Number(data.page || 1);
+  AUDIT_PAGE_SIZE = Number(data.pageSize || AUDIT_PAGE_SIZE);
+  AUDIT_CACHE = Array.isArray(data.rows) ? data.rows : [];
+  const summary = data.summary || {};
+  const scope = AUDIT_BRANCH === 'all' ? 'Todas las sucursales' : ($('#auditBranchFilter')?.selectedOptions?.[0]?.textContent || 'Sucursal');
+  $('#auditSummaryCards').innerHTML = `
+    <article class="audit-summary-card total"><i class="ph-bold ph-shield-check"></i><div><span>Eventos auditados</span><b>${Number(summary.total || 0)}</b><small>${esc(scope)}</small></div></article>
+    <article class="audit-summary-card cancelled"><i class="ph-bold ph-x-circle"></i><div><span>Ventas canceladas</span><b>${Number(summary.cancellations || 0)}</b><small>${fmtMoney(summary.cancelled_amount || 0)}</small></div></article>
+    <article class="audit-summary-card corrected"><i class="ph-bold ph-pencil-simple"></i><div><span>Rondas corregidas</span><b>${Number(summary.round_edits || 0)}</b><small>Impacto ${fmtMoney(summary.corrected_amount || 0)}</small></div></article>
+    <article class="audit-summary-card payments"><i class="ph-bold ph-credit-card"></i><div><span>Cambios de pago</span><b>${Number(summary.payment_edits || 0)}</b><small>Movimientos registrados</small></div></article>`;
+  const branchSelect = $('#auditBranchFilter');
+  if (branchSelect && branchSelect.options.length <= 2) {
+    branchSelect.innerHTML = `<option value="all">Todas las sucursales</option><option value="general">General</option>${(data.branches || []).map((branch) => `<option value="${branch.id}">${esc(branch.name)}</option>`).join('')}`;
+    branchSelect.value = AUDIT_BRANCH;
+  }
+  $('#auditResultSummary').innerHTML = `<span><i class="ph-bold ph-file-magnifying-glass"></i>${Number(data.total || 0)} resultado${Number(data.total || 0) === 1 ? '' : 's'}</span><span><i class="ph-bold ph-calendar"></i>${auditPeriodLabel()}</span>`;
+  $('#auditLogTable').innerHTML = AUDIT_CACHE.length ? `<table class="audit-table"><thead><tr><th class="audit-head-date"><i class="ph-bold ph-calendar-blank"></i> Fecha</th><th class="audit-head-event"><i class="ph-bold ph-lightning"></i> Evento</th><th class="audit-head-branch"><i class="ph-bold ph-storefront"></i> Sucursal</th><th class="audit-head-reference"><i class="ph-bold ph-link"></i> Referencia</th><th class="audit-head-amount"><i class="ph-bold ph-coins"></i> Impacto</th><th class="audit-head-user"><i class="ph-bold ph-user-circle"></i> Responsable</th><th class="audit-head-reason"><i class="ph-bold ph-note-pencil"></i> Motivo</th><th class="audit-head-actions"></th></tr></thead><tbody>${AUDIT_CACHE.map(renderAuditRow).join('')}</tbody></table>` : emptyHTML('ph-file-magnifying-glass', 'Sin movimientos auditados', 'Cambia el periodo, sucursal o búsqueda para consultar otros eventos.');
+  document.querySelectorAll('[data-view-audit]').forEach((button) => button.addEventListener('click', () => openAuditDetail(button.dataset.viewAudit)));
+  document.querySelectorAll('[data-print-audit]').forEach((button) => button.addEventListener('click', () => printAuditEvent(button.dataset.printAudit)));
+  reportPager($('#auditLogPagination'), AUDIT_PAGE, Number(data.totalPages || 1), (next) => loadAuditLog(next).catch((error) => toast(error.message, true)));
+}
+
+const AUDIT_EVENT_META = {
+  sale_cancelled: { label: 'Venta cancelada', icon: 'ph-x-circle', tone: 'cancelled' },
+  sale_payment_edited: { label: 'Pago editado', icon: 'ph-credit-card', tone: 'payment' },
+  table_round_edited: { label: 'Ronda editada', icon: 'ph-pencil-simple', tone: 'edited' },
+  table_round_deleted: { label: 'Ronda eliminada', icon: 'ph-trash', tone: 'deleted' },
+};
+
+function auditPeriodLabel() {
+  if (AUDIT_FILTER === 'today') return 'Hoy';
+  if (AUDIT_FILTER === 'week') return 'Semana actual';
+  if (AUDIT_FILTER === 'custom') return `${AUDIT_START_DATE || '—'} a ${AUDIT_END_DATE || '—'}`;
+  return 'Mes actual';
+}
+
+function auditReference(row) {
+  if (row.order_id) return `Venta #${row.order_id}`;
+  return `Mesa #${row.table_account_id || '—'} · Ronda #${row.table_round_id || '—'}`;
+}
+
+function renderAuditRow(row) {
+  const meta = AUDIT_EVENT_META[row.event_type] || { label: row.event_type, icon: 'ph-warning-circle', tone: 'other' };
+  const initials = String(row.actor_username || '?').slice(0, 2).toUpperCase();
+  return `<tr class="audit-row tone-${meta.tone}">
+    <td data-label="Fecha"><div class="audit-date"><i class="ph-bold ph-clock"></i><span>${esc(row.created_at || '—')}</span></div></td>
+    <td data-label="Evento"><span class="audit-event ${meta.tone}"><i class="ph-bold ${meta.icon}"></i>${esc(meta.label)}</span></td>
+    <td data-label="Sucursal"><span class="audit-branch"><i class="ph-fill ph-map-pin"></i>${esc(row.branch_name || 'General')}</span></td>
+    <td data-label="Referencia"><b class="audit-reference">${esc(auditReference(row))}</b></td>
+    <td data-label="Impacto"><span class="audit-amount ${meta.tone}">${fmtMoney(Math.abs(Number(row.amount || 0)))}</span></td>
+    <td data-label="Responsable"><div class="audit-user"><span>${esc(initials)}</span><div><b>${esc(row.actor_username || '—')}</b><small>${esc(row.authorized_by || 'Sin NIP')}</small></div></div></td>
+    <td data-label="Motivo"><p class="audit-reason">${esc(row.reason || 'Sin motivo')}</p></td>
+    <td data-label="Acciones"><div class="audit-actions"><button class="btn btn-ghost btn-icon" type="button" data-view-audit="${row.id}" title="Ver evidencia"><i class="ph-bold ph-eye"></i></button><button class="btn btn-ghost btn-icon" type="button" data-print-audit="${row.id}" title="Imprimir auditoría"><i class="ph-bold ph-printer"></i></button></div></td>
+  </tr>`;
+}
+
+function parseAuditData(value) {
+  if (value && typeof value === 'object') return value;
+  try { return JSON.parse(value || '{}'); } catch { return {}; }
+}
+
+function auditSnapshotHtml(value) {
+  const data = parseAuditData(value);
+  const items = Array.isArray(data.items) ? data.items : [];
+  const labels = { status: 'Estado', total: 'Total', paymentMethod: 'Forma de pago', paymentBreakdown: 'Distribución del pago', cashReceived: 'Efectivo recibido', cashChange: 'Cambio', roundNumber: 'Ronda', subtotal: 'Subtotal' };
+  const fields = Object.entries(data).filter(([key]) => key !== 'items');
+  return `<div class="audit-snapshot-fields">${fields.length ? fields.map(([key, val]) => `<span><small>${esc(labels[key] || key)}</small><b>${typeof val === 'object' ? esc(JSON.stringify(val)) : esc(String(val ?? '—'))}</b></span>`).join('') : '<span><small>Información</small><b>Sin datos adicionales</b></span>'}</div>${items.length ? `<div class="audit-snapshot-items"><b>Productos</b>${items.map((item) => `<span><i>${Number(item.qty || 1)}×</i><strong>${esc(item.name || 'Producto')}</strong><em>${fmtMoney(Number(item.price || 0) * Number(item.qty || 1))}</em></span>`).join('')}</div>` : ''}`;
+}
+
+function auditDetailMarkup(row) {
+  const meta = AUDIT_EVENT_META[row.event_type] || { label: row.event_type, icon: 'ph-warning-circle', tone: 'other' };
+  return `<div class="audit-detail-meta"><span><i class="ph-bold ph-calendar"></i><small>Fecha</small><b>${esc(row.created_at || '—')}</b></span><span><i class="ph-bold ph-storefront"></i><small>Sucursal</small><b>${esc(row.branch_name || 'General')}</b></span><span><i class="ph-bold ph-user"></i><small>Responsable</small><b>${esc(row.actor_username || '—')}</b></span><span><i class="ph-bold ph-password"></i><small>Autorización</small><b>${esc(row.authorized_by || 'No requerida')}</b></span></div><div class="audit-detail-banner ${meta.tone}"><i class="ph-bold ${meta.icon}"></i><div><span>${esc(meta.label)}</span><b>${esc(auditReference(row))} · ${fmtMoney(Math.abs(Number(row.amount || 0)))}</b><p>${esc(row.reason || 'Sin motivo registrado')}</p></div></div><div class="audit-before-after"><section><h4><i class="ph-bold ph-arrow-counter-clockwise"></i> Antes</h4>${auditSnapshotHtml(row.before_data)}</section><section><h4><i class="ph-bold ph-arrow-clockwise"></i> Después</h4>${auditSnapshotHtml(row.after_data)}</section></div>`;
+}
+
+function openAuditDetail(id) {
+  const row = AUDIT_CACHE.find((item) => Number(item.id) === Number(id));
+  if (!row) return toast('No se encontró el movimiento auditado', true);
+  AUDIT_SELECTED = row;
+  const meta = AUDIT_EVENT_META[row.event_type] || { label: row.event_type };
+  $('#auditDetailTitle').innerHTML = `<i class="ph-bold ph-shield-check"></i> Evento #${row.id} · ${esc(meta.label)}`;
+  $('#auditDetailContent').innerHTML = auditDetailMarkup(row);
+  $('#auditDetailModal').classList.add('show');
+}
+
+function printAuditEvent(id) {
+  const row = AUDIT_CACHE.find((item) => Number(item.id) === Number(id));
+  if (!row) return toast('No se encontró el movimiento auditado', true);
+  const meta = AUDIT_EVENT_META[row.event_type] || { label: row.event_type };
+  const html = `<!doctype html><html lang="es"><head><meta charset="utf-8"><title>Auditoría #${row.id}</title><style>body{font-family:Arial,sans-serif;margin:24px;color:#172033}header{border-bottom:3px solid #0f766e;padding-bottom:12px}h1{font-size:20px;margin:0 0 5px}p{font-size:12px}.meta{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:16px 0}.meta span,section{border:1px solid #dbe3ea;padding:10px;border-radius:6px}.meta small{display:block;color:#64748b}.event{padding:12px;background:#f8fafc;border-left:5px solid #f97316}.event b,.event span{display:block}.snapshots{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:12px}.audit-snapshot-fields span,.audit-snapshot-items span{display:flex;justify-content:space-between;gap:8px;padding:5px 0;border-bottom:1px solid #e5e7eb;font-size:11px}.audit-snapshot-fields small{color:#64748b}.audit-snapshot-items>b{display:block;margin:8px 0;font-size:11px}.audit-snapshot-items i,.audit-snapshot-items em{font-style:normal}@media print{button{display:none}}@media(max-width:600px){.meta,.snapshots{grid-template-columns:1fr}}</style></head><body><header><h1>Auditoría #${row.id} · ${esc(meta.label)}</h1><p>${esc(SETTINGS?.business_name || ME?.tenant?.businessName || 'Negocio')}</p></header><div class="meta"><span><small>Fecha</small><b>${esc(row.created_at || '—')}</b></span><span><small>Sucursal</small><b>${esc(row.branch_name || 'General')}</b></span><span><small>Responsable</small><b>${esc(row.actor_username || '—')}</b></span><span><small>Autorización</small><b>${esc(row.authorized_by || 'No requerida')}</b></span></div><div class="event"><span>${esc(auditReference(row))} · ${fmtMoney(Math.abs(Number(row.amount || 0)))}</span><b>Motivo: ${esc(row.reason || 'Sin motivo')}</b></div><div class="snapshots"><section><h3>Antes</h3>${auditSnapshotHtml(row.before_data)}</section><section><h3>Después</h3>${auditSnapshotHtml(row.after_data)}</section></div><script>window.onload=()=>{window.print();setTimeout(()=>window.close(),120)};<\/script></body></html>`;
+  const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const popup = window.open(url, '_blank', 'width=900,height=820');
+  if (!popup) return toast('Permite ventanas emergentes para imprimir la auditoría', true);
+  setTimeout(() => URL.revokeObjectURL(url), 10000);
+}
+
+async function loadCutsHistory(page = 1) {
+  const query = new URLSearchParams({
+    page: String(Math.max(1, page)),
+    pageSize: String(CUTS_PAGE_SIZE),
+    search: CUTS_SEARCH,
+    branchId: CUTS_BRANCH,
+  });
+  const data = await api(`/api/pos/cuts?${query.toString()}`);
+  CUTS_PAGE = Number(data.page || 1);
+  CUTS_PAGE_SIZE = Number(data.pageSize || CUTS_PAGE_SIZE);
+  CUTS_CACHE = Array.isArray(data.rows) ? data.rows : [];
+  const branchSelect = $('#cutsBranchFilter');
+  if (branchSelect && branchSelect.options.length <= 2) {
+    branchSelect.innerHTML = `<option value="all">Todas las sucursales</option><option value="general">General</option>${(data.branches || []).map((branch) => `<option value="${branch.id}">${esc(branch.name)}</option>`).join('')}`;
+    branchSelect.value = CUTS_BRANCH;
+  }
+  $('#cutsResultSummary').innerHTML = `<span><i class="ph-bold ph-receipt"></i> ${Number(data.total || 0)} corte${Number(data.total || 0) === 1 ? '' : 's'}</span><span><i class="ph-bold ph-files"></i> Página ${CUTS_PAGE} de ${Number(data.totalPages || 1)}</span>`;
+  $('#cutsHistoryTable').innerHTML = CUTS_CACHE.length ? `<table class="cuts-table"><thead><tr><th class="cut-head-id"><i class="ph-bold ph-hash"></i> Corte</th><th class="cut-head-branch"><i class="ph-bold ph-storefront"></i> Sucursal</th><th class="cut-head-user"><i class="ph-bold ph-user-circle"></i> Usuario</th><th class="cut-head-open"><i class="ph-bold ph-door-open"></i> Apertura</th><th class="cut-head-close"><i class="ph-bold ph-lock-key"></i> Cierre</th><th class="cut-head-sales"><i class="ph-bold ph-chart-line-up"></i> Ventas</th><th class="cut-head-expected"><i class="ph-bold ph-calculator"></i> Esperado</th><th class="cut-head-counted"><i class="ph-bold ph-money"></i> Contado</th><th class="cut-head-difference"><i class="ph-bold ph-scales"></i> Diferencia</th><th class="cut-head-actions"><i class="ph-bold ph-dots-three"></i></th></tr></thead><tbody>${CUTS_CACHE.map(renderCutRow).join('')}</tbody></table>` : emptyHTML('ph-safe', 'Sin cortes encontrados', 'Cambia la búsqueda o los filtros para consultar otros turnos.');
+  document.querySelectorAll('[data-view-cut]').forEach((button) => button.addEventListener('click', () => openCutDetail(button.dataset.viewCut)));
+  document.querySelectorAll('[data-print-cut]').forEach((button) => button.addEventListener('click', () => printHistoricalCut(button.dataset.printCut)));
+  reportPager($('#cutsPagination'), CUTS_PAGE, Number(data.totalPages || 1), (next) => loadCutsHistory(next).catch((error) => toast(error.message, true)));
+}
+
+function renderCutRow(row) {
+  const difference = Number(row.difference_amount || 0);
+  const statusLabel = row.status === 'open' ? 'Abierta' : 'Cerrada';
+  const initials = String(row.opened_by || '?').slice(0, 2).toUpperCase();
+  const differenceClass = difference < 0 ? 'negative' : difference > 0 ? 'positive' : 'balanced';
+  return `<tr class="cut-row ${row.status === 'open' ? 'is-open' : ''}">
+    <td data-label="Corte"><div class="cut-id"><b>#${row.id}</b><span class="cut-status ${row.status}">${statusLabel}</span></div></td>
+    <td data-label="Sucursal"><span class="cut-branch"><i class="ph-fill ph-map-pin"></i>${esc(row.branch_name || 'General')}</span></td>
+    <td data-label="Usuario"><div class="cut-user"><span>${esc(initials)}</span><div><b>${esc(row.opened_by || '—')}</b><small>Cerró: ${esc(row.closed_by || '—')}</small></div></div></td>
+    <td data-label="Apertura"><div class="cut-date open"><i class="ph-bold ph-sun-horizon"></i><span>${esc(row.opened_at || '—')}</span></div></td>
+    <td data-label="Cierre"><div class="cut-date close"><i class="ph-bold ph-moon-stars"></i><span>${esc(row.closed_at || 'Pendiente')}</span></div></td>
+    <td data-label="Ventas"><div class="cut-money sales"><b>${fmtMoney(row.totals?.totalSales || 0)}</b><small>${Number(row.totals?.tickets || 0)} ticket${Number(row.totals?.tickets || 0) === 1 ? '' : 's'}</small></div></td>
+    <td data-label="Esperado"><span class="cut-money expected">${fmtMoney(row.expected_cash || 0)}</span></td>
+    <td data-label="Contado"><span class="cut-money counted">${row.closing_amount == null ? '—' : fmtMoney(row.closing_amount)}</span></td>
+    <td data-label="Diferencia"><span class="cut-difference ${differenceClass}">${row.status === 'open' ? 'Pendiente' : fmtMoney(difference)}</span></td>
+    <td data-label="Acciones"><div class="cut-actions"><button class="btn btn-ghost btn-icon" type="button" data-view-cut="${row.id}" title="Ver detalle"><i class="ph-bold ph-eye"></i></button><button class="btn btn-ghost btn-icon" type="button" data-print-cut="${row.id}" title="Imprimir corte"><i class="ph-bold ph-printer"></i></button></div></td>
+  </tr>`;
+}
+
+function historicalCutResult(row) {
+  return {
+    closedSession: row,
+    totals: row.totals || {},
+    expectedAmount: Number(row.expected_cash || 0),
+    closingAmount: row.closing_amount == null ? 0 : Number(row.closing_amount),
+    differenceAmount: Number(row.difference_amount || 0),
+  };
+}
+
+function printHistoricalCut(id) {
+  const row = CUTS_CACHE.find((item) => Number(item.id) === Number(id));
+  if (!row) return toast('No se encontró el corte', true);
+  printPosCloseReport(historicalCutResult(row));
+}
+
+function openCutDetail(id) {
+  const row = CUTS_CACHE.find((item) => Number(item.id) === Number(id));
+  if (!row) return toast('No se encontró el corte', true);
+  CUTS_SELECTED = row;
+  const totals = row.totals || {};
+  const methods = totals.salesByMethod || {};
+  const movements = totals.movements || {};
+  const difference = Number(row.difference_amount || 0);
+  $('#cutsDetailTitle').innerHTML = `<i class="ph-bold ph-receipt"></i> Corte #${row.id} · ${esc(row.branch_name || 'General')}`;
+  $('#cutsDetailContent').innerHTML = `
+    <div class="cut-detail-meta"><span><i class="ph-bold ph-user"></i><b>Abrió</b>${esc(row.opened_by || '—')}</span><span><i class="ph-bold ph-door-open"></i><b>Apertura</b>${esc(row.opened_at || '—')}</span><span><i class="ph-bold ph-lock-key"></i><b>Cierre</b>${esc(row.closed_at || 'Pendiente')}</span></div>
+    <div class="cut-detail-kpis"><article class="opening"><i class="ph-bold ph-wallet"></i><span>Fondo inicial</span><b>${fmtMoney(row.opening_amount || 0)}</b></article><article class="sales"><i class="ph-bold ph-chart-line-up"></i><span>Ventas</span><b>${fmtMoney(totals.totalSales || 0)}</b><small>${Number(totals.tickets || 0)} tickets</small></article><article class="expected"><i class="ph-bold ph-calculator"></i><span>Esperado</span><b>${fmtMoney(row.expected_cash || 0)}</b></article><article class="counted"><i class="ph-bold ph-money"></i><span>Contado</span><b>${row.closing_amount == null ? 'Pendiente' : fmtMoney(row.closing_amount)}</b></article><article class="difference ${difference < 0 ? 'negative' : difference > 0 ? 'positive' : ''}"><i class="ph-bold ph-scales"></i><span>Diferencia</span><b>${row.status === 'open' ? 'Pendiente' : fmtMoney(difference)}</b></article></div>
+    <div class="cut-detail-groups"><section><h4><i class="ph-bold ph-credit-card"></i> Ventas por medio</h4><div><span>Efectivo <b>${fmtMoney(methods.cash || 0)}</b></span><span>Tarjeta <b>${fmtMoney(methods.card || 0)}</b></span><span>Transferencia <b>${fmtMoney(methods.transfer || 0)}</b></span><span>Mixto <b>${fmtMoney(methods.mixed || 0)}</b></span></div></section><section><h4><i class="ph-bold ph-arrows-left-right"></i> Movimientos de caja</h4><div><span>Ingresos <b>${fmtMoney(movements.income || 0)}</b></span><span>Retiros <b>${fmtMoney(movements.withdrawal || 0)}</b></span><span>Gastos <b>${fmtMoney(movements.expense || 0)}</b></span><span>Cancelaciones <b>${fmtMoney(totals.cancellations?.total || 0)}</b></span></div></section></div>
+    ${row.notes ? `<div class="cut-detail-notes"><i class="ph-bold ph-note"></i><div><b>Notas del corte</b><p>${esc(row.notes)}</p></div></div>` : ''}`;
+  $('#cutsDetailModal').classList.add('show');
+}
+
+$('#auditRefreshBtn')?.addEventListener('click', () => loadAuditLog(AUDIT_PAGE).catch((error) => toast(error.message, true)));
+document.querySelectorAll('#auditPeriodFilter [data-audit-period]').forEach((button) => button.addEventListener('click', () => {
+  AUDIT_FILTER = button.dataset.auditPeriod;
+  document.querySelectorAll('#auditPeriodFilter [data-audit-period]').forEach((item) => item.classList.toggle('on', item === button));
+  $('#auditCustomRange').hidden = AUDIT_FILTER !== 'custom';
+  if (AUDIT_FILTER !== 'custom') loadAuditLog(1).catch((error) => toast(error.message, true));
+}));
+$('#auditApplyRange')?.addEventListener('click', () => {
+  AUDIT_START_DATE = $('#auditStartDate').value || '';
+  AUDIT_END_DATE = $('#auditEndDate').value || '';
+  loadAuditLog(1).catch((error) => toast(error.message, true));
+});
+$('#auditSearch')?.addEventListener('input', (event) => {
+  AUDIT_SEARCH = event.target.value.trim();
+  clearTimeout(AUDIT_SEARCH_TIMER);
+  AUDIT_SEARCH_TIMER = setTimeout(() => loadAuditLog(1).catch((error) => toast(error.message, true)), 280);
+});
+$('#auditBranchFilter')?.addEventListener('change', (event) => { AUDIT_BRANCH = event.target.value; loadAuditLog(1).catch((error) => toast(error.message, true)); });
+$('#auditPageSize')?.addEventListener('change', (event) => { AUDIT_PAGE_SIZE = Number(event.target.value) || 10; loadAuditLog(1).catch((error) => toast(error.message, true)); });
+[$('#auditDetailClose'), $('#auditDetailCancel')].forEach((button) => button?.addEventListener('click', () => $('#auditDetailModal').classList.remove('show')));
+$('#auditDetailPrint')?.addEventListener('click', () => AUDIT_SELECTED && printAuditEvent(AUDIT_SELECTED.id));
+$('#cutsRefreshBtn')?.addEventListener('click', () => loadCutsHistory(CUTS_PAGE).catch((error) => toast(error.message, true)));
+$('#cutsSearch')?.addEventListener('input', (event) => {
+  CUTS_SEARCH = event.target.value.trim();
+  clearTimeout(CUTS_SEARCH_TIMER);
+  CUTS_SEARCH_TIMER = setTimeout(() => loadCutsHistory(1).catch((error) => toast(error.message, true)), 280);
+});
+$('#cutsBranchFilter')?.addEventListener('change', (event) => { CUTS_BRANCH = event.target.value; loadCutsHistory(1).catch((error) => toast(error.message, true)); });
+$('#cutsPageSize')?.addEventListener('change', (event) => { CUTS_PAGE_SIZE = Number(event.target.value) || 10; loadCutsHistory(1).catch((error) => toast(error.message, true)); });
+[$('#cutsDetailClose'), $('#cutsDetailCancel')].forEach((button) => button?.addEventListener('click', () => $('#cutsDetailModal').classList.remove('show')));
+$('#cutsDetailPrint')?.addEventListener('click', () => CUTS_SELECTED && printPosCloseReport(historicalCutResult(CUTS_SELECTED)));
+$('#cutsDetailPdf')?.addEventListener('click', () => CUTS_SELECTED && exportPosClosePdf(historicalCutResult(CUTS_SELECTED)));
 $('#contactForm').addEventListener('submit', async (e) => {
   e.preventDefault();
   const deliveryEnabled = $('#botDelivery') ? $('#botDelivery').checked : true;

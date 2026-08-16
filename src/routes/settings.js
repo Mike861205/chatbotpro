@@ -1,4 +1,5 @@
 const express = require('express');
+const bcrypt = require('bcryptjs');
 const { q, setSetting } = require('../db');
 const { requireAuth, requireOwner } = require('../middleware/auth');
 const { createImageUpload, deleteManagedUpload, optimizeUploadedImage, safeUnlink } = require('../utils/uploads');
@@ -49,6 +50,10 @@ const SETTING_KEYS = [
   'ticket_print_mode',
   'ticket_mobile_zoom_percent',
   'pos_catalog_sort_mode',
+  'pos_round_edit_enabled',
+  'pos_round_edit_require_pin',
+  'pos_same_day_cancel_enabled',
+  'pos_cancel_require_pin',
 ];
 
 function normalizeReceivingModes(raw) {
@@ -113,6 +118,10 @@ router.get('/', async (req, res, next) => {
     out.logo = req.tenant.logo;
     out.primary_color = req.tenant.primary_color;
     out.slug = req.tenant.slug;
+    const pinSetting = await req.tdb.get(
+      "SELECT 1 AS configured FROM {s}.settings WHERE key = 'pos_authorization_pin_hash' AND COALESCE(value, '') <> '' LIMIT 1"
+    );
+    out.authorization_pin_configured = Boolean(pinSetting);
     res.json(out);
   } catch (e) { next(e); }
 });
@@ -143,6 +152,13 @@ router.put('/', upload.single('logo'), async (req, res, next) => {
       } catch (error) {
         return res.status(400).json({ error: error.message });
       }
+    }
+    if (body.pos_authorization_pin !== undefined) {
+      const pin = String(body.pos_authorization_pin || '').trim();
+      if (pin && !/^\d{4,8}$/.test(pin)) {
+        return res.status(400).json({ error: 'El NIP debe contener de 4 a 8 dígitos' });
+      }
+      await setSetting(req.tdb, 'pos_authorization_pin_hash', pin ? await bcrypt.hash(pin, 12) : '');
     }
     for (const k of SETTING_KEYS) {
       if (body[k] !== undefined) await setSetting(req.tdb, k, body[k]);
