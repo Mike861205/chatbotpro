@@ -3797,9 +3797,36 @@ select.status-sel {
   gap: 10px;
 }
 .pos-movement-modal {
+  max-width: 780px !important;
+  width: 95vw !important;
+  max-height: 90vh !important;
+  display: flex !important;
+  flex-direction: column !important;
+  padding: 24px 26px !important;
+  border-radius: 22px !important;
   background:
     radial-gradient(520px 220px at 105% -20%, color-mix(in srgb, var(--primary) 14%, transparent), transparent 70%),
     linear-gradient(180deg, #ffffff 0%, #f8fbff 100%);
+  overflow-y: auto !important;
+  overflow-x: hidden !important;
+}
+.pos-movement-modal h3 {
+  margin-bottom: 16px;
+}
+.pos-movement-kinds {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.pos-movement-kinds button {
+  flex: 1;
+  min-height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  font-weight: 700;
+  font-size: 13.5px;
 }
 .pos-movement-kinds button[data-kind='income'].on {
   background: linear-gradient(135deg, #16a34a, #22c55e);
@@ -3818,11 +3845,12 @@ select.status-sel {
   border-radius: 14px;
   display: grid;
   grid-template-columns: 38px 1fr;
-  gap: 10px;
+  gap: 12px;
   align-items: center;
-  padding: 10px 12px;
-  margin-bottom: 12px;
+  padding: 10px 14px;
+  margin-bottom: 14px;
   background: #fff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.02);
 }
 .pos-movement-kind-hint i {
   width: 38px;
@@ -3833,16 +3861,19 @@ select.status-sel {
   justify-content: center;
   color: #fff;
   font-size: 18px;
+  flex-shrink: 0;
 }
 .pos-movement-kind-hint b {
   display: block;
   font-size: 13.5px;
+  font-weight: 700;
 }
 .pos-movement-kind-hint span {
   display: block;
   font-size: 12px;
   color: var(--ink-2);
   margin-top: 2px;
+  line-height: 1.35;
 }
 .pos-movement-kind-hint.tone-income {
   border-color: color-mix(in srgb, #16a34a 30%, var(--line));
@@ -3859,42 +3890,214 @@ select.status-sel {
   background: linear-gradient(180deg, #fff5f5 0%, #fff 100%);
 }
 .pos-movement-kind-hint.tone-expense i { background: linear-gradient(135deg, #dc2626, #ef4444); }
+
+.pos-movement-modal .row-2 {
+  display: grid;
+  grid-template-columns: 1fr 1.6fr;
+  gap: 12px;
+}
+.pos-movement-modal .modal-actions {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+  margin-top: 14px;
+  margin-bottom: 16px;
+}
+
+.pos-movement-history-wrap {
+  margin-top: 6px;
+  width: 100%;
+}
 .pos-movement-groups {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px;
+  gap: 14px;
+  align-items: stretch;
 }
 .pos-movement-group {
+  display: flex;
+  flex-direction: column;
   border: 1px solid var(--line);
   border-radius: 16px;
-  padding: 10px;
+  padding: 12px 14px;
   background: #fff;
+  min-width: 0;
+  min-height: 130px;
+  box-shadow: 0 2px 8px rgba(15, 23, 42, 0.03);
 }
+.pos-movement-group.income {
+  border-color: color-mix(in srgb, #16a34a 26%, var(--line));
+  background: linear-gradient(180deg, #f4fff8 0%, #fff 46px);
+}
+.pos-movement-group.income .pos-movement-group-head i { color: #16a34a; }
+.pos-movement-group.outflow {
+  border-color: color-mix(in srgb, #dc2626 26%, var(--line));
+  background: linear-gradient(180deg, #fff5f5 0%, #fff 46px);
+}
+.pos-movement-group.outflow .pos-movement-group-head i { color: #dc2626; }
+
 .pos-movement-group-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  margin-bottom: 10px;
-  font-size: 13.5px;
+  padding-bottom: 8px;
+  margin-bottom: 8px;
+  border-bottom: 1px solid #f1f5f9;
+  font-size: 13px;
+  flex-shrink: 0;
 }
 .pos-movement-group-head > div {
   display: inline-flex;
   align-items: center;
-  gap: 7px;
+  gap: 6px;
   font-weight: 800;
+  color: #0f172a;
 }
-.pos-movement-group-head b { font-size: 14px; }
-.pos-movement-group.income {
-  border-color: color-mix(in srgb, #16a34a 28%, var(--line));
-  background: linear-gradient(180deg, #f4fff8 0%, #fff 42%);
+.pos-mov-total-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 8px;
+  font-size: 12.5px;
+  font-weight: 800;
+  letter-spacing: -0.01em;
 }
-.pos-movement-group.income .pos-movement-group-head i { color: #16a34a; }
-.pos-movement-group.outflow {
-  border-color: color-mix(in srgb, #dc2626 28%, var(--line));
-  background: linear-gradient(180deg, #fff5f5 0%, #fff 42%);
+.pos-mov-total-pill.tone-green {
+  background: #ecfdf5;
+  color: #059669;
+  border: 1px solid #a7f3d0;
 }
-.pos-movement-group.outflow .pos-movement-group-head i { color: #dc2626; }
+.pos-mov-total-pill.tone-red {
+  background: #fef2f2;
+  color: #dc2626;
+  border: 1px solid #fecaca;
+}
+
+.pos-movement-table-container {
+  overflow-x: auto;
+  overflow-y: auto;
+  max-height: 180px;
+  width: 100%;
+  border-radius: 8px;
+  -webkit-overflow-scrolling: touch;
+  flex: 1;
+}
+.pos-movement-table {
+  width: 100% !important;
+  min-width: 0 !important;
+  border-collapse: collapse !important;
+  font-size: 12px !important;
+  table-layout: auto !important;
+}
+.pos-movement-table thead th {
+  position: sticky;
+  top: 0;
+  background: #f8fafc;
+  padding: 5px 6px !important;
+  font-size: 9px !important;
+  font-weight: 800 !important;
+  color: #64748b !important;
+  text-transform: uppercase !important;
+  letter-spacing: 0.04em !important;
+  border-bottom: 1px solid #e2e8f0 !important;
+  white-space: nowrap !important;
+  text-align: left;
+  z-index: 2;
+}
+.pos-movement-table thead th:last-child {
+  text-align: right;
+}
+.pos-movement-table tbody td {
+  padding: 6px 6px !important;
+  border-bottom: 1px solid #f1f5f9 !important;
+  vertical-align: middle !important;
+  color: #1e293b;
+  font-size: 11.5px;
+}
+.pos-movement-table tbody tr:last-child td {
+  border-bottom: none !important;
+}
+.pos-movement-table tbody tr:hover td {
+  background: rgba(248, 250, 252, 0.8);
+}
+.pos-mov-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 1.5px 5.5px;
+  border-radius: 5px;
+  font-size: 10px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.pos-mov-badge.income {
+  background: #ecfdf5;
+  color: #047857;
+}
+.pos-mov-badge.withdrawal {
+  background: #fffbeb;
+  color: #b45309;
+}
+.pos-mov-badge.expense {
+  background: #fef2f2;
+  color: #dc2626;
+}
+.pos-mov-amount {
+  font-weight: 800;
+  color: #0f172a;
+  white-space: nowrap;
+  font-size: 12px;
+}
+.pos-mov-note {
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #64748b;
+}
+.pos-mov-time {
+  text-align: right;
+  color: #94a3b8;
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.pos-movement-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 18px 10px;
+  color: #94a3b8;
+  font-size: 11.5px;
+  font-weight: 600;
+  text-align: center;
+  min-height: 90px;
+  flex: 1;
+}
+.pos-movement-empty i {
+  font-size: 22px;
+  color: #cbd5e1;
+}
+
+@media (max-width: 680px) {
+  .pos-movement-modal {
+    padding: 16px 14px !important;
+    max-height: 94vh !important;
+  }
+  .pos-movement-modal .row-2 {
+    grid-template-columns: 1fr;
+    gap: 10px;
+  }
+  .pos-movement-groups {
+    grid-template-columns: 1fr;
+    gap: 12px;
+  }
+  .pos-mov-note {
+    max-width: 160px;
+  }
+}
 
 /* ============================================================
    Cierre de Caja del Turno — Premium & Responsive
@@ -4743,10 +4946,57 @@ select.status-sel {
 }
 #saDemoLeadSummary .demo-summary-card.tone-total {
   border-color: color-mix(in srgb, #0f172a 28%, var(--line));
-  background: linear-gradient(135deg, #111827 0%, #334155 100%);
+  background: linear-gradient(135deg, #0f172a 0%, #1e293b 60%, #334155 100%);
   color: #fff;
 }
-#saDemoLeadSummary .demo-summary-card.tone-total i { color: #f8fafc; background: rgba(255,255,255,.12); }
+#saDemoLeadSummary .demo-summary-card.tone-total span { color: rgba(255, 255, 255, 0.75) !important; }
+#saDemoLeadSummary .demo-summary-card.tone-total b { color: #ffffff !important; text-shadow: 0 1px 3px rgba(0,0,0,0.3); }
+#saDemoLeadSummary .demo-summary-card.tone-total i { color: #38bdf8 !important; background: rgba(255,255,255,.14) !important; }
+
+/* Grid estructurado de botones de acción en SuperAdmin */
+.sa-actions-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 5px;
+  min-width: 275px;
+  max-width: 320px;
+}
+.sa-actions-grid-2 {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 5px;
+  min-width: 190px;
+  max-width: 230px;
+}
+.sa-actions-grid .btn, .sa-actions-grid-2 .btn {
+  padding: 5px 8px !important;
+  font-size: 11px !important;
+  font-weight: 700 !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  gap: 5px !important;
+  white-space: nowrap !important;
+  border-radius: 8px !important;
+  min-height: 28px !important;
+  height: 28px !important;
+  line-height: 1 !important;
+  text-decoration: none !important;
+}
+.sa-actions-grid .btn i, .sa-actions-grid-2 .btn i {
+  font-size: 13px !important;
+  flex-shrink: 0;
+}
+.btn-sa-manage {
+  background: color-mix(in srgb, var(--primary) 14%, white) !important;
+  color: var(--primary) !important;
+  border-color: color-mix(in srgb, var(--primary) 35%, var(--line)) !important;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.03) !important;
+}
+.btn-sa-manage:hover {
+  background: var(--primary) !important;
+  color: #fff !important;
+}
 #saDemoLeadSummary .demo-summary-card.tone-active {
   border-color: color-mix(in srgb, #22c55e 32%, var(--line));
   background: linear-gradient(135deg, #ecfff3 0%, #dff7ea 100%);
@@ -8127,6 +8377,7 @@ kbd {
   background: #ffffff;
   box-shadow: 0 2px 8px rgba(15, 23, 42, 0.03);
   transition: transform .18s ease, box-shadow .18s ease, border-color .18s ease;
+  overflow: hidden;
 }
 .sales-report-stat:hover {
   transform: translateY(-2px);
@@ -8157,7 +8408,8 @@ kbd {
   align-items: center;
   justify-content: space-between;
   gap: 10px;
-  margin-bottom: 8px;
+  margin-bottom: 0;
+  flex-shrink: 0;
 }
 .sales-stat-top small {
   display: block;
@@ -8193,7 +8445,7 @@ kbd {
 .sales-report-stat strong {
   display: block;
   overflow: hidden;
-  margin-bottom: 4px;
+  margin-bottom: 0;
   color: #0f172a;
   font-size: 22px;
   font-weight: 900;
@@ -8201,6 +8453,7 @@ kbd {
   line-height: 1.2;
   text-overflow: ellipsis;
   white-space: nowrap;
+  flex-shrink: 0;
 }
 .sales-report-stat span {
   display: block;

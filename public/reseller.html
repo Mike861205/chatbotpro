@@ -3,46 +3,556 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Portal reseller — ChatBotPro</title>
-  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+  <title>Portal Reseller — ChatBotPro</title>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800;900&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/regular/style.css" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/bold/style.css" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/duotone/style.css" />
   <link rel="stylesheet" href="/static/css/styles.css" />
   <link rel="icon" type="image/png" href="/static/chatbotpro100.png" />
   <style>
-    .reseller-link{display:flex;gap:8px;align-items:center;padding:12px;background:var(--bg);border:1px solid var(--line);border-radius:12px;flex-wrap:wrap}.reseller-link code{flex:1;min-width:210px;overflow-wrap:anywhere}.reseller-summary{display:grid;grid-template-columns:repeat(4,minmax(150px,1fr));gap:12px;margin-bottom:14px}.reseller-stat{padding:16px}.reseller-stat span{display:block;color:var(--ink-2);font-size:13px}.reseller-stat b{font-size:28px}.reseller-toolbar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:12px}.reseller-toolbar input,.reseller-toolbar select{max-width:360px}.reseller-actions{display:flex;gap:6px;flex-wrap:wrap}.reseller-view[hidden]{display:none!important}@media(max-width:850px){.reseller-summary{grid-template-columns:repeat(2,1fr)}}
+    .reseller-hero-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 14px;
+      margin-bottom: 16px;
+    }
+    .reseller-hero-card {
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      min-height: 112px;
+      padding: 16px 18px;
+      border-radius: 18px;
+      border: 1px solid var(--line);
+      background: #ffffff;
+      box-shadow: 0 2px 10px rgba(15, 23, 42, 0.03);
+      cursor: pointer;
+      transition: transform .18s ease, box-shadow .18s ease, border-color .18s ease;
+    }
+    .reseller-hero-card:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 8px 24px rgba(15, 23, 42, 0.07);
+    }
+    .reseller-hero-card.active-tab {
+      border-color: var(--primary);
+      background: linear-gradient(160deg, #ffffff 60%, color-mix(in srgb, var(--primary) 8%, transparent) 100%);
+      box-shadow: 0 4px 18px color-mix(in srgb, var(--primary) 18%, transparent);
+    }
+    .reseller-hero-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+    }
+    .reseller-hero-head span {
+      color: #64748b;
+      font-size: 11px;
+      font-weight: 800;
+      text-transform: uppercase;
+      letter-spacing: .05em;
+    }
+    .reseller-hero-icon {
+      width: 34px;
+      height: 34px;
+      border-radius: 10px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 18px;
+    }
+    .reseller-hero-icon.blue { background: #eff6ff; color: #2563eb; }
+    .reseller-hero-icon.green { background: #ecfdf5; color: #059669; }
+    .reseller-hero-icon.purple { background: #f5f3ff; color: #7c3aed; }
+    .reseller-hero-icon.amber { background: #fffbeb; color: #d97706; }
+
+    .reseller-hero-value {
+      font-size: 28px;
+      font-weight: 900;
+      color: #0f172a;
+      letter-spacing: -0.02em;
+      margin-top: 6px;
+    }
+    .reseller-hero-sub {
+      font-size: 11.5px;
+      color: #94a3b8;
+      font-weight: 600;
+      margin-top: 2px;
+    }
+
+    .reseller-link-box {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 14px;
+      padding: 16px 20px;
+      background: linear-gradient(135deg, #0f172a 0%, #1e293b 60%, #334155 100%);
+      border-radius: 18px;
+      color: #fff;
+      margin-bottom: 16px;
+      box-shadow: 0 8px 24px rgba(15, 23, 42, 0.15);
+      flex-wrap: wrap;
+    }
+    .reseller-link-info {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      min-width: 240px;
+      flex: 1;
+    }
+    .reseller-link-ic {
+      width: 44px;
+      height: 44px;
+      border-radius: 12px;
+      background: rgba(255, 255, 255, 0.12);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 22px;
+      color: #38bdf8;
+      flex-shrink: 0;
+    }
+    .reseller-link-text small {
+      display: block;
+      color: rgba(255, 255, 255, 0.7);
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: .04em;
+    }
+    .reseller-link-text code {
+      display: block;
+      color: #fff;
+      font-size: 14px;
+      font-weight: 700;
+      word-break: break-all;
+      margin-top: 2px;
+    }
+    .reseller-link-btns {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+    .reseller-link-btns .btn {
+      font-weight: 800;
+      font-size: 13px;
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      padding: 9px 15px;
+      border-radius: 11px;
+      text-decoration: none;
+      cursor: pointer;
+      transition: all .16s ease;
+    }
+    .btn-reseller-white {
+      background: #ffffff !important;
+      color: #0f172a !important;
+      border: 1px solid rgba(255, 255, 255, 0.9) !important;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.15) !important;
+    }
+    .btn-reseller-white:hover {
+      background: #f1f5f9 !important;
+      color: #0f172a !important;
+      transform: translateY(-1px);
+    }
+    .btn-reseller-glass {
+      background: rgba(255, 255, 255, 0.14) !important;
+      color: #ffffff !important;
+      border: 1px solid rgba(255, 255, 255, 0.3) !important;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.1) !important;
+    }
+    .btn-reseller-glass:hover {
+      background: rgba(255, 255, 255, 0.24) !important;
+      color: #ffffff !important;
+      border-color: rgba(255, 255, 255, 0.5) !important;
+      transform: translateY(-1px);
+    }
+    .btn-reseller-glass i {
+      color: #38bdf8 !important;
+    }
+    .btn-reseller-wa {
+      background: rgba(34, 197, 94, 0.16) !important;
+      color: #4ade80 !important;
+      border: 1px solid rgba(74, 222, 128, 0.4) !important;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.1) !important;
+    }
+    .btn-reseller-wa:hover {
+      background: rgba(34, 197, 94, 0.28) !important;
+      color: #ffffff !important;
+      border-color: rgba(74, 222, 128, 0.7) !important;
+      transform: translateY(-1px);
+    }
+    .btn-reseller-wa i {
+      color: #22c55e !important;
+    }
+
+    .reseller-toolbar-wrap {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 14px;
+      flex-wrap: wrap;
+    }
+    .reseller-search-box {
+      position: relative;
+      flex: 1;
+      max-width: 380px;
+      min-width: 220px;
+    }
+    .reseller-search-box i {
+      position: absolute;
+      left: 12px;
+      top: 50%;
+      transform: translateY(-50%);
+      color: #94a3b8;
+      font-size: 16px;
+      pointer-events: none;
+    }
+    .reseller-search-box input {
+      width: 100%;
+      padding-left: 36px;
+      border-radius: 12px;
+      border: 1px solid #cbd5e1;
+      background: #fff;
+      font-size: 13.5px;
+    }
+
+    .reseller-stage-pills {
+      display: flex;
+      gap: 6px;
+      flex-wrap: wrap;
+      margin-bottom: 14px;
+    }
+    .stage-pill {
+      padding: 6px 12px;
+      border-radius: 999px;
+      border: 1px solid #e2e8f0;
+      background: #fff;
+      color: #64748b;
+      font-size: 12px;
+      font-weight: 700;
+      cursor: pointer;
+      transition: all .15s ease;
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+    }
+    .stage-pill:hover {
+      border-color: #cbd5e1;
+      background: #f8fafc;
+      color: #0f172a;
+    }
+    .stage-pill.active {
+      border-color: var(--primary);
+      background: color-mix(in srgb, var(--primary) 12%, white);
+      color: var(--primary);
+      font-weight: 800;
+    }
+    .stage-pill b {
+      font-size: 11px;
+      padding: 1px 6px;
+      border-radius: 999px;
+      background: rgba(0,0,0,0.06);
+    }
+
+    .reseller-table-card {
+      border-radius: 18px;
+      border: 1px solid var(--line);
+      background: #fff;
+      box-shadow: 0 2px 10px rgba(15, 23, 42, 0.03);
+      padding: 18px 20px;
+    }
+
+    .reseller-actions {
+      display: flex;
+      gap: 6px;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+    .reseller-actions .btn {
+      padding: 6px 11px;
+      font-size: 12px;
+      font-weight: 700;
+      border-radius: 9px;
+    }
+
+    .reseller-view[hidden] {
+      display: none !important;
+    }
+
+    /* Modal gestión */
+    .reseller-subject-card {
+      padding: 12px 16px;
+      border-radius: 14px;
+      background: #f8fafc;
+      border: 1px solid #e2e8f0;
+      margin-bottom: 16px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+    .reseller-subject-card b {
+      font-size: 15px;
+      color: #0f172a;
+      display: block;
+    }
+    .reseller-subject-card span {
+      font-size: 12px;
+      color: #64748b;
+    }
+
+    @media (max-width: 900px) {
+      .reseller-hero-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .reseller-link-box { flex-direction: column; align-items: stretch; }
+      .reseller-link-btns { justify-content: flex-start; }
+    }
+    @media (max-width: 580px) {
+      .reseller-hero-grid { grid-template-columns: 1fr; }
+      .reseller-toolbar-wrap { flex-direction: column; align-items: stretch; }
+      .reseller-search-box { max-width: none; }
+    }
   </style>
 </head>
 <body>
   <div class="app-shell">
     <aside class="sidebar">
-      <div class="brand"><div class="logo-wrap"><div class="logo-dot has-image"><img src="/static/chatbotpro100.png" alt="ChatBotPro" /></div></div><div><h2 id="resellerName">Reseller</h2><small>Portal comercial</small></div></div>
-      <nav>
-        <a href="#prospects" data-view="prospects" class="active"><span class="nav-ic"><i class="ph-bold ph-buildings"></i></span><span>Prospectos</span></a>
-        <a href="#clients" data-view="clients"><span class="nav-ic"><i class="ph-bold ph-handshake"></i></span><span>Clientes</span></a>
-        <a href="#demo-leads" data-view="demo-leads"><span class="nav-ic"><i class="ph-bold ph-rocket-launch"></i></span><span>Leads demo</span></a>
-        <a href="#follow-up" data-view="follow-up"><span class="nav-ic"><i class="ph-bold ph-kanban"></i></span><span>Seguimiento</span></a>
-      </nav>
-      <div class="user-pill" style="margin-top:auto"><div class="avatar"><i class="ph-bold ph-user-circle"></i></div><div><b id="resellerUser">—</b><small>Reseller</small></div><button class="btn btn-ghost" id="logout" type="button" title="Salir"><i class="ph-bold ph-sign-out"></i></button></div>
-    </aside>
-    <main class="main">
-      <header class="topbar"><div><h1 id="viewTitle"><i class="ph-bold ph-buildings"></i> Prospectos</h1><p id="viewSubtitle" class="muted">Negocios registrados desde tu enlace.</p></div><button class="btn btn-ghost" id="reload"><i class="ph-bold ph-arrows-clockwise"></i> Actualizar</button></header>
-      <div class="reseller-summary">
-        <div class="card reseller-stat"><span>Prospectos</span><b id="countProspects">0</b></div>
-        <div class="card reseller-stat"><span>Clientes</span><b id="countClients">0</b></div>
-        <div class="card reseller-stat"><span>Leads demo</span><b id="countDemos">0</b></div>
-        <div class="card reseller-stat"><span>Seguimientos pendientes</span><b id="countFollowUp">0</b></div>
+      <div class="brand">
+        <div class="logo-wrap">
+          <div class="logo-dot has-image"><img src="/static/chatbotpro100.png" alt="ChatBotPro" /></div>
+        </div>
+        <div>
+          <h2 id="resellerName">Reseller</h2>
+          <small>Portal Comercial</small>
+        </div>
       </div>
-      <div class="card" style="padding:14px;margin-bottom:14px"><div class="reseller-link"><i class="ph-bold ph-link"></i><code id="referralUrl">—</code><button class="btn btn-primary" id="copyLink" type="button"><i class="ph-bold ph-copy"></i> Copiar enlace</button></div></div>
+      <nav>
+        <a href="#prospects" data-view="prospects" class="active">
+          <span class="nav-ic"><i class="ph-bold ph-buildings"></i></span>
+          <span>Prospectos</span>
+        </a>
+        <a href="#clients" data-view="clients">
+          <span class="nav-ic"><i class="ph-bold ph-handshake"></i></span>
+          <span>Clientes</span>
+        </a>
+        <a href="#demo-leads" data-view="demo-leads">
+          <span class="nav-ic"><i class="ph-bold ph-rocket-launch"></i></span>
+          <span>Leads demo</span>
+        </a>
+        <a href="#follow-up" data-view="follow-up">
+          <span class="nav-ic"><i class="ph-bold ph-kanban"></i></span>
+          <span>Seguimiento</span>
+        </a>
+      </nav>
+      <div class="user-pill" style="margin-top:auto">
+        <div class="avatar"><i class="ph-bold ph-user-circle"></i></div>
+        <div>
+          <b id="resellerUser">—</b>
+          <small>Reseller Activo</small>
+        </div>
+        <button class="btn btn-ghost" id="logout" type="button" title="Cerrar sesión"><i class="ph-bold ph-sign-out"></i></button>
+      </div>
+    </aside>
 
-      <section class="reseller-view" id="viewProspects"><div class="card" style="padding:16px"><div class="reseller-toolbar"><input type="search" data-search="prospects" placeholder="Buscar prospecto, dueño o teléfono" /></div><div id="prospectsTable"></div></div></section>
-      <section class="reseller-view" id="viewClients" hidden><div class="card" style="padding:16px"><div class="reseller-toolbar"><input type="search" data-search="clients" placeholder="Buscar cliente, dueño o teléfono" /></div><div id="clientsTable"></div></div></section>
-      <section class="reseller-view" id="viewDemoLeads" hidden><div class="card" style="padding:16px"><div class="reseller-toolbar"><input type="search" data-search="demo-leads" placeholder="Buscar lead, giro o teléfono" /></div><div id="demoLeadsTable"></div></div></section>
-      <section class="reseller-view" id="viewFollowUp" hidden><div class="card" style="padding:16px"><div class="reseller-toolbar"><input type="search" data-search="follow-up" placeholder="Buscar contacto o nota" /><select id="stageFilter"><option value="active">Candidatos activos</option><option value="all">Todas las etapas</option><option value="new">Nuevo</option><option value="contacted">Contactado</option><option value="interested">Interesado</option><option value="potential">Potencial a compra</option><option value="follow_up">En seguimiento</option><option value="won">Cierre exitoso</option><option value="not_interested">No interesado</option><option value="lost">Cierre no exitoso</option></select></div><div id="followUpTable"></div></div></section>
+    <main class="main">
+      <header class="topbar">
+        <div>
+          <h1 id="viewTitle"><i class="ph-bold ph-buildings"></i> Prospectos</h1>
+          <p id="viewSubtitle" class="muted">Negocios registrados desde tu enlace comercial.</p>
+        </div>
+        <button class="btn btn-ghost" id="reload" type="button"><i class="ph-bold ph-arrows-clockwise"></i> Actualizar</button>
+      </header>
+
+      <!-- Tarjetas de Resumen Superior -->
+      <div class="reseller-hero-grid">
+        <div class="reseller-hero-card active-tab" data-nav-target="prospects">
+          <div class="reseller-hero-head">
+            <span>Prospectos</span>
+            <div class="reseller-hero-icon blue"><i class="ph-duotone ph-buildings"></i></div>
+          </div>
+          <div class="reseller-hero-value" id="countProspects">0</div>
+          <div class="reseller-hero-sub">Negocios registrados</div>
+        </div>
+
+        <div class="reseller-hero-card" data-nav-target="clients">
+          <div class="reseller-hero-head">
+            <span>Clientes</span>
+            <div class="reseller-hero-icon green"><i class="ph-duotone ph-handshake"></i></div>
+          </div>
+          <div class="reseller-hero-value" id="countClients">0</div>
+          <div class="reseller-hero-sub">Cuentas activadas</div>
+        </div>
+
+        <div class="reseller-hero-card" data-nav-target="demo-leads">
+          <div class="reseller-hero-head">
+            <span>Leads demo</span>
+            <div class="reseller-hero-icon purple"><i class="ph-duotone ph-rocket-launch"></i></div>
+          </div>
+          <div class="reseller-hero-value" id="countDemos">0</div>
+          <div class="reseller-hero-sub">Pruebas solicitadas</div>
+        </div>
+
+        <div class="reseller-hero-card" data-nav-target="follow-up">
+          <div class="reseller-hero-head">
+            <span>Seguimientos</span>
+            <div class="reseller-hero-icon amber"><i class="ph-duotone ph-calendar-check"></i></div>
+          </div>
+          <div class="reseller-hero-value" id="countFollowUp">0</div>
+          <div class="reseller-hero-sub">Acciones pendientes</div>
+        </div>
+      </div>
+
+      <!-- Enlace Comercial del Reseller -->
+      <div class="reseller-link-box">
+        <div class="reseller-link-info">
+          <div class="reseller-link-ic"><i class="ph-duotone ph-link"></i></div>
+          <div class="reseller-link-text">
+            <small>Tu enlace comercial personalizado</small>
+            <code id="referralUrl">—</code>
+          </div>
+        </div>
+        <div class="reseller-link-btns">
+          <button class="btn btn-reseller-white" id="copyLink" type="button"><i class="ph-bold ph-copy"></i> Copiar enlace</button>
+          <a class="btn btn-reseller-glass" id="openLink" href="#" target="_blank" rel="noopener noreferrer"><i class="ph-bold ph-arrow-square-out"></i> Abrir enlace</a>
+          <a class="btn btn-reseller-wa" id="shareWhatsApp" href="#" target="_blank" rel="noopener noreferrer"><i class="ph-bold ph-whatsapp-logo"></i> Compartir WhatsApp</a>
+        </div>
+      </div>
+
+      <!-- Vistas -->
+      <section class="reseller-view" id="viewProspects">
+        <div class="reseller-table-card">
+          <div class="reseller-toolbar-wrap">
+            <div class="reseller-search-box">
+              <i class="ph ph-magnifying-glass"></i>
+              <input type="search" data-search="prospects" placeholder="Buscar negocio, dueño o teléfono..." />
+            </div>
+            <select id="prospectStageFilter" class="sa-stage-filter"></select>
+          </div>
+          <div id="prospectsTable"></div>
+        </div>
+      </section>
+
+      <section class="reseller-view" id="viewClients" hidden>
+        <div class="reseller-table-card">
+          <div class="reseller-toolbar-wrap">
+            <div class="reseller-search-box">
+              <i class="ph ph-magnifying-glass"></i>
+              <input type="search" data-search="clients" placeholder="Buscar cliente, dueño o teléfono..." />
+            </div>
+          </div>
+          <div id="clientsTable"></div>
+        </div>
+      </section>
+
+      <section class="reseller-view" id="viewDemoLeads" hidden>
+        <div class="reseller-table-card">
+          <div class="reseller-toolbar-wrap">
+            <div class="reseller-search-box">
+              <i class="ph ph-magnifying-glass"></i>
+              <input type="search" data-search="demo-leads" placeholder="Buscar lead, giro o teléfono..." />
+            </div>
+            <select id="demoStageFilter" class="sa-stage-filter"></select>
+          </div>
+          <div id="demoLeadsTable"></div>
+        </div>
+      </section>
+
+      <section class="reseller-view" id="viewFollowUp" hidden>
+        <div class="reseller-table-card">
+          <!-- Filtro rápido de etapas -->
+          <div class="sa-followup-stage-grid" id="resellerFollowUpSummary"></div>
+          <div class="reseller-toolbar-wrap">
+            <div class="reseller-search-box">
+              <i class="ph ph-magnifying-glass"></i>
+              <input type="search" data-search="follow-up" placeholder="Buscar candidato, nota o teléfono..." />
+            </div>
+            <div style="display:flex;gap:8px;flex-wrap:wrap">
+              <select id="followUpTypeFilter" style="min-width:140px">
+                <option value="all">Todos los orígenes</option>
+                <option value="tenant">Solo prospectos</option>
+                <option value="demo_lead">Solo leads demo</option>
+              </select>
+              <select id="followUpStageFilter" class="sa-stage-filter"></select>
+            </div>
+          </div>
+          <div id="followUpTable"></div>
+        </div>
+      </section>
     </main>
   </div>
+
+  <!-- Toast -->
   <div id="toast"><i class="ph-bold ph-check-circle"></i><span id="toastMsg"></span></div>
-  <div class="modal-bg" id="followUpModal"><div class="modal" style="max-width:720px"><h3><i class="ph-bold ph-note-pencil"></i> Gestión comercial</h3><p class="hint" id="followUpSubject"></p><form id="followUpForm"><input type="hidden" id="followUpType" /><input type="hidden" id="followUpId" /><div class="row-2"><div class="field"><label>Etapa</label><select id="followUpStage" required><option value="new">Nuevo</option><option value="contacted">Contactado</option><option value="interested">Interesado</option><option value="potential">Potencial a compra</option><option value="follow_up">En seguimiento</option><option value="won">Cierre exitoso</option><option value="not_interested">No interesado</option><option value="lost">Cierre no exitoso</option></select></div><div class="field"><label>Tipo de gestión</label><select id="followUpActivity"><option value="contact">Contactación</option><option value="follow_up">Seguimiento</option><option value="note">Nota</option><option value="close_won">Cierre exitoso</option><option value="close_lost">Cierre no exitoso</option></select></div></div><div class="field"><label>Próximo seguimiento</label><input id="followUpDate" type="datetime-local" /></div><div class="field"><label>Nota</label><textarea id="followUpNote" rows="4" maxlength="4000" placeholder="Resultado del contacto y siguiente acción"></textarea></div><div class="modal-actions"><button type="button" class="btn btn-ghost" id="followUpCancel">Cancelar</button><button class="btn btn-primary" type="submit"><i class="ph-bold ph-floppy-disk"></i> Guardar</button></div></form><div id="followUpHistory"></div></div></div>
+
+  <!-- Modal de Gestión Comercial (Igual que SuperAdmin) -->
+  <div class="modal-bg" id="followUpModal">
+    <div class="modal" style="max-width:740px">
+      <h3><i class="ph-bold ph-note-pencil"></i> Gestión Comercial del Contacto</h3>
+      <div class="reseller-subject-card">
+        <div>
+          <b id="followUpSubjectTitle">—</b>
+          <span id="followUpSubjectSubtitle">—</span>
+        </div>
+        <div id="followUpSubjectBadge"></div>
+      </div>
+
+      <form id="followUpForm">
+        <input type="hidden" id="followUpType" />
+        <input type="hidden" id="followUpId" />
+        <div class="row-2">
+          <div class="field">
+            <label><i class="ph-bold ph-kanban"></i> Cambiar Etapa Comercial</label>
+            <select id="followUpStage" required></select>
+          </div>
+          <div class="field">
+            <label><i class="ph-bold ph-clipboard-text"></i> Tipo de Acción</label>
+            <select id="followUpActivity">
+              <option value="contact">Contactación</option>
+              <option value="follow_up">Seguimiento</option>
+              <option value="note">Nota interna</option>
+              <option value="close_won">Cierre exitoso (Ganado)</option>
+              <option value="close_lost">Cierre no exitoso (Perdido)</option>
+            </select>
+          </div>
+        </div>
+        <div class="field">
+          <label><i class="ph-bold ph-calendar-plus"></i> Programar Próximo Seguimiento (Opcional)</label>
+          <input id="followUpDate" type="datetime-local" />
+        </div>
+        <div class="field">
+          <label><i class="ph-bold ph-chat-text"></i> Detalle / Nota de la gestión</label>
+          <textarea id="followUpNote" rows="3" maxlength="4000" placeholder="Escribe el resultado de la llamada, acuerdo o siguiente paso..."></textarea>
+        </div>
+        <div class="modal-actions">
+          <button type="button" class="btn btn-ghost" id="followUpCancel">Cancelar</button>
+          <button class="btn btn-primary" type="submit"><i class="ph-bold ph-floppy-disk"></i> Guardar Gestión</button>
+        </div>
+      </form>
+
+      <!-- Historial de actividades -->
+      <div id="saFollowUpHistoryWrap">
+        <h3><i class="ph-bold ph-clock-counter-clockwise"></i> Historial de Gestiones Anteriores</h3>
+        <div id="followUpHistory"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal de Módulos Explorados (Demo Leads) -->
+  <div class="modal-bg" id="resellerModuleModal">
+    <div class="modal" style="max-width:580px">
+      <h3><i class="ph-bold ph-browsers"></i> Módulos Explorados en la Demo</h3>
+      <p class="hint" id="resellerModuleSubject">Actividad de exploración del visitante en el panel.</p>
+      <div id="resellerModuleContent"></div>
+      <div class="modal-actions">
+        <button type="button" class="btn btn-ghost" id="resellerModuleClose">Cerrar</button>
+      </div>
+    </div>
+  </div>
+
   <script src="/static/js/reseller.js"></script>
 </body>
 </html>
+

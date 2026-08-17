@@ -95,6 +95,12 @@ module.exports = {
   DATA_DIR,
   TENANTS_DIR,
   UPLOADS_DIR,
+  // SMTP — notificaciones de leads y registros nuevos
+  SMTP_HOST: (process.env.SMTP_HOST || 'smtp.gmail.com').trim(),
+  SMTP_PORT: Number(process.env.SMTP_PORT) || 587,
+  SMTP_USER: (process.env.SMTP_USER || '').trim(),
+  SMTP_PASS: (process.env.SMTP_PASS || '').trim(),
+  NOTIFICATION_EMAIL: (process.env.NOTIFICATION_EMAIL || '').trim(),
   // Leídos después de ensureVapidKeys() — ya están garantizados
   get VAPID_PUBLIC_KEY()  { return (process.env.VAPID_PUBLIC_KEY  || '').trim(); },
   get VAPID_PRIVATE_KEY() { return (process.env.VAPID_PRIVATE_KEY || '').trim(); },

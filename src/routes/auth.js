@@ -8,6 +8,7 @@ const { signToken, setAuthCookie, clearAuthCookie, requireAuth, requireOwner } =
 const { createRateLimiter } = require('../middleware/security');
 const { normalizeInternationalPhone, phoneCountries } = require('../utils/phone');
 const { regionalDefaults, isSupportedTimeZone } = require('../utils/regional');
+const { sendLeadNotification, sendRegistrationNotification } = require('../utils/mailer');
 
 const router = express.Router();
 
@@ -246,6 +247,18 @@ router.post('/register', authAttemptLimiter, async (req, res, next) => {
     // Crea el SCHEMA AISLADO del tenant en Neon con valores por defecto
     await initTenantDefaults(cleanSlug, cleanBusinessName, regional);
 
+    // Notificación por email del nuevo registro
+    sendRegistrationNotification({
+      ownerName: cleanOwnerName,
+      phone: normalizedPhone.e164,
+      phoneCountry: normalizedPhone.country,
+      callingCode: normalizedPhone.callingCode,
+      businessName: cleanBusinessName,
+      slug: cleanSlug,
+      username: cleanUser,
+      timezone: regional.timezone,
+    }).catch(err => console.error('[mailer] fire-and-forget register error:', err.message));
+
     setAuthCookie(res, signToken(owner, tenant), 'owner');
     res.json({ ok: true, slug: cleanSlug });
   } catch (e) {
@@ -324,6 +337,19 @@ router.post('/demo-login', authAttemptLimiter, async (req, res, next) => {
         return res.status(400).json({ error: e.message });
       }
       throw e;
+    }
+
+    // Notificación por email solo para leads NUEVOS (primera vez)
+    if (demoLead && demoLead.demo_count === 1) {
+      const normalized = normalizeInternationalPhone(phone, phoneCountry);
+      sendLeadNotification({
+        contactName: normalizeLeadText(contactName, 120),
+        phone: normalized.e164,
+        phoneCountry: normalized.country,
+        callingCode: normalized.callingCode,
+        businessGiro: normalizeLeadText(businessGiro, 120),
+        sourcePage: sourcePage || 'landing',
+      }).catch(err => console.error('[mailer] fire-and-forget lead error:', err.message));
     }
 
     const { username: demoUsername, password: demoPassword, tenantSlug: demoTenantSlug } = getDemoCredentials();

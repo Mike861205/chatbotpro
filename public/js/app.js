@@ -4412,7 +4412,7 @@ function renderPosActions() {
       <i class="ph-bold ph-receipt"></i> Historial de ventas
     </button>
     <button type="button" class="pos-action-btn" id="posOpenMovement" ${hasSession ? '' : 'disabled'}>
-      <i class="ph-bold ph-arrows-left-right"></i> Movimientos
+      <i class="ph-bold ph-arrows-left-right"></i> Operaciones de caja
     </button>
     <button type="button" class="pos-action-btn" id="posOpenClose" ${hasSession ? '' : 'disabled'}>
       <i class="ph-bold ph-lock"></i> Cierre de caja
@@ -5225,7 +5225,7 @@ function updatePosCloseDifference() {
 
 function openPosMovementModal() {
   const session = POS_OVERVIEW?.activeSession;
-  if (!session) return toast('Abre una caja para registrar movimientos', true);
+  if (!session) return toast('Abre una caja para registrar operaciones', true);
   const rows = POS_OVERVIEW?.recentMovements || [];
   const incomes = rows.filter((row) => row.kind === 'income');
   const outflows = rows.filter((row) => row.kind === 'withdrawal' || row.kind === 'expense');
@@ -5233,8 +5233,28 @@ function openPosMovementModal() {
   const outflowTotal = outflows.reduce((sum, row) => sum + Number(row.amount || 0), 0);
   const renderGroupTable = (groupRows) =>
     groupRows.length
-      ? `<table><thead><tr><th>Tipo</th><th>Monto</th><th>Nota</th><th>Hora</th></tr></thead><tbody>${groupRows.map((row) => `<tr><td>${esc(posMovementLabel(row.kind))}</td><td><b>${fmtMoney(row.amount)}</b></td><td>${esc(row.note || '—')}</td><td>${esc(row.created_at || '')}</td></tr>`).join('')}</tbody></table>`
-      : '<div class="hint" style="margin:0">Sin movimientos registrados en este grupo.</div>';
+      ? `<div class="pos-movement-table-container">
+          <table class="pos-movement-table">
+            <thead>
+              <tr>
+                <th>Tipo</th>
+                <th>Monto</th>
+                <th>Nota</th>
+                <th>Hora</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${groupRows.map((row) => `
+                <tr>
+                  <td><span class="pos-mov-badge ${esc(row.kind)}">${esc(posMovementLabel(row.kind))}</span></td>
+                  <td><b class="pos-mov-amount">${fmtMoney(row.amount)}</b></td>
+                  <td class="pos-mov-note" title="${esc(row.note || '')}">${esc(row.note || '—')}</td>
+                  <td class="pos-mov-time">${esc(row.created_at || '')}</td>
+                </tr>`).join('')}
+            </tbody>
+          </table>
+        </div>`
+      : '<div class="pos-movement-empty"><i class="ph-duotone ph-receipt"></i><span>Sin operaciones registradas en este grupo</span></div>';
 
   $('#posMovementHistory').innerHTML = rows.length
     ? `
@@ -5242,19 +5262,19 @@ function openPosMovementModal() {
         <div class="pos-movement-group income">
           <div class="pos-movement-group-head">
             <div><i class="ph-bold ph-trend-up"></i> Ingresos</div>
-            <b>${fmtMoney(incomeTotal)}</b>
+            <span class="pos-mov-total-pill tone-green">${fmtMoney(incomeTotal)}</span>
           </div>
           ${renderGroupTable(incomes)}
         </div>
         <div class="pos-movement-group outflow">
           <div class="pos-movement-group-head">
             <div><i class="ph-bold ph-arrow-bend-up-left"></i> Gastos y retiros</div>
-            <b>${fmtMoney(outflowTotal)}</b>
+            <span class="pos-mov-total-pill tone-red">${fmtMoney(outflowTotal)}</span>
           </div>
           ${renderGroupTable(outflows)}
         </div>
       </div>`
-    : emptyHTML('ph-receipt', 'Sin movimientos', 'Todavía no registras ingresos, retiros ni gastos en esta caja.');
+    : emptyHTML('ph-receipt', 'Sin operaciones', 'Todavía no registras ingresos, retiros ni gastos en esta caja.');
   $('#posMovementAmountModal').value = '';
   $('#posMovementNoteModal').value = '';
   $('#posMovementKindModal').value = 'income';

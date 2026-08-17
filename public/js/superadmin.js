@@ -383,14 +383,14 @@ function renderTenantTable() {
       <td>${esc(t.plan_name || 'starter')}<div class="meta">Hasta ${Number(t.branch_limit || 2)} sucursales activas</div></td>
       <td>${moduleUsageButton(t, 'tenant')}</td>
       <td>
-        <div style="display:flex;gap:6px;flex-wrap:wrap">
+        <div class="sa-actions-grid">
           <button type="button" class="btn btn-ghost" data-sa-access="${t.id}"><i class="ph-bold ph-sign-in"></i> Entrar</button>
-          <button type="button" class="btn btn-ghost" data-sa-password="${t.id}"><i class="ph-bold ph-key"></i> Password</button>
+          <button type="button" class="btn btn-sa-manage" data-sa-manage="tenant:${t.id}"><i class="ph-bold ph-note-pencil"></i> Gestionar</button>
+          ${waUrl ? `<a class="btn btn-ghost" href="${waUrl}" target="_blank" rel="noopener noreferrer"><i class="ph-bold ph-whatsapp-logo" style="color:#22c55e"></i> WhatsApp</a>` : '<button type="button" class="btn btn-ghost" disabled style="opacity:.3"><i class="ph-bold ph-whatsapp-logo"></i> WhatsApp</button>'}
+          <button type="button" class="btn btn-ghost" data-sa-password="${t.id}"><i class="ph-bold ph-key"></i> Clave</button>
           <button type="button" class="btn btn-ghost" data-sa-payment="${t.id}"><i class="ph-bold ph-currency-circle-dollar"></i> Pago</button>
+          ${t.phone_valid && t.phone_e164 ? `<button type="button" class="btn btn-ghost" data-sa-copy-phone="${esc(t.phone_e164)}"><i class="ph-bold ph-copy"></i> Copiar</button>` : '<button type="button" class="btn btn-ghost" disabled style="opacity:.3"><i class="ph-bold ph-copy"></i> Copiar</button>'}
           <button type="button" class="btn btn-ghost" data-sa-branches="${t.id}"><i class="ph-bold ph-storefront"></i> Sucursales</button>
-          ${waUrl ? `<a class="btn btn-ghost" href="${waUrl}" target="_blank" rel="noopener noreferrer"><i class="ph-bold ph-whatsapp-logo"></i> WhatsApp</a>` : ''}
-          ${t.phone_valid && t.phone_e164 ? `<button type="button" class="btn btn-ghost" data-sa-copy-phone="${esc(t.phone_e164)}"><i class="ph-bold ph-copy"></i> Copiar</button>` : ''}
-          <button type="button" class="btn btn-ghost" data-sa-manage="tenant:${t.id}"><i class="ph-bold ph-note-pencil"></i> Gestionar</button>
           <button type="button" class="btn ${(t.account_status === 'active' && t.billing_status !== 'suspended') ? 'btn-danger' : 'btn-primary'}" data-sa-suspend="${t.id}">
             <i class="ph-bold ${(t.account_status === 'active' && t.billing_status !== 'suspended') ? 'ph-pause-circle' : 'ph-play-circle'}"></i>
             ${(t.account_status === 'active' && t.billing_status !== 'suspended') ? 'Suspender' : 'Activar'}
@@ -401,7 +401,6 @@ function renderTenantTable() {
     </tr>`;
     })
     .join('')}</tbody></table></div>`;
-
   document.querySelectorAll('[data-sa-access]').forEach((btn) => {
     btn.addEventListener('click', () => accessTenant(Number(btn.dataset.saAccess)).catch((err) => toast(err.message, true)));
   });
@@ -489,10 +488,10 @@ function renderDemoLeadsTable() {
         <td>${fmtDate(lead.last_seen_at)}</td>
         <td>${moduleUsageButton(lead, 'lead')}</td>
         <td>
-          <div style="display:flex;gap:6px;flex-wrap:wrap">
-            ${waUrl ? `<a class="btn btn-ghost" href="${waUrl}" target="_blank" rel="noopener noreferrer"><i class="ph-bold ph-whatsapp-logo"></i> WhatsApp</a>` : ''}
-            ${lead.phone_valid && lead.phone_e164 ? `<button type="button" class="btn btn-ghost" data-sa-copy-phone="${esc(lead.phone_e164)}"><i class="ph-bold ph-copy"></i> Copiar</button>` : ''}
-            <button type="button" class="btn btn-ghost" data-sa-manage="demo_lead:${lead.id}"><i class="ph-bold ph-note-pencil"></i> Gestionar</button>
+          <div class="sa-actions-grid-2">
+            ${waUrl ? `<a class="btn btn-ghost" href="${waUrl}" target="_blank" rel="noopener noreferrer"><i class="ph-bold ph-whatsapp-logo"></i> WhatsApp</a>` : '<button type="button" class="btn btn-ghost" disabled style="opacity:.3"><i class="ph-bold ph-whatsapp-logo"></i> WhatsApp</button>'}
+            ${lead.phone_valid && lead.phone_e164 ? `<button type="button" class="btn btn-ghost" data-sa-copy-phone="${esc(lead.phone_e164)}"><i class="ph-bold ph-copy"></i> Copiar</button>` : '<button type="button" class="btn btn-ghost" disabled style="opacity:.3"><i class="ph-bold ph-copy"></i> Copiar</button>'}
+            <button type="button" class="btn btn-sa-manage" data-sa-manage="demo_lead:${lead.id}"><i class="ph-bold ph-note-pencil"></i> Gestionar</button>
             <button type="button" class="btn btn-danger" data-sa-delete-lead="${lead.id}"><i class="ph-bold ph-trash"></i> Eliminar</button>
           </div>
         </td>
@@ -848,16 +847,18 @@ function renderClientsTable() {
       <td>${fmtMoney(client.last_payment_amount)}<div class="meta">${fmtDate(client.last_payment_at)} · ${esc(client.last_payment_method || '—')}</div></td>
       <td>${fmtDate(client.billing_due_date)}</td>
       <td><b>${fmtMoney(client.total_paid)}</b><div class="meta">${Number(client.payment_count || 0)} pago${Number(client.payment_count || 0) === 1 ? '' : 's'}</div></td>
-      <td><div style="display:flex;gap:6px;flex-wrap:wrap">
+      <td><div class="sa-actions-grid">
         <button type="button" class="btn btn-ghost" data-sa-access="${client.id}"><i class="ph-bold ph-sign-in"></i> Entrar</button>
-        <button type="button" class="btn btn-ghost" data-sa-password="${client.id}"><i class="ph-bold ph-key"></i> Password</button>
+        <button type="button" class="btn btn-ghost" data-sa-password="${client.id}"><i class="ph-bold ph-key"></i> Clave</button>
         <button type="button" class="btn btn-ghost" data-sa-payment="${client.id}"><i class="ph-bold ph-currency-circle-dollar"></i> Pago</button>
         <button type="button" class="btn btn-ghost" data-sa-payments="${client.id}"><i class="ph-bold ph-receipt"></i> Historial</button>
         <button type="button" class="btn btn-ghost" data-sa-licenses="${client.id}"><i class="ph-bold ph-key"></i> Licencias</button>
         <button type="button" class="btn btn-ghost" data-sa-branches="${client.id}"><i class="ph-bold ph-storefront"></i> Sucursales</button>
-        ${moduleUsageButton(client, 'tenant')}
-        ${waUrl ? `<a class="btn btn-ghost" href="${waUrl}" target="_blank" rel="noopener noreferrer"><i class="ph-bold ph-whatsapp-logo"></i> WhatsApp</a>` : ''}
-        <button type="button" class="btn ${(client.account_status === 'active' && client.billing_status !== 'suspended') ? 'btn-danger' : 'btn-primary'}" data-sa-suspend="${client.id}">${(client.account_status === 'active' && client.billing_status !== 'suspended') ? 'Suspender' : 'Activar'}</button>
+        ${waUrl ? `<a class="btn btn-ghost" href="${waUrl}" target="_blank" rel="noopener noreferrer"><i class="ph-bold ph-whatsapp-logo" style="color:#22c55e"></i> WhatsApp</a>` : '<button type="button" class="btn btn-ghost" disabled style="opacity:.3"><i class="ph-bold ph-whatsapp-logo"></i> WhatsApp</button>'}
+        <button type="button" class="btn ${(client.account_status === 'active' && client.billing_status !== 'suspended') ? 'btn-danger' : 'btn-primary'}" data-sa-suspend="${client.id}">
+          <i class="ph-bold ${(client.account_status === 'active' && client.billing_status !== 'suspended') ? 'ph-pause-circle' : 'ph-play-circle'}"></i>
+          ${(client.account_status === 'active' && client.billing_status !== 'suspended') ? 'Suspender' : 'Activar'}
+        </button>
         <button type="button" class="btn btn-danger" data-sa-delete-tenant="${client.id}"><i class="ph-bold ph-trash"></i> Eliminar</button>
       </div></td>
     </tr>`;
