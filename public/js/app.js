@@ -7772,6 +7772,8 @@ async function fillBotForm() {
   $('#botPickup').checked = SETTINGS.pickup_enabled === '1';
   $('#botDineIn').checked = SETTINGS.dine_in_enabled !== '0';
   $('#botLocation').checked = SETTINGS.location_enabled !== '0';
+  $('#botPosGlobalOrders').checked = (SETTINGS.chatbot_pos_global_orders_enabled || '0') === '1';
+  syncGlobalChatbotOrdersHint();
   fillChatbotInfoOptionsFromSettings();
   fillReceivingModesFromSettings();
   DELIVERY_ZONES = parseDeliveryZones(SETTINGS.delivery_zones_geojson || '[]');
@@ -7799,6 +7801,37 @@ async function fillBotForm() {
   }
   await loadBranches();
 }
+
+function syncGlobalChatbotOrdersHint() {
+  const enabled = Boolean($('#botPosGlobalOrders')?.checked);
+  const hint = $('#botPosGlobalOrdersHint');
+  if (hint) {
+    hint.textContent = enabled
+      ? 'Modo global: el primer punto de venta que tome el pedido lo asignará a su caja y sucursal.'
+      : 'Modo por sucursal: los pedidos se distribuyen según las zonas de entrega.';
+  }
+}
+
+$('#botPosGlobalOrders')?.addEventListener('change', async (event) => {
+  const checkbox = event.currentTarget;
+  const previousValue = SETTINGS?.chatbot_pos_global_orders_enabled || '0';
+  syncGlobalChatbotOrdersHint();
+  checkbox.disabled = true;
+  try {
+    const value = checkbox.checked ? '1' : '0';
+    const fd = new FormData();
+    fd.append('chatbot_pos_global_orders_enabled', value);
+    await api('/api/settings', { method: 'PUT', body: fd });
+    SETTINGS.chatbot_pos_global_orders_enabled = value;
+    toast(checkbox.checked ? 'Pedidos globales activados' : 'Pedidos por sucursal activados');
+  } catch (error) {
+    checkbox.checked = previousValue === '1';
+    syncGlobalChatbotOrdersHint();
+    toast(error.message, true);
+  } finally {
+    checkbox.disabled = false;
+  }
+});
 let AI_PROMO_IDEAS = [];
 
 function openAiPromoModal() {

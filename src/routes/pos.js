@@ -308,6 +308,11 @@ async function isChatbotPosIntegrationEnabled(t) {
   return String(value || '0') === '1';
 }
 
+async function areGlobalChatbotPosOrdersEnabled(t) {
+  const value = await getSetting(t, 'chatbot_pos_global_orders_enabled', '0');
+  return String(value || '0') === '1';
+}
+
 async function getProductExtrasMaps(t, productIds = []) {
   const ids = [...new Set((productIds || []).map((id) => Number(id)).filter((id) => Number.isInteger(id) && id > 0))];
   const variantsMap = new Map();
@@ -371,7 +376,7 @@ function paymentBreakdownForMethod(method, total) {
 async function loadChatbotOrderForImport(t, orderId) {
   return t.get(
     `SELECT o.id, o.customer_id, o.items, o.subtotal::float AS subtotal, o.total::float AS total, o.status, o.channel, o.delivery, o.notes, o.order_notes,
-            o.payment_method, o.pickup_branch_name, o.customer_location_text, o.customer_location_resolved,
+            o.payment_method, o.pickup_branch_id, o.pickup_branch_name, o.customer_location_text, o.customer_location_resolved,
             o.receiving_mode_label, o.receiving_mode_behavior, o.delivery_address, o.delivery_neighborhood, o.delivery_reference,
             o.delivery_fee::float AS delivery_fee, o.delivery_zone_name, o.service_branch_id, o.service_branch_name,o.branch_stock_applied,
             to_char(o.created_at AT TIME ZONE '${tenantTimeZone(t)}', 'DD Mon YYYY, HH24:MI') AS created_at,
@@ -1146,14 +1151,16 @@ router.get('/chatbot-orders', async (req, res, next) => {
     const enabled = await isChatbotPosIntegrationEnabled(req.tdb);
     if (!enabled) return res.status(403).json({ error: 'Activa la integración de pedidos chatbot en Mi negocio para usar esta función' });
     const session = await getOpenSession(req.tdb, userSessionContext(req.user, req));
+    const globalOrdersEnabled = await areGlobalChatbotPosOrdersEnabled(req.tdb);
+    const restrictToSessionBranch = !globalOrdersEnabled && Boolean(session?.branch_id);
 
     const pageSize = 10;
     const safePage = Math.max(1, Number(req.query.page || 1) || 1);
     const countParams = [Array.from(CHATBOT_IMPORTABLE_STATUSES)];
-    const branchFilter = session?.branch_id
+    const branchFilter = restrictToSessionBranch
       ? ` AND COALESCE(o.service_branch_id, o.pickup_branch_id) = $2`
       : '';
-    if (session?.branch_id) countParams.push(Number(session.branch_id));
+    if (restrictToSessionBranch) countParams.push(Number(session.branch_id));
 
     const totalRow = await req.tdb.get(
       `SELECT COUNT(*)::int AS c
@@ -1172,7 +1179,7 @@ router.get('/chatbot-orders', async (req, res, next) => {
     const rowParams = [Array.from(CHATBOT_IMPORTABLE_STATUSES)];
     let limitIndex = 2;
     let offsetIndex = 3;
-    if (session?.branch_id) {
+    if (restrictToSessionBranch) {
       rowParams.push(Number(session.branch_id));
       limitIndex = 3;
       offsetIndex = 4;
@@ -1240,7 +1247,9 @@ router.post('/chatbot-orders/:id/import', async (req, res, next) => {
     const sourceOrder = await loadChatbotOrderForImport(req.tdb, id);
     if (!sourceOrder) return res.status(404).json({ error: 'No se encontró el pedido de chatbot' });
     if (sourceOrder.channel !== 'chatbot') return res.status(409).json({ error: 'Este pedido ya fue integrado al POS' });
-    if (session.branch_id && Number(sourceOrder.service_branch_id || 0) > 0 && Number(sourceOrder.service_branch_id) !== Number(session.branch_id)) {
+    const globalOrdersEnabled = await areGlobalChatbotPosOrdersEnabled(req.tdb);
+    const assignedBranchId = Number(sourceOrder.service_branch_id || sourceOrder.pickup_branch_id || 0);
+    if (!globalOrdersEnabled && session.branch_id && assignedBranchId > 0 && assignedBranchId !== Number(session.branch_id)) {
       return res.status(409).json({ error: `Este pedido corresponde a la sucursal ${sourceOrder.service_branch_name || 'asignada'} y no a la caja abierta.` });
     }
     if (!CHATBOT_IMPORTABLE_STATUSES.has(sourceOrder.status)) {
@@ -1346,42 +1355,44 @@ router.post('/chatbot-orders/:id/import', async (req, res, next) => {
     const deliveryNeighborhood = String(sourceOrder.delivery_neighborhood || '').trim().slice(0, 160);
     const deliveryReference = String(sourceOrder.delivery_reference || ((sourceOrder.receiving_mode_behavior === 'delivery' || sourceOrder.delivery === 'domicilio') ? sourceOrder.notes : '') || '').trim().slice(0, 240);
 
-    const update = await req.tdb.run(
-      `UPDATE {s}.orders
-       SET channel = 'pos',
-           status = 'entregado',
-           pos_session_id = $1,
-           payment_method = $2,
-           payment_breakdown = $3,
-           service_branch_id = $7,
-           service_branch_name = $8,
-           items = $9,
-           cogs_total = $10,
-           delivery_address = $11,
-           delivery_neighborhood = $12,
-           delivery_reference = $13,
-           cash_received = CASE WHEN $2 = 'cash' THEN total ELSE NULL END,
-           cash_change = 0,
-           notes = CASE
-             WHEN COALESCE(notes, '') = '' THEN $4
-             ELSE notes || E'\n\n' || $4
-           END
-       WHERE id = $5
-         AND channel = 'chatbot'
-         AND status = ANY($6::text[])
-         AND (created_at AT TIME ZONE '${req.timezone}')::date = (now() AT TIME ZONE '${req.timezone}')::date
-       RETURNING id, total::float AS total, payment_method, payment_breakdown, cash_received::float AS cash_received,
-                 cash_change::float AS cash_change, notes, order_notes, items,
-                 to_char(created_at AT TIME ZONE '${req.timezone}', 'DD Mon YYYY, HH24:MI') AS created_at`,
-      [session.id, paymentMethod, JSON.stringify(paymentBreakdown), mergedNote, id, Array.from(CHATBOT_IMPORTABLE_STATUSES), session.branch_id || null, session.branch_name || null, JSON.stringify(costedSourceItems), cogsTotal, deliveryAddress, deliveryNeighborhood, deliveryReference]
-    );
-
-    if (!update.rowCount) {
-      return res.status(409).json({ error: 'El pedido ya no está disponible para integrarse al POS' });
-    }
-    if (!Number(sourceOrder.branch_stock_applied) && await decrementBranchStockForSale(req.tdb, session.branch_id, costedSourceItems)) {
-      await req.tdb.run('UPDATE {s}.orders SET branch_stock_applied=1 WHERE id=$1', [id]);
-    }
+    const update = await req.tdb.tx(async (tx) => {
+      const claimed = await tx.run(
+        `UPDATE {s}.orders
+         SET channel = 'pos',
+             status = 'entregado',
+             pos_session_id = $1,
+             payment_method = $2,
+             payment_breakdown = $3,
+             service_branch_id = $7,
+             service_branch_name = $8,
+             items = $9,
+             cogs_total = $10,
+             delivery_address = $11,
+             delivery_neighborhood = $12,
+             delivery_reference = $13,
+             cash_received = CASE WHEN $2 = 'cash' THEN total ELSE NULL END,
+             cash_change = 0,
+             notes = CASE
+               WHEN COALESCE(notes, '') = '' THEN $4
+               ELSE notes || E'\n\n' || $4
+             END
+         WHERE id = $5
+           AND channel = 'chatbot'
+           AND status = ANY($6::text[])
+           AND (created_at AT TIME ZONE '${req.timezone}')::date = (now() AT TIME ZONE '${req.timezone}')::date
+         RETURNING id, total::float AS total, payment_method, payment_breakdown, cash_received::float AS cash_received,
+                   cash_change::float AS cash_change, notes, order_notes, items,
+                   to_char(created_at AT TIME ZONE '${req.timezone}', 'DD Mon YYYY, HH24:MI') AS created_at`,
+        [session.id, paymentMethod, JSON.stringify(paymentBreakdown), mergedNote, id, Array.from(CHATBOT_IMPORTABLE_STATUSES), session.branch_id || null, session.branch_name || null, JSON.stringify(costedSourceItems), cogsTotal, deliveryAddress, deliveryNeighborhood, deliveryReference]
+      );
+      if (!claimed.rowCount) {
+        throw Object.assign(new Error('El pedido ya no está disponible para integrarse al POS'), { statusCode: 409 });
+      }
+      if (!Number(sourceOrder.branch_stock_applied) && await decrementBranchStockForSale(tx, session.branch_id, costedSourceItems)) {
+        await tx.run('UPDATE {s}.orders SET branch_stock_applied=1 WHERE id=$1', [id]);
+      }
+      return claimed;
+    });
 
     const saleRow = await req.tdb.get(
       `SELECT id, subtotal::float AS subtotal, total::float AS total, delivery_fee::float AS delivery_fee,

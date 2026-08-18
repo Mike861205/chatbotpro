@@ -43,6 +43,7 @@ const SETTING_KEYS = [
   'chatbot_upsell_offers_json',
   'chatbot_extra_options_json',
   'chatbot_pos_integration_enabled',
+  'chatbot_pos_global_orders_enabled',
   'business_type',
   'delivery_zones_geojson',
   'delivery_fee_rules',
