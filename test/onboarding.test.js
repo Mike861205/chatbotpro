@@ -38,3 +38,8 @@ test('el panel incluye el módulo permanente debajo de Pedidos en vivo y los sei
     assert.match(script, new RegExp(`action: '${destination}'`));
   }
 });
+
+test('ver mi chatbot registra el uso para leads demo y prospectos', () => {
+  assert.match(script, /if \(action === 'chatbot-preview'\) \{\s*trackModuleUsage\('chatbot'\);[\s\S]+window\.open\(url, '_blank', 'noopener'\)/);
+  assert.match(script, /\$\('#openChatLink'\)\?\.addEventListener\('click', \(\) => trackModuleUsage\('chatbot'\)\)/);
+});

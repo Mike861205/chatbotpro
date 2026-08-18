@@ -8,7 +8,7 @@ let _transporter = null;
 function getTransporter() {
   if (_transporter) return _transporter;
   if (!config.SMTP_USER || !config.SMTP_PASS) {
-    console.warn('[mailer] SMTP_USER o SMTP_PASS no configurados — emails desactivados');
+    console.error('[mailer] SMTP desactivado: configura SMTP_USER y SMTP_PASS');
     return null;
   }
   _transporter = nodemailer.createTransport({
@@ -18,6 +18,30 @@ function getTransporter() {
     auth: { user: config.SMTP_USER, pass: config.SMTP_PASS },
   });
   return _transporter;
+}
+
+async function verifyNotificationMailer() {
+  const transport = getTransporter();
+  if (!transport) return false;
+  if (!config.NOTIFICATION_EMAIL) {
+    console.error('[mailer] Notificaciones desactivadas: configura NOTIFICATION_EMAIL');
+    return false;
+  }
+  try {
+    await transport.verify();
+    console.log(`[mailer] SMTP listo; notificaciones dirigidas a ${config.NOTIFICATION_EMAIL}`);
+    return true;
+  } catch (error) {
+    console.error(`[mailer] SMTP no disponible: ${error.message}`);
+    return false;
+  }
+}
+
+function requireNotificationTransport() {
+  const transport = getTransporter();
+  if (!transport) throw new Error('SMTP_USER o SMTP_PASS no configurados');
+  if (!config.NOTIFICATION_EMAIL) throw new Error('NOTIFICATION_EMAIL no configurado');
+  return transport;
 }
 
 /* ───────────────────── helpers de formato ───────────────────── */
@@ -61,8 +85,7 @@ function emailWrapper(accentColor, title, tableRows) {
 /* ───────────────────── notificación: nuevo lead demo ───────────────────── */
 
 async function sendLeadNotification({ contactName, phone, phoneCountry, callingCode, businessGiro, sourcePage }) {
-  const transport = getTransporter();
-  if (!transport || !config.NOTIFICATION_EMAIL) return;
+  const transport = requireNotificationTransport();
 
   const sourceLabel = sourcePage === 'login' ? 'Pantalla de Login' : 'Landing Page';
   const tableRows = [
@@ -76,24 +99,20 @@ async function sendLeadNotification({ contactName, phone, phoneCountry, callingC
 
   const html = emailWrapper('#0ea5e9', '🆕 Nuevo Lead Demo', tableRows);
 
-  try {
-    await transport.sendMail({
-      from: `"ChatBotPro" <${config.SMTP_USER}>`,
-      to: config.NOTIFICATION_EMAIL,
-      subject: `🆕 Nuevo Lead Demo — ${contactName}`,
-      html,
-    });
-    console.log(`[mailer] Lead demo notificado: ${contactName}`);
-  } catch (err) {
-    console.error('[mailer] Error enviando notificación de lead demo:', err.message);
-  }
+  await transport.sendMail({
+    from: `"ChatBotPro" <${config.SMTP_USER}>`,
+    to: config.NOTIFICATION_EMAIL,
+    subject: `🆕 Nuevo Lead Demo — ${contactName}`,
+    html,
+  });
+  console.log(`[mailer] Lead demo notificado: ${contactName}`);
+  return true;
 }
 
 /* ───────────────────── notificación: nuevo registro ───────────────────── */
 
 async function sendRegistrationNotification({ ownerName, phone, phoneCountry, callingCode, businessName, slug, username, timezone }) {
-  const transport = getTransporter();
-  if (!transport || !config.NOTIFICATION_EMAIL) return;
+  const transport = requireNotificationTransport();
 
   const tableRows = [
     row('Dueño', ownerName),
@@ -108,17 +127,14 @@ async function sendRegistrationNotification({ ownerName, phone, phoneCountry, ca
 
   const html = emailWrapper('#16a34a', '🎉 Nuevo Registro de Prospecto', tableRows);
 
-  try {
-    await transport.sendMail({
-      from: `"ChatBotPro" <${config.SMTP_USER}>`,
-      to: config.NOTIFICATION_EMAIL,
-      subject: `🎉 Nuevo Registro — ${businessName} (${ownerName})`,
-      html,
-    });
-    console.log(`[mailer] Registro notificado: ${businessName} (${ownerName})`);
-  } catch (err) {
-    console.error('[mailer] Error enviando notificación de registro:', err.message);
-  }
+  await transport.sendMail({
+    from: `"ChatBotPro" <${config.SMTP_USER}>`,
+    to: config.NOTIFICATION_EMAIL,
+    subject: `🎉 Nuevo Registro — ${businessName} (${ownerName})`,
+    html,
+  });
+  console.log(`[mailer] Registro notificado: ${businessName} (${ownerName})`);
+  return true;
 }
 
-module.exports = { sendLeadNotification, sendRegistrationNotification };
+module.exports = { verifyNotificationMailer, sendLeadNotification, sendRegistrationNotification };

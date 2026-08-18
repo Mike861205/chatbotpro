@@ -7,6 +7,7 @@ const multer = require('multer');
 const config = require('./src/config');
 const { initMaster, refreshTenantBillingStatuses, q } = require('./src/db');
 const { setIo } = require('./src/notifications');
+const { verifyNotificationMailer } = require('./src/utils/mailer');
 const jwt = require('jsonwebtoken');
 const {
   apiNoStore,
@@ -196,6 +197,9 @@ initMaster()
       console.log(`   Panel:    http://localhost:${config.PORT}/login`);
       console.log(`   Registro: http://localhost:${config.PORT}/register`);
       console.log(`   Notifs:   http://localhost:${config.PORT}/notificaciones\n`);
+      verifyNotificationMailer().catch((error) => {
+        console.error('[mailer] No se pudo verificar SMTP al iniciar:', error.message);
+      });
     });
   })
   .catch((e) => {

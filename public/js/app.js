@@ -687,6 +687,7 @@ async function closeOnboardingIntro() {
 async function runOnboardingAction(action, fromIntro = false) {
   if (fromIntro) await closeOnboardingIntro();
   if (action === 'chatbot-preview') {
+    trackModuleUsage('chatbot');
     const url = $('#openChatLink')?.href || `/${ME?.tenant?.slug || ''}`;
     window.open(url, '_blank', 'noopener');
     return;
@@ -838,6 +839,8 @@ async function navigate(view) {
   }
 }
 globalThis.navigate = navigate;
+
+$('#openChatLink')?.addEventListener('click', () => trackModuleUsage('chatbot'));
 
 $('#configureTimezoneBtn')?.addEventListener('click', async () => {
   if (isCashierUser()) return;
