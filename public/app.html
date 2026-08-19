@@ -840,14 +840,6 @@
               <div class="hint" style="margin-top:6px"><i class="ph ph-info"></i> Los cambios en estas opciones se guardan con el botón "Guardar flujo".</div>
           </div>
 
-          <div class="card">
-            <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
-              <h3><i class="ph-bold ph-buildings"></i> Sucursales para pedidos</h3>
-              <button class="btn btn-primary" id="addBranchBtn"><i class="ph-bold ph-plus-circle"></i> Nueva sucursal</button>
-            </div>
-            <div class="hint" style="margin-top:8px">El chatbot mostrará estas sucursales al recoger, comer en sucursal o usar una modalidad personalizada que solicite sucursal.</div>
-            <div class="table-wrap" id="branchTable" style="margin-top:14px"></div>
-          </div>
         </div>
 
         <div id="chatbotDeliveryPanel" hidden>
@@ -1024,6 +1016,13 @@
               </div>
               <button class="btn btn-primary" type="submit"><i class="ph-bold ph-floppy-disk"></i> Guardar identidad</button>
             </form>
+            <hr style="margin:18px 0;border:none;border-top:1px solid var(--line)" />
+            <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
+              <h3><i class="ph-bold ph-buildings"></i> Sucursales</h3>
+              <button class="btn btn-primary" id="addBranchBtn"><i class="ph-bold ph-plus-circle"></i> Nueva sucursal</button>
+            </div>
+            <div class="hint" style="margin-top:8px">Crea las sucursales que usarás para asignar cajeros, administrar cajas y recibir pedidos.</div>
+            <div class="table-wrap" id="branchTable" style="margin-top:14px"></div>
             <hr style="margin:18px 0;border:none;border-top:1px solid var(--line)" />
             <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
               <h3><i class="ph-bold ph-users-three"></i> Cajeros y cajas</h3>

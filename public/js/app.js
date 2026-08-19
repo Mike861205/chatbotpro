@@ -8316,7 +8316,7 @@ function updateTimezonePreview() {
   }
 }
 
-function fillConfigForm() {
+async function fillConfigForm() {
   if (!SETTINGS) return;
   renderRegionalSettingsOptions();
   $('#cfgName').value = SETTINGS.business_name || '';
@@ -8356,7 +8356,10 @@ function fillConfigForm() {
   $('#logoPreview').innerHTML = SETTINGS.logo ? `<img src="${esc(SETTINGS.logo)}" alt="" />` : '<i class="ph ph-image"></i>';
   renderSwatches();
   renderBusinessModelPicker();
-  if (!isCashierUser()) loadCashiers().catch((err) => toast(err.message, true));
+  if (!isCashierUser()) {
+    await loadBranches();
+    await loadCashiers();
+  }
 }
 $('#cfgLogo').addEventListener('change', () => {
   const f = $('#cfgLogo').files[0];
