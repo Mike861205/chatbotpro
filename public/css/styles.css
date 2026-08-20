@@ -6016,11 +6016,13 @@ select.status-sel {
 .module-usage-btn span { display: flex; align-items: center; gap: 5px; font-size: 12px; }
 .module-usage-btn span i { color: #2563eb; font-size: 16px; }
 .module-usage-btn small { display: block; margin-top: 3px; color: var(--ink-3); font-size: 10px; white-space: nowrap; }
-.module-usage-summary { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 16px; }
+.module-usage-summary { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; margin-bottom: 16px; }
 .module-usage-summary > div { padding: 13px; border: 1px solid var(--line); border-radius: 14px; background: #f8fafc; }
 .module-usage-summary span { display: block; color: var(--ink-3); font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: .5px; }
 .module-usage-summary b { display: block; margin-top: 5px; color: var(--ink); font-size: 22px; }
-.module-usage-summary .module-last-seen { font-size: 13px; line-height: 1.35; }
+.module-usage-summary .module-last-seen,
+.module-usage-summary .module-first-seen,
+.module-usage-summary .module-total-time { font-size: 13px; line-height: 1.35; }
 .module-detail-table td, .module-detail-table th { white-space: nowrap; }
 .module-empty { padding: 28px 12px; }
 .sa-delete-icon { width: 64px; height: 64px; border-radius: 20px; background: var(--red-soft); color: var(--red); display: flex; align-items: center; justify-content: center; margin: 0 auto 16px; }

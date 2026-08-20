@@ -276,18 +276,42 @@ function matchesTenantFilter(tenant, filter) {
   return true;
 }
 
+function matchesModuleFilter(entity, filter) {
+  if (filter === 'all') return true;
+  const moduleCount = Number(entity.module_count || 0);
+  if (filter === '1') return moduleCount >= 1 && moduleCount <= 2;
+  if (filter === '3') return moduleCount >= 3 && moduleCount <= 4;
+  if (filter === '5') return moduleCount >= 5 && moduleCount <= 9;
+  if (filter === '10') return moduleCount >= 10;
+  return true;
+}
+
+function compareByModuleImportance(left, right) {
+  const viewsDifference = Number(right.module_views || 0) - Number(left.module_views || 0);
+  if (viewsDifference) return viewsDifference;
+  const modulesDifference = Number(right.module_count || 0) - Number(left.module_count || 0);
+  if (modulesDifference) return modulesDifference;
+  return new Date(right.module_last_seen || right.last_seen_at || right.created_at || 0)
+    - new Date(left.module_last_seen || left.last_seen_at || left.created_at || 0);
+}
+
 function getFilteredTenants() {
   const search = String($('#saTenantSearch')?.value || '').trim().toLowerCase();
+  const moduleFilter = String($('#saTenantModuleFilter')?.value || 'all');
   const stage = String($('#saTenantStageFilter')?.value || 'all');
   const reseller = String($('#saTenantResellerFilter')?.value || 'all');
   return SA_TENANTS.filter((t) => {
     if (!matchesTenantFilter(t, SA_FILTER)) return false;
+    if (!matchesModuleFilter(t, moduleFilter)) return false;
     if (stage !== 'all' && String(t.sales_stage || 'new') !== stage) return false;
     if (reseller === 'direct' && t.reseller_id) return false;
     if (!['all', 'direct'].includes(reseller) && String(t.reseller_id || '') !== reseller) return false;
     if (!search) return true;
-    return [t.slug, t.business_name, t.owner_name, t.phone, t.phone_country_name, t.phone_calling_code, t.reseller_name].join(' ').toLowerCase().includes(search);
-  });
+    return [t.id, t.slug, t.business_name, t.owner_name, t.owner_username, t.phone, t.phone_digits,
+      t.phone_country, t.phone_country_name, t.phone_calling_code, t.reseller_name, t.reseller_slug,
+      t.plan_name, t.sales_stage, t.module_count, t.module_views]
+      .join(' ').toLowerCase().includes(search);
+  }).sort(compareByModuleImportance);
 }
 
 function syncFilterControls() {
@@ -426,12 +450,18 @@ function renderTenantTable() {
 
 function getFilteredDemoLeads() {
   const search = String($('#saDemoLeadSearch')?.value || '').trim().toLowerCase();
+  const moduleFilter = String($('#saDemoModuleFilter')?.value || 'all');
   const stage = String($('#saDemoStageFilter')?.value || 'all');
   return SA_DEMO_LEADS.filter((lead) => {
+    if (!matchesModuleFilter(lead, moduleFilter)) return false;
     if (stage !== 'all' && String(lead.sales_stage || 'new') !== stage) return false;
     if (!search) return true;
-    return [lead.contact_name, lead.phone, lead.phone_country_name, lead.phone_calling_code, lead.business_giro, lead.source_label, lead.last_demo_tenant_slug].join(' ').toLowerCase().includes(search);
-  });
+    return [lead.id, lead.contact_name, lead.phone, lead.phone_digits, lead.phone_country,
+      lead.phone_country_name, lead.phone_calling_code, lead.business_giro, lead.source_label,
+      lead.source_page, lead.last_demo_tenant_slug, lead.demo_count, lead.sales_stage,
+      lead.module_count, lead.module_views]
+      .join(' ').toLowerCase().includes(search);
+  }).sort(compareByModuleImportance);
 }
 
 function renderDemoLeadSummary(summary) {
@@ -888,11 +918,31 @@ function openModulesModal(type, id) {
   const modules = usageModules(entity);
   const name = type === 'tenant' ? entity.business_name : entity.contact_name;
   const totalViews = Number(entity.module_views || 0);
+
+  // Calcular tiempo total: desde primera hasta última actividad global
+  const firstSeen = entity.module_first_seen ? new Date(entity.module_first_seen) : null;
+  const lastSeen = entity.module_last_seen ? new Date(entity.module_last_seen) : null;
+  let tiempoTotal = '—';
+  if (firstSeen && lastSeen && !Number.isNaN(firstSeen.getTime()) && !Number.isNaN(lastSeen.getTime())) {
+    const diffMs = lastSeen - firstSeen;
+    if (diffMs < 60000) {
+      tiempoTotal = `${Math.round(diffMs / 1000)} seg`;
+    } else if (diffMs < 3600000) {
+      tiempoTotal = `${Math.round(diffMs / 60000)} min`;
+    } else {
+      const hrs = Math.floor(diffMs / 3600000);
+      const mins = Math.round((diffMs % 3600000) / 60000);
+      tiempoTotal = mins > 0 ? `${hrs}h ${mins}min` : `${hrs}h`;
+    }
+  }
+
   $('#saModulesSubject').textContent = `${type === 'tenant' ? 'Tenant' : 'Lead demo'}: ${name}`;
   $('#saModulesSummary').innerHTML = `
     <div><span>Módulos utilizados</span><b>${Number(entity.module_count || modules.length)}</b></div>
     <div><span>Accesos totales</span><b>${totalViews}</b></div>
+    <div><span>Primera actividad</span><b class="module-first-seen">${fmtDateTime(entity.module_first_seen)}</b></div>
     <div><span>Última actividad</span><b class="module-last-seen">${fmtDateTime(entity.module_last_seen)}</b></div>
+    <div><span>Tiempo total en sistema</span><b class="module-total-time">${tiempoTotal}</b></div>
   `;
 
   $('#saModulesDetail').innerHTML = modules.length
@@ -908,6 +958,7 @@ function openModulesModal(type, id) {
 
   $('#saModulesModal')?.classList.add('show');
 }
+
 
 function bindModuleUsageButtons() {
   document.querySelectorAll('[data-sa-modules]').forEach((btn) => {
@@ -1598,12 +1649,14 @@ $('#saBrandLogoFile')?.addEventListener('change', (e) => {
 $('#saUploadBrandLogo')?.addEventListener('click', () => uploadSuperAdminLogo().catch((e) => toast(e.message, true)));
 
 $('#saTenantSearch')?.addEventListener('input', renderTenantTable);
+$('#saTenantModuleFilter')?.addEventListener('change', renderTenantTable);
 $('#saTenantStageFilter')?.addEventListener('change', renderTenantTable);
 $('#saTenantResellerFilter')?.addEventListener('change', renderTenantTable);
 $('#saReloadTenants')?.addEventListener('click', () => loadTenants().catch((e) => toast(e.message, true)));
 $('#saClientSearch')?.addEventListener('input', renderClientsTable);
 $('#saReloadClients')?.addEventListener('click', () => loadClients().catch((e) => toast(e.message, true)));
 $('#saDemoLeadSearch')?.addEventListener('input', renderDemoLeadsTable);
+$('#saDemoModuleFilter')?.addEventListener('change', renderDemoLeadsTable);
 $('#saDemoStageFilter')?.addEventListener('change', renderDemoLeadsTable);
 $('#saReloadDemoLeads')?.addEventListener('click', () => loadDemoLeads().catch((e) => toast(e.message, true)));
 $('#saFollowUpSearch')?.addEventListener('input', renderFollowUpTable);

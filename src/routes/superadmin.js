@@ -630,6 +630,7 @@ router.get('/tenants', requireSuperAdmin, async (req, res, next) => {
         COALESCE(u.username, '') AS owner_username,
         COALESCE(usage_stats.module_count, 0)::int AS module_count,
         COALESCE(usage_stats.module_views, 0)::int AS module_views,
+        usage_stats.module_first_seen,
         usage_stats.module_last_seen,
         COALESCE(usage_stats.modules, '[]'::json) AS modules,
         COALESCE(followup_stats.activity_count, 0)::int AS activity_count,
@@ -644,6 +645,7 @@ router.get('/tenants', requireSuperAdmin, async (req, res, next) => {
         SELECT
           COUNT(*)::int AS module_count,
           COALESCE(SUM(mu.view_count), 0)::int AS module_views,
+          MIN(mu.first_seen_at) AS module_first_seen,
           MAX(mu.last_seen_at) AS module_last_seen,
           json_agg(
             json_build_object(
@@ -715,6 +717,7 @@ router.get('/demo-leads', requireSuperAdmin, async (req, res, next) => {
         COALESCE(r.slug, '') AS reseller_slug,
         COALESCE(usage_stats.module_count, 0)::int AS module_count,
         COALESCE(usage_stats.module_views, 0)::int AS module_views,
+        usage_stats.module_first_seen,
         usage_stats.module_last_seen,
         COALESCE(usage_stats.modules, '[]'::json) AS modules,
         COALESCE(followup_stats.activity_count, 0)::int AS activity_count,
@@ -726,6 +729,7 @@ router.get('/demo-leads', requireSuperAdmin, async (req, res, next) => {
         SELECT
           COUNT(*)::int AS module_count,
           COALESCE(SUM(mu.view_count), 0)::int AS module_views,
+          MIN(mu.first_seen_at) AS module_first_seen,
           MAX(mu.last_seen_at) AS module_last_seen,
           json_agg(
             json_build_object(
@@ -825,6 +829,7 @@ router.get('/clients', requireSuperAdmin, async (req, res, next) => {
         COALESCE(payments.last_payment_method, '') AS last_payment_method,
         COALESCE(usage_stats.module_count, 0)::int AS module_count,
         COALESCE(usage_stats.module_views, 0)::int AS module_views,
+        usage_stats.module_first_seen,
         usage_stats.module_last_seen,
         COALESCE(usage_stats.modules, '[]'::json) AS modules
       FROM tenants t
@@ -846,6 +851,7 @@ router.get('/clients', requireSuperAdmin, async (req, res, next) => {
         SELECT
           COUNT(*)::int AS module_count,
           COALESCE(SUM(mu.view_count), 0)::int AS module_views,
+          MIN(mu.first_seen_at) AS module_first_seen,
           MAX(mu.last_seen_at) AS module_last_seen,
           json_agg(
             json_build_object(

@@ -2719,11 +2719,9 @@ function operationalOrderNote(order) {
   return String(order?.order_note || order?.order_notes || (order?.channel === 'pos' ? order?.notes : '') || '').trim();
 }
 
-function openOrderComandaPrintWindow(order) {
-  if (!order) return toast('No se encontró el pedido para imprimir', true);
-  const items = buildOrderComandaItems(order);
-  if (!items.length) return toast('El pedido no tiene productos para comanda', true);
+// ── Helpers de impresión de comanda ────────────────────────────────────────
 
+function buildComandaHtml(order, areaItems, areaLabel) {
   const biz = esc(SETTINGS?.business_name || ME?.tenant?.businessName || 'Negocio');
   const bizAddress = esc(SETTINGS?.address || '');
   const bizWhatsapp = esc((SETTINGS?.whatsapp || '').trim());
@@ -2743,6 +2741,7 @@ function openOrderComandaPrintWindow(order) {
     ? `${location.origin}${ME.tenant.logo.startsWith('/') ? ME.tenant.logo : `/${ME.tenant.logo}`}`
     : '';
 
+  const items = areaItems.map((it) => ({ qty: Number(it?.qty ?? 0), name: String(it?.name || 'Producto') }));
   const itemRows = items.map((it) => {
     const qty = Number.isFinite(it.qty) ? it.qty : 0;
     return `<tr>
@@ -2763,12 +2762,16 @@ function openOrderComandaPrintWindow(order) {
   const deliveryReference = esc(order?.delivery_reference || (order?.channel === 'chatbot' ? order?.notes : '') || '');
   const deliveryLocation = esc(order?.customer_location_text || order?.customer_location_resolved || '');
 
+  const areaHeader = areaLabel
+    ? `<div class="center area-label">${esc(areaLabel.toUpperCase())}</div>`
+    : '';
+
   const html = `<!doctype html>
 <html lang="es">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Comanda #${esc(String(order.id || ''))}</title>
+  <title>Comanda #${esc(String(order.id || ''))}${areaLabel ? ` — ${esc(areaLabel)}` : ''}</title>
   <style>
     ${pageCss}
     html, body { margin: 0; padding: 0; }
@@ -2786,6 +2789,7 @@ function openOrderComandaPrintWindow(order) {
     td { padding: 4px 2px; vertical-align: top; }
     td.qty { width: 22%; text-align: center; font-weight: 800; }
     .headline { font-size: ${Math.max(fontPx + 2, 14)}px; font-weight: 800; letter-spacing: 0.5px; }
+    .area-label { font-size: ${Math.max(fontPx + 4, 16)}px; font-weight: 900; letter-spacing: 1px; padding: 4px 0; border: 2px solid #000; margin: 6px 0; }
     .order-note { margin: 9px 0; padding: 8px; border: 3px double #000; font-size: ${Math.max(fontPx + 2, 14)}px; font-weight: 900; line-height: 1.35; text-align: center; overflow-wrap: anywhere; }
     .order-note span { display: block; margin-bottom: 3px; font-size: ${Math.max(fontPx - 2, 10)}px; letter-spacing: .7px; }
     .delivery-block { margin: 7px 0; padding: 7px; border: 2px solid #000; overflow-wrap: anywhere; }
@@ -2799,6 +2803,7 @@ function openOrderComandaPrintWindow(order) {
     ${bizWhatsapp ? `<div class="center meta">WhatsApp: ${bizWhatsapp}</div>` : ''}
     <div class="sep"></div>
     <div class="center headline">COMANDA #${esc(String(order.id || ''))}</div>
+    ${areaHeader}
     <div class="center meta">${createdAt}</div>
     <div class="meta"><b>Cliente:</b> ${customerName}${customerPhone ? ` · ${customerPhone}` : ''}</div>
     <div class="meta"><b>Entrega:</b> ${delivery}</div>
@@ -2818,7 +2823,7 @@ function openOrderComandaPrintWindow(order) {
       <tbody>${itemRows}</tbody>
     </table>
     <div class="sep"></div>
-    <div class="center meta">Impresión de cocina</div>
+    <div class="center meta">${areaLabel ? `Área: ${esc(areaLabel)}` : 'Impresión de cocina'}</div>
   </div>
   <script>
     window.onload = () => {
@@ -2829,12 +2834,57 @@ function openOrderComandaPrintWindow(order) {
 </body>
 </html>`;
 
+  return { html, printWindowSize };
+}
+
+function printComandaWindow(html, printWindowSize) {
   const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
   const blobUrl = URL.createObjectURL(blob);
   const w = window.open(blobUrl, '_blank', printWindowSize);
-  if (!w) return toast('Permite ventanas emergentes para imprimir', true);
+  if (!w) {
+    toast('Permite ventanas emergentes para imprimir', true);
+    URL.revokeObjectURL(blobUrl);
+    return false;
+  }
   setTimeout(() => URL.revokeObjectURL(blobUrl), 10000);
+  return true;
 }
+
+async function openOrderComandaPrintWindow(order) {
+  if (!order) return toast('No se encontró el pedido para imprimir', true);
+  const allItems = buildOrderComandaItems(order);
+  if (!allItems.length) return toast('El pedido no tiene productos para comanda', true);
+
+  try {
+    // Consultar al backend cómo agrupar los ítems por área KDS
+    const res = await fetch(`/api/orders/${order.id}/comanda-areas`);
+    if (!res.ok) throw new Error('Error al obtener áreas');
+    const data = await res.json();
+
+    if (!data.areas || data.areas.length === 0) {
+      // Sin áreas configuradas → comanda única (comportamiento original)
+      const { html, printWindowSize } = buildComandaHtml(order, allItems, '');
+      printComandaWindow(html, printWindowSize);
+      return;
+    }
+
+    // Con áreas → abrir una ventana por área con un pequeño delay para no bloquear popups
+    let blocked = false;
+    data.areas.forEach((area, idx) => {
+      if (blocked) return;
+      setTimeout(() => {
+        const { html, printWindowSize } = buildComandaHtml(order, area.items, area.name);
+        const ok = printComandaWindow(html, printWindowSize);
+        if (!ok) blocked = true;
+      }, idx * 600); // 600ms entre cada ventana para que el navegador no las bloquee
+    });
+  } catch {
+    // Fallback: si falla la petición, imprimir comanda única sin área
+    const { html, printWindowSize } = buildComandaHtml(order, allItems, '');
+    printComandaWindow(html, printWindowSize);
+  }
+}
+
 
 function ordersTableHTML(orders, editable = true) {
   const actionHead = editable ? '<th>Comanda</th>' : '';

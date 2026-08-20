@@ -145,4 +145,99 @@ router.patch('/:id', async (req, res, next) => {
   } catch (e) { next(e); }
 });
 
+
+// Agrupa los ítems del pedido por áreas KDS configuradas
+router.get('/:id/comanda-areas', async (req, res, next) => {
+  try {
+    const orderId = Number(req.params.id);
+    if (!Number.isInteger(orderId) || orderId <= 0) {
+      return res.status(400).json({ error: 'ID de pedido inválido' });
+    }
+
+    // Obtener el pedido
+    const orderRow = await req.tdb.get(
+      `SELECT id, items, service_branch_id, pickup_branch_id FROM {s}.orders WHERE id = $1`,
+      [orderId]
+    );
+    if (!orderRow) return res.status(404).json({ error: 'Pedido no encontrado' });
+
+    let items = [];
+    try { items = JSON.parse(orderRow.items || '[]'); } catch { items = []; }
+    if (!Array.isArray(items)) items = [];
+
+    // Obtener todas las áreas KDS activas con sus asignaciones
+    const areaRows = await req.tdb.all(
+      `SELECT a.id, a.name, a.color,
+              COALESCE(array_agg(DISTINCT ac.category_id) FILTER (WHERE ac.category_id IS NOT NULL), '{}') AS category_ids,
+              COALESCE(array_agg(DISTINCT ap.product_id)  FILTER (WHERE ap.product_id  IS NOT NULL), '{}') AS product_ids
+       FROM {s}.kds_areas a
+       LEFT JOIN {s}.kds_area_categories ac ON ac.area_id = a.id
+       LEFT JOIN {s}.kds_area_products   ap ON ap.area_id = a.id
+       WHERE a.active = 1
+       GROUP BY a.id, a.name, a.color
+       ORDER BY a.id ASC`
+    );
+
+    // Si no hay áreas configuradas → devolver todos los ítems como una sola comanda
+    if (!areaRows || areaRows.length === 0) {
+      return res.json({ areas: null, items });
+    }
+
+    // Obtener info de productos para resolver categoría
+    const productIds = [...new Set(
+      items.map((it) => Number(it?.id ?? it?.productId)).filter((id) => Number.isInteger(id) && id > 0)
+    )];
+    const productMap = new Map();
+    if (productIds.length) {
+      const products = await req.tdb.all(
+        `SELECT id, category_id FROM {s}.products WHERE id = ANY($1::int[])`,
+        [productIds]
+      );
+      products.forEach((p) => productMap.set(Number(p.id), Number(p.category_id)));
+    }
+
+    // Construir reglas de área
+    const areas = areaRows.map((a) => ({
+      id: Number(a.id),
+      name: String(a.name),
+      color: String(a.color || '#ff6b35'),
+      categoryIds: new Set((a.category_ids || []).map(Number)),
+      productIds: new Set((a.product_ids || []).map(Number)),
+      items: [],
+    }));
+
+    const unassignedItems = [];
+
+    for (const item of items) {
+      const productId = Number(item?.id ?? item?.productId);
+      const categoryId = productMap.get(productId);
+      let assigned = false;
+
+      for (const area of areas) {
+        const byProduct  = Number.isInteger(productId) && productId > 0 && area.productIds.has(productId);
+        const byCategory = Number.isInteger(categoryId) && area.categoryIds.has(categoryId);
+        if (byProduct || byCategory) {
+          area.items.push(item);
+          assigned = true;
+          break; // cada ítem va solo a la primera área que coincida
+        }
+      }
+
+      if (!assigned) unassignedItems.push(item);
+    }
+
+    // Filtrar áreas sin ítems
+    const activeAreas = areas
+      .filter((a) => a.items.length > 0)
+      .map(({ id, name, color, items: aItems }) => ({ id, name, color, items: aItems }));
+
+    // Si hay ítems sin área asignada, agregar grupo "General"
+    if (unassignedItems.length > 0) {
+      activeAreas.push({ id: 0, name: 'General', color: '#6b7280', items: unassignedItems });
+    }
+
+    res.json({ areas: activeAreas, items });
+  } catch (e) { next(e); }
+});
+
 module.exports = router;

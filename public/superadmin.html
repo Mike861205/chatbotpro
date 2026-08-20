@@ -69,7 +69,14 @@
               <button type="button" data-status="active">Con acceso</button>
               <button type="button" data-status="inactive">Inactivos</button>
             </div>
-            <input id="saTenantSearch" type="search" placeholder="Buscar por negocio, país, lada o teléfono" style="max-width:360px" />
+            <input id="saTenantSearch" type="search" placeholder="Buscar texto, ID, teléfono, módulos o visitas" style="max-width:360px" />
+            <select id="saTenantModuleFilter" aria-label="Filtrar prospectos por módulos visitados">
+              <option value="all">Todos los módulos</option>
+              <option value="1">1–2 módulos</option>
+              <option value="3">3–4 módulos</option>
+              <option value="5">5–9 módulos</option>
+              <option value="10">10+ módulos</option>
+            </select>
             <select id="saTenantStageFilter" class="sa-stage-filter" aria-label="Filtrar por etapa comercial"></select>
             <select id="saTenantResellerFilter" aria-label="Filtrar prospectos por reseller"><option value="all">Todos los resellers</option></select>
             <button type="button" class="btn btn-primary" id="saReloadTenants"><i class="ph-bold ph-arrows-clockwise"></i> Actualizar</button>
@@ -134,7 +141,14 @@
         <div class="card" style="padding:16px">
           <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:12px">
             <label for="saDemoLeadSearch" style="position:absolute;left:-9999px;width:1px;height:1px;overflow:hidden">Buscar leads demo</label>
-            <input id="saDemoLeadSearch" type="search" placeholder="Buscar por nombre, país, lada, teléfono o giro" style="max-width:380px" />
+            <input id="saDemoLeadSearch" type="search" placeholder="Buscar texto, ID, teléfono, módulos o visitas" style="max-width:380px" />
+            <select id="saDemoModuleFilter" aria-label="Filtrar leads por módulos visitados">
+              <option value="all">Todos los módulos</option>
+              <option value="1">1–2 módulos</option>
+              <option value="3">3–4 módulos</option>
+              <option value="5">5–9 módulos</option>
+              <option value="10">10+ módulos</option>
+            </select>
             <select id="saDemoStageFilter" class="sa-stage-filter" aria-label="Filtrar por etapa comercial"></select>
           </div>
           <div id="saDemoBulkBar" class="sa-bulk-bar" hidden></div>
