@@ -15,6 +15,12 @@ let SA_ACTIVATE_TENANT_ID = null;
 let SA_ACTIVATE_MODE = 'account';
 let SA_DEPLOY_POLL_TIMER = null;
 let SA_DELETE_TARGET = null;
+let SA_TENANT_SORT = { key: 'created_at', dir: 'desc' };
+let SA_TENANT_PAGE = 1;
+let SA_TENANT_PER_PAGE = 20;
+let SA_DEMO_SORT = { key: 'last_seen_at', dir: 'desc' };
+let SA_DEMO_PAGE = 1;
+let SA_DEMO_PER_PAGE = 20;
 
 const SA_SALES_STAGES = [
   ['new', 'Nuevo', 'new'],
@@ -286,13 +292,68 @@ function matchesModuleFilter(entity, filter) {
   return true;
 }
 
-function compareByModuleImportance(left, right) {
-  const viewsDifference = Number(right.module_views || 0) - Number(left.module_views || 0);
-  if (viewsDifference) return viewsDifference;
-  const modulesDifference = Number(right.module_count || 0) - Number(left.module_count || 0);
-  if (modulesDifference) return modulesDifference;
-  return new Date(right.module_last_seen || right.last_seen_at || right.created_at || 0)
-    - new Date(left.module_last_seen || left.last_seen_at || left.created_at || 0);
+function compareBySortKey(a, b, key, dir) {
+  let va, vb;
+  if (key === 'last_seen_at') {
+    va = new Date(a.module_last_seen || a.last_seen_at || a.first_seen_at || a.created_at || 0).getTime();
+    vb = new Date(b.module_last_seen || b.last_seen_at || b.first_seen_at || b.created_at || 0).getTime();
+  } else if (key === 'first_seen_at') {
+    va = new Date(a.first_seen_at || a.created_at || 0).getTime();
+    vb = new Date(b.first_seen_at || b.created_at || 0).getTime();
+  } else if (['created_at', 'module_last_seen', 'module_first_seen'].includes(key)) {
+    va = new Date(a[key] || 0).getTime();
+    vb = new Date(b[key] || 0).getTime();
+  } else if (['module_count', 'module_views', 'demo_count'].includes(key)) {
+    va = Number(a[key] || 0);
+    vb = Number(b[key] || 0);
+  } else {
+    va = String(a[key] || '').toLowerCase();
+    vb = String(b[key] || '').toLowerCase();
+  }
+  const cmp = va < vb ? -1 : va > vb ? 1 : 0;
+  return dir === 'asc' ? cmp : -cmp;
+}
+
+function paginateArray(arr, page, perPage) {
+  const totalPages = Math.max(1, Math.ceil(arr.length / perPage));
+  const safePage = Math.max(1, Math.min(page, totalPages));
+  return { items: arr.slice((safePage - 1) * perPage, safePage * perPage), page: safePage, totalPages, total: arr.length, perPage };
+}
+
+function renderPaginationBar(prefix, pag) {
+  const from = pag.total === 0 ? 0 : ((pag.page - 1) * pag.perPage) + 1;
+  const to = Math.min(pag.page * pag.perPage, pag.total);
+  return `<div class="sa-pagination">
+    <div class="sa-pagination-left">
+      <span>${from}–${to} de ${pag.total}</span>
+      <select data-sa-per-page="${prefix}" aria-label="Registros por página">
+        ${[10, 20, 30].map((n) => `<option value="${n}" ${pag.perPage === n ? 'selected' : ''}>${n} por página</option>`).join('')}
+      </select>
+    </div>
+    <div class="sa-pagination-controls">
+      <button type="button" class="btn btn-ghost btn-sm" data-sa-page-prev="${prefix}" ${pag.page <= 1 ? 'disabled' : ''}><i class="ph-bold ph-caret-left"></i></button>
+      <span>Pág ${pag.page} de ${pag.totalPages}</span>
+      <button type="button" class="btn btn-ghost btn-sm" data-sa-page-next="${prefix}" ${pag.page >= pag.totalPages ? 'disabled' : ''}><i class="ph-bold ph-caret-right"></i></button>
+    </div>
+  </div>`;
+}
+
+function sortableHeader(label, key, currentSort) {
+  const isActive = currentSort.key === key;
+  const arrow = isActive ? (currentSort.dir === 'asc' ? 'ph-caret-up' : 'ph-caret-down') : 'ph-caret-up-down';
+  return `<th class="sortable${isActive ? ' sort-active' : ''}" data-sort-key="${key}">${label} <i class="ph ${arrow}"></i></th>`;
+}
+
+function bindPagination(prefix, renderFn, getPage, setPage, getPerPage, setPerPage) {
+  document.querySelectorAll(`[data-sa-page-prev="${prefix}"]`).forEach((btn) => {
+    btn.onclick = () => { setPage(getPage() - 1); renderFn(); };
+  });
+  document.querySelectorAll(`[data-sa-page-next="${prefix}"]`).forEach((btn) => {
+    btn.onclick = () => { setPage(getPage() + 1); renderFn(); };
+  });
+  document.querySelectorAll(`[data-sa-per-page="${prefix}"]`).forEach((sel) => {
+    sel.onchange = () => { setPerPage(Number(sel.value)); setPage(1); renderFn(); };
+  });
 }
 
 function getFilteredTenants() {
@@ -311,7 +372,7 @@ function getFilteredTenants() {
       t.phone_country, t.phone_country_name, t.phone_calling_code, t.reseller_name, t.reseller_slug,
       t.plan_name, t.sales_stage, t.module_count, t.module_views]
       .join(' ').toLowerCase().includes(search);
-  }).sort(compareByModuleImportance);
+  }).sort((a, b) => compareBySortKey(a, b, SA_TENANT_SORT.key, SA_TENANT_SORT.dir));
 }
 
 function syncFilterControls() {
@@ -328,6 +389,7 @@ function syncFilterControls() {
 
 function setTenantFilter(filter, announce = false) {
   SA_FILTER = filter || 'all';
+  SA_TENANT_PAGE = 1;
   syncFilterControls();
   renderTenantTable();
   if (announce) {
@@ -385,10 +447,14 @@ function renderTenantTable() {
     return;
   }
 
-  const allChecked = filtered.length > 0 && filtered.every((item) => SA_SELECTED.has(salesSubjectKey('tenant', item.id)));
+  const pag = paginateArray(filtered, SA_TENANT_PAGE, SA_TENANT_PER_PAGE);
+  SA_TENANT_PAGE = pag.page;
+  const pageItems = pag.items;
+
+  const allChecked = pageItems.length > 0 && pageItems.every((item) => SA_SELECTED.has(salesSubjectKey('tenant', item.id)));
   table.innerHTML = `<div class="table-wrap"><table><thead><tr>
-    <th class="sa-select-col"><input type="checkbox" data-sa-select-all="tenant" ${allChecked ? 'checked' : ''} aria-label="Seleccionar prospectos visibles" /></th><th>Prospecto</th><th>Dueño</th><th>Reseller</th><th>Etapa</th><th>Registro</th><th>Acceso</th><th>Plan de interés</th><th>Módulos</th><th>Acciones</th>
-  </tr></thead><tbody>${filtered
+    <th class="sa-select-col"><input type="checkbox" data-sa-select-all="tenant" ${allChecked ? 'checked' : ''} aria-label="Seleccionar prospectos visibles" /></th><th>Prospecto</th><th>Dueño</th><th>Reseller</th><th>Etapa</th>${sortableHeader('Registro', 'created_at', SA_TENANT_SORT)}${sortableHeader('Última actividad', 'module_last_seen', SA_TENANT_SORT)}<th>Acceso</th><th>Plan de interés</th>${sortableHeader('Módulos', 'module_count', SA_TENANT_SORT)}<th>Acciones</th>
+  </tr></thead><tbody>${pageItems
     .map((t) => {
       const waUrl = t.phone_valid && t.phone_digits ? `https://wa.me/${t.phone_digits}` : '';
       const country = t.phone_country_name || t.phone_country || 'Sin país';
@@ -403,6 +469,7 @@ function renderTenantTable() {
       <td>${t.reseller_name ? `<b>${esc(t.reseller_name)}</b><div class="meta">/${esc(t.reseller_slug)}</div>` : '<span class="meta">Directo</span>'}</td>
       <td>${salesStageChip(t.sales_stage)}${t.next_follow_up_at ? `<div class="meta">Próximo: ${fmtDateTime(t.next_follow_up_at)}</div>` : ''}</td>
       <td>${fmtDate(t.created_at)}</td>
+      <td>${t.module_last_seen ? fmtDate(t.module_last_seen) : '<span class="meta">—</span>'}</td>
       <td>${statusChip('account', t.account_status)}</td>
       <td>${esc(t.plan_name || 'starter')}<div class="meta">Hasta ${Number(t.branch_limit || 2)} sucursales activas</div></td>
       <td>${moduleUsageButton(t, 'tenant')}</td>
@@ -424,7 +491,7 @@ function renderTenantTable() {
       </td>
     </tr>`;
     })
-    .join('')}</tbody></table></div>`;
+    .join('')}</tbody></table></div>${renderPaginationBar('tenant', pag)}`;
   document.querySelectorAll('[data-sa-access]').forEach((btn) => {
     btn.addEventListener('click', () => accessTenant(Number(btn.dataset.saAccess)).catch((err) => toast(err.message, true)));
   });
@@ -446,6 +513,16 @@ function renderTenantTable() {
   document.querySelectorAll('[data-sa-delete-tenant]').forEach((btn) => {
     btn.addEventListener('click', () => openDeleteModal('tenant', Number(btn.dataset.saDeleteTenant)));
   });
+  // Sort bindings
+  document.querySelectorAll('#saTenantsTable .sortable').forEach((th) => {
+    th.onclick = () => {
+      const k = th.dataset.sortKey;
+      SA_TENANT_SORT = { key: k, dir: SA_TENANT_SORT.key === k && SA_TENANT_SORT.dir === 'desc' ? 'asc' : 'desc' };
+      SA_TENANT_PAGE = 1;
+      renderTenantTable();
+    };
+  });
+  bindPagination('tenant', renderTenantTable, () => SA_TENANT_PAGE, (v) => { SA_TENANT_PAGE = v; }, () => SA_TENANT_PER_PAGE, (v) => { SA_TENANT_PER_PAGE = v; });
 }
 
 function getFilteredDemoLeads() {
@@ -461,7 +538,7 @@ function getFilteredDemoLeads() {
       lead.source_page, lead.last_demo_tenant_slug, lead.demo_count, lead.sales_stage,
       lead.module_count, lead.module_views]
       .join(' ').toLowerCase().includes(search);
-  }).sort(compareByModuleImportance);
+  }).sort((a, b) => compareBySortKey(a, b, SA_DEMO_SORT.key, SA_DEMO_SORT.dir));
 }
 
 function renderDemoLeadSummary(summary) {
@@ -497,14 +574,20 @@ function renderDemoLeadsTable() {
     return;
   }
 
-  const allChecked = filtered.length > 0 && filtered.every((item) => SA_SELECTED.has(salesSubjectKey('demo_lead', item.id)));
+  const pag = paginateArray(filtered, SA_DEMO_PAGE, SA_DEMO_PER_PAGE);
+  SA_DEMO_PAGE = pag.page;
+  const pageItems = pag.items;
+
+  const allChecked = pageItems.length > 0 && pageItems.every((item) => SA_SELECTED.has(salesSubjectKey('demo_lead', item.id)));
   table.innerHTML = `<div class="table-wrap"><table><thead><tr>
-    <th class="sa-select-col"><input type="checkbox" data-sa-select-all="demo_lead" ${allChecked ? 'checked' : ''} aria-label="Seleccionar leads visibles" /></th><th>Nombre</th><th>Etapa</th><th>País</th><th>Lada / teléfono</th><th>Giro</th><th>Origen</th><th>Veces</th><th>Primera vez</th><th>Última vez</th><th>Módulos</th><th>Acciones</th>
-  </tr></thead><tbody>${filtered
+    <th class="sa-select-col"><input type="checkbox" data-sa-select-all="demo_lead" ${allChecked ? 'checked' : ''} aria-label="Seleccionar leads visibles" /></th>${sortableHeader('Nombre', 'contact_name', SA_DEMO_SORT)}${sortableHeader('Etapa', 'sales_stage', SA_DEMO_SORT)}<th>País</th><th>Lada / teléfono</th><th>Giro</th><th>Origen</th>${sortableHeader('Veces', 'demo_count', SA_DEMO_SORT)}${sortableHeader('Primera vez', 'first_seen_at', SA_DEMO_SORT)}${sortableHeader('Última vez', 'last_seen_at', SA_DEMO_SORT)}${sortableHeader('Módulos', 'module_count', SA_DEMO_SORT)}<th>Acciones</th>
+  </tr></thead><tbody>${pageItems
     .map((lead) => {
       const digits = String(lead.phone_digits || '').replace(/\D/g, '');
       const waUrl = lead.phone_valid && digits ? `https://wa.me/${digits}` : '';
       const key = salesSubjectKey('demo_lead', lead.id);
+      const firstSeen = lead.first_seen_at || lead.created_at;
+      const lastSeen = lead.module_last_seen || lead.last_seen_at || firstSeen;
       return `<tr class="${SA_SELECTED.has(key) ? 'sa-row-selected' : ''}">
         <td class="sa-select-col"><input type="checkbox" data-sa-sales-select="${key}" ${SA_SELECTED.has(key) ? 'checked' : ''} aria-label="Seleccionar ${esc(lead.contact_name)}" /></td>
         <td><b>${esc(lead.contact_name)}</b><div class="meta">ID #${lead.id}</div></td>
@@ -514,8 +597,8 @@ function renderDemoLeadsTable() {
         <td>${esc(lead.business_giro)}</td>
         <td><span class="tag">${esc(lead.source_label || 'Landing')}</span></td>
         <td><b>${Number(lead.demo_count || 0)}</b></td>
-        <td>${fmtDate(lead.first_seen_at)}</td>
-        <td>${fmtDate(lead.last_seen_at)}</td>
+        <td>${fmtDate(firstSeen)}</td>
+        <td>${lastSeen ? fmtDate(lastSeen) : '<span class="meta">—</span>'}</td>
         <td>${moduleUsageButton(lead, 'lead')}</td>
         <td>
           <div class="sa-actions-grid-2">
@@ -527,7 +610,7 @@ function renderDemoLeadsTable() {
         </td>
       </tr>`;
     })
-    .join('')}</tbody></table></div>`;
+    .join('')}</tbody></table></div>${renderPaginationBar('demo_lead', pag)}`;
 
   bindModuleUsageButtons();
   bindPhoneActions();
@@ -535,6 +618,16 @@ function renderDemoLeadsTable() {
   document.querySelectorAll('[data-sa-delete-lead]').forEach((btn) => {
     btn.addEventListener('click', () => openDeleteModal('lead', Number(btn.dataset.saDeleteLead)));
   });
+  // Sort bindings
+  document.querySelectorAll('#saDemoLeadsTable .sortable').forEach((th) => {
+    th.onclick = () => {
+      const k = th.dataset.sortKey;
+      SA_DEMO_SORT = { key: k, dir: SA_DEMO_SORT.key === k && SA_DEMO_SORT.dir === 'desc' ? 'asc' : 'desc' };
+      SA_DEMO_PAGE = 1;
+      renderDemoLeadsTable();
+    };
+  });
+  bindPagination('demo_lead', renderDemoLeadsTable, () => SA_DEMO_PAGE, (v) => { SA_DEMO_PAGE = v; }, () => SA_DEMO_PER_PAGE, (v) => { SA_DEMO_PER_PAGE = v; });
 }
 
 function salesStageMeta(value) {
@@ -919,21 +1012,31 @@ function openModulesModal(type, id) {
   const name = type === 'tenant' ? entity.business_name : entity.contact_name;
   const totalViews = Number(entity.module_views || 0);
 
-  // Calcular tiempo total: desde primera hasta última actividad global
-  const firstSeen = entity.module_first_seen ? new Date(entity.module_first_seen) : null;
-  const lastSeen = entity.module_last_seen ? new Date(entity.module_last_seen) : null;
+  // Calcular tiempo total activo: suma del tiempo activo en cada módulo individual
+  let totalActiveMs = 0;
+  for (const m of modules) {
+    if (m.firstSeenAt && m.lastSeenAt) {
+      const d1 = new Date(m.firstSeenAt).getTime();
+      const d2 = new Date(m.lastSeenAt).getTime();
+      if (!Number.isNaN(d1) && !Number.isNaN(d2) && d2 > d1) {
+        totalActiveMs += (d2 - d1);
+      }
+    }
+  }
+
   let tiempoTotal = '—';
-  if (firstSeen && lastSeen && !Number.isNaN(firstSeen.getTime()) && !Number.isNaN(lastSeen.getTime())) {
-    const diffMs = lastSeen - firstSeen;
-    if (diffMs < 60000) {
-      tiempoTotal = `${Math.round(diffMs / 1000)} seg`;
-    } else if (diffMs < 3600000) {
-      tiempoTotal = `${Math.round(diffMs / 60000)} min`;
+  if (totalActiveMs > 0) {
+    if (totalActiveMs < 60000) {
+      tiempoTotal = `${Math.round(totalActiveMs / 1000)} seg`;
+    } else if (totalActiveMs < 3600000) {
+      tiempoTotal = `${Math.round(totalActiveMs / 60000)} min`;
     } else {
-      const hrs = Math.floor(diffMs / 3600000);
-      const mins = Math.round((diffMs % 3600000) / 60000);
+      const hrs = Math.floor(totalActiveMs / 3600000);
+      const mins = Math.round((totalActiveMs % 3600000) / 60000);
       tiempoTotal = mins > 0 ? `${hrs}h ${mins}min` : `${hrs}h`;
     }
+  } else if (totalViews > 0) {
+    tiempoTotal = '< 1 min';
   }
 
   $('#saModulesSubject').textContent = `${type === 'tenant' ? 'Tenant' : 'Lead demo'}: ${name}`;
@@ -1648,17 +1751,17 @@ $('#saBrandLogoFile')?.addEventListener('change', (e) => {
 });
 $('#saUploadBrandLogo')?.addEventListener('click', () => uploadSuperAdminLogo().catch((e) => toast(e.message, true)));
 
-$('#saTenantSearch')?.addEventListener('input', renderTenantTable);
-$('#saTenantModuleFilter')?.addEventListener('change', renderTenantTable);
-$('#saTenantStageFilter')?.addEventListener('change', renderTenantTable);
-$('#saTenantResellerFilter')?.addEventListener('change', renderTenantTable);
-$('#saReloadTenants')?.addEventListener('click', () => loadTenants().catch((e) => toast(e.message, true)));
+$('#saTenantSearch')?.addEventListener('input', () => { SA_TENANT_PAGE = 1; renderTenantTable(); });
+$('#saTenantModuleFilter')?.addEventListener('change', () => { SA_TENANT_PAGE = 1; renderTenantTable(); });
+$('#saTenantStageFilter')?.addEventListener('change', () => { SA_TENANT_PAGE = 1; renderTenantTable(); });
+$('#saTenantResellerFilter')?.addEventListener('change', () => { SA_TENANT_PAGE = 1; renderTenantTable(); });
+$('#saReloadTenants')?.addEventListener('click', () => { SA_TENANT_PAGE = 1; loadTenants().catch((e) => toast(e.message, true)); });
 $('#saClientSearch')?.addEventListener('input', renderClientsTable);
 $('#saReloadClients')?.addEventListener('click', () => loadClients().catch((e) => toast(e.message, true)));
-$('#saDemoLeadSearch')?.addEventListener('input', renderDemoLeadsTable);
-$('#saDemoModuleFilter')?.addEventListener('change', renderDemoLeadsTable);
-$('#saDemoStageFilter')?.addEventListener('change', renderDemoLeadsTable);
-$('#saReloadDemoLeads')?.addEventListener('click', () => loadDemoLeads().catch((e) => toast(e.message, true)));
+$('#saDemoLeadSearch')?.addEventListener('input', () => { SA_DEMO_PAGE = 1; renderDemoLeadsTable(); });
+$('#saDemoModuleFilter')?.addEventListener('change', () => { SA_DEMO_PAGE = 1; renderDemoLeadsTable(); });
+$('#saDemoStageFilter')?.addEventListener('change', () => { SA_DEMO_PAGE = 1; renderDemoLeadsTable(); });
+$('#saReloadDemoLeads')?.addEventListener('click', () => { SA_DEMO_PAGE = 1; loadDemoLeads().catch((e) => toast(e.message, true)); });
 $('#saFollowUpSearch')?.addEventListener('input', renderFollowUpTable);
 $('#saFollowUpStageFilter')?.addEventListener('change', renderFollowUpTable);
 $('#saFollowUpTypeFilter')?.addEventListener('change', renderFollowUpTable);

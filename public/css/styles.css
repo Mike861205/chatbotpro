@@ -6028,6 +6028,19 @@ select.status-sel {
 .sa-delete-icon { width: 64px; height: 64px; border-radius: 20px; background: var(--red-soft); color: var(--red); display: flex; align-items: center; justify-content: center; margin: 0 auto 16px; }
 .sa-delete-icon i { font-size: 30px; }
 
+th.sortable { cursor: pointer; user-select: none; transition: background-color .15s, color .15s; }
+th.sortable:hover { background: rgba(37, 99, 235, .08); color: var(--primary); }
+th.sortable i { margin-left: 4px; font-size: 11px; opacity: .45; vertical-align: middle; }
+th.sortable.sort-active { color: var(--primary); }
+th.sortable.sort-active i { opacity: 1; color: var(--primary); }
+
+.sa-pagination { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; padding: 12px 14px; border-top: 1px solid var(--line); background: var(--surface); border-radius: 0 0 12px 12px; font-size: 13px; }
+.sa-pagination-left { display: flex; align-items: center; gap: 10px; color: var(--ink-2); }
+.sa-pagination-left select { padding: 4px 8px; font-size: 12px; border-radius: 8px; border: 1px solid var(--line); background: var(--surface); color: var(--ink); cursor: pointer; }
+.sa-pagination-controls { display: flex; align-items: center; gap: 8px; color: var(--ink-2); }
+.sa-pagination-controls button { padding: 4px 8px; min-height: 28px; }
+
+
 @media (max-width: 640px) {
   .module-usage-summary { grid-template-columns: 1fr; }
   .module-usage-btn { min-width: 118px; }

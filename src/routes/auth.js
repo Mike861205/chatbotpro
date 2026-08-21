@@ -438,6 +438,7 @@ router.post('/module-usage', requireAuth, async (req, res, next) => {
          RETURNING view_count`,
         [tenantId, demoLeadId, moduleKey]
       );
+      await q('UPDATE demo_leads SET last_seen_at = now() WHERE id = $1', [demoLeadId]);
     } else {
       result = await q(
         `INSERT INTO module_usage (tenant_id, demo_lead_id, module_key, view_count, first_seen_at, last_seen_at)
