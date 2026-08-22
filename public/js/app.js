@@ -142,12 +142,37 @@ function enhanceResponsiveTables(root = document) {
   });
 }
 
+function enhanceOrderNoteCallouts(root = document) {
+  root.querySelectorAll?.('.order-note-callout[data-collapsible-note]').forEach((callout) => {
+    if (callout.dataset.noteEnhanced === 'true') return;
+
+    const noteText = callout.querySelector('.order-note-text');
+    const toggle = callout.querySelector('.order-note-toggle');
+    if (!noteText || !toggle) return;
+
+    callout.dataset.noteEnhanced = 'true';
+    const canMeasure = noteText.clientHeight > 0;
+    toggle.hidden = canMeasure
+      ? noteText.scrollHeight <= noteText.clientHeight + 1
+      : noteText.textContent.trim().length <= 80;
+
+    toggle.addEventListener('click', () => {
+      const expanded = toggle.getAttribute('aria-expanded') !== 'true';
+      callout.classList.toggle('is-expanded', expanded);
+      toggle.setAttribute('aria-expanded', String(expanded));
+      toggle.querySelector('span').textContent = expanded ? 'Ver menos' : 'Ver más';
+      toggle.querySelector('i').className = `ph-bold ${expanded ? 'ph-caret-up' : 'ph-caret-down'}`;
+    });
+  });
+}
+
 let responsiveTableFrame = 0;
 function scheduleResponsiveTableEnhancement() {
   if (responsiveTableFrame) return;
   responsiveTableFrame = requestAnimationFrame(() => {
     responsiveTableFrame = 0;
     enhanceResponsiveTables();
+    enhanceOrderNoteCallouts();
   });
 }
 
@@ -2892,8 +2917,13 @@ function ordersTableHTML(orders, editable = true) {
     .map((o) => {
       const items = o.items.map((it) => `${it.qty}× ${it.name}`).join(', ');
       const orderNote = operationalOrderNote(o);
+      const noteId = `order-note-${editable ? 'orders' : 'recent'}-${o.id}`;
       const noteCallout = orderNote
-        ? `<div class="order-note-callout"><span><i class="ph-fill ph-warning-circle"></i> Nota del pedido</span><b>${esc(orderNote)}</b></div>`
+        ? `<div class="order-note-callout" data-collapsible-note>
+            <span><i class="ph-fill ph-warning-circle"></i> Nota del pedido</span>
+            <b class="order-note-text" id="${noteId}">${esc(orderNote)}</b>
+            <button type="button" class="order-note-toggle" aria-expanded="false" aria-controls="${noteId}" hidden><span>Ver más</span><i class="ph-bold ph-caret-down"></i></button>
+          </div>`
         : '';
       const statusCell = editable
         ? `<select data-order="${o.id}" class="status-sel s-${o.status}">
