@@ -37,6 +37,14 @@ test('valida datos fiscales CFDI 4.0 de emisor y receptor', () => {
   });
   assert.equal(issuer.rfc, 'EKU9003173C9');
   assert.equal(validateReceiver({ rfc: 'XAXX010101000', name: 'PUBLICO EN GENERAL', fiscalRegime: '616', postalCode: '78240', cfdiUse: 'S01' }).cfdiUse, 'S01');
+  const generic = validateReceiver(
+    { rfc: 'XAXX010101000', name: 'Nombre incorrecto', fiscalRegime: '625', postalCode: '23477', cfdiUse: 'G03' },
+    { issuerPostalCode: '78240' }
+  );
+  assert.deepEqual(
+    { name: generic.name, fiscalRegime: generic.fiscalRegime, postalCode: generic.postalCode, cfdiUse: generic.cfdiUse },
+    { name: 'PUBLICO EN GENERAL', fiscalRegime: '616', postalCode: '78240', cfdiUse: 'S01' }
+  );
   assert.throws(() => validateReceiver({ rfc: 'INVALIDO' }), /RFC/);
 });
 
@@ -94,6 +102,7 @@ test('el portal público es responsivo y presenta la identidad completa del tena
   assert.match(css, /grid-template-columns: minmax\(340px, 410px\)/);
   assert.match(client, /function applyBusiness\(portal\)/);
   assert.match(client, /function renderTicketSummary\(ticket\)/);
+  assert.match(client, /applyGenericReceiverDefaults/);
   assert.doesNotMatch(client, /ticketSummary'\)\.innerHTML/);
 });
 

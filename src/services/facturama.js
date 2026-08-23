@@ -66,7 +66,10 @@ class FacturamaClient {
       }
       if (!response.ok) {
         const providerMessage = flattenProviderError(payload);
-        throw new FacturamaError(providerMessage || `Facturama respondió HTTP ${response.status}`, {
+        const fallbackMessage = response.status === 401
+          ? 'Facturama rechazó las credenciales de API del ambiente configurado'
+          : `Facturama respondió HTTP ${response.status}`;
+        throw new FacturamaError(providerMessage || fallbackMessage, {
           status: response.status >= 400 && response.status < 500 ? 422 : 502,
           providerStatus: response.status,
           details: payload,

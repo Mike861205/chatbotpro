@@ -5060,6 +5060,20 @@ function openPosInvoiceModal(saleId) {
   $('#posInvoiceForm').hidden = false; $('#posInvoiceResult').hidden = true;
   $('#posInvoiceModal').classList.add('show');
 }
+
+function applyPosGenericReceiverDefaults() {
+  if ($('#posInvoiceRfc')?.value.trim().toUpperCase() !== 'XAXX010101000') return;
+  $('#posInvoiceName').value = 'PUBLICO EN GENERAL';
+  $('#posInvoiceRegime').value = '616';
+  $('#posInvoiceUse').value = 'S01';
+  const issuerPostalCode = String(INVOICING_DATA?.profile?.postal_code || '').trim();
+  if (/^\d{5}$/.test(issuerPostalCode)) $('#posInvoicePostal').value = issuerPostalCode;
+}
+
+$('#posInvoiceRfc')?.addEventListener('input', (event) => {
+  event.currentTarget.value = event.currentTarget.value.toUpperCase().replace(/[^A-ZÑ&0-9]/g, '').slice(0, 13);
+  applyPosGenericReceiverDefaults();
+});
 $('#posInvoiceCancel')?.addEventListener('click', () => $('#posInvoiceModal').classList.remove('show'));
 $('#posInvoiceForm')?.addEventListener('submit', async (event) => {
   event.preventDefault(); const button = event.currentTarget.querySelector('button[type="submit"]'); button.disabled = true;

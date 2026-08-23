@@ -56,7 +56,7 @@ function validateFiscalProfile(input = {}) {
   return profile;
 }
 
-function validateReceiver(input = {}) {
+function validateReceiver(input = {}, options = {}) {
   const receiver = {
     rfc: cleanUpper(input.rfc, 13),
     name: cleanUpper(input.name ?? input.legalName, 300),
@@ -65,6 +65,16 @@ function validateReceiver(input = {}) {
     cfdiUse: cleanUpper(input.cfdiUse ?? input.cfdi_use ?? 'G03', 4),
     email: String(input.email || '').trim().toLowerCase().slice(0, 254),
   };
+  // El RFC genérico nacional tiene valores obligatorios en CFDI 4.0. Los
+  // normalizamos para que una prueba de público general no sea rechazada por
+  // una combinación incompatible de régimen, uso o domicilio fiscal.
+  if (receiver.rfc === 'XAXX010101000') {
+    receiver.name = 'PUBLICO EN GENERAL';
+    receiver.fiscalRegime = '616';
+    receiver.cfdiUse = 'S01';
+    const issuerPostalCode = String(options.issuerPostalCode || '').trim();
+    if (POSTAL_RE.test(issuerPostalCode)) receiver.postalCode = issuerPostalCode;
+  }
   if (!RFC_RE.test(receiver.rfc)) throw Object.assign(new Error('El RFC del receptor no tiene un formato válido'), { status: 400 });
   if (receiver.name.length < 3) throw Object.assign(new Error('Captura el nombre fiscal del receptor'), { status: 400 });
   if (!FISCAL_REGIMES.has(receiver.fiscalRegime)) throw Object.assign(new Error('El régimen fiscal del receptor no es válido'), { status: 400 });

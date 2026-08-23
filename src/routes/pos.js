@@ -1,5 +1,8 @@
 const express = require('express');
 const bcrypt = require('bcryptjs');
+const fs = require('node:fs/promises');
+const path = require('node:path');
+const config = require('../config');
 const { requireAuth, requireOwner } = require('../middleware/auth');
 const { getSetting } = require('../db');
 const { decrypt } = require('../utils/crypto');
@@ -74,6 +77,19 @@ function normalizePublicMediaPath(raw) {
   if (!value) return '';
   if (/^(https?:)?\/\//i.test(value) || value.startsWith('data:') || value.startsWith('blob:')) return value;
   return value.startsWith('/') ? value : `/${value.replace(/^\/+/, '')}`;
+}
+
+async function resolveExistingPublicMediaPath(raw) {
+  const normalized = normalizePublicMediaPath(raw);
+  if (!normalized || !normalized.startsWith('/uploads/')) return normalized;
+  const relativePath = normalized.slice('/uploads/'.length);
+  if (!relativePath || relativePath.includes('..')) return '';
+  try {
+    await fs.access(path.join(config.UPLOADS_DIR, relativePath.replaceAll('/', path.sep)));
+    return normalized;
+  } catch {
+    return '';
+  }
 }
 
 function sameMoney(a, b) {
@@ -1097,13 +1113,13 @@ router.get('/overview', async (req, res, next) => {
     );
     const { variantsMap, groupsMap } = await getProductExtrasMaps(req.tdb, products.map((p) => p.id));
     const soldQtyByProduct = await listSoldQtyByProduct(req.tdb);
-    const productsWithExtras = products.map((p) => ({
+    const productsWithExtras = await Promise.all(products.map(async (p) => ({
       ...p,
-      image: normalizePublicMediaPath(p.image),
+      image: await resolveExistingPublicMediaPath(p.image),
       soldQty: Number(soldQtyByProduct.get(Number(p.id)) || 0),
       variants: variantsMap.get(p.id) || [],
       modifierGroups: groupsMap.get(p.id) || [],
-    }));
+    })));
     const ctx = userSessionContext(req.user, req);
     const session = await getOpenSession(req.tdb, ctx);
     const sessionTotals = session ? await getSessionTotals(req.tdb, session.id) : null;

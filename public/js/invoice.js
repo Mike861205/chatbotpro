@@ -7,6 +7,7 @@
   const apiBase = `/api/invoicing/public/${encodeURIComponent(slug || '')}`;
   const steps = ['lookup', 'receiver', 'success'];
   let currentTicket = null;
+  let currentPortal = null;
   let portalAvailable = false;
 
   function formatMoney(value) {
@@ -143,13 +144,21 @@
     badge.append(icon, document.createTextNode(sandbox ? ' Ambiente de pruebas' : ' Facturación activa'));
   }
 
-  function setUnavailable(text) {
+  function setUnavailable(text, blocking = true) {
     portalAvailable = false;
-    document.body.classList.add('portal-unavailable');
     $('#portalUnavailable').hidden = false;
+    document.body.classList.toggle('portal-unavailable', blocking);
     const description = $('#portalUnavailable p');
     if (text && description) description.textContent = text;
-    $$('#lookupForm input, #lookupForm button').forEach((element) => { element.disabled = true; });
+    if (blocking) $$('#lookupForm input, #lookupForm button').forEach((element) => { element.disabled = true; });
+  }
+
+  function applyGenericReceiverDefaults() {
+    if ($('#receiverRfc').value.trim().toUpperCase() !== 'XAXX010101000') return;
+    $('#receiverName').value = 'PUBLICO EN GENERAL';
+    $('#receiverRegime').value = '616';
+    $('#receiverUse').value = 'S01';
+    if (currentPortal?.issuer?.postalCode) $('#receiverPostal').value = currentPortal.issuer.postalCode;
   }
 
   function renderTicketSummary(ticket) {
@@ -215,11 +224,12 @@
   async function initialize() {
     try {
       const portal = await request('');
+      currentPortal = portal;
       applyBusiness(portal);
       portalAvailable = Boolean(portal.available);
       if (!portalAvailable) {
-        setUnavailable();
-        return;
+        setUnavailable(portal.unavailableReason || '', false);
+        portalAvailable = true;
       }
       const params = new URLSearchParams(location.search);
       if (params.get('ticket')) $('#ticket').value = params.get('ticket');
@@ -279,6 +289,7 @@
 
   $('#receiverRfc').addEventListener('input', (event) => {
     event.currentTarget.value = event.currentTarget.value.toUpperCase().replace(/[^A-ZÑ&0-9]/g, '').slice(0, 13);
+    applyGenericReceiverDefaults();
   });
 
   $('#receiverPostal').addEventListener('input', (event) => {

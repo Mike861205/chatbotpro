@@ -78,6 +78,15 @@ function profileReady(profile) {
   return Boolean(profile.csd_uploaded);
 }
 
+function profileReadinessError(profile) {
+  if (!profile?.enabled) return 'Activa la facturación electrónica en la configuración fiscal';
+  if (!profileCompleteness(profile)) return 'Completa los datos fiscales y valores SAT predeterminados del negocio';
+  if (!facturama.isConfigured()) return 'Configura las credenciales de Facturama en el servidor';
+  if (profile.environment === 'sandbox' && profile.sandbox_shared) return '';
+  if (!profile.csd_uploaded) return 'Carga los certificados de sello digital del emisor';
+  return '';
+}
+
 async function requestMexicoEligibility(req) {
   if (isMexicoIdentity(req.tenant) || req.tenant?.slug === config.DEMO_TENANT_SLUG) return true;
   const leadId = Number(req.user?.demoLeadId || 0);
@@ -143,9 +152,10 @@ async function loadInvoiceFiles(invoice, profile) {
 }
 
 async function issueSaleInvoice({ tenant, tenantDb, orderId, receiverInput, requestedPaymentForm = '', actor = '', publicToken = '' }) {
-  const receiver = validateReceiver(receiverInput);
   const profile = await getProfile(tenantDb);
-  if (!profileReady(profile)) throw Object.assign(new Error('La facturación del negocio todavía no está activa o completa'), { status: 409 });
+  const readinessError = profileReadinessError(profile);
+  if (readinessError) throw Object.assign(new Error(readinessError), { status: 409 });
+  const receiver = validateReceiver(receiverInput, { issuerPostalCode: profile.postal_code });
 
   const sale = await tenantDb.get(
     `SELECT id, items, subtotal::float AS subtotal, total::float AS total, status, channel, payment_method, payment_breakdown,
@@ -303,6 +313,7 @@ router.get('/public/:slug', publicLimiter, async (req, res, next) => {
         postalCode: profile.postal_code,
       } : null,
       available: profileReady(profile),
+      unavailableReason: profileReadinessError(profile),
       environment: profile?.environment || config.FACTURAMA_ENVIRONMENT,
     });
   } catch (error) { next(error); }
