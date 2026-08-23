@@ -11,7 +11,7 @@
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/fill/style.css" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/duotone/style.css" />
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-  <link rel="stylesheet" href="/static/css/styles.css?v=20260823fiscalproducts" />
+  <link rel="stylesheet" href="/static/css/styles.css?v=20260823invoiceerrors" />
   <link rel="icon" type="image/svg+xml" href="/static/favicon.svg" />
   <link rel="icon" type="image/png" href="/static/chatbotpro100.png" />
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
@@ -2319,11 +2319,12 @@
 
   <!-- ════════ Modal pedidos chatbot para POS ════════ -->
   <div class="modal-bg" id="posInvoiceModal">
-    <div class="modal" style="max-width:660px">
-      <h3><i class="ph-bold ph-file-text"></i> Facturar ticket <span id="posInvoiceTicketLabel"></span></h3>
-      <p class="hint">Captura los datos exactamente como aparecen en la Constancia de Situación Fiscal.</p>
+    <div class="modal pos-invoice-modal" style="max-width:660px">
+      <div class="pos-invoice-heading"><div><h3><i class="ph-bold ph-file-text"></i> Facturar ticket <span id="posInvoiceTicketLabel"></span></h3><p class="hint">Captura los datos exactamente como aparecen en la Constancia de Situación Fiscal.</p></div><span class="pos-invoice-environment" id="posInvoiceEnvironment"><i class="ph-bold ph-flask"></i> Sandbox</span></div>
       <form id="posInvoiceForm">
         <input type="hidden" id="posInvoiceSaleId" />
+        <button type="button" class="pos-invoice-generic" id="posInvoiceGeneric"><i class="ph-bold ph-test-tube"></i><span><b>Usar público general de prueba</b><small>XAXX010101000 · completa automáticamente los datos compatibles</small></span><i class="ph-bold ph-arrow-right"></i></button>
+        <div class="pos-invoice-error" id="posInvoiceError" role="alert" aria-live="assertive" hidden></div>
         <div class="row-2">
           <div class="field"><label>RFC</label><input id="posInvoiceRfc" maxlength="13" required /></div>
           <div class="field"><label>Código postal fiscal</label><input id="posInvoicePostal" maxlength="5" inputmode="numeric" required /></div>
@@ -2334,7 +2335,7 @@
           <div class="field"><label>Uso del CFDI</label><select id="posInvoiceUse"><option value="G03">G03 — Gastos en general</option><option value="S01">S01 — Sin efectos fiscales</option><option value="G01">G01 — Adquisición de mercancías</option><option value="D01">D01 — Honorarios médicos</option></select></div>
         </div>
         <div class="field"><label>Correo del receptor (opcional)</label><input id="posInvoiceEmail" type="email" maxlength="160" /></div>
-        <div class="modal-actions"><button type="button" class="btn btn-ghost" id="posInvoiceCancel">Cancelar</button><button type="submit" class="btn btn-primary"><i class="ph-bold ph-seal-check"></i> Timbrar CFDI</button></div>
+        <div class="modal-actions"><button type="button" class="btn btn-ghost" id="posInvoiceCancel">Cancelar</button><button type="submit" class="btn btn-primary" id="posInvoiceSubmit"><i class="ph-bold ph-seal-check"></i> Timbrar CFDI</button></div>
       </form>
       <div id="posInvoiceResult" hidden></div>
     </div>
@@ -2706,6 +2707,6 @@
     </div>
   </div>
 
-  <script src="/static/js/app.js?v=20260823fiscalproducts"></script>
+  <script src="/static/js/app.js?v=20260823invoiceerrors"></script>
 </body>
 </html>

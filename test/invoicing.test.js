@@ -94,6 +94,19 @@ test('los datos SAT por producto viven en Productos y Facturación conserva sól
   assert.match(productsRoute, /isr_rate::float AS isr_rate/);
 });
 
+test('el POS muestra errores de timbrado dentro del modal y prepara público general en sandbox', () => {
+  const app = read('public/app.html');
+  const client = read('public/js/app.js');
+  const css = read('public/css/styles.css');
+  assert.match(app, /id="posInvoiceError"/);
+  assert.match(app, /id="posInvoiceGeneric"/);
+  assert.match(client, /function showPosInvoiceError/);
+  assert.match(client, /function setPosGenericReceiver/);
+  assert.match(client, /environment === 'sandbox'/);
+  assert.match(css, /\.pos-invoice-error/);
+  assert.match(css, /z-index: 2500/);
+});
+
 test('mapea el medio de pago POS al catálogo SAT', () => {
   assert.equal(paymentFormFromSale({ payment_method: 'cash' }), '01');
   assert.equal(paymentFormFromSale({ payment_method: 'card' }, '04'), '04');

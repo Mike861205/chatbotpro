@@ -5073,8 +5073,40 @@ function openPosInvoiceModal(saleId) {
   if (!ME?.tenant?.invoicingEligible) return toast('La facturación sólo está disponible para cuentas de México', true);
   $('#posInvoiceSaleId').value = saleId;
   $('#posInvoiceTicketLabel').textContent = `#${saleId}`;
+  const environment = String(INVOICING_DATA?.provider?.environment || 'sandbox').toLowerCase();
+  const environmentBadge = $('#posInvoiceEnvironment');
+  environmentBadge.classList.toggle('production', environment === 'production');
+  environmentBadge.innerHTML = environment === 'production' ? '<i class="ph-bold ph-shield-check"></i> Producción' : '<i class="ph-bold ph-flask"></i> Sandbox · pruebas';
+  clearPosInvoiceError();
   $('#posInvoiceForm').hidden = false; $('#posInvoiceResult').hidden = true;
+  if (environment === 'sandbox' && !$('#posInvoiceRfc').value.trim()) setPosGenericReceiver();
+  else applyPosGenericReceiverDefaults();
   $('#posInvoiceModal').classList.add('show');
+}
+
+function clearPosInvoiceError() {
+  const box = $('#posInvoiceError');
+  if (!box) return;
+  box.hidden = true;
+  box.innerHTML = '';
+}
+
+function showPosInvoiceError(error) {
+  const box = $('#posInvoiceError');
+  if (!box) return;
+  const status = Number(error?.status || 0);
+  const uncertain = Boolean(error?.data?.uncertain);
+  const message = String(error?.message || 'No fue posible timbrar el CFDI.').trim();
+  const title = uncertain ? 'No se pudo confirmar el timbrado' : status === 409 ? 'La factura todavía no está lista' : 'No se pudo timbrar el CFDI';
+  box.innerHTML = `<i class="ph-bold ph-warning-circle"></i><div><b>${esc(title)}</b><span>${esc(message)}</span>${status ? `<small>Código de respuesta: ${status}</small>` : ''}</div>`;
+  box.hidden = false;
+  box.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+
+function setPosGenericReceiver() {
+  $('#posInvoiceRfc').value = 'XAXX010101000';
+  applyPosGenericReceiverDefaults();
+  clearPosInvoiceError();
 }
 
 function applyPosGenericReceiverDefaults() {
@@ -5089,10 +5121,16 @@ function applyPosGenericReceiverDefaults() {
 $('#posInvoiceRfc')?.addEventListener('input', (event) => {
   event.currentTarget.value = event.currentTarget.value.toUpperCase().replace(/[^A-ZÑ&0-9]/g, '').slice(0, 13);
   applyPosGenericReceiverDefaults();
+  clearPosInvoiceError();
 });
+$('#posInvoiceGeneric')?.addEventListener('click', setPosGenericReceiver);
 $('#posInvoiceCancel')?.addEventListener('click', () => $('#posInvoiceModal').classList.remove('show'));
 $('#posInvoiceForm')?.addEventListener('submit', async (event) => {
   event.preventDefault(); const button = event.currentTarget.querySelector('button[type="submit"]'); button.disabled = true;
+  clearPosInvoiceError();
+  applyPosGenericReceiverDefaults();
+  $('#posInvoiceModal .modal').classList.add('is-submitting');
+  button.innerHTML = '<i class="ph-bold ph-spinner-gap"></i> Timbrando con Facturama…';
   try {
     const saleId = $('#posInvoiceSaleId').value;
     const data = await api(`/api/invoicing/sales/${saleId}/issue`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ receiver: { rfc: $('#posInvoiceRfc').value, name: $('#posInvoiceName').value, fiscalRegime: $('#posInvoiceRegime').value, postalCode: $('#posInvoicePostal').value, cfdiUse: $('#posInvoiceUse').value, email: $('#posInvoiceEmail').value } }) });
@@ -5100,7 +5138,14 @@ $('#posInvoiceForm')?.addEventListener('submit', async (event) => {
     event.currentTarget.hidden = true; const result = $('#posInvoiceResult'); result.hidden = false;
     result.innerHTML = `<div class="invoice-pos-success"><i class="ph-bold ph-check-circle"></i><h3>CFDI timbrado</h3><p>${esc(invoice.uuid || `${invoice.series}-${invoice.folio}`)}</p><div><a class="btn btn-primary" target="_blank" href="/api/invoicing/invoices/${invoice.id}/pdf">Descargar PDF</a><a class="btn btn-ghost" target="_blank" href="/api/invoicing/invoices/${invoice.id}/xml">Descargar XML</a></div></div>`;
     toast(data.reused ? 'Este ticket ya estaba facturado' : 'Factura timbrada correctamente');
-  } catch (error) { toast(error.message, true); } finally { button.disabled = false; }
+  } catch (error) {
+    showPosInvoiceError(error);
+    toast(error.message, true);
+  } finally {
+    button.disabled = false;
+    button.innerHTML = '<i class="ph-bold ph-seal-check"></i> Timbrar CFDI';
+    $('#posInvoiceModal .modal').classList.remove('is-submitting');
+  }
 });
 
 function syncPosSalesFilterUI() {

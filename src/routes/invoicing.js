@@ -95,7 +95,7 @@ function profileReady(profile) {
 function profileReadinessError(profile) {
   if (!profile?.enabled) return 'Activa la facturación electrónica en la configuración fiscal';
   if (!profileCompleteness(profile)) return 'Completa los datos fiscales y valores SAT predeterminados del negocio';
-  if (!facturama.isConfigured()) return 'Configura las credenciales de Facturama en el servidor';
+  if (!facturama.isConfigured()) return `Facturación en preparación: faltan las credenciales de Facturama ${config.FACTURAMA_ENVIRONMENT === 'sandbox' ? 'Sandbox' : 'Producción'} en el servidor. Comunícate con soporte.`;
   if (profile.environment === 'sandbox' && profile.sandbox_shared) return '';
   if (!profile.csd_uploaded) return 'Carga los certificados de sello digital del emisor';
   return '';
