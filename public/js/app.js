@@ -3691,6 +3691,7 @@ function buildPosTicketData() {
       tableNumber: LAST_POS_SALE.tableNumber || null,
       waiterName: LAST_POS_SALE.waiterName || '',
       rounds: Array.isArray(LAST_POS_SALE.rounds) ? LAST_POS_SALE.rounds : [],
+      invoiceCode: LAST_POS_SALE.invoiceCode || LAST_POS_SALE.invoice_code || '',
       invoiceToken: LAST_POS_SALE.invoiceToken || LAST_POS_SALE.invoice_token || '',
     };
   }
@@ -3752,8 +3753,16 @@ function openThermalPrintWindow(ticket) {
   const deliveryNeighborhood = esc(ticket.deliveryNeighborhood || ticket.delivery_neighborhood || '');
   const deliveryReference = esc(ticket.deliveryReference || ticket.delivery_reference || '');
   const hasDeliveryData = Boolean(deliveryAddress || deliveryNeighborhood || deliveryReference);
-  const invoiceUrl = ME?.tenant?.invoicingEligible && ticket.id && ticket.invoiceToken
-    ? `${ME.tenant.invoicingPortalUrl}?ticket=${encodeURIComponent(ticket.id)}&token=${encodeURIComponent(ticket.invoiceToken)}`
+  const rawInvoiceCode = String(ticket.invoiceCode || ticket.invoiceToken || '').trim();
+  const compactInvoiceCode = rawInvoiceCode.replace(/[^A-Z0-9]/gi, '').toUpperCase();
+  const friendlyInvoiceCode = compactInvoiceCode.length === 8
+    ? `${compactInvoiceCode.slice(0, 4)}-${compactInvoiceCode.slice(4)}`
+    : rawInvoiceCode;
+  const invoiceUrl = ME?.tenant?.invoicingEligible && ticket.id && rawInvoiceCode
+    ? `${ME.tenant.invoicingPortalUrl}?ticket=${encodeURIComponent(ticket.id)}&code=${encodeURIComponent(friendlyInvoiceCode)}`
+    : '';
+  const invoiceQrUrl = invoiceUrl
+    ? `https://api.qrserver.com/v1/create-qr-code/?size=220x220&margin=4&data=${encodeURIComponent(invoiceUrl)}`
     : '';
   const html = `<!doctype html>
 <html lang="es">
@@ -3782,6 +3791,11 @@ function openThermalPrintWindow(ticket) {
     .order-note { margin: 9px 0; padding: 8px; border: 3px double #000; font-size: ${Math.max(fontPx + 2, 14)}px; font-weight: 900; line-height: 1.35; text-align: center; overflow-wrap: anywhere; }
     .order-note span { display: block; margin-bottom: 3px; font-size: ${Math.max(fontPx - 2, 10)}px; letter-spacing: .7px; }
     .delivery-block { margin: 7px 0; padding: 7px; border: 2px solid #000; overflow-wrap: anywhere; }
+    .invoice-box { margin: 8px 0; padding: 9px 5px; border: 2px solid #000; text-align: center; }
+    .invoice-code-label { margin-top: 5px; font-size: ${Math.max(fontPx - 2, 10)}px; font-weight: 700; }
+    .invoice-code { margin: 2px 0 5px; font-size: ${Math.max(fontPx + 5, 18)}px; font-weight: 900; letter-spacing: 2px; }
+    .invoice-qr { width: 31mm; height: 31mm; margin: 4px auto; display: block; image-rendering: pixelated; }
+    .invoice-link { font-size: ${Math.max(fontPx - 3, 9)}px; overflow-wrap: anywhere; }
   </style>
 </head>
 <body>
@@ -3819,13 +3833,19 @@ function openThermalPrintWindow(ticket) {
   </table>
   ${ticket.notes ? `<div class="sep"></div><div class="order-note"><span>⚠ NOTA DEL PEDIDO</span>${esc(ticket.notes)}</div>` : ''}
   <div class="sep"></div>
-  ${invoiceUrl ? `<div class="center meta"><b>FACTURA TU COMPRA</b><br><span style="overflow-wrap:anywhere">${esc(invoiceUrl)}</span></div><div class="sep"></div>` : ''}
+  ${invoiceUrl ? `<div class="invoice-box"><b>FACTURA TU COMPRA</b><img class="invoice-qr" src="${esc(invoiceQrUrl)}" alt="QR de facturacion" /><div class="invoice-code-label">TICKET #${esc(String(ticket.id))} &middot; C&Oacute;DIGO DE FACTURACI&Oacute;N</div><div class="invoice-code">${esc(friendlyInvoiceCode)}</div><div class="invoice-link">${esc(ME.tenant.invoicingPortalUrl)}</div></div><div class="sep"></div>` : ''}
   <div class="center meta">${isRoundTicket ? 'Ronda enviada a preparación' : 'Gracias por tu compra'}</div>
   </div>
   <script>
     window.onload = () => {
-      window.print();
-      setTimeout(() => window.close(), 120);
+      const images = Array.from(document.images);
+      Promise.all(images.map((image) => image.complete ? Promise.resolve() : new Promise((resolve) => {
+        image.addEventListener('load', resolve, { once: true });
+        image.addEventListener('error', resolve, { once: true });
+      }))).finally(() => {
+        window.print();
+        setTimeout(() => window.close(), 120);
+      });
     };
   </script>
 </body>
@@ -3887,6 +3907,7 @@ function printPosSaleById(id) {
     tableNumber: sale.table_number || null,
     waiterName: sale.waiter_name || '',
     rounds: Array.isArray(sale.rounds) ? sale.rounds : [],
+    invoiceCode: sale.invoice_code || sale.invoiceCode || '',
     invoiceToken: sale.invoice_token || sale.invoiceToken || '',
     delivery: sale.delivery || '',
     deliveryAddress: sale.delivery_address || '',
@@ -5341,6 +5362,7 @@ async function importChatbotOrderToPos(orderId) {
       deliveryAddress: sale.delivery_address || '',
       deliveryNeighborhood: sale.delivery_neighborhood || '',
       deliveryReference: sale.delivery_reference || '',
+      invoiceCode: sale.invoice_code || sale.invoiceCode || '',
       invoiceToken: sale.invoice_token || sale.invoiceToken || '',
     };
     toast(`Pedido #${id} integrado a caja`);

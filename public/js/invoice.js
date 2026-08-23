@@ -96,6 +96,13 @@
     return digits.length >= 10 && digits.length <= 15 ? digits : '';
   }
 
+  function formatInvoiceCode(value) {
+    const raw = String(value || '').trim();
+    if (/^[0-9a-f-]{36}$/i.test(raw)) return raw;
+    const compact = raw.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 8);
+    return compact.length > 4 ? `${compact.slice(0, 4)}-${compact.slice(4)}` : compact;
+  }
+
   function applyBusiness(portal) {
     const business = portal.business || {};
     const name = business.name || 'Portal de facturación';
@@ -197,7 +204,7 @@
   }
 
   function invoiceDownloads(invoice, token) {
-    const suffix = `?token=${encodeURIComponent(token)}`;
+    const suffix = `?code=${encodeURIComponent(token)}`;
     $('#downloadPdf').href = `${apiBase}/invoices/${invoice.id}/pdf${suffix}`;
     $('#downloadXml').href = `${apiBase}/invoices/${invoice.id}/xml${suffix}`;
     setText('#invoiceIdentity', invoice.uuid ? `UUID · ${invoice.uuid}` : `Serie ${invoice.series || '—'} · Folio ${invoice.folio || '—'}`);
@@ -207,7 +214,7 @@
   }
 
   async function lookup(ticket, token) {
-    const data = await request('/lookup', { method: 'POST', body: JSON.stringify({ ticket, token }) });
+    const data = await request('/lookup', { method: 'POST', body: JSON.stringify({ ticket, code: token }) });
     currentTicket = { ticket: Number(ticket), token, ...data.ticket };
     if (data.invoice?.status === 'active') {
       invoiceDownloads(data.invoice, token);
@@ -233,10 +240,11 @@
       }
       const params = new URLSearchParams(location.search);
       if (params.get('ticket')) $('#ticket').value = params.get('ticket');
-      if (params.get('token')) $('#token').value = params.get('token');
-      if (params.get('ticket') && params.get('token')) {
+      const invoiceCode = params.get('code') || params.get('token');
+      if (invoiceCode) $('#token').value = formatInvoiceCode(invoiceCode);
+      if (params.get('ticket') && invoiceCode) {
         setBusy($('#lookupForm'), true);
-        try { await lookup(params.get('ticket'), params.get('token')); }
+        try { await lookup(params.get('ticket'), invoiceCode); }
         catch (error) { message(error.message); }
         finally { setBusy($('#lookupForm'), false); }
       }
@@ -270,7 +278,7 @@
         method: 'POST',
         body: JSON.stringify({
           ticket: currentTicket.ticket,
-          token: currentTicket.token,
+          code: currentTicket.token,
           receiver: {
             rfc: $('#receiverRfc').value.trim().toUpperCase(),
             name: $('#receiverName').value.trim(),
@@ -294,6 +302,10 @@
 
   $('#receiverPostal').addEventListener('input', (event) => {
     event.currentTarget.value = event.currentTarget.value.replace(/\D/g, '').slice(0, 5);
+  });
+
+  $('#token').addEventListener('blur', (event) => {
+    event.currentTarget.value = formatInvoiceCode(event.currentTarget.value);
   });
 
   $('#invoiceAnother').addEventListener('click', () => {

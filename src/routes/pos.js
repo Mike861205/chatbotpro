@@ -437,7 +437,7 @@ async function listRecentSales(t, sessionId = null) {
   }
   params.push(15);
   const rows = await t.all(
-    `SELECT id, invoice_token, total::float AS total, status, payment_method, payment_breakdown, cash_received::float AS cash_received,
+    `SELECT id, invoice_code, invoice_token, total::float AS total, status, payment_method, payment_breakdown, cash_received::float AS cash_received,
             cash_change::float AS cash_change, COALESCE(NULLIF(order_notes, ''), notes) AS notes, items, table_account_id, table_number, waiter_name,
             delivery, delivery_fee::float AS delivery_fee, receiving_mode_label, receiving_mode_behavior, delivery_address, delivery_neighborhood, delivery_reference,
             to_char(created_at AT TIME ZONE '${tenantTimeZone(t)}', 'DD Mon YYYY, HH24:MI') AS created_at
@@ -516,7 +516,7 @@ async function listSalesHistoryPage(t, options = {}) {
   const offset = (boundedPage - 1) * safeSize;
 
   const rows = await t.all(
-    `SELECT id, invoice_token, total::float AS total, status, payment_method, payment_breakdown, cash_received::float AS cash_received,
+    `SELECT id, invoice_code, invoice_token, total::float AS total, status, payment_method, payment_breakdown, cash_received::float AS cash_received,
             cash_change::float AS cash_change, COALESCE(NULLIF(order_notes, ''), notes) AS notes, items, table_account_id, table_number, waiter_name,
             delivery, delivery_fee::float AS delivery_fee, receiving_mode_label, receiving_mode_behavior, delivery_address, delivery_neighborhood, delivery_reference,
             to_char(created_at AT TIME ZONE '${tenantTimeZone(t)}', 'DD Mon YYYY, HH24:MI') AS created_at
@@ -1032,7 +1032,7 @@ router.post('/table-accounts/:id/checkout', async (req, res, next) => {
                pos_session_id=$8, delivery_fee=0, service_branch_id=$9, service_branch_name=$10,
                table_account_id=$11, table_number=$12, waiter_name=$13, cogs_total=$14,
                order_notes=CASE WHEN $15 <> '' THEN $15 ELSE order_notes END
-           WHERE id=$16 RETURNING id, invoice_token`,
+           WHERE id=$16 RETURNING id, invoice_code, invoice_token`,
           [JSON.stringify(items), subtotal, notes, payment.method, JSON.stringify(payment.breakdown), payment.cashReceived || null,
             payment.cashChange || null, session.id, session.branch_id || null, session.branch_name || null,
             account.id, account.table_number, waiterName, cogsTotal, userNote, linkedOrder.id]
@@ -1044,7 +1044,7 @@ router.post('/table-accounts/:id/checkout', async (req, res, next) => {
             cash_received, cash_change, pos_session_id, delivery_fee, service_branch_id, service_branch_name,
             table_account_id, table_number, waiter_name, cogs_total, order_notes)
            VALUES (NULL, $1, $2, $2, 'entregado', 'pos', 'mesa', $3, $4, $5, $6, $7, $8, 0, $9, $10, $11, $12, $13, $14, $15)
-           RETURNING id, invoice_token`,
+           RETURNING id, invoice_code, invoice_token`,
           [JSON.stringify(items), subtotal, notes, payment.method, JSON.stringify(payment.breakdown), payment.cashReceived || null,
             payment.cashChange || null, session.id, session.branch_id || null, session.branch_name || null,
             account.id, account.table_number, waiterName, cogsTotal, userNote]
@@ -1060,7 +1060,7 @@ router.post('/table-accounts/:id/checkout', async (req, res, next) => {
          WHERE id = $6`,
         [JSON.stringify(items), subtotal, session.id, saleRow.id, req.user.username, account.id]
       );
-      return { account, items, subtotal, payment, notes, orderNote: userNote, saleId: saleRow.id, invoiceToken: saleRow.invoice_token };
+      return { account, items, subtotal, payment, notes, orderNote: userNote, saleId: saleRow.id, invoiceCode: saleRow.invoice_code, invoiceToken: saleRow.invoice_token };
     });
     const totals = await getSessionTotals(req.tdb, session.id);
     const rounds = await listTableRounds(req.tdb, [accountId]);
@@ -1080,6 +1080,7 @@ router.post('/table-accounts/:id/checkout', async (req, res, next) => {
         tableNumber: result.account.table_number,
         waiterName: result.account.waiter_name,
         rounds,
+        invoiceCode: result.invoiceCode,
         invoiceToken: result.invoiceToken,
       },
       totals,
@@ -1412,7 +1413,7 @@ router.post('/chatbot-orders/:id/import', async (req, res, next) => {
     });
 
     const saleRow = await req.tdb.get(
-      `SELECT id, invoice_token, subtotal::float AS subtotal, total::float AS total, delivery_fee::float AS delivery_fee,
+      `SELECT id, invoice_code, invoice_token, subtotal::float AS subtotal, total::float AS total, delivery_fee::float AS delivery_fee,
               status, payment_method, payment_breakdown, cash_received::float AS cash_received,
               cash_change::float AS cash_change, notes, order_notes, items, delivery, receiving_mode_label, receiving_mode_behavior,
               delivery_address, delivery_neighborhood, delivery_reference,
@@ -1586,7 +1587,7 @@ async function createPosSale(req, res, next) {
         `INSERT INTO {s}.orders
          (customer_id, items, subtotal, total, status, channel, delivery, notes, payment_method, payment_breakdown, cash_received, cash_change, pos_session_id, delivery_fee, service_branch_id, service_branch_name, cogs_total, order_notes, delivery_address, delivery_neighborhood, delivery_reference)
          VALUES (NULL, $1, $2, $3, 'entregado', 'pos', $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
-         RETURNING id, invoice_token`,
+         RETURNING id, invoice_code, invoice_token`,
         [
           JSON.stringify(saleItems),
           subtotal,
@@ -1640,6 +1641,7 @@ async function createPosSale(req, res, next) {
         deliveryAddress,
         deliveryNeighborhood,
         deliveryReference,
+        invoiceCode: result.row.invoice_code,
         invoiceToken: result.row.invoice_token,
       },
       totals: result.totals,

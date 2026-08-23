@@ -818,6 +818,13 @@ async function createTenantSchema(slug) {
     UPDATE "${s}".orders SET invoice_token = gen_random_uuid() WHERE invoice_token IS NULL;
     ALTER TABLE "${s}".orders ALTER COLUMN invoice_token SET NOT NULL;
     CREATE UNIQUE INDEX IF NOT EXISTS idx_${s}_orders_invoice_token ON "${s}".orders(invoice_token);
+    ALTER TABLE "${s}".orders ADD COLUMN IF NOT EXISTS invoice_code TEXT;
+    UPDATE "${s}".orders
+       SET invoice_code = upper(substr(md5(invoice_token::text || ':' || id::text), 1, 8))
+     WHERE invoice_code IS NULL OR invoice_code = '';
+    ALTER TABLE "${s}".orders ALTER COLUMN invoice_code SET DEFAULT upper(substr(replace(gen_random_uuid()::text, '-', ''), 1, 8));
+    ALTER TABLE "${s}".orders ALTER COLUMN invoice_code SET NOT NULL;
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_${s}_orders_invoice_code ON "${s}".orders(invoice_code);
 
     CREATE TABLE IF NOT EXISTS "${s}".fiscal_profiles (
       id INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1),

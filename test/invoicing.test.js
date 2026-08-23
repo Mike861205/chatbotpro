@@ -73,17 +73,24 @@ test('mapea el medio de pago POS al catálogo SAT', () => {
 
 test('la integración está montada, aislada por México y expone POS y portal público', () => {
   const server = read('server.js');
+  const database = read('src/db/index.js');
   const auth = read('src/routes/auth.js');
   const route = read('src/routes/invoicing.js');
   const app = read('public/app.html');
+  const client = read('public/js/app.js');
   assert.match(server, /app\.use\('\/api\/invoicing'/);
   assert.match(server, /hostname\.startsWith\('facturacion\.'/);
   assert.match(auth, /invoicingEligible/);
   assert.match(route, /router\.use\(requireMexico\)/);
   assert.match(route, /\/public\/:slug\/issue/);
   assert.match(route, /\/sales\/:id\/issue/);
+  assert.match(route, /invoiceAccessMatches/);
+  assert.match(database, /invoice_code TEXT/);
+  assert.match(database, /orders_invoice_code/);
   assert.match(app, /data-mexico-only="true"/);
   assert.match(app, /id="view-facturacion"/);
+  assert.match(client, /C&Oacute;DIGO DE FACTURACI&Oacute;N/);
+  assert.match(client, /friendlyInvoiceCode/);
 });
 
 test('el portal público es responsivo y presenta la identidad completa del tenant', () => {
@@ -103,6 +110,7 @@ test('el portal público es responsivo y presenta la identidad completa del tena
   assert.match(client, /function applyBusiness\(portal\)/);
   assert.match(client, /function renderTicketSummary\(ticket\)/);
   assert.match(client, /applyGenericReceiverDefaults/);
+  assert.match(client, /params\.get\('code'\) \|\| params\.get\('token'\)/);
   assert.doesNotMatch(client, /ticketSummary'\)\.innerHTML/);
 });
 

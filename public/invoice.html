@@ -104,8 +104,8 @@
           </div>
           <div class="form-field">
             <label for="token">Código de facturación</label>
-            <div class="input-shell"><i class="ph-bold ph-key"></i><input id="token" name="token" required autocomplete="off" spellcheck="false" placeholder="Pega el código incluido en tu ticket" /><span class="input-check"><i class="ph-bold ph-check"></i></span></div>
-            <small>Es un código único que protege el acceso a tu compra.</small>
+            <div class="input-shell"><i class="ph-bold ph-key"></i><input id="token" name="code" required maxlength="36" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="Ej. A7C9-2F4D" /><span class="input-check"><i class="ph-bold ph-check"></i></span></div>
+            <small>Son 8 caracteres impresos debajo del concepto “Código de facturación”.</small>
           </div>
           <button class="primary action-button" type="submit"><span class="button-label"><i class="ph-bold ph-magnifying-glass"></i> Buscar mi compra</span><span class="button-loading"><i class="ph-bold ph-spinner-gap"></i> Buscando ticket…</span></button>
         </form>

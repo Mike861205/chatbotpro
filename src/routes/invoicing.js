@@ -34,6 +34,18 @@ function parseJson(raw, fallback = {}) {
   try { return JSON.parse(String(raw || '')); } catch { return fallback; }
 }
 
+function compactInvoiceCode(value) {
+  return String(value || '').trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+}
+
+function invoiceAccessMatches(sale, value) {
+  const raw = String(value || '').trim();
+  if (!raw) return false;
+  if (/^[0-9a-f-]{36}$/i.test(raw) && String(sale.invoice_token || '').toLowerCase() === raw.toLowerCase()) return true;
+  return /^[A-Z0-9]{8}$/.test(compactInvoiceCode(raw))
+    && compactInvoiceCode(sale.invoice_code) === compactInvoiceCode(raw);
+}
+
 function safeProfile(row) {
   if (!row) return null;
   return {
@@ -159,12 +171,12 @@ async function issueSaleInvoice({ tenant, tenantDb, orderId, receiverInput, requ
 
   const sale = await tenantDb.get(
     `SELECT id, items, subtotal::float AS subtotal, total::float AS total, status, channel, payment_method, payment_breakdown,
-            delivery_fee::float AS delivery_fee, service_branch_id, invoice_token, created_at
+            delivery_fee::float AS delivery_fee, service_branch_id, invoice_token, invoice_code, created_at
      FROM {s}.orders WHERE id = $1 LIMIT 1`,
     [orderId]
   );
   if (!sale || sale.channel !== 'pos') throw Object.assign(new Error('Ticket de punto de venta no encontrado'), { status: 404 });
-  if (publicToken && String(sale.invoice_token) !== String(publicToken)) throw Object.assign(new Error('El enlace de facturación no es válido'), { status: 404 });
+  if (publicToken && !invoiceAccessMatches(sale, publicToken)) throw Object.assign(new Error('El código de facturación no es válido'), { status: 404 });
   if (sale.status === 'cancelado') throw Object.assign(new Error('No se puede facturar un ticket cancelado'), { status: 409 });
 
   const current = await tenantDb.get(
@@ -324,16 +336,18 @@ router.post('/public/:slug/lookup', publicLimiter, async (req, res, next) => {
     const tenant = await findPublicTenant(req.params.slug);
     if (!tenant) return res.status(404).json({ error: 'Portal de facturación no disponible' });
     const ticket = Number(req.body?.ticket || 0);
-    const token = String(req.body?.token || '').trim();
-    if (!Number.isInteger(ticket) || ticket <= 0 || !/^[0-9a-f-]{36}$/i.test(token)) return res.status(400).json({ error: 'Captura un ticket y enlace válidos' });
+    const token = String(req.body?.code || req.body?.token || '').trim();
+    if (!Number.isInteger(ticket) || ticket <= 0 || (!/^[0-9a-f-]{36}$/i.test(token) && !/^[A-Z0-9]{8}$/.test(compactInvoiceCode(token)))) {
+      return res.status(400).json({ error: 'Captura el número de ticket y su código de facturación' });
+    }
     const tenantDb = tdb(tenant.slug);
     const sale = await tenantDb.get(
-      `SELECT id, items, total::float AS total, status, invoice_token,
+      `SELECT id, items, total::float AS total, status, invoice_token, invoice_code,
               to_char(created_at, 'YYYY-MM-DD HH24:MI') AS created_at
-       FROM {s}.orders WHERE id=$1 AND channel='pos' AND invoice_token=$2::uuid LIMIT 1`,
-      [ticket, token]
+       FROM {s}.orders WHERE id=$1 AND channel='pos' LIMIT 1`,
+      [ticket]
     );
-    if (!sale) return res.status(404).json({ error: 'No encontramos el ticket con ese enlace' });
+    if (!sale || !invoiceAccessMatches(sale, token)) return res.status(404).json({ error: 'No encontramos el ticket con ese código de facturación' });
     if (sale.status === 'cancelado') return res.status(409).json({ error: 'El ticket está cancelado' });
     const invoice = await tenantDb.get('SELECT * FROM {s}.invoices WHERE order_id=$1 ORDER BY id DESC LIMIT 1', [ticket]);
     res.json({
@@ -348,7 +362,7 @@ router.post('/public/:slug/issue', publicLimiter, async (req, res, next) => {
     const tenant = await findPublicTenant(req.params.slug);
     if (!tenant) return res.status(404).json({ error: 'Portal de facturación no disponible' });
     const ticket = Number(req.body?.ticket || 0);
-    const token = String(req.body?.token || '').trim();
+    const token = String(req.body?.code || req.body?.token || '').trim();
     const result = await issueSaleInvoice({
       tenant,
       tenantDb: tdb(tenant.slug),
@@ -369,13 +383,13 @@ router.get('/public/:slug/invoices/:id/:format', publicLimiter, async (req, res,
   try {
     const tenant = await findPublicTenant(req.params.slug);
     if (!tenant) return res.status(404).end();
-    const token = String(req.query.token || '').trim();
+    const token = String(req.query.code || req.query.token || '').trim();
     const tenantDb = tdb(tenant.slug);
     const invoice = await tenantDb.get(
-      `SELECT i.*, o.invoice_token FROM {s}.invoices i JOIN {s}.orders o ON o.id=i.order_id WHERE i.id=$1 LIMIT 1`,
+      `SELECT i.*, o.invoice_token, o.invoice_code FROM {s}.invoices i JOIN {s}.orders o ON o.id=i.order_id WHERE i.id=$1 LIMIT 1`,
       [req.params.id]
     );
-    if (!invoice || String(invoice.invoice_token) !== token) return res.status(404).end();
+    if (!invoice || !invoiceAccessMatches(invoice, token)) return res.status(404).end();
     if (!['xml', 'pdf'].includes(req.params.format)) return res.status(400).json({ error: 'Formato no válido' });
     const format = req.params.format;
     const content = decrypt(format === 'xml' ? invoice.xml_enc : invoice.pdf_enc);
