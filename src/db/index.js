@@ -813,6 +813,7 @@ async function createTenantSchema(slug) {
     ALTER TABLE "${s}".products ADD COLUMN IF NOT EXISTS sat_unit_name TEXT;
     ALTER TABLE "${s}".products ADD COLUMN IF NOT EXISTS tax_object TEXT;
     ALTER TABLE "${s}".products ADD COLUMN IF NOT EXISTS iva_rate NUMERIC(8,6);
+    ALTER TABLE "${s}".products ADD COLUMN IF NOT EXISTS isr_rate NUMERIC(8,6);
     ALTER TABLE "${s}".branches ADD COLUMN IF NOT EXISTS fiscal_postal_code TEXT;
     ALTER TABLE "${s}".orders ADD COLUMN IF NOT EXISTS invoice_token UUID DEFAULT gen_random_uuid();
     UPDATE "${s}".orders SET invoice_token = gen_random_uuid() WHERE invoice_token IS NULL;
@@ -844,6 +845,7 @@ async function createTenantSchema(slug) {
       default_unit_name TEXT NOT NULL DEFAULT 'Unidad de servicio',
       default_tax_object TEXT NOT NULL DEFAULT '02',
       default_iva_rate NUMERIC(8,6) NOT NULL DEFAULT 0.160000,
+      default_isr_rate NUMERIC(8,6) NOT NULL DEFAULT 0,
       delivery_product_code TEXT NOT NULL DEFAULT '',
       prices_include_tax INTEGER NOT NULL DEFAULT 1,
       default_card_payment_form TEXT NOT NULL DEFAULT '04',
@@ -857,6 +859,7 @@ async function createTenantSchema(slug) {
     ALTER TABLE "${s}".fiscal_profiles ADD COLUMN IF NOT EXISTS default_card_payment_form TEXT NOT NULL DEFAULT '04';
     ALTER TABLE "${s}".fiscal_profiles ADD COLUMN IF NOT EXISTS csd_uploaded INTEGER NOT NULL DEFAULT 0;
     ALTER TABLE "${s}".fiscal_profiles ADD COLUMN IF NOT EXISTS csd_updated_at TIMESTAMPTZ;
+    ALTER TABLE "${s}".fiscal_profiles ADD COLUMN IF NOT EXISTS default_isr_rate NUMERIC(8,6) NOT NULL DEFAULT 0;
 
     CREATE TABLE IF NOT EXISTS "${s}".fiscal_customers (
       id BIGSERIAL PRIMARY KEY,

@@ -435,6 +435,8 @@ router.get('/', async (req, res, next) => {
   try {
     const rows = await req.tdb.all(
       `SELECT p.id, p.category_id, p.name, p.description, p.price::float AS price, p.image, p.active,
+              p.sat_product_code, p.sat_unit_code, p.sat_unit_name, p.tax_object,
+              p.iva_rate::float AS iva_rate, p.isr_rate::float AS isr_rate,
               c.name AS category_name
        FROM {s}.products p
        LEFT JOIN {s}.categories c ON c.id = p.category_id
@@ -852,17 +854,40 @@ router.delete('/:id/modifier-groups/:gid/options/:oid', async (req, res, next) =
   } catch (e) { next(e); }
 });
 
+function normalizeProductFiscal(body = {}, existing = {}) {
+  const read = (key, column) => Object.prototype.hasOwnProperty.call(body, key) ? body[key] : existing[column];
+  const productCode = String(read('satProductCode', 'sat_product_code') ?? '').trim() || null;
+  const unitCode = String(read('satUnitCode', 'sat_unit_code') ?? '').trim().toUpperCase() || null;
+  const unitName = String(read('satUnitName', 'sat_unit_name') ?? '').trim().slice(0, 40) || null;
+  const taxObject = String(read('taxObject', 'tax_object') ?? '').trim() || null;
+  const ivaRaw = read('ivaRate', 'iva_rate');
+  const isrRaw = read('isrRate', 'isr_rate');
+  const ivaRate = ivaRaw === '' || ivaRaw === null || ivaRaw === undefined ? null : Number(ivaRaw);
+  const isrRate = isrRaw === '' || isrRaw === null || isrRaw === undefined ? null : Number(isrRaw);
+  if (productCode && !/^\d{8}$/.test(productCode)) throw Object.assign(new Error('La clave SAT debe tener 8 dígitos'), { status: 400 });
+  if (unitCode && !/^[A-Z0-9]{2,3}$/.test(unitCode)) throw Object.assign(new Error('La clave de unidad SAT no es válida'), { status: 400 });
+  if (taxObject && !['01','02','03','04','05','06','07','08'].includes(taxObject)) throw Object.assign(new Error('El objeto de impuesto no es válido'), { status: 400 });
+  if (ivaRate !== null && (!Number.isFinite(ivaRate) || ivaRate < 0 || ivaRate > 1)) throw Object.assign(new Error('La tasa de IVA no es válida'), { status: 400 });
+  if (isrRate !== null && (!Number.isFinite(isrRate) || isrRate < 0 || isrRate > 1)) throw Object.assign(new Error('La tasa de ISR no es válida'), { status: 400 });
+  if (ivaRate !== null && isrRate !== null && 1 + ivaRate - isrRate <= 0) throw Object.assign(new Error('La combinación de IVA e ISR no es válida'), { status: 400 });
+  return { productCode, unitCode, unitName, taxObject, ivaRate, isrRate };
+}
+
 router.post('/', upload.single('image'), async (req, res, next) => {
   let img = null;
   try {
     const { name, description, price, categoryId, active } = req.body || {};
+    const fiscal = normalizeProductFiscal(req.body || {});
     if (!name || !name.trim() || price === undefined || price === '') {
       return res.status(400).json({ error: 'Nombre y precio son obligatorios' });
     }
     img = req.file ? await optimizeUploadedImage(req.file, { scope: req.tenant.slug, outputPrefix: 'prod' }) : null;
     const row = await req.tdb.get(
-      'INSERT INTO {s}.products (name, description, price, category_id, image, active) VALUES ($1,$2,$3,$4,$5,$6) RETURNING id',
-      [name.trim(), description || '', Number(price) || 0, categoryId || null, img, active === '0' ? 0 : 1]
+      `INSERT INTO {s}.products
+       (name,description,price,category_id,image,active,sat_product_code,sat_unit_code,sat_unit_name,tax_object,iva_rate,isr_rate)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING id`,
+      [name.trim(), description || '', Number(price) || 0, categoryId || null, img, active === '0' ? 0 : 1,
+        fiscal.productCode, fiscal.unitCode, fiscal.unitName, fiscal.taxObject, fiscal.ivaRate, fiscal.isrRate]
     );
     res.json(row);
   } catch (e) {
@@ -880,9 +905,11 @@ router.put('/:id', upload.single('image'), async (req, res, next) => {
     const existing = await req.tdb.get('SELECT * FROM {s}.products WHERE id = $1', [req.params.id]);
     if (!existing) return res.status(404).json({ error: 'Producto no encontrado' });
     const { name, description, price, categoryId, active } = req.body || {};
+    const fiscal = normalizeProductFiscal(req.body || {}, existing);
     img = req.file ? await optimizeUploadedImage(req.file, { scope: req.tenant.slug, outputPrefix: 'prod' }) : existing.image;
     await req.tdb.run(
-      'UPDATE {s}.products SET name=$1, description=$2, price=$3, category_id=$4, image=$5, active=$6 WHERE id=$7',
+      `UPDATE {s}.products SET name=$1,description=$2,price=$3,category_id=$4,image=$5,active=$6,
+       sat_product_code=$7,sat_unit_code=$8,sat_unit_name=$9,tax_object=$10,iva_rate=$11,isr_rate=$12 WHERE id=$13`,
       [
         (name || existing.name).trim(),
         description ?? existing.description,
@@ -890,6 +917,7 @@ router.put('/:id', upload.single('image'), async (req, res, next) => {
         categoryId !== undefined ? categoryId || null : existing.category_id,
         img,
         active !== undefined ? (active === '0' ? 0 : 1) : existing.active,
+        fiscal.productCode, fiscal.unitCode, fiscal.unitName, fiscal.taxObject, fiscal.ivaRate, fiscal.isrRate,
         req.params.id,
       ]
     );

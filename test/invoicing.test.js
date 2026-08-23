@@ -33,7 +33,7 @@ test('valida datos fiscales CFDI 4.0 de emisor y receptor', () => {
     rfc: 'EKU9003173C9', legalName: 'ESCUELA KEMPER URGATE', fiscalRegime: '601',
     postalCode: '78240', series: 'TEST', defaultProductCode: '01010101',
     defaultUnitCode: 'E48', defaultUnitName: 'Unidad de servicio', defaultTaxObject: '02',
-    defaultIvaRate: 0.16, defaultCardPaymentForm: '04',
+    defaultIvaRate: 0.16, defaultIsrRate: 0, defaultCardPaymentForm: '04',
   });
   assert.equal(issuer.rfc, 'EKU9003173C9');
   assert.equal(validateReceiver({ rfc: 'XAXX010101000', name: 'PUBLICO EN GENERAL', fiscalRegime: '616', postalCode: '78240', cfdiUse: 'S01' }).cfdiUse, 'S01');
@@ -62,6 +62,36 @@ test('convierte precios POS con IVA incluido a conceptos Facturama sin alterar e
   assert.equal(items[0].Subtotal, 100);
   assert.equal(items[0].Taxes[0].Total, 16);
   assert.equal(items.reduce((sum, item) => sum + item.Total, 0), 136);
+});
+
+test('calcula IVA e ISR retenido por producto conservando el total cobrado', () => {
+  const profile = {
+    default_product_code: '01010101', default_unit_code: 'E48', default_unit_name: 'Unidad de servicio',
+    default_tax_object: '02', default_iva_rate: 0.16, default_isr_rate: 0.10,
+  };
+  const items = buildFacturamaItems(
+    { items: [{ id: 7, name: 'Servicio profesional', qty: 1, price: 106 }], delivery_fee: 0, total: 106 },
+    new Map(),
+    profile
+  );
+  assert.equal(items[0].Subtotal, 100);
+  assert.deepEqual(items[0].Taxes.map((tax) => [tax.Name, tax.Total, tax.IsRetention]), [
+    ['IVA', 16, false],
+    ['ISR', 10, true],
+  ]);
+  assert.equal(items[0].Total, 106);
+});
+
+test('los datos SAT por producto viven en Productos y Facturación conserva sólo valores globales', () => {
+  const app = read('public/app.html');
+  const client = read('public/js/app.js');
+  const productsRoute = read('src/routes/products.js');
+  assert.match(app, /id="prodTabFiscal"/);
+  assert.match(app, /id="pIsrRate"/);
+  assert.match(app, /id="fiscalIsrRate"/);
+  assert.doesNotMatch(app, /id="fiscalProductsTable"/);
+  assert.match(client, /fd\.append\('satProductCode'/);
+  assert.match(productsRoute, /isr_rate::float AS isr_rate/);
 });
 
 test('mapea el medio de pago POS al catálogo SAT', () => {

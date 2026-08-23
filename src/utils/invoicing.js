@@ -41,6 +41,7 @@ function validateFiscalProfile(input = {}) {
     defaultUnitName: String(input.defaultUnitName ?? input.default_unit_name ?? 'Unidad de servicio').trim().slice(0, 40),
     defaultTaxObject: String(input.defaultTaxObject ?? input.default_tax_object ?? '02').trim(),
     defaultIvaRate: Number(input.defaultIvaRate ?? input.default_iva_rate ?? 0.16),
+    defaultIsrRate: Number(input.defaultIsrRate ?? input.default_isr_rate ?? 0),
     defaultCardPaymentForm: String(input.defaultCardPaymentForm ?? input.default_card_payment_form ?? '04').trim(),
   };
   if (!RFC_RE.test(profile.rfc)) throw Object.assign(new Error('El RFC del emisor no tiene un formato válido'), { status: 400 });
@@ -52,6 +53,8 @@ function validateFiscalProfile(input = {}) {
   if (!SAT_UNIT_RE.test(profile.defaultUnitCode)) throw Object.assign(new Error('La clave de unidad SAT no es válida'), { status: 400 });
   if (!['01', '02', '03', '04', '05', '06', '07', '08'].includes(profile.defaultTaxObject)) throw Object.assign(new Error('El objeto de impuesto no es válido'), { status: 400 });
   if (!Number.isFinite(profile.defaultIvaRate) || profile.defaultIvaRate < 0 || profile.defaultIvaRate > 1) throw Object.assign(new Error('La tasa de IVA no es válida'), { status: 400 });
+  if (!Number.isFinite(profile.defaultIsrRate) || profile.defaultIsrRate < 0 || profile.defaultIsrRate > 1) throw Object.assign(new Error('La tasa de ISR no es válida'), { status: 400 });
+  if (1 + profile.defaultIvaRate - profile.defaultIsrRate <= 0) throw Object.assign(new Error('La combinación de IVA e ISR no es válida'), { status: 400 });
   if (!PAYMENT_FORMS.has(profile.defaultCardPaymentForm)) throw Object.assign(new Error('La forma de pago de tarjeta no es válida'), { status: 400 });
   return profile;
 }
@@ -110,12 +113,16 @@ function paymentFormFromSale(sale, defaultCard = '04', requested = '') {
   return options[0][1] > 0 ? options[0][0] : '01';
 }
 
-function fiscalItem({ description, quantity, grossTotal, productCode, unitCode, unitName, taxObject, ivaRate }) {
+function fiscalItem({ description, quantity, grossTotal, productCode, unitCode, unitName, taxObject, ivaRate, isrRate }) {
   const qty = Math.max(1, Number(quantity || 1));
   const gross = roundMoney(grossTotal);
   const rate = taxObject === '02' ? Number(ivaRate || 0) : 0;
-  const base = rate > 0 ? roundMoney(gross / (1 + rate)) : gross;
-  const tax = rate > 0 ? roundMoney(gross - base) : 0;
+  const retentionRate = taxObject === '02' ? Number(isrRate || 0) : 0;
+  const divisor = 1 + rate - retentionRate;
+  if (divisor <= 0) throw Object.assign(new Error('La combinación de IVA e ISR no es válida'), { status: 400 });
+  const base = (rate > 0 || retentionRate > 0) ? roundMoney(gross / divisor) : gross;
+  const tax = rate > 0 ? roundMoney(base * rate) : 0;
+  const retention = retentionRate > 0 ? roundMoney(base * retentionRate) : 0;
   const item = {
     ProductCode: productCode,
     Description: String(description || 'Venta').trim().slice(0, 1000),
@@ -129,6 +136,7 @@ function fiscalItem({ description, quantity, grossTotal, productCode, unitCode, 
   };
   if (taxObject === '02' && rate >= 0) {
     item.Taxes = [{ Total: tax, Name: 'IVA', Base: base, Rate: rate, IsRetention: false }];
+    if (retentionRate > 0) item.Taxes.push({ Total: retention, Name: 'ISR', Base: base, Rate: retentionRate, IsRetention: true });
   }
   return item;
 }
@@ -148,6 +156,7 @@ function buildFacturamaItems(sale, productsById, profile) {
       unitName: product.sat_unit_name || profile.default_unit_name,
       taxObject: product.tax_object || profile.default_tax_object,
       ivaRate: product.iva_rate === null || product.iva_rate === undefined ? profile.default_iva_rate : Number(product.iva_rate),
+      isrRate: product.isr_rate === null || product.isr_rate === undefined ? profile.default_isr_rate : Number(product.isr_rate),
     });
   });
   const deliveryFee = roundMoney(sale.delivery_fee || 0);
@@ -157,6 +166,7 @@ function buildFacturamaItems(sale, productsById, profile) {
       productCode: profile.delivery_product_code || profile.default_product_code,
       unitCode: profile.default_unit_code, unitName: profile.default_unit_name,
       taxObject: profile.default_tax_object, ivaRate: Number(profile.default_iva_rate),
+      isrRate: Number(profile.default_isr_rate || 0),
     }));
   }
   if (!items.length) throw Object.assign(new Error('La venta no contiene conceptos facturables'), { status: 400 });

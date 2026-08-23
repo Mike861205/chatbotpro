@@ -798,15 +798,19 @@ function trackModuleUsage(moduleKey) {
 
 function applyUserScopeUI() {
   const cashierMode = isCashierUser();
+  const mexicoEligible = Boolean(ME?.tenant?.invoicingEligible);
   document.body.classList.toggle('cashier-mode', cashierMode);
   document.querySelectorAll('.sidebar nav a').forEach((a) => {
     if (!a.dataset.view) {
       a.hidden = cashierMode;
       return;
     }
-    const mexicoAllowed = a.dataset.mexicoOnly !== 'true' || Boolean(ME?.tenant?.invoicingEligible);
+    const mexicoAllowed = a.dataset.mexicoOnly !== 'true' || mexicoEligible;
     const allowed = mexicoAllowed && (!cashierMode || CASHIER_ALLOWED_VIEWS.has(a.dataset.view));
     a.hidden = !allowed;
+  });
+  document.querySelectorAll('[data-mexico-only="true"]:not(.sidebar nav a)').forEach((element) => {
+    if (!mexicoEligible) element.hidden = true;
   });
   document.querySelectorAll('.sidebar nav .nav-label').forEach((lbl) => {
     if (cashierMode) {
@@ -5008,17 +5012,15 @@ function renderInvoicing() {
   $('#fiscalProductCode').value = profile.default_product_code || data.sandboxDefaults?.defaultProductCode || '01010101';
   $('#fiscalUnitCode').value = profile.default_unit_code || data.sandboxDefaults?.defaultUnitCode || 'E48';
   $('#fiscalUnitName').value = profile.default_unit_name || data.sandboxDefaults?.defaultUnitName || 'Unidad de servicio';
+  $('#fiscalTaxObject').value = profile.default_tax_object || data.sandboxDefaults?.defaultTaxObject || '02';
   $('#fiscalIvaRate').value = String(profile.default_iva_rate ?? data.sandboxDefaults?.defaultIvaRate ?? 0.16);
+  $('#fiscalIsrRate').value = String(profile.default_isr_rate ?? data.sandboxDefaults?.defaultIsrRate ?? 0);
   $('#fiscalEnabled').checked = profile.enabled ?? true;
   $('#fiscalCsdCard').hidden = Boolean(data.sandboxSharedAvailable && $('#fiscalSandboxShared').checked);
 
   $('#fiscalBranchesTable').innerHTML = data.branches?.length
     ? `<table><thead><tr><th>Sucursal</th><th>Dirección</th><th>CP de expedición</th><th></th></tr></thead><tbody>${data.branches.map((branch) => `<tr data-fiscal-branch-row="${branch.id}"><td><b>${esc(branch.name)}</b></td><td>${esc(branch.address || '—')}</td><td><input class="fiscal-table-input" data-branch-postal value="${esc(branch.fiscal_postal_code || profile.postal_code || '')}" maxlength="5" inputmode="numeric" /></td><td><button class="btn btn-ghost" data-save-fiscal-branch="${branch.id}"><i class="ph-bold ph-floppy-disk"></i> Guardar</button></td></tr>`).join('')}</tbody></table>`
     : emptyHTML('ph-storefront', 'Sin sucursales', 'Agrega una sucursal para configurar su lugar de expedición.');
-
-  $('#fiscalProductsTable').innerHTML = data.products?.length
-    ? `<table><thead><tr><th>Producto</th><th>Clave SAT</th><th>Unidad</th><th>Objeto</th><th>IVA</th><th></th></tr></thead><tbody>${data.products.map((product) => `<tr data-fiscal-product-row="${product.id}"><td><b>${esc(product.name)}</b></td><td><input class="fiscal-table-input" data-product-code value="${esc(product.sat_product_code || profile.default_product_code || '01010101')}" maxlength="8" /></td><td><input class="fiscal-table-input short" data-unit-code value="${esc(product.sat_unit_code || profile.default_unit_code || 'E48')}" maxlength="3" /><input type="hidden" data-unit-name value="${esc(product.sat_unit_name || profile.default_unit_name || 'Unidad de servicio')}" /></td><td><select class="fiscal-table-input" data-tax-object><option value="02" ${String(product.tax_object || '02') === '02' ? 'selected' : ''}>02</option><option value="01" ${String(product.tax_object) === '01' ? 'selected' : ''}>01</option></select></td><td><select class="fiscal-table-input" data-iva-rate><option value="0.16" ${Number(product.iva_rate ?? 0.16) === 0.16 ? 'selected' : ''}>16%</option><option value="0.08" ${Number(product.iva_rate) === 0.08 ? 'selected' : ''}>8%</option><option value="0" ${Number(product.iva_rate) === 0 ? 'selected' : ''}>0%</option></select></td><td><button class="btn btn-ghost" data-save-fiscal-product="${product.id}"><i class="ph-bold ph-floppy-disk"></i></button></td></tr>`).join('')}</tbody></table>`
-    : emptyHTML('ph-barcode', 'Sin productos', 'Crea productos antes de configurar claves SAT.');
 
   $('#fiscalInvoicesTable').innerHTML = data.invoices?.length
     ? `<table><thead><tr><th>Ticket</th><th>CFDI</th><th>Receptor</th><th>Total</th><th>Estado</th><th>Fecha</th><th>Acciones</th></tr></thead><tbody>${data.invoices.map((invoice) => `<tr><td>#${invoice.orderId}</td><td><b>${esc([invoice.series, invoice.folio].filter(Boolean).join('-') || '—')}</b><small class="fiscal-uuid">${esc(invoice.uuid || '')}</small></td><td>${esc(invoice.receiver?.rfc || '—')}<small class="fiscal-uuid">${esc(invoice.receiver?.name || '')}</small></td><td>${fmtMoney(invoice.total)}</td><td>${esc(fiscalStatusLabel(invoice.status))}</td><td>${esc(invoice.issuedAt || invoice.createdAt || '')}</td><td><div class="invoice-actions">${invoice.status === 'active' ? `<a class="btn btn-ghost" href="/api/invoicing/invoices/${invoice.id}/pdf" target="_blank">PDF</a><a class="btn btn-ghost" href="/api/invoicing/invoices/${invoice.id}/xml" target="_blank">XML</a>${!isCashierUser() ? `<button class="btn btn-danger" data-cancel-cfdi="${invoice.id}">Cancelar</button>` : ''}` : ''}</div></td></tr>`).join('')}</tbody></table>`
@@ -5028,13 +5030,6 @@ function renderInvoicing() {
     const row = button.closest('[data-fiscal-branch-row]');
     try { await api(`/api/invoicing/branches/${button.dataset.saveFiscalBranch}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ postalCode: row.querySelector('[data-branch-postal]').value }) }); toast('Código postal guardado'); }
     catch (error) { toast(error.message, true); }
-  }));
-  document.querySelectorAll('[data-save-fiscal-product]').forEach((button) => button.addEventListener('click', async () => {
-    const row = button.closest('[data-fiscal-product-row]');
-    try {
-      await api(`/api/invoicing/products/${button.dataset.saveFiscalProduct}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ productCode: row.querySelector('[data-product-code]').value, unitCode: row.querySelector('[data-unit-code]').value, unitName: row.querySelector('[data-unit-name]').value, taxObject: row.querySelector('[data-tax-object]').value, ivaRate: Number(row.querySelector('[data-iva-rate]').value) }) });
-      toast('Clave SAT guardada');
-    } catch (error) { toast(error.message, true); }
   }));
   document.querySelectorAll('[data-cancel-cfdi]').forEach((button) => button.addEventListener('click', async () => {
     if (!await askConfirm('¿Cancelar CFDI?', 'Se solicitará la cancelación ante el SAT con motivo 02: comprobante emitido con errores sin relación.')) return;
@@ -5059,7 +5054,7 @@ $('#fiscalSandboxShared')?.addEventListener('change', (event) => {
 $('#fiscalProfileForm')?.addEventListener('submit', async (event) => {
   event.preventDefault();
   try {
-    await api('/api/invoicing/profile', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled: $('#fiscalEnabled').checked, sandboxShared: $('#fiscalSandboxShared').checked, rfc: $('#fiscalRfc').value, legalName: $('#fiscalLegalName').value, fiscalRegime: $('#fiscalRegime').value, postalCode: $('#fiscalPostalCode').value, series: $('#fiscalSeries').value, defaultProductCode: $('#fiscalProductCode').value, defaultUnitCode: $('#fiscalUnitCode').value, defaultUnitName: $('#fiscalUnitName').value, defaultTaxObject: '02', defaultIvaRate: Number($('#fiscalIvaRate').value), defaultCardPaymentForm: '04' }) });
+    await api('/api/invoicing/profile', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled: $('#fiscalEnabled').checked, sandboxShared: $('#fiscalSandboxShared').checked, rfc: $('#fiscalRfc').value, legalName: $('#fiscalLegalName').value, fiscalRegime: $('#fiscalRegime').value, postalCode: $('#fiscalPostalCode').value, series: $('#fiscalSeries').value, defaultProductCode: $('#fiscalProductCode').value, defaultUnitCode: $('#fiscalUnitCode').value, defaultUnitName: $('#fiscalUnitName').value, defaultTaxObject: $('#fiscalTaxObject').value, defaultIvaRate: Number($('#fiscalIvaRate').value), defaultIsrRate: Number($('#fiscalIsrRate').value), defaultCardPaymentForm: '04' }) });
     toast('Configuración fiscal guardada'); await loadInvoicing();
   } catch (error) { toast(error.message, true); }
 });
@@ -6434,6 +6429,12 @@ function openProdModal(p = null) {
   $('#pPrice').value = p ? p.price : '';
   $('#pCat').value = p && p.category_id ? p.category_id : '';
   $('#pActive').checked = p ? !!p.active : true;
+  $('#pSatProductCode').value = p?.sat_product_code || '';
+  $('#pSatUnitCode').value = p?.sat_unit_code || '';
+  $('#pSatUnitName').value = p?.sat_unit_name || '';
+  $('#pTaxObject').value = p?.tax_object || '';
+  $('#pIvaRate').value = p?.iva_rate === null || p?.iva_rate === undefined ? '' : String(p.iva_rate);
+  $('#pIsrRate').value = p?.isr_rate === null || p?.isr_rate === undefined ? '' : String(p.isr_rate);
   resetDropzone(p && p.image ? p.image : null);
 
   // Reset tabs
@@ -6911,6 +6912,12 @@ $('#prodForm').addEventListener('submit', async (e) => {
   fd.append('price', $('#pPrice').value);
   fd.append('categoryId', $('#pCat').value);
   fd.append('active', $('#pActive').checked ? '1' : '0');
+  fd.append('satProductCode', $('#pSatProductCode').value.trim());
+  fd.append('satUnitCode', $('#pSatUnitCode').value.trim());
+  fd.append('satUnitName', $('#pSatUnitName').value.trim());
+  fd.append('taxObject', $('#pTaxObject').value);
+  fd.append('ivaRate', $('#pIvaRate').value);
+  fd.append('isrRate', $('#pIsrRate').value);
   if ($('#pImage').files[0]) fd.append('image', $('#pImage').files[0]);
   try {
     const saved = await api(id ? `/api/products/${id}` : '/api/products', { method: id ? 'PUT' : 'POST', body: fd });

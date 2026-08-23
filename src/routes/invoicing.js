@@ -55,6 +55,7 @@ function safeProfile(row) {
     prices_include_tax: Boolean(Number(row.prices_include_tax)),
     csd_uploaded: Boolean(Number(row.csd_uploaded)),
     default_iva_rate: Number(row.default_iva_rate || 0),
+    default_isr_rate: Number(row.default_isr_rate || 0),
     next_folio: Number(row.next_folio || 1),
   };
 }
@@ -75,6 +76,7 @@ function sandboxIssuerDefaults() {
     defaultUnitName: 'Unidad de servicio',
     defaultTaxObject: '02',
     defaultIvaRate: 0.16,
+    defaultIsrRate: 0,
     defaultCardPaymentForm: '04',
   };
 }
@@ -189,7 +191,8 @@ async function issueSaleInvoice({ tenant, tenantDb, orderId, receiverInput, requ
   const productIds = [...new Set((rawItems || []).map((item) => Number(item.id || item.productId || 0)).filter((id) => id > 0))];
   const productRows = productIds.length
     ? await tenantDb.all(
-      `SELECT id, name, sat_product_code, sat_unit_code, sat_unit_name, tax_object, iva_rate::float AS iva_rate
+      `SELECT id, name, sat_product_code, sat_unit_code, sat_unit_name, tax_object,
+              iva_rate::float AS iva_rate, isr_rate::float AS isr_rate
        FROM {s}.products WHERE id = ANY($1::int[])`, [productIds]
     )
     : [];
@@ -406,10 +409,9 @@ router.use(requireMexico);
 
 router.get('/bootstrap', async (req, res, next) => {
   try {
-    const [profile, branches, products, invoices] = await Promise.all([
+    const [profile, branches, invoices] = await Promise.all([
       getProfile(req.tdb),
       req.tdb.all('SELECT id,name,address,fiscal_postal_code,active FROM {s}.branches ORDER BY active DESC,name'),
-      req.tdb.all(`SELECT id,name,sat_product_code,sat_unit_code,sat_unit_name,tax_object,iva_rate::float AS iva_rate,active FROM {s}.products ORDER BY active DESC,name`),
       req.tdb.all(`SELECT i.*, o.total::float AS order_total FROM {s}.invoices i JOIN {s}.orders o ON o.id=i.order_id ORDER BY i.id DESC LIMIT 50`),
     ]);
     res.json({
@@ -421,7 +423,6 @@ router.get('/bootstrap', async (req, res, next) => {
       sandboxDefaults: sandboxIssuerDefaults(),
       portalUrl: invoicingPortalUrl(req, config.INVOICING_PORTAL_ORIGIN, req.tenant.slug),
       branches,
-      products,
       invoices: invoices.map((row) => invoiceSummary(row)),
     });
   } catch (error) { next(error); }
@@ -432,29 +433,38 @@ router.put('/profile', requireOwner, async (req, res, next) => {
     const useSandboxShared = config.FACTURAMA_ENVIRONMENT === 'sandbox'
       && config.FACTURAMA_SANDBOX_SHARED_ISSUER
       && req.body?.sandboxShared !== false;
-    const source = useSandboxShared ? { ...req.body, ...sandboxIssuerDefaults() } : req.body;
+    const sandboxDefaults = sandboxIssuerDefaults();
+    const source = useSandboxShared ? {
+      ...req.body,
+      rfc: sandboxDefaults.rfc,
+      legalName: sandboxDefaults.legalName,
+      fiscalRegime: sandboxDefaults.fiscalRegime,
+      postalCode: sandboxDefaults.postalCode,
+      series: sandboxDefaults.series,
+    } : req.body;
     const profile = validateFiscalProfile(source);
     const enabled = req.body?.enabled === false ? 0 : 1;
     const apiMode = useSandboxShared ? 'web' : 'multi';
     const row = await req.tdb.get(
       `INSERT INTO {s}.fiscal_profiles
        (id,enabled,environment,api_mode,sandbox_shared,rfc,legal_name,fiscal_regime,postal_code,series,
-        default_product_code,default_unit_code,default_unit_name,default_tax_object,default_iva_rate,
+        default_product_code,default_unit_code,default_unit_name,default_tax_object,default_iva_rate,default_isr_rate,
         delivery_product_code,prices_include_tax,default_card_payment_form,updated_at)
-       VALUES (1,$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,1,$16,now())
+       VALUES (1,$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,1,$17,now())
        ON CONFLICT (id) DO UPDATE SET enabled=EXCLUDED.enabled,environment=EXCLUDED.environment,api_mode=EXCLUDED.api_mode,
         sandbox_shared=EXCLUDED.sandbox_shared,rfc=EXCLUDED.rfc,legal_name=EXCLUDED.legal_name,
         fiscal_regime=EXCLUDED.fiscal_regime,postal_code=EXCLUDED.postal_code,series=EXCLUDED.series,
         default_product_code=EXCLUDED.default_product_code,default_unit_code=EXCLUDED.default_unit_code,
         default_unit_name=EXCLUDED.default_unit_name,default_tax_object=EXCLUDED.default_tax_object,
-        default_iva_rate=EXCLUDED.default_iva_rate,delivery_product_code=EXCLUDED.delivery_product_code,
+        default_iva_rate=EXCLUDED.default_iva_rate,default_isr_rate=EXCLUDED.default_isr_rate,
+        delivery_product_code=EXCLUDED.delivery_product_code,
         prices_include_tax=1,default_card_payment_form=EXCLUDED.default_card_payment_form,
         csd_uploaded=CASE WHEN fiscal_profiles.rfc=EXCLUDED.rfc THEN fiscal_profiles.csd_uploaded ELSE 0 END,
         updated_at=now()
        RETURNING *`,
       [enabled, config.FACTURAMA_ENVIRONMENT, apiMode, useSandboxShared ? 1 : 0, profile.rfc, profile.legalName,
         profile.fiscalRegime, profile.postalCode, profile.series, profile.defaultProductCode, profile.defaultUnitCode,
-        profile.defaultUnitName, profile.defaultTaxObject, profile.defaultIvaRate,
+        profile.defaultUnitName, profile.defaultTaxObject, profile.defaultIvaRate, profile.defaultIsrRate,
         String(req.body?.deliveryProductCode || profile.defaultProductCode).trim(), profile.defaultCardPaymentForm]
     );
     res.json({ ok: true, profile: safeProfile(row), ready: profileReady(safeProfile(row)) });

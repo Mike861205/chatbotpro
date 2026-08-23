@@ -1634,6 +1634,11 @@ label { display: flex; align-items: center; gap: 6px; font-size: 12.5px; font-we
   background: var(--grad);
 }
 
+.sidebar nav .nav-label-ventas::before { background: linear-gradient(180deg, #38bdf8, #2563eb); }
+.sidebar nav .nav-label-operacion::before { background: linear-gradient(180deg, #fb923c, #ea580c); }
+.sidebar nav .nav-label-inventario::before { background: linear-gradient(180deg, #2dd4bf, #0f766e); }
+.sidebar nav .nav-label-compras::before { background: linear-gradient(180deg, #a78bfa, #7c3aed); }
+
 .sidebar nav .nav-label-chatbot::before {
   background: var(--grad);
 }
@@ -6553,6 +6558,7 @@ th.sortable.sort-active i { opacity: 1; color: var(--primary); }
 /* ---------- Product variants / modifiers modal tabs ---------- */
 .prod-modal-tabs {
   display: flex;
+  flex-wrap: wrap;
   gap: 4px;
   margin-bottom: 16px;
   border-bottom: 2px solid var(--line);

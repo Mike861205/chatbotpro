@@ -11,7 +11,7 @@
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/fill/style.css" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/duotone/style.css" />
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-  <link rel="stylesheet" href="/static/css/styles.css?v=20260822ordernotecompact" />
+  <link rel="stylesheet" href="/static/css/styles.css?v=20260823fiscalproducts" />
   <link rel="icon" type="image/svg+xml" href="/static/favicon.svg" />
   <link rel="icon" type="image/png" href="/static/chatbotpro100.png" />
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
@@ -34,18 +34,23 @@
       <nav>
         <div class="nav-label nav-label-principal"><i class="ph-fill ph-chart-pie-slice"></i> Principal</div>
         <a href="#dashboard" data-view="dashboard" class="active" data-color="indigo"><span class="nav-ic"><i class="ph-duotone ph-squares-four"></i></span><span>Dashboard</span></a>
+        <div class="nav-label nav-label-ventas"><i class="ph-fill ph-chart-line-up"></i> Ventas</div>
         <a href="#pedidos" data-view="pedidos" data-color="orange"><span class="nav-ic"><i class="ph-duotone ph-clipboard-text"></i></span><span>Pedidos</span> <span id="pendingBadge" class="count" style="display:none"></span></a>
         <a href="#clientes" data-view="clientes" data-color="blue"><span class="nav-ic"><i class="ph-duotone ph-identification-card"></i></span><span>Clientes</span></a>
         <a href="#pos" data-view="pos" data-color="emerald"><span class="nav-ic"><i class="ph-duotone ph-cash-register"></i></span><span>Punto de venta</span></a>
-        <a href="#kds" data-view="kds" data-color="orange"><span class="nav-ic"><i class="ph-duotone ph-monitor-play"></i></span><span>Pantallas KDS</span></a>
         <a href="#ventas" data-view="ventas" data-color="blue"><span class="nav-ic"><i class="ph-duotone ph-chart-line-up"></i></span><span>Ventas</span></a>
         <a href="#facturacion" data-view="facturacion" data-mexico-only="true" data-color="emerald"><span class="nav-ic"><i class="ph-duotone ph-file-text"></i></span><span>Facturación MX</span></a>
         <a href="#cancelaciones" data-view="cancelaciones" data-color="rose"><span class="nav-ic"><i class="ph-duotone ph-file-magnifying-glass"></i></span><span>Cancelaciones</span></a>
         <a href="#cortes" data-view="cortes" data-color="emerald"><span class="nav-ic"><i class="ph-duotone ph-safe"></i></span><span>Cortes</span></a>
+        <div class="nav-label nav-label-operacion"><i class="ph-fill ph-monitor-play"></i> Operación</div>
+        <a href="#kds" data-view="kds" data-color="orange"><span class="nav-ic"><i class="ph-duotone ph-monitor-play"></i></span><span>Pantallas KDS</span></a>
+        <a href="/notificaciones" target="_blank" data-color="violet" style="color:#a78bfa"><span class="nav-ic"><i class="ph-duotone ph-broadcast"></i></span><span>Pedidos en vivo</span> <span style="font-size:9px;background:#6c47ff;color:#fff;padding:2px 6px;border-radius:10px;margin-left:auto">PWA</span></a>
+        <div class="nav-label nav-label-inventario"><i class="ph-fill ph-package"></i> Inventario</div>
         <a href="#productos" data-view="productos" data-color="rose"><span class="nav-ic"><i class="ph-duotone ph-cooking-pot"></i></span><span>Productos</span></a>
         <a href="#costos" data-view="costos" data-color="amber"><span class="nav-ic"><i class="ph-duotone ph-chart-pie-slice"></i></span><span>Costo de ventas</span></a>
         <a href="#inventarios" data-view="inventarios" data-color="teal"><span class="nav-ic"><i class="ph-duotone ph-package"></i></span><span>Inventarios</span></a>
         <a href="#stock-sucursales" data-view="stock-sucursales" data-color="cyan"><span class="nav-ic"><i class="ph-duotone ph-warehouse"></i></span><span>Stock por sucursal</span></a>
+        <div class="nav-label nav-label-compras"><i class="ph-fill ph-shopping-bag-open"></i> Compras</div>
         <a href="#compras" data-view="compras" data-color="blue"><span class="nav-ic"><i class="ph-duotone ph-shopping-bag-open"></i></span><span>Compras</span></a>
         <div class="nav-label nav-label-empleados"><i class="ph-fill ph-users"></i> Empleados</div>
         <a href="#empleados" data-view="empleados" data-color="fuchsia"><span class="nav-ic"><i class="ph-duotone ph-users-three"></i></span><span>Productividad</span></a>
@@ -54,7 +59,6 @@
         <div class="nav-label nav-label-negocio"><i class="ph-fill ph-briefcase"></i> Negocio</div>
         <a href="#config" data-view="config" data-color="amber"><span class="nav-ic"><i class="ph-duotone ph-buildings"></i></span><span>Mi negocio</span></a>
         <a href="#suscripciones" data-view="suscripciones" data-color="violet"><span class="nav-ic"><i class="ph-duotone ph-seal-check"></i></span><span>Suscripciones</span></a>
-        <a href="/notificaciones" target="_blank" data-color="violet" style="color:#a78bfa"><span class="nav-ic"><i class="ph-duotone ph-broadcast"></i></span><span>Pedidos en vivo</span> <span style="font-size:9px;background:#6c47ff;color:#fff;padding:2px 6px;border-radius:10px;margin-left:auto">PWA</span></a>
         <a href="#instrucciones" data-view="instrucciones" data-color="lime"><span class="nav-ic"><i class="ph-duotone ph-book-open-text"></i></span><span>Instrucciones</span></a>
       </nav>
       <div class="foot">
@@ -1020,8 +1024,13 @@
               </div>
               <div class="row-2">
                 <div class="field"><label>Nombre unidad</label><input id="fiscalUnitName" value="Unidad de servicio" required /></div>
-                <div class="field"><label>IVA</label><select id="fiscalIvaRate"><option value="0.16">16%</option><option value="0.08">8%</option><option value="0">0%</option></select></div>
+                <div class="field"><label>Objeto de impuesto</label><select id="fiscalTaxObject"><option value="02">02 - Sí objeto de impuesto</option><option value="01">01 - No objeto de impuesto</option><option value="03">03 - Sí objeto, no obligado al desglose</option></select></div>
               </div>
+              <div class="row-2">
+                <div class="field"><label>IVA</label><select id="fiscalIvaRate"><option value="0.16">16%</option><option value="0.08">8%</option><option value="0">0%</option></select></div>
+                <div class="field"><label>Retención ISR</label><select id="fiscalIsrRate"><option value="0">Sin retención</option><option value="0.0125">1.25%</option><option value="0.04">4%</option><option value="0.10">10%</option></select></div>
+              </div>
+              <p class="hint"><i class="ph-bold ph-info"></i> Estos valores globales se usan como respaldo cuando un producto no tiene configuración fiscal propia.</p>
             </details>
             <div class="toggle-row"><div class="t-info"><i class="ph-bold ph-power"></i><div><b>Activar facturación</b><span>Permite timbrar cuando la configuración esté completa.</span></div></div><label class="switch"><input id="fiscalEnabled" type="checkbox" checked /><span class="track"></span></label></div>
             <button class="btn btn-primary" type="submit"><i class="ph-bold ph-floppy-disk"></i> Guardar configuración fiscal</button>
@@ -1038,7 +1047,6 @@
           </div>
         </div>
         <div class="card" style="margin-top:16px"><h3><i class="ph-bold ph-storefront"></i> Código postal por sucursal</h3><p class="hint">Define el lugar de expedición. Si queda vacío se usa el código postal fiscal principal.</p><div class="table-wrap" id="fiscalBranchesTable"></div></div>
-        <div class="card" style="margin-top:16px"><h3><i class="ph-bold ph-barcode"></i> Catálogo SAT por producto</h3><p class="hint">Los productos sin configuración usan los valores predeterminados del emisor.</p><div class="table-wrap" id="fiscalProductsTable"></div></div>
         <div class="card" style="margin-top:16px"><h3><i class="ph-bold ph-files"></i> CFDI emitidos</h3><div class="table-wrap" id="fiscalInvoicesTable"></div></div>
       </section>
 
@@ -1739,6 +1747,7 @@
       <!-- Pestañas del modal -->
       <div class="prod-modal-tabs" id="prodModalTabs">
         <button type="button" class="active" data-prod-tab="basic"><i class="ph-bold ph-info"></i> Info básica</button>
+        <button type="button" data-prod-tab="fiscal" data-mexico-only="true"><i class="ph-bold ph-barcode"></i> Datos SAT</button>
         <button type="button" data-prod-tab="variants"><i class="ph-bold ph-stack"></i> Variantes de precio</button>
         <button type="button" data-prod-tab="modifiers"><i class="ph-bold ph-sliders"></i> Ingredientes / Opciones</button>
       </div>
@@ -1769,6 +1778,19 @@
           </div>
           <!-- Ficha técnica: extras configurados -->
           <div id="prodExtrasPreview" style="margin-top:14px"></div>
+        </div>
+        <div class="prod-tab-panel" id="prodTabFiscal" data-mexico-only="true" hidden>
+          <div class="hint" style="margin-bottom:12px"><i class="ph-bold ph-info"></i> Configura cómo se facturará este producto. Si dejas un campo vacío se usará el valor global definido en Facturación MX.</div>
+          <div class="row-2">
+            <div class="field"><label><i class="ph-bold ph-barcode"></i> Clave SAT</label><input id="pSatProductCode" maxlength="8" inputmode="numeric" placeholder="Ej. 90101501" /></div>
+            <div class="field"><label><i class="ph-bold ph-ruler"></i> Clave de unidad</label><input id="pSatUnitCode" maxlength="3" placeholder="Ej. E48" /></div>
+          </div>
+          <div class="field"><label>Nombre de unidad</label><input id="pSatUnitName" maxlength="40" placeholder="Ej. Unidad de servicio" /></div>
+          <div class="row-2">
+            <div class="field"><label>Objeto de impuesto</label><select id="pTaxObject"><option value="">Usar valor global</option><option value="02">02 - Sí objeto de impuesto</option><option value="01">01 - No objeto de impuesto</option><option value="03">03 - Sí objeto, no obligado al desglose</option></select></div>
+            <div class="field"><label>IVA</label><select id="pIvaRate"><option value="">Usar valor global</option><option value="0.16">16%</option><option value="0.08">8%</option><option value="0">0%</option></select></div>
+          </div>
+          <div class="field"><label>Retención ISR</label><select id="pIsrRate"><option value="">Usar valor global</option><option value="0">Sin retención</option><option value="0.0125">1.25%</option><option value="0.04">4%</option><option value="0.10">10%</option></select></div>
         </div>
         <!-- Pestaña: Variantes de precio -->
         <div class="prod-tab-panel" id="prodTabVariants" hidden>
@@ -2684,6 +2706,6 @@
     </div>
   </div>
 
-  <script src="/static/js/app.js?v=20260822ordernotecompact"></script>
+  <script src="/static/js/app.js?v=20260823fiscalproducts"></script>
 </body>
 </html>
