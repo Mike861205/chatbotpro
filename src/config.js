@@ -78,6 +78,21 @@ module.exports = {
   DEMO_TENANT_SLUG: String(process.env.DEMO_TENANT_SLUG || '').trim().toLowerCase(),
   PG_SSL_REJECT_UNAUTHORIZED: envEnabled('PG_SSL_REJECT_UNAUTHORIZED', true),
   OPENAI_API_KEY: (process.env.OPENAI_API_KEY || '').trim(),
+  FACTURAMA_ENVIRONMENT: String(process.env.FACTURAMA_ENVIRONMENT || 'sandbox').trim().toLowerCase() === 'production' ? 'production' : 'sandbox',
+  FACTURAMA_USERNAME: String(process.env.FACTURAMA_USERNAME || '').trim(),
+  FACTURAMA_PASSWORD: String(process.env.FACTURAMA_PASSWORD || ''),
+  FACTURAMA_BASE_URL: String(process.env.FACTURAMA_BASE_URL || (
+    String(process.env.FACTURAMA_ENVIRONMENT || 'sandbox').trim().toLowerCase() === 'production'
+      ? 'https://api.facturama.mx'
+      : 'https://apisandbox.facturama.mx'
+  )).trim().replace(/\/+$/, ''),
+  FACTURAMA_TIMEOUT_MS: Math.min(60000, Math.max(5000, Number(process.env.FACTURAMA_TIMEOUT_MS) || 25000)),
+  FACTURAMA_SANDBOX_SHARED_ISSUER: envEnabled('FACTURAMA_SANDBOX_SHARED_ISSUER', true),
+  FACTURAMA_SANDBOX_RFC: String(process.env.FACTURAMA_SANDBOX_RFC || 'EKU9003173C9').trim().toUpperCase(),
+  FACTURAMA_SANDBOX_NAME: String(process.env.FACTURAMA_SANDBOX_NAME || 'ESCUELA KEMPER URGATE').trim().toUpperCase(),
+  FACTURAMA_SANDBOX_REGIME: String(process.env.FACTURAMA_SANDBOX_REGIME || '601').trim(),
+  FACTURAMA_SANDBOX_POSTAL_CODE: String(process.env.FACTURAMA_SANDBOX_POSTAL_CODE || '78240').trim(),
+  INVOICING_PORTAL_ORIGIN: String(process.env.INVOICING_PORTAL_ORIGIN || 'https://facturacion.chatbotpro.systemdem.online').trim().replace(/\/+$/, ''),
   DATABASE_URL: (() => {
     const url = (process.env.DATABASE_URL || '').trim();
     if (!url) {

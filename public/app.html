@@ -39,6 +39,7 @@
         <a href="#pos" data-view="pos" data-color="emerald"><span class="nav-ic"><i class="ph-duotone ph-cash-register"></i></span><span>Punto de venta</span></a>
         <a href="#kds" data-view="kds" data-color="orange"><span class="nav-ic"><i class="ph-duotone ph-monitor-play"></i></span><span>Pantallas KDS</span></a>
         <a href="#ventas" data-view="ventas" data-color="blue"><span class="nav-ic"><i class="ph-duotone ph-chart-line-up"></i></span><span>Ventas</span></a>
+        <a href="#facturacion" data-view="facturacion" data-mexico-only="true" data-color="emerald"><span class="nav-ic"><i class="ph-duotone ph-file-text"></i></span><span>Facturación MX</span></a>
         <a href="#cancelaciones" data-view="cancelaciones" data-color="rose"><span class="nav-ic"><i class="ph-duotone ph-file-magnifying-glass"></i></span><span>Cancelaciones</span></a>
         <a href="#cortes" data-view="cortes" data-color="emerald"><span class="nav-ic"><i class="ph-duotone ph-safe"></i></span><span>Cortes</span></a>
         <a href="#productos" data-view="productos" data-color="rose"><span class="nav-ic"><i class="ph-duotone ph-cooking-pot"></i></span><span>Productos</span></a>
@@ -987,6 +988,58 @@
             <div class="table-wrap" id="tablesConfigList"></div>
           </div>
         </div>
+      </section>
+
+      <!-- ──────── Facturación electrónica México ──────── -->
+      <section class="section" id="view-facturacion">
+        <div class="invoice-admin-hero">
+          <div><span><i class="ph-bold ph-seal-check"></i> CFDI 4.0 · México</span><h2>Facturación electrónica sencilla desde tu punto de venta</h2><p>Configura una vez tus datos fiscales, factura tickets en caja y comparte tu portal de autofacturación.</p></div>
+          <div id="invoiceReadyStatus" class="invoice-ready-status">Cargando…</div>
+        </div>
+        <div class="card invoice-portal-card">
+          <div><h3><i class="ph-bold ph-globe"></i> Portal de autofacturación</h3><p id="invoicePortalUrl">—</p></div>
+          <a class="btn btn-primary" id="openInvoicePortal" target="_blank" rel="noopener"><i class="ph-bold ph-arrow-square-out"></i> Abrir portal</a>
+        </div>
+        <div class="invoice-admin-grid">
+          <form class="card" id="fiscalProfileForm">
+            <h3><i class="ph-bold ph-buildings"></i> Datos fiscales del emisor</h3>
+            <div class="toggle-row" id="sandboxSharedRow"><div class="t-info"><i class="ph-bold ph-flask"></i><div><b>Emisor compartido de pruebas</b><span>Usa el RFC de prueba oficial en Facturama Sandbox.</span></div></div><label class="switch"><input id="fiscalSandboxShared" type="checkbox" checked /><span class="track"></span></label></div>
+            <div class="row-2">
+              <div class="field"><label>RFC</label><input id="fiscalRfc" maxlength="13" required /></div>
+              <div class="field"><label>Régimen fiscal</label><input id="fiscalRegime" maxlength="3" inputmode="numeric" required /></div>
+            </div>
+            <div class="field"><label>Nombre o razón social</label><input id="fiscalLegalName" maxlength="254" required /></div>
+            <div class="row-2">
+              <div class="field"><label>Código postal fiscal</label><input id="fiscalPostalCode" maxlength="5" inputmode="numeric" required /></div>
+              <div class="field"><label>Serie de facturación</label><input id="fiscalSeries" maxlength="25" required value="A" /></div>
+            </div>
+            <details class="invoice-advanced"><summary>Valores SAT predeterminados</summary>
+              <div class="row-2">
+                <div class="field"><label>Clave producto/servicio</label><input id="fiscalProductCode" maxlength="8" value="01010101" required /></div>
+                <div class="field"><label>Clave unidad</label><input id="fiscalUnitCode" maxlength="3" value="E48" required /></div>
+              </div>
+              <div class="row-2">
+                <div class="field"><label>Nombre unidad</label><input id="fiscalUnitName" value="Unidad de servicio" required /></div>
+                <div class="field"><label>IVA</label><select id="fiscalIvaRate"><option value="0.16">16%</option><option value="0.08">8%</option><option value="0">0%</option></select></div>
+              </div>
+            </details>
+            <div class="toggle-row"><div class="t-info"><i class="ph-bold ph-power"></i><div><b>Activar facturación</b><span>Permite timbrar cuando la configuración esté completa.</span></div></div><label class="switch"><input id="fiscalEnabled" type="checkbox" checked /><span class="track"></span></label></div>
+            <button class="btn btn-primary" type="submit"><i class="ph-bold ph-floppy-disk"></i> Guardar configuración fiscal</button>
+          </form>
+          <div class="card" id="fiscalCsdCard">
+            <h3><i class="ph-bold ph-certificate"></i> Sellos digitales (CSD)</h3>
+            <p class="hint">En producción, cada tenant carga su .cer y .key. La contraseña sólo se envía directamente a Facturama y nunca se guarda.</p>
+            <form id="fiscalCsdForm">
+              <div class="field"><label>Certificado .cer</label><input name="certificate" type="file" accept=".cer" required /></div>
+              <div class="field"><label>Llave privada .key</label><input name="privateKey" type="file" accept=".key" required /></div>
+              <div class="field"><label>Contraseña de la llave</label><input name="privateKeyPassword" type="password" required autocomplete="new-password" /></div>
+              <button class="btn btn-primary" type="submit"><i class="ph-bold ph-cloud-arrow-up"></i> Cargar CSD a Facturama</button>
+            </form>
+          </div>
+        </div>
+        <div class="card" style="margin-top:16px"><h3><i class="ph-bold ph-storefront"></i> Código postal por sucursal</h3><p class="hint">Define el lugar de expedición. Si queda vacío se usa el código postal fiscal principal.</p><div class="table-wrap" id="fiscalBranchesTable"></div></div>
+        <div class="card" style="margin-top:16px"><h3><i class="ph-bold ph-barcode"></i> Catálogo SAT por producto</h3><p class="hint">Los productos sin configuración usan los valores predeterminados del emisor.</p><div class="table-wrap" id="fiscalProductsTable"></div></div>
+        <div class="card" style="margin-top:16px"><h3><i class="ph-bold ph-files"></i> CFDI emitidos</h3><div class="table-wrap" id="fiscalInvoicesTable"></div></div>
       </section>
 
       <!-- ──────── Mi negocio ──────── -->
@@ -2243,6 +2296,28 @@
   </div>
 
   <!-- ════════ Modal pedidos chatbot para POS ════════ -->
+  <div class="modal-bg" id="posInvoiceModal">
+    <div class="modal" style="max-width:660px">
+      <h3><i class="ph-bold ph-file-text"></i> Facturar ticket <span id="posInvoiceTicketLabel"></span></h3>
+      <p class="hint">Captura los datos exactamente como aparecen en la Constancia de Situación Fiscal.</p>
+      <form id="posInvoiceForm">
+        <input type="hidden" id="posInvoiceSaleId" />
+        <div class="row-2">
+          <div class="field"><label>RFC</label><input id="posInvoiceRfc" maxlength="13" required /></div>
+          <div class="field"><label>Código postal fiscal</label><input id="posInvoicePostal" maxlength="5" inputmode="numeric" required /></div>
+        </div>
+        <div class="field"><label>Nombre o razón social</label><input id="posInvoiceName" maxlength="254" required /></div>
+        <div class="row-2">
+          <div class="field"><label>Régimen fiscal</label><input id="posInvoiceRegime" maxlength="3" inputmode="numeric" required placeholder="Ej. 612" /></div>
+          <div class="field"><label>Uso del CFDI</label><select id="posInvoiceUse"><option value="G03">G03 — Gastos en general</option><option value="S01">S01 — Sin efectos fiscales</option><option value="G01">G01 — Adquisición de mercancías</option><option value="D01">D01 — Honorarios médicos</option></select></div>
+        </div>
+        <div class="field"><label>Correo del receptor (opcional)</label><input id="posInvoiceEmail" type="email" maxlength="160" /></div>
+        <div class="modal-actions"><button type="button" class="btn btn-ghost" id="posInvoiceCancel">Cancelar</button><button type="submit" class="btn btn-primary"><i class="ph-bold ph-seal-check"></i> Timbrar CFDI</button></div>
+      </form>
+      <div id="posInvoiceResult" hidden></div>
+    </div>
+  </div>
+
   <div class="modal-bg" id="posChatbotQueueModal">
     <div class="modal pos-chatbot-modal">
       <div class="pos-chatbot-modal-head">

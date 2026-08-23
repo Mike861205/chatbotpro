@@ -68,6 +68,7 @@ app.use('/api/notifications', require('./src/routes/notifications'));
 app.use('/api/inventory', require('./src/routes/inventory'));
 app.use('/api/employees', require('./src/routes/employees'));
 app.use('/api/kds', require('./src/routes/kds'));
+app.use('/api/invoicing', require('./src/routes/invoicing'));
 
 // Páginas
 const page = (name) => (req, res) => res.sendFile(path.join(__dirname, 'public', name));
@@ -85,8 +86,13 @@ app.get('/superadmin', page('superadmin.html'));
 app.get('/resellers/panel', page('reseller.html'));
 app.get('/resellers/:slug', validSlug, page('reseller-login.html'));
 app.get('/c/:slug', validSlug, page('chat.html'));
+app.get('/facturacion/:slug', validSlug, page('invoice.html'));
 app.get('/:slug', validSlug, async (req, res, next) => {
   try {
+    const hostname = String(req.hostname || '').toLowerCase();
+    if (hostname.startsWith('facturacion.')) {
+      return res.sendFile(path.join(__dirname, 'public', 'invoice.html'));
+    }
     const found = await q('SELECT id FROM resellers WHERE slug = $1 AND active = 1 LIMIT 1', [req.params.slug]);
     if (found.rows[0]) return res.redirect(302, `/?reseller=${encodeURIComponent(req.params.slug)}`);
     return res.sendFile(path.join(__dirname, 'public', 'chat.html'));

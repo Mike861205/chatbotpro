@@ -8,6 +8,7 @@ const { signToken, setAuthCookie, clearAuthCookie, requireAuth, requireOwner } =
 const { createRateLimiter } = require('../middleware/security');
 const { normalizeInternationalPhone, phoneCountries } = require('../utils/phone');
 const { regionalDefaults, isSupportedTimeZone } = require('../utils/regional');
+const { isMexicoIdentity, invoicingPortalUrl } = require('../utils/invoicing');
 const { sendLeadNotification, sendRegistrationNotification } = require('../utils/mailer');
 
 const router = express.Router();
@@ -28,6 +29,7 @@ const TRACKABLE_MODULES = new Set([
   'pedidos',
   'clientes',
   'pos',
+  'facturacion',
   'kds',
   'ventas',
   'productos',
@@ -541,8 +543,21 @@ router.post('/logout', (req, res) => {
   res.json({ ok: true });
 });
 
-router.get('/me', requireAuth, (req, res) => {
-  res.json({
+router.get('/me', requireAuth, async (req, res, next) => {
+  try {
+    let phoneCountry = req.tenant.phone_country || '';
+    let phoneCallingCode = req.tenant.phone_calling_code || '';
+    let invoicingEligible = isMexicoIdentity(req.tenant) || req.tenant.slug === config.DEMO_TENANT_SLUG;
+    const demoLeadId = Number(req.user.demoLeadId || 0);
+    if (!invoicingEligible && Number.isInteger(demoLeadId) && demoLeadId > 0) {
+      const lead = await q('SELECT phone_country, phone_calling_code FROM demo_leads WHERE id = $1 LIMIT 1', [demoLeadId]);
+      if (isMexicoIdentity(lead.rows[0])) {
+        invoicingEligible = true;
+        phoneCountry = lead.rows[0].phone_country || phoneCountry;
+        phoneCallingCode = lead.rows[0].phone_calling_code || phoneCallingCode;
+      }
+    }
+    res.json({
     username: req.user.username,
     role: req.user.role,
     displayName: req.user.displayName,
@@ -558,8 +573,15 @@ router.get('/me', requireAuth, (req, res) => {
       phone: decrypt(req.tenant.phone_enc) || '',
       logo: req.tenant.logo,
       primaryColor: req.tenant.primary_color,
+      phoneCountry,
+      phoneCallingCode,
+      invoicingEligible,
+      invoicingPortalUrl: invoicingPortalUrl(req, config.INVOICING_PORTAL_ORIGIN, req.tenant.slug),
     },
   });
+  } catch (error) {
+    next(error);
+  }
 });
 
 router.post('/onboarding/complete', requireAuth, requireOwner, async (req, res, next) => {

@@ -806,6 +806,102 @@ async function createTenantSchema(slug) {
       calculated_at TIMESTAMPTZ DEFAULT now()
     );
     CREATE UNIQUE INDEX IF NOT EXISTS idx_${s}_emp_comm_rec_uq ON "${s}".emp_commission_records(employee_id, COALESCE(scheme_id,-1), period_year, period_month);
+
+    -- FacturaciÃ³n electrÃ³nica MÃ©xico (CFDI 4.0)
+    ALTER TABLE "${s}".products ADD COLUMN IF NOT EXISTS sat_product_code TEXT;
+    ALTER TABLE "${s}".products ADD COLUMN IF NOT EXISTS sat_unit_code TEXT;
+    ALTER TABLE "${s}".products ADD COLUMN IF NOT EXISTS sat_unit_name TEXT;
+    ALTER TABLE "${s}".products ADD COLUMN IF NOT EXISTS tax_object TEXT;
+    ALTER TABLE "${s}".products ADD COLUMN IF NOT EXISTS iva_rate NUMERIC(8,6);
+    ALTER TABLE "${s}".branches ADD COLUMN IF NOT EXISTS fiscal_postal_code TEXT;
+    ALTER TABLE "${s}".orders ADD COLUMN IF NOT EXISTS invoice_token UUID DEFAULT gen_random_uuid();
+    UPDATE "${s}".orders SET invoice_token = gen_random_uuid() WHERE invoice_token IS NULL;
+    ALTER TABLE "${s}".orders ALTER COLUMN invoice_token SET NOT NULL;
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_${s}_orders_invoice_token ON "${s}".orders(invoice_token);
+
+    CREATE TABLE IF NOT EXISTS "${s}".fiscal_profiles (
+      id INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+      enabled INTEGER NOT NULL DEFAULT 0,
+      provider TEXT NOT NULL DEFAULT 'facturama',
+      environment TEXT NOT NULL DEFAULT 'sandbox',
+      api_mode TEXT NOT NULL DEFAULT 'multi',
+      sandbox_shared INTEGER NOT NULL DEFAULT 0,
+      rfc TEXT NOT NULL DEFAULT '',
+      legal_name TEXT NOT NULL DEFAULT '',
+      fiscal_regime TEXT NOT NULL DEFAULT '',
+      postal_code TEXT NOT NULL DEFAULT '',
+      series TEXT NOT NULL DEFAULT 'POS',
+      next_folio BIGINT NOT NULL DEFAULT 1,
+      default_product_code TEXT NOT NULL DEFAULT '',
+      default_unit_code TEXT NOT NULL DEFAULT 'E48',
+      default_unit_name TEXT NOT NULL DEFAULT 'Unidad de servicio',
+      default_tax_object TEXT NOT NULL DEFAULT '02',
+      default_iva_rate NUMERIC(8,6) NOT NULL DEFAULT 0.160000,
+      delivery_product_code TEXT NOT NULL DEFAULT '',
+      prices_include_tax INTEGER NOT NULL DEFAULT 1,
+      default_card_payment_form TEXT NOT NULL DEFAULT '04',
+      csd_uploaded INTEGER NOT NULL DEFAULT 0,
+      csd_updated_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+    ALTER TABLE "${s}".fiscal_profiles ADD COLUMN IF NOT EXISTS sandbox_shared INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE "${s}".fiscal_profiles ADD COLUMN IF NOT EXISTS delivery_product_code TEXT NOT NULL DEFAULT '';
+    ALTER TABLE "${s}".fiscal_profiles ADD COLUMN IF NOT EXISTS default_card_payment_form TEXT NOT NULL DEFAULT '04';
+    ALTER TABLE "${s}".fiscal_profiles ADD COLUMN IF NOT EXISTS csd_uploaded INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE "${s}".fiscal_profiles ADD COLUMN IF NOT EXISTS csd_updated_at TIMESTAMPTZ;
+
+    CREATE TABLE IF NOT EXISTS "${s}".fiscal_customers (
+      id BIGSERIAL PRIMARY KEY,
+      rfc_hash TEXT NOT NULL UNIQUE,
+      fiscal_data_enc TEXT NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
+    CREATE TABLE IF NOT EXISTS "${s}".invoices (
+      id BIGSERIAL PRIMARY KEY,
+      order_id INTEGER NOT NULL REFERENCES "${s}".orders(id),
+      request_key UUID NOT NULL UNIQUE,
+      provider TEXT NOT NULL DEFAULT 'facturama',
+      environment TEXT NOT NULL DEFAULT 'sandbox',
+      provider_id TEXT,
+      uuid TEXT,
+      series TEXT NOT NULL DEFAULT '',
+      folio TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending',
+      receiver_data_enc TEXT NOT NULL,
+      fiscal_snapshot_enc TEXT NOT NULL,
+      provider_response_enc TEXT,
+      xml_enc TEXT,
+      pdf_enc TEXT,
+      certificate_number TEXT,
+      error_message TEXT NOT NULL DEFAULT '',
+      cancellation_motive TEXT,
+      replacement_uuid TEXT,
+      cancellation_status TEXT,
+      cancellation_message TEXT,
+      cancellation_receipt_enc TEXT,
+      issued_by TEXT NOT NULL DEFAULT '',
+      issued_at TIMESTAMPTZ,
+      cancel_requested_at TIMESTAMPTZ,
+      canceled_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_${s}_invoices_uuid ON "${s}".invoices(uuid) WHERE uuid IS NOT NULL;
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_${s}_invoices_order_live ON "${s}".invoices(order_id) WHERE status IN ('pending','unknown','active','cancel_pending');
+    CREATE INDEX IF NOT EXISTS idx_${s}_invoices_created ON "${s}".invoices(created_at DESC, id DESC);
+
+    CREATE TABLE IF NOT EXISTS "${s}".invoice_events (
+      id BIGSERIAL PRIMARY KEY,
+      invoice_id BIGINT NOT NULL REFERENCES "${s}".invoices(id) ON DELETE CASCADE,
+      event_type TEXT NOT NULL,
+      detail TEXT NOT NULL DEFAULT '',
+      actor TEXT NOT NULL DEFAULT '',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS idx_${s}_invoice_events_invoice ON "${s}".invoice_events(invoice_id, created_at DESC);
   `);
 }
 

@@ -2,6 +2,7 @@
 set -euo pipefail
 
 DOMAIN="chatbotpro.systemdem.online"
+INVOICE_DOMAIN="facturacion.chatbotpro.systemdem.online"
 APP_DIR="/var/www/chatbotpro"
 PORT=3003
 REPO="https://github.com/Mike861205/chatbotpro.git"
@@ -143,7 +144,7 @@ cat > /etc/nginx/sites-available/$DOMAIN <<EOF
 server {
     listen 80;
     listen [::]:80;
-    server_name $DOMAIN;
+    server_name $DOMAIN $INVOICE_DOMAIN;
 
     client_max_body_size 16m;
 
@@ -172,10 +173,10 @@ if ufw status | grep -q "Status: active"; then
 fi
 
 echo "==> 13) SSL Let's Encrypt"
-certbot --nginx -d "$DOMAIN" --redirect --non-interactive --agree-tos -m "$SSL_EMAIL" || {
+certbot --nginx -d "$DOMAIN" -d "$INVOICE_DOMAIN" --redirect --non-interactive --agree-tos -m "$SSL_EMAIL" || {
   echo "Reintentando certbot..."
   sleep 5
-  certbot --nginx -d "$DOMAIN" --redirect --non-interactive --agree-tos -m "$SSL_EMAIL"
+  certbot --nginx -d "$DOMAIN" -d "$INVOICE_DOMAIN" --redirect --non-interactive --agree-tos -m "$SSL_EMAIL"
 }
 systemctl reload nginx
 
