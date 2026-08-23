@@ -33,6 +33,46 @@ class FacturamaClient {
     this.password = String(options.password ?? config.FACTURAMA_PASSWORD ?? '');
     this.baseUrl = String(options.baseUrl ?? config.FACTURAMA_BASE_URL ?? '').replace(/\/+$/, '');
     this.timeoutMs = Number(options.timeoutMs || config.FACTURAMA_TIMEOUT_MS || 25000);
+    this.branchOfficeCache = null;
+    this.branchOfficeCacheAt = 0;
+  }
+
+  async webExpeditionPostalCode(preferred = '') {
+    const now = Date.now();
+    if (!this.branchOfficeCache || now - this.branchOfficeCacheAt > 5 * 60 * 1000) {
+      const offices = await this.request('/api/BranchOffice');
+      this.branchOfficeCache = Array.isArray(offices) ? offices : [];
+      this.branchOfficeCacheAt = now;
+    }
+    const postalCodes = this.branchOfficeCache
+      .map((office) => String(office?.Address?.ZipCode || '').trim())
+      .filter((postalCode) => /^\d{5}$/.test(postalCode));
+    const requested = String(preferred || '').trim();
+    if (postalCodes.includes(requested)) return requested;
+    if (postalCodes[0]) return postalCodes[0];
+    throw new FacturamaError('Configura al menos un lugar de expedición en el perfil de Facturama', { status: 409 });
+  }
+
+  async ensureWebIssuanceContext(preferredPostalCode = '', preferredSeries = 'TEST') {
+    await this.webExpeditionPostalCode(preferredPostalCode);
+    const requestedPostalCode = String(preferredPostalCode || '').trim();
+    const office = this.branchOfficeCache.find((item) => String(item?.Address?.ZipCode || '').trim() === requestedPostalCode)
+      || this.branchOfficeCache.find((item) => /^\d{5}$/.test(String(item?.Address?.ZipCode || '').trim()));
+    if (!office?.Id) throw new FacturamaError('Configura un lugar de expedición válido en Facturama', { status: 409 });
+    const safeSeries = String(preferredSeries || 'TEST').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 10) || 'TEST';
+    let series = await this.request(`/api/serie/${encodeURIComponent(office.Id)}`);
+    series = Array.isArray(series) ? series : [];
+    let selected = series.find((item) => String(item?.Name || '').toUpperCase() === safeSeries) || series[0];
+    if (!selected) {
+      selected = await this.request(`/api/serie/${encodeURIComponent(office.Id)}`, {
+        method: 'POST',
+        body: { IdBranchOffice: office.Id, Name: safeSeries, Description: 'ChatBotPro Sandbox', Folio: 1 },
+      });
+    }
+    return {
+      postalCode: String(office.Address.ZipCode).trim(),
+      series: String(selected?.Name || safeSeries).trim(),
+    };
   }
 
   isConfigured() {

@@ -12,6 +12,7 @@ const {
   validateFiscalProfile,
   validateReceiver,
   globalInformationForReceiver,
+  resolveExpeditionPostalCode,
   paymentFormFromSale,
   buildFacturamaItems,
   extractFacturamaIdentity,
@@ -166,7 +167,7 @@ async function loadInvoiceFiles(invoice, profile) {
   return files;
 }
 
-async function issueSaleInvoice({ tenant, tenantDb, orderId, receiverInput, requestedPaymentForm = '', actor = '', publicToken = '' }) {
+async function issueSaleInvoice({ tenant, tenantDb, orderId, receiverInput, requestedPaymentForm = '', conceptMode = 'detailed', actor = '', publicToken = '' }) {
   const profile = await getProfile(tenantDb);
   const readinessError = profileReadinessError(profile);
   if (readinessError) throw Object.assign(new Error(readinessError), { status: 409 });
@@ -196,11 +197,18 @@ async function issueSaleInvoice({ tenant, tenantDb, orderId, receiverInput, requ
     )
     : [];
   const productsById = new Map(productRows.map((row) => [Number(row.id), row]));
-  const items = buildFacturamaItems(sale, productsById, profile);
+  const normalizedConceptMode = conceptMode === 'total' ? 'total' : 'detailed';
+  const items = buildFacturamaItems(sale, productsById, profile, { conceptMode: normalizedConceptMode });
   const branch = sale.service_branch_id
     ? await tenantDb.get('SELECT fiscal_postal_code FROM {s}.branches WHERE id = $1 LIMIT 1', [sale.service_branch_id])
     : null;
-  const expeditionPlace = /^\d{5}$/.test(String(branch?.fiscal_postal_code || '')) ? branch.fiscal_postal_code : profile.postal_code;
+  let expeditionPlace = resolveExpeditionPostalCode(profile, branch?.fiscal_postal_code);
+  let invoiceSeries = profile.series;
+  if (profile.api_mode === 'web') {
+    const issuanceContext = await facturama.ensureWebIssuanceContext(expeditionPlace, profile.series);
+    expeditionPlace = issuanceContext.postalCode;
+    invoiceSeries = issuanceContext.series;
+  }
   const receiver = validateReceiver(receiverInput, { expeditionPostalCode: expeditionPlace });
   const paymentForm = paymentFormFromSale(sale, profile.default_card_payment_form, requestedPaymentForm);
 
@@ -216,13 +224,13 @@ async function issueSaleInvoice({ tenant, tenantDb, orderId, receiverInput, requ
     await tx.run('UPDATE {s}.fiscal_profiles SET next_folio = next_folio + 1, updated_at = now() WHERE id = 1');
     const snapshot = {
       issuer: { rfc: profile.rfc, legalName: profile.legal_name, fiscalRegime: profile.fiscal_regime, postalCode: expeditionPlace },
-      receiver, paymentForm, items, total: Number(sale.total), orderId: Number(sale.id),
+      receiver, paymentForm, conceptMode: normalizedConceptMode, items, total: Number(sale.total), orderId: Number(sale.id),
     };
     const row = await tx.get(
       `INSERT INTO {s}.invoices
        (order_id, request_key, environment, series, folio, status, receiver_data_enc, fiscal_snapshot_enc, issued_by)
        VALUES ($1,$2,$3,$4,$5,'pending',$6,$7,$8) RETURNING *`,
-      [sale.id, requestKey, profile.environment, profile.series, folio, encrypt(JSON.stringify(receiver)), encrypt(JSON.stringify(snapshot)), actor]
+      [sale.id, requestKey, profile.environment, invoiceSeries, folio, encrypt(JSON.stringify(receiver)), encrypt(JSON.stringify(snapshot)), actor]
     );
     await tx.run("INSERT INTO {s}.invoice_events (invoice_id, event_type, detail, actor) VALUES ($1,'created','Solicitud preparada',$2)", [row.id, actor]);
     return { row, folio, snapshot };
@@ -237,7 +245,7 @@ async function issueSaleInvoice({ tenant, tenantDb, orderId, receiverInput, requ
     ExpeditionPlace: expeditionPlace,
     PaymentForm: paymentForm,
     PaymentMethod: 'PUE',
-    Serie: profile.series,
+    Serie: invoiceSeries,
     Folio: allocated.folio,
     Receiver: {
       Rfc: receiver.rfc,
@@ -347,16 +355,26 @@ router.post('/public/:slug/lookup', publicLimiter, async (req, res, next) => {
     }
     const tenantDb = tdb(tenant.slug);
     const sale = await tenantDb.get(
-      `SELECT id, items, total::float AS total, status, invoice_token, invoice_code,
+      `SELECT id, items, total::float AS total, status, invoice_token, invoice_code, service_branch_id,
               to_char(created_at, 'YYYY-MM-DD HH24:MI') AS created_at
        FROM {s}.orders WHERE id=$1 AND channel='pos' LIMIT 1`,
       [ticket]
     );
     if (!sale || !invoiceAccessMatches(sale, token)) return res.status(404).json({ error: 'No encontramos el ticket con ese código de facturación' });
     if (sale.status === 'cancelado') return res.status(409).json({ error: 'El ticket está cancelado' });
-    const invoice = await tenantDb.get('SELECT * FROM {s}.invoices WHERE order_id=$1 ORDER BY id DESC LIMIT 1', [ticket]);
+    const [invoice, profile, branch] = await Promise.all([
+      tenantDb.get('SELECT * FROM {s}.invoices WHERE order_id=$1 ORDER BY id DESC LIMIT 1', [ticket]),
+      getProfile(tenantDb),
+      sale.service_branch_id
+        ? tenantDb.get('SELECT fiscal_postal_code FROM {s}.branches WHERE id=$1 LIMIT 1', [sale.service_branch_id])
+        : null,
+    ]);
+    let expeditionPostalCode = resolveExpeditionPostalCode(profile, branch?.fiscal_postal_code);
+    if (profile?.api_mode === 'web') {
+      try { expeditionPostalCode = await facturama.webExpeditionPostalCode(expeditionPostalCode); } catch {}
+    }
     res.json({
-      ticket: { id: sale.id, items: parseJson(sale.items, []).map((item) => ({ name: item.name, qty: item.qty, price: item.price })), total: sale.total, createdAt: sale.created_at },
+      ticket: { id: sale.id, items: parseJson(sale.items, []).map((item) => ({ name: item.name, qty: item.qty, price: item.price })), total: sale.total, createdAt: sale.created_at, expeditionPostalCode },
       invoice: invoice ? invoiceSummary({ ...invoice, order_total: sale.total }, false) : null,
     });
   } catch (error) { next(error); }
@@ -374,6 +392,7 @@ router.post('/public/:slug/issue', publicLimiter, async (req, res, next) => {
       orderId: ticket,
       receiverInput: req.body?.receiver,
       requestedPaymentForm: req.body?.paymentForm,
+      conceptMode: req.body?.conceptMode,
       actor: 'autofacturación',
       publicToken: token,
     });

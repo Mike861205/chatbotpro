@@ -102,6 +102,15 @@ function globalInformationForReceiver(receiver = {}, issuedAt = new Date()) {
   };
 }
 
+function resolveExpeditionPostalCode(profile = {}, branchPostalCode = '') {
+  const profilePostalCode = String(profile.postal_code ?? profile.postalCode ?? '').trim();
+  const branchCode = String(branchPostalCode || '').trim();
+  const sharedSandbox = String(profile.environment || '').toLowerCase() === 'sandbox'
+    && Boolean(profile.sandbox_shared === true || Number(profile.sandbox_shared) === 1);
+  if (!sharedSandbox && POSTAL_RE.test(branchCode)) return branchCode;
+  return POSTAL_RE.test(profilePostalCode) ? profilePostalCode : branchCode;
+}
+
 function roundMoney(value) {
   return Math.round((Number(value) + Number.EPSILON) * 100) / 100;
 }
@@ -135,19 +144,25 @@ function fiscalItem({ description, quantity, grossTotal, productCode, unitCode, 
   const retentionRate = taxObject === '02' ? Number(isrRate || 0) : 0;
   const divisor = 1 + rate - retentionRate;
   if (divisor <= 0) throw Object.assign(new Error('La combinación de IVA e ISR no es válida'), { status: 400 });
-  const base = (rate > 0 || retentionRate > 0) ? roundMoney(gross / divisor) : gross;
-  const tax = rate > 0 ? roundMoney(base * rate) : 0;
-  const retention = retentionRate > 0 ? roundMoney(base * retentionRate) : 0;
+  // Facturama valida Total = Subtotal + traslados - retenciones. Conservamos
+  // hasta seis decimales (permitidos por CFDI 4.0) para evitar diferencias de
+  // un centavo al extraer IVA de precios que ya lo incluyen.
+  const rawBase = (rate > 0 || retentionRate > 0) ? gross / divisor : gross;
+  const unitPrice = roundSix(rawBase / qty);
+  const base = roundSix(unitPrice * qty);
+  const tax = rate > 0 ? roundSix(base * rate) : 0;
+  const retention = retentionRate > 0 ? roundSix(base * retentionRate) : 0;
+  const fiscalTotal = roundSix(base + tax - retention);
   const item = {
     ProductCode: productCode,
     Description: String(description || 'Venta').trim().slice(0, 1000),
     UnitCode: unitCode,
     Unit: unitName,
     Quantity: qty,
-    UnitPrice: roundSix(base / qty),
+    UnitPrice: unitPrice,
     Subtotal: base,
     TaxObject: taxObject,
-    Total: gross,
+    Total: fiscalTotal,
   };
   if (taxObject === '02' && rate >= 0) {
     item.Taxes = [{ Total: tax, Name: 'IVA', Base: base, Rate: rate, IsRetention: false }];
@@ -156,9 +171,20 @@ function fiscalItem({ description, quantity, grossTotal, productCode, unitCode, 
   return item;
 }
 
-function buildFacturamaItems(sale, productsById, profile) {
+function buildFacturamaItems(sale, productsById, profile, options = {}) {
   const rawItems = typeof sale.items === 'string' ? JSON.parse(sale.items || '[]') : (sale.items || []);
-  const items = rawItems.map((line) => {
+  const conceptMode = options.conceptMode === 'total' ? 'total' : 'detailed';
+  const items = conceptMode === 'total' ? [fiscalItem({
+    description: 'Consumo',
+    quantity: 1,
+    grossTotal: Number(sale.total || 0),
+    productCode: profile.default_product_code,
+    unitCode: profile.default_unit_code,
+    unitName: profile.default_unit_name,
+    taxObject: profile.default_tax_object,
+    ivaRate: Number(profile.default_iva_rate),
+    isrRate: Number(profile.default_isr_rate || 0),
+  })] : rawItems.map((line) => {
     const product = productsById.get(Number(line.id || line.productId || 0)) || {};
     const qty = Math.max(1, Number(line.qty || 1));
     const gross = roundMoney(Number(line.price || 0) * qty);
@@ -175,7 +201,7 @@ function buildFacturamaItems(sale, productsById, profile) {
     });
   });
   const deliveryFee = roundMoney(sale.delivery_fee || 0);
-  if (deliveryFee > 0) {
+  if (conceptMode === 'detailed' && deliveryFee > 0) {
     items.push(fiscalItem({
       description: 'Servicio de entrega', quantity: 1, grossTotal: deliveryFee,
       productCode: profile.delivery_product_code || profile.default_product_code,
@@ -220,6 +246,6 @@ function createRequestKey() {
 
 module.exports = {
   RFC_RE, POSTAL_RE, FISCAL_REGIMES, CFDI_USES, PAYMENT_FORMS,
-  isMexicoIdentity, invoicingPortalUrl, validateFiscalProfile, validateReceiver, globalInformationForReceiver, roundMoney,
+  isMexicoIdentity, invoicingPortalUrl, validateFiscalProfile, validateReceiver, globalInformationForReceiver, resolveExpeditionPostalCode, roundMoney,
   paymentFormFromSale, buildFacturamaItems, extractFacturamaIdentity, createRequestKey,
 };

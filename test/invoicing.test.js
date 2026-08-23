@@ -8,6 +8,7 @@ const {
   validateFiscalProfile,
   validateReceiver,
   globalInformationForReceiver,
+  resolveExpeditionPostalCode,
   paymentFormFromSale,
   buildFacturamaItems,
 } = require('../src/utils/invoicing');
@@ -55,6 +56,8 @@ test('valida datos fiscales CFDI 4.0 de emisor y receptor', () => {
     Periodicity: '01', Months: '08', Year: 2026,
   });
   assert.equal(globalInformationForReceiver({ rfc: 'EKU9003173C9' }), null);
+  assert.equal(resolveExpeditionPostalCode({ environment: 'sandbox', sandbox_shared: true, postal_code: '78240' }, '23456'), '78240');
+  assert.equal(resolveExpeditionPostalCode({ environment: 'production', sandbox_shared: false, postal_code: '78240' }, '23456'), '23456');
   assert.throws(() => validateReceiver({ rfc: 'INVALIDO' }), /RFC/);
 });
 
@@ -72,6 +75,22 @@ test('convierte precios POS con IVA incluido a conceptos Facturama sin alterar e
   assert.equal(items[0].Subtotal, 100);
   assert.equal(items[0].Taxes[0].Total, 16);
   assert.equal(items.reduce((sum, item) => sum + item.Total, 0), 136);
+});
+
+test('conserva seis decimales fiscales y permite consumo total o desglosado', () => {
+  const profile = {
+    default_product_code: '01010101', default_unit_code: 'E48', default_unit_name: 'Unidad de servicio',
+    default_tax_object: '02', default_iva_rate: 0.16, default_isr_rate: 0,
+  };
+  const sale = { items: [{ id: 1, name: 'Aros', qty: 1, price: 80 }, { id: 2, name: 'Alitas', qty: 1, price: 199 }], delivery_fee: 0, total: 279 };
+  const detailed = buildFacturamaItems(sale, new Map(), profile, { conceptMode: 'detailed' });
+  assert.equal(detailed[0].Subtotal, 68.965517);
+  assert.equal(detailed[0].Taxes[0].Total, 11.034483);
+  assert.equal(detailed[0].Total, 80);
+  const total = buildFacturamaItems(sale, new Map(), profile, { conceptMode: 'total' });
+  assert.equal(total.length, 1);
+  assert.equal(total[0].Description, 'Consumo');
+  assert.equal(total[0].Total, 279);
 });
 
 test('calcula IVA e ISR retenido por producto conservando el total cobrado', () => {
@@ -113,6 +132,7 @@ test('el POS muestra errores de timbrado dentro del modal y prepara público gen
   assert.match(client, /function showPosInvoiceError/);
   assert.match(client, /function setPosGenericReceiver/);
   assert.match(client, /environment === 'sandbox'/);
+  assert.match(read('public/invoice.html'), /name="conceptMode" value="total"/);
   assert.match(css, /\.pos-invoice-error/);
   assert.match(css, /z-index: 2500/);
 });

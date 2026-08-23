@@ -50,6 +50,7 @@
   }
 
   function setBusy(form, busy) {
+    if (!form) return;
     form.classList.toggle('is-busy', busy);
     const button = form.querySelector('button[type="submit"]');
     if (button) button.disabled = busy;
@@ -165,7 +166,8 @@
     $('#receiverName').value = 'PUBLICO EN GENERAL';
     $('#receiverRegime').value = '616';
     $('#receiverUse').value = 'S01';
-    if (currentPortal?.issuer?.postalCode) $('#receiverPostal').value = currentPortal.issuer.postalCode;
+    const expeditionPostalCode = currentTicket?.expeditionPostalCode || currentPortal?.issuer?.postalCode;
+    if (expeditionPostalCode) $('#receiverPostal').value = expeditionPostalCode;
   }
 
   function renderTicketSummary(ticket) {
@@ -224,6 +226,7 @@
     if (data.invoice?.status === 'cancel_pending') throw new Error('La factura de este ticket tiene una cancelación en proceso. Comunícate con el negocio.');
     if (data.invoice?.status === 'canceled') throw new Error('La factura asociada a este ticket fue cancelada. Comunícate con el negocio.');
     renderTicketSummary(data.ticket);
+    applyGenericReceiverDefaults();
     showSection('receiver');
     $('#receiverStep').scrollIntoView({ behavior: 'smooth', block: 'start' });
   }
@@ -260,18 +263,20 @@
 
   $('#lookupForm').addEventListener('submit', async (event) => {
     event.preventDefault();
+    const form = event.currentTarget;
     if (!portalAvailable) return;
     message('');
-    setBusy(event.currentTarget, true);
+    setBusy(form, true);
     try { await lookup($('#ticket').value, $('#token').value.trim()); }
     catch (error) { message(error.message); }
-    finally { setBusy(event.currentTarget, false); }
+    finally { setBusy(form, false); }
   });
 
   $('#invoiceForm').addEventListener('submit', async (event) => {
     event.preventDefault();
+    const form = event.currentTarget;
     message('');
-    setBusy(event.currentTarget, true);
+    setBusy(form, true);
     try {
       if (!currentTicket) throw new Error('Busca primero tu ticket');
       const data = await request('/issue', {
@@ -279,6 +284,7 @@
         body: JSON.stringify({
           ticket: currentTicket.ticket,
           code: currentTicket.token,
+          conceptMode: form.elements.conceptMode.value,
           receiver: {
             rfc: $('#receiverRfc').value.trim().toUpperCase(),
             name: $('#receiverName').value.trim(),
@@ -292,7 +298,7 @@
       if (data.invoice?.status !== 'active') throw new Error('El CFDI quedó en proceso de validación. Intenta consultar nuevamente este ticket en unos minutos.');
       invoiceDownloads(data.invoice, currentTicket.token);
     } catch (error) { message(error.message); }
-    finally { setBusy(event.currentTarget, false); }
+    finally { setBusy(form, false); }
   });
 
   $('#receiverRfc').addEventListener('input', (event) => {

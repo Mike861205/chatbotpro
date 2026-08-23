@@ -216,6 +216,16 @@ button, a { -webkit-tap-highlight-color: transparent; }
 
 .portal-form { display: grid; gap: 18px; }
 .form-grid-two { grid-template-columns: 1fr 1fr; }
+.concept-mode { margin: 0; padding: 0; border: 0; }
+.concept-mode legend { margin-bottom: 10px; color: var(--ink); font-size: 11px; font-weight: 800; }
+.concept-mode-options { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.concept-mode-options label { cursor: pointer; }
+.concept-mode-options input { position: absolute; opacity: 0; pointer-events: none; }
+.concept-mode-options span { display: grid; grid-template-columns: 34px 1fr; column-gap: 10px; align-items: center; min-height: 66px; padding: 11px 13px; border: 1px solid #dfe5ef; border-radius: 15px; background: #fff; transition: .18s ease; }
+.concept-mode-options i { grid-row: 1 / 3; display: grid; place-items: center; width: 34px; height: 34px; border-radius: 10px; background: #f0fdf4; color: var(--brand); font-size: 18px; }
+.concept-mode-options b { color: var(--ink); font-size: 11px; }
+.concept-mode-options small { color: var(--muted); font-size: 8px; line-height: 1.4; }
+.concept-mode-options input:checked + span { border-color: var(--brand); background: color-mix(in srgb, var(--brand) 6%, white); box-shadow: 0 0 0 3px color-mix(in srgb, var(--brand) 12%, transparent); }
 .full-field { grid-column: 1 / -1; }
 .form-field { min-width: 0; display: grid; gap: 7px; }
 .form-field label { color: var(--ink-soft); font-size: 11px; font-weight: 800; }
@@ -371,6 +381,7 @@ body.portal-unavailable .lookup-card input, body.portal-unavailable .lookup-card
   .card-heading p { font-size: 10px; line-height: 1.55; }
   .portal-form { gap: 16px; }
   .form-grid-two { grid-template-columns: 1fr; }
+  .concept-mode-options { grid-template-columns: 1fr; }
   .full-field { grid-column: auto; }
   .form-field label { font-size: 11px; }
   .form-field > small { font-size: 8px; }

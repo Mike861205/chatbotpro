@@ -10,7 +10,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/bold/style.css" />
-  <link rel="stylesheet" href="/static/css/invoice.css" />
+  <link rel="stylesheet" href="/static/css/invoice.css?v=20260823conceptmode" />
 </head>
 <body data-portal-step="lookup">
   <div class="page-glow page-glow-one" aria-hidden="true"></div>
@@ -122,6 +122,13 @@
         <div id="ticketSummary" class="ticket-summary"></div>
 
         <form id="invoiceForm" class="portal-form form-grid-two">
+          <fieldset class="concept-mode full-field">
+            <legend>¿Cómo quieres que aparezca tu compra?</legend>
+            <div class="concept-mode-options">
+              <label><input type="radio" name="conceptMode" value="total" checked /><span><i class="ph-bold ph-bowl-food"></i><b>Consumo total</b><small>Un solo concepto por el total del ticket</small></span></label>
+              <label><input type="radio" name="conceptMode" value="detailed" /><span><i class="ph-bold ph-list-bullets"></i><b>Consumo desglosado</b><small>Cada producto aparece por separado</small></span></label>
+            </div>
+          </fieldset>
           <div class="form-field">
             <label for="receiverRfc">RFC</label>
             <div class="input-shell"><i class="ph-bold ph-identification-card"></i><input id="receiverRfc" maxlength="13" required autocapitalize="characters" autocomplete="off" placeholder="XAXX010101000" /></div>
@@ -190,6 +197,6 @@
       </footer>
     </section>
   </main>
-  <script src="/static/js/invoice.js" defer></script>
+  <script src="/static/js/invoice.js?v=20260823conceptmode" defer></script>
 </body>
 </html>
