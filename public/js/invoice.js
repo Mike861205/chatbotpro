@@ -1,15 +1,43 @@
 (() => {
   const $ = (selector) => document.querySelector(selector);
+  const $$ = (selector) => Array.from(document.querySelectorAll(selector));
   const segments = location.pathname.split('/').filter(Boolean);
-  const slug = location.hostname.toLowerCase().startsWith('facturacion.') ? segments[0] : segments.at(-1);
+  const isInvoiceDomain = location.hostname.toLowerCase().startsWith('facturacion.');
+  const slug = isInvoiceDomain ? segments[0] : segments.at(-1);
   const apiBase = `/api/invoicing/public/${encodeURIComponent(slug || '')}`;
+  const steps = ['lookup', 'receiver', 'success'];
   let currentTicket = null;
+  let portalAvailable = false;
 
-  function message(text = '') {
-    const el = $('#portalMessage');
-    el.textContent = text;
-    el.hidden = !text;
+  function formatMoney(value) {
+    return new Intl.NumberFormat('es-MX', { style: 'currency', currency: 'MXN' }).format(Number(value || 0));
   }
+
+  function formatDate(value) {
+    if (!value) return '';
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return '';
+    return new Intl.DateTimeFormat('es-MX', { dateStyle: 'medium', timeStyle: 'short' }).format(date);
+  }
+
+  function setText(selector, value) {
+    const element = $(selector);
+    if (element) element.textContent = String(value || '');
+  }
+
+  function message(text = '', type = 'error') {
+    const element = $('#portalMessage');
+    element.replaceChildren();
+    element.hidden = !text;
+    element.classList.toggle('success-message', type === 'success');
+    if (!text) return;
+    const icon = document.createElement('i');
+    icon.className = type === 'success' ? 'ph-bold ph-check-circle' : 'ph-bold ph-warning-circle';
+    const content = document.createElement('span');
+    content.textContent = text;
+    element.append(icon, content);
+  }
+
   async function request(path, options = {}) {
     const response = await fetch(`${apiBase}${path}`, {
       ...options,
@@ -19,60 +47,213 @@
     if (!response.ok) throw new Error(data.error || 'No se pudo completar la solicitud');
     return data;
   }
+
   function setBusy(form, busy) {
+    form.classList.toggle('is-busy', busy);
     const button = form.querySelector('button[type="submit"]');
     if (button) button.disabled = busy;
   }
+
+  function showSection(section) {
+    $('#lookupStep').hidden = section !== 'lookup';
+    $('#receiverStep').hidden = section !== 'receiver';
+    $('#successStep').hidden = section !== 'success';
+    document.body.dataset.portalStep = section;
+    const activeIndex = steps.indexOf(section);
+    $$('[data-progress-step]').forEach((element) => {
+      const index = steps.indexOf(element.dataset.progressStep);
+      element.classList.toggle('active', index === activeIndex);
+      element.classList.toggle('complete', index < activeIndex);
+      const marker = element.querySelector(':scope > span');
+      if (marker) marker.textContent = index < activeIndex ? '✓' : String(index + 1);
+    });
+  }
+
+  function setLogo(imageSelector, fallbackSelector, source, businessName) {
+    const image = $(imageSelector);
+    const fallback = $(fallbackSelector);
+    if (!source) {
+      image.hidden = true;
+      fallback.hidden = false;
+      return;
+    }
+    image.alt = `Logo de ${businessName}`;
+    image.onload = () => {
+      image.hidden = false;
+      fallback.hidden = true;
+    };
+    image.onerror = () => {
+      image.hidden = true;
+      fallback.hidden = false;
+    };
+    image.src = source;
+  }
+
+  function normalizeWhatsapp(value) {
+    let digits = String(value || '').replace(/\D/g, '');
+    if (digits.length === 10) digits = `52${digits}`;
+    return digits.length >= 10 && digits.length <= 15 ? digits : '';
+  }
+
+  function applyBusiness(portal) {
+    const business = portal.business || {};
+    const name = business.name || 'Portal de facturación';
+    const brand = /^#[0-9a-f]{6}$/i.test(business.primaryColor || '') ? business.primaryColor : '#6c47ff';
+    setText('#businessName', name);
+    setText('#mobileBusinessName', name);
+    document.title = `Facturación · ${name}`;
+    document.documentElement.style.setProperty('--brand', brand);
+    const theme = $('meta[name="theme-color"]');
+    if (theme) theme.content = brand;
+    setLogo('#businessLogo', '#businessLogoFallback', business.logo, name);
+    setLogo('#mobileBusinessLogo', '#mobileLogoFallback', business.logo, name);
+
+    let hasDetails = false;
+    if (portal.issuer) {
+      setText('#issuerLegalName', portal.issuer.legalName || name);
+      setText('#issuerRfc', [portal.issuer.rfc && `RFC ${portal.issuer.rfc}`, portal.issuer.postalCode && `CP ${portal.issuer.postalCode}`].filter(Boolean).join(' · '));
+      $('#issuerDetail').hidden = false;
+      hasDetails = true;
+    }
+    if (business.address) {
+      setText('#businessAddress', business.address);
+      $('#addressDetail').hidden = false;
+      hasDetails = true;
+    }
+    if (business.hours) {
+      setText('#businessHours', business.hours);
+      $('#hoursDetail').hidden = false;
+      hasDetails = true;
+    }
+    const whatsapp = normalizeWhatsapp(business.whatsapp);
+    if (whatsapp) {
+      const link = $('#businessWhatsapp');
+      link.href = `https://wa.me/${whatsapp}?text=${encodeURIComponent(`Hola, necesito ayuda para facturar un ticket de ${name}.`)}`;
+      link.hidden = false;
+      hasDetails = true;
+    }
+    $('#businessDetails').hidden = !hasDetails;
+
+    const badge = $('#environmentBadge');
+    const sandbox = portal.environment === 'sandbox';
+    badge.className = `environment ${sandbox ? 'sandbox' : 'production'}`;
+    badge.replaceChildren();
+    const icon = document.createElement('i');
+    icon.className = sandbox ? 'ph-bold ph-flask' : 'ph-bold ph-seal-check';
+    badge.append(icon, document.createTextNode(sandbox ? ' Ambiente de pruebas' : ' Facturación activa'));
+  }
+
+  function setUnavailable(text) {
+    portalAvailable = false;
+    document.body.classList.add('portal-unavailable');
+    $('#portalUnavailable').hidden = false;
+    const description = $('#portalUnavailable p');
+    if (text && description) description.textContent = text;
+    $$('#lookupForm input, #lookupForm button').forEach((element) => { element.disabled = true; });
+  }
+
+  function renderTicketSummary(ticket) {
+    const summary = $('#ticketSummary');
+    summary.replaceChildren();
+
+    const head = document.createElement('div');
+    head.className = 'ticket-summary-head';
+    const identity = document.createElement('div');
+    const label = document.createElement('span');
+    label.textContent = formatDate(ticket.createdAt) || 'Compra encontrada';
+    const number = document.createElement('strong');
+    number.textContent = `Ticket #${ticket.id}`;
+    identity.append(label, number);
+    const total = document.createElement('div');
+    total.className = 'ticket-summary-total';
+    total.textContent = formatMoney(ticket.total);
+    head.append(identity, total);
+    summary.append(head);
+
+    const items = document.createElement('div');
+    items.className = 'ticket-items';
+    (ticket.items || []).forEach((item) => {
+      const row = document.createElement('div');
+      row.className = 'ticket-item';
+      const quantity = document.createElement('b');
+      quantity.textContent = `${Number(item.qty || 0)}×`;
+      const name = document.createElement('span');
+      name.textContent = item.name || 'Producto';
+      const amount = document.createElement('span');
+      amount.textContent = formatMoney(Number(item.qty || 0) * Number(item.price || 0));
+      row.append(quantity, name, amount);
+      items.append(row);
+    });
+    summary.append(items);
+  }
+
   function invoiceDownloads(invoice, token) {
     const suffix = `?token=${encodeURIComponent(token)}`;
     $('#downloadPdf').href = `${apiBase}/invoices/${invoice.id}/pdf${suffix}`;
     $('#downloadXml').href = `${apiBase}/invoices/${invoice.id}/xml${suffix}`;
-    $('#invoiceIdentity').textContent = invoice.uuid ? `UUID: ${invoice.uuid}` : `Serie ${invoice.series || ''} · Folio ${invoice.folio || ''}`;
-    $('#lookupStep').hidden = true;
-    $('#receiverStep').hidden = true;
-    $('#successStep').hidden = false;
+    setText('#invoiceIdentity', invoice.uuid ? `UUID · ${invoice.uuid}` : `Serie ${invoice.series || '—'} · Folio ${invoice.folio || '—'}`);
+    message('');
+    showSection('success');
+    window.scrollTo({ top: 0, behavior: 'smooth' });
   }
+
   async function lookup(ticket, token) {
     const data = await request('/lookup', { method: 'POST', body: JSON.stringify({ ticket, token }) });
     currentTicket = { ticket: Number(ticket), token, ...data.ticket };
-    if (data.invoice && ['active', 'canceled', 'cancel_pending'].includes(data.invoice.status)) {
+    if (data.invoice?.status === 'active') {
       invoiceDownloads(data.invoice, token);
       return;
     }
-    const names = (data.ticket.items || []).map((item) => `${item.qty}× ${item.name}`).join(', ');
-    $('#ticketSummary').innerHTML = `<span class="total">$${Number(data.ticket.total).toFixed(2)}</span><b>Ticket #${data.ticket.id}</b><br>${names}`;
-    $('#receiverStep').hidden = false;
-    $('#receiverStep').scrollIntoView({ behavior: 'smooth' });
+    if (['pending', 'unknown'].includes(data.invoice?.status)) throw new Error('La factura de este ticket está en proceso de validación. Intenta nuevamente en unos minutos.');
+    if (data.invoice?.status === 'cancel_pending') throw new Error('La factura de este ticket tiene una cancelación en proceso. Comunícate con el negocio.');
+    if (data.invoice?.status === 'canceled') throw new Error('La factura asociada a este ticket fue cancelada. Comunícate con el negocio.');
+    renderTicketSummary(data.ticket);
+    showSection('receiver');
+    $('#receiverStep').scrollIntoView({ behavior: 'smooth', block: 'start' });
   }
 
-  document.addEventListener('DOMContentLoaded', async () => {
+  async function initialize() {
     try {
       const portal = await request('');
-      if (!portal.available) throw new Error('Este negocio todavía no ha activado su facturación electrónica.');
-      $('#businessName').textContent = portal.business.name;
-      document.title = `Facturación · ${portal.business.name}`;
-      document.documentElement.style.setProperty('--brand', portal.business.primaryColor || '#6c47ff');
-      $('#environmentBadge').textContent = portal.environment === 'sandbox' ? 'Pruebas SAT' : 'Producción';
-      if (portal.business.logo) {
-        $('#businessLogo').src = portal.business.logo;
-        $('#businessLogo').hidden = false;
-        $('.logo-wrap i').hidden = true;
+      applyBusiness(portal);
+      portalAvailable = Boolean(portal.available);
+      if (!portalAvailable) {
+        setUnavailable();
+        return;
       }
       const params = new URLSearchParams(location.search);
       if (params.get('ticket')) $('#ticket').value = params.get('ticket');
       if (params.get('token')) $('#token').value = params.get('token');
-      if (params.get('ticket') && params.get('token')) await lookup(params.get('ticket'), params.get('token'));
-    } catch (error) { message(error.message); }
-  });
+      if (params.get('ticket') && params.get('token')) {
+        setBusy($('#lookupForm'), true);
+        try { await lookup(params.get('ticket'), params.get('token')); }
+        catch (error) { message(error.message); }
+        finally { setBusy($('#lookupForm'), false); }
+      }
+    } catch (error) {
+      setText('#businessName', 'Portal de facturación');
+      setText('#mobileBusinessName', 'Portal de facturación');
+      setUnavailable('No fue posible cargar la información del negocio. Verifica que el enlace sea correcto o intenta nuevamente más tarde.');
+      message(error.message);
+    }
+  }
+
+  document.addEventListener('DOMContentLoaded', initialize);
 
   $('#lookupForm').addEventListener('submit', async (event) => {
-    event.preventDefault(); message(''); setBusy(event.currentTarget, true);
+    event.preventDefault();
+    if (!portalAvailable) return;
+    message('');
+    setBusy(event.currentTarget, true);
     try { await lookup($('#ticket').value, $('#token').value.trim()); }
     catch (error) { message(error.message); }
     finally { setBusy(event.currentTarget, false); }
   });
+
   $('#invoiceForm').addEventListener('submit', async (event) => {
-    event.preventDefault(); message(''); setBusy(event.currentTarget, true);
+    event.preventDefault();
+    message('');
+    setBusy(event.currentTarget, true);
     try {
       if (!currentTicket) throw new Error('Busca primero tu ticket');
       const data = await request('/issue', {
@@ -81,17 +262,43 @@
           ticket: currentTicket.ticket,
           token: currentTicket.token,
           receiver: {
-            rfc: $('#receiverRfc').value,
-            name: $('#receiverName').value,
+            rfc: $('#receiverRfc').value.trim().toUpperCase(),
+            name: $('#receiverName').value.trim(),
             fiscalRegime: $('#receiverRegime').value,
-            postalCode: $('#receiverPostal').value,
+            postalCode: $('#receiverPostal').value.trim(),
             cfdiUse: $('#receiverUse').value,
-            email: $('#receiverEmail').value,
+            email: $('#receiverEmail').value.trim(),
           },
         }),
       });
+      if (data.invoice?.status !== 'active') throw new Error('El CFDI quedó en proceso de validación. Intenta consultar nuevamente este ticket en unos minutos.');
       invoiceDownloads(data.invoice, currentTicket.token);
     } catch (error) { message(error.message); }
     finally { setBusy(event.currentTarget, false); }
+  });
+
+  $('#receiverRfc').addEventListener('input', (event) => {
+    event.currentTarget.value = event.currentTarget.value.toUpperCase().replace(/[^A-ZÑ&0-9]/g, '').slice(0, 13);
+  });
+
+  $('#receiverPostal').addEventListener('input', (event) => {
+    event.currentTarget.value = event.currentTarget.value.replace(/\D/g, '').slice(0, 5);
+  });
+
+  $('#invoiceAnother').addEventListener('click', () => {
+    currentTicket = null;
+    $('#lookupForm').reset();
+    $('#invoiceForm').reset();
+    message('');
+    showSection('lookup');
+    history.replaceState({}, '', location.pathname);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  });
+
+  $('#backToLookup').addEventListener('click', () => {
+    message('');
+    showSection('lookup');
+    $('#ticket').focus();
+    window.scrollTo({ top: 0, behavior: 'smooth' });
   });
 })();

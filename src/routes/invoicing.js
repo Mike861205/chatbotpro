@@ -272,9 +272,36 @@ router.get('/public/:slug', publicLimiter, async (req, res, next) => {
     const tenant = await findPublicTenant(req.params.slug);
     if (!tenant) return res.status(404).json({ error: 'Portal de facturación no disponible' });
     const tenantDb = tdb(tenant.slug);
-    const profile = await getProfile(tenantDb);
+    const [profile, settingsRows, branches] = await Promise.all([
+      getProfile(tenantDb),
+      tenantDb.all(
+        `SELECT key,value FROM {s}.settings
+         WHERE key = ANY($1::text[])`,
+        [['business_name', 'address', 'whatsapp', 'hours']]
+      ),
+      tenantDb.all(
+        `SELECT name,address FROM {s}.branches
+         WHERE active=1 ORDER BY id LIMIT 3`
+      ),
+    ]);
+    const settings = Object.fromEntries(settingsRows.map((row) => [row.key, String(row.value || '').trim()]));
     res.json({
-      business: { slug: tenant.slug, name: tenant.business_name, logo: tenant.logo, primaryColor: tenant.primary_color },
+      business: {
+        slug: tenant.slug,
+        name: settings.business_name || tenant.business_name,
+        logo: tenant.logo,
+        primaryColor: tenant.primary_color,
+        address: settings.address || branches[0]?.address || '',
+        whatsapp: settings.whatsapp || '',
+        hours: settings.hours || '',
+        branches: branches.map((branch) => ({ name: branch.name || '', address: branch.address || '' })),
+      },
+      issuer: profileCompleteness(profile) ? {
+        legalName: profile.legal_name,
+        rfc: profile.rfc,
+        fiscalRegime: profile.fiscal_regime,
+        postalCode: profile.postal_code,
+      } : null,
       available: profileReady(profile),
       environment: profile?.environment || config.FACTURAMA_ENVIRONMENT,
     });

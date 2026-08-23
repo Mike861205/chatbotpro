@@ -78,6 +78,25 @@ test('la integración está montada, aislada por México y expone POS y portal p
   assert.match(app, /id="view-facturacion"/);
 });
 
+test('el portal público es responsivo y presenta la identidad completa del tenant', () => {
+  const route = read('src/routes/invoicing.js');
+  const html = read('public/invoice.html');
+  const css = read('public/css/invoice.css');
+  const client = read('public/js/invoice.js');
+  assert.match(route, /settings\.business_name \|\| tenant\.business_name/);
+  assert.match(route, /legalName: profile\.legal_name/);
+  assert.match(route, /branches: branches\.map/);
+  assert.match(html, /id="businessLogo"/);
+  assert.match(html, /class="mobile-business-header"/);
+  assert.match(html, /data-progress-step="receiver"/);
+  assert.match(html, /id="portalUnavailable"/);
+  assert.match(css, /@media \(max-width: 680px\)/);
+  assert.match(css, /grid-template-columns: minmax\(340px, 410px\)/);
+  assert.match(client, /function applyBusiness\(portal\)/);
+  assert.match(client, /function renderTicketSummary\(ticket\)/);
+  assert.doesNotMatch(client, /ticketSummary'\)\.innerHTML/);
+});
+
 test('no hay credenciales Facturama embebidas en archivos versionados', () => {
   const combined = [
     '.env.example', 'src/config.js', 'src/services/facturama.js', 'src/routes/invoicing.js',

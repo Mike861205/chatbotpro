@@ -2,66 +2,193 @@
 <html lang="es-MX">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+  <meta name="theme-color" content="#5b35f5" />
   <meta name="robots" content="noindex,nofollow" />
   <title>Facturación electrónica</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
-  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700;800&display=swap" rel="stylesheet" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/bold/style.css" />
   <link rel="stylesheet" href="/static/css/invoice.css" />
 </head>
-<body>
-  <main class="portal-shell">
-    <header class="portal-brand">
-      <div class="logo-wrap"><img id="businessLogo" alt="" hidden /><i class="ph-bold ph-receipt"></i></div>
-      <div><span>Facturación electrónica</span><h1 id="businessName">Cargando negocio…</h1></div>
-      <span class="environment" id="environmentBadge"></span>
-    </header>
+<body data-portal-step="lookup">
+  <div class="page-glow page-glow-one" aria-hidden="true"></div>
+  <div class="page-glow page-glow-two" aria-hidden="true"></div>
 
-    <section class="portal-card" id="lookupStep">
-      <div class="step-title"><b>1</b><div><h2>Busca tu ticket</h2><p>Usa el número y código incluidos en tu ticket de compra.</p></div></div>
-      <form id="lookupForm" class="form-grid">
-        <label>Número de ticket<input id="ticket" name="ticket" type="number" min="1" required autocomplete="off" /></label>
-        <label>Código de facturación<input id="token" name="token" required autocomplete="off" placeholder="Código del ticket" /></label>
-        <button class="primary" type="submit"><i class="ph-bold ph-magnifying-glass"></i> Buscar compra</button>
-      </form>
-    </section>
+  <main class="portal-layout">
+    <aside class="brand-panel" aria-label="Información del negocio">
+      <div class="brand-panel-pattern" aria-hidden="true"></div>
+      <div class="brand-content">
+        <div class="business-brand">
+          <div class="logo-wrap">
+            <img id="businessLogo" alt="Logo del negocio" hidden />
+            <i class="ph-bold ph-storefront" id="businessLogoFallback"></i>
+          </div>
+          <div class="business-heading">
+            <span class="eyebrow"><i class="ph-bold ph-seal-check"></i> Portal oficial de facturación</span>
+            <h1 id="businessName">Cargando negocio…</h1>
+            <p id="businessWelcome">Factura tu compra de forma rápida, segura y sencilla.</p>
+          </div>
+        </div>
 
-    <section class="portal-card" id="receiverStep" hidden>
-      <div class="step-title"><b>2</b><div><h2>Completa tus datos fiscales</h2><p>Escríbelos tal como aparecen en tu Constancia de Situación Fiscal.</p></div></div>
-      <div id="ticketSummary" class="ticket-summary"></div>
-      <form id="invoiceForm" class="form-grid two">
-        <label>RFC<input id="receiverRfc" maxlength="13" required autocapitalize="characters" /></label>
-        <label>Nombre o razón social<input id="receiverName" maxlength="254" required /></label>
-        <label>Régimen fiscal<input id="receiverRegime" inputmode="numeric" maxlength="3" required placeholder="Ej. 612" /></label>
-        <label>Código postal fiscal<input id="receiverPostal" inputmode="numeric" maxlength="5" required /></label>
-        <label>Uso del CFDI
-          <select id="receiverUse" required>
-            <option value="G03">G03 — Gastos en general</option>
-            <option value="S01">S01 — Sin efectos fiscales</option>
-            <option value="G01">G01 — Adquisición de mercancías</option>
-            <option value="D01">D01 — Honorarios médicos</option>
-            <option value="CP01">CP01 — Pagos</option>
-          </select>
-        </label>
-        <label>Correo de contacto (opcional)<input id="receiverEmail" type="email" maxlength="160" autocomplete="email" /></label>
-        <button class="primary full" type="submit"><i class="ph-bold ph-seal-check"></i> Timbrar factura</button>
-      </form>
-      <p class="privacy"><i class="ph-bold ph-lock-key"></i> Tus datos fiscales se cifran y sólo se usan para emitir el CFDI.</p>
-    </section>
+        <div class="business-details" id="businessDetails" hidden>
+          <div class="business-detail" id="issuerDetail" hidden>
+            <i class="ph-bold ph-buildings"></i>
+            <div><span>Emisor fiscal</span><strong id="issuerLegalName"></strong><small id="issuerRfc"></small></div>
+          </div>
+          <div class="business-detail" id="addressDetail" hidden>
+            <i class="ph-bold ph-map-pin"></i>
+            <div><span>Ubicación</span><strong id="businessAddress"></strong></div>
+          </div>
+          <div class="business-detail" id="hoursDetail" hidden>
+            <i class="ph-bold ph-clock"></i>
+            <div><span>Horario</span><strong id="businessHours"></strong></div>
+          </div>
+          <a class="business-detail business-contact" id="businessWhatsapp" hidden target="_blank" rel="noopener">
+            <i class="ph-bold ph-whatsapp-logo"></i>
+            <div><span>¿Necesitas ayuda?</span><strong>Contactar al negocio</strong></div>
+            <i class="ph-bold ph-arrow-up-right"></i>
+          </a>
+        </div>
 
-    <section class="portal-card success" id="successStep" hidden>
-      <i class="ph-bold ph-check-circle success-icon"></i>
-      <h2>Tu factura está lista</h2>
-      <p id="invoiceIdentity"></p>
-      <div class="download-row">
-        <a id="downloadPdf" class="primary" target="_blank"><i class="ph-bold ph-file-pdf"></i> Descargar PDF</a>
-        <a id="downloadXml" class="secondary" target="_blank"><i class="ph-bold ph-file-code"></i> Descargar XML</a>
+        <div class="trust-card">
+          <div class="trust-icon"><i class="ph-bold ph-shield-check"></i></div>
+          <div><strong>Tus datos están protegidos</strong><span>La información fiscal se cifra y se utiliza únicamente para emitir tu CFDI.</span></div>
+        </div>
+
+        <div class="brand-benefits">
+          <span><i class="ph-bold ph-check-circle"></i> CFDI 4.0</span>
+          <span><i class="ph-bold ph-lightning"></i> Proceso en minutos</span>
+          <span><i class="ph-bold ph-download-simple"></i> PDF y XML</span>
+        </div>
       </div>
-    </section>
+      <div class="powered-by"><span>Facturación segura con</span><strong>ChatBotPro</strong></div>
+    </aside>
 
-    <div class="message" id="portalMessage" role="alert" hidden></div>
-    <footer>CFDI 4.0 · Timbrado mediante Facturama · ChatBotPro</footer>
+    <section class="portal-workspace">
+      <header class="mobile-business-header">
+        <div class="mobile-logo"><img id="mobileBusinessLogo" alt="" hidden /><i class="ph-bold ph-storefront" id="mobileLogoFallback"></i></div>
+        <div><span>Portal de facturación</span><strong id="mobileBusinessName">Cargando…</strong></div>
+      </header>
+
+      <div class="workspace-topbar">
+        <div class="secure-label"><i class="ph-bold ph-lock-key"></i><span>Conexión segura</span></div>
+        <span class="environment" id="environmentBadge"><i class="ph-bold ph-spinner-gap"></i> Preparando portal</span>
+      </div>
+
+      <nav class="progress-steps" aria-label="Progreso de facturación">
+        <div class="progress-step active" data-progress-step="lookup"><span>1</span><div><strong>Tu compra</strong><small>Busca el ticket</small></div></div>
+        <i class="ph-bold ph-caret-right"></i>
+        <div class="progress-step" data-progress-step="receiver"><span>2</span><div><strong>Datos fiscales</strong><small>Completa tu información</small></div></div>
+        <i class="ph-bold ph-caret-right"></i>
+        <div class="progress-step" data-progress-step="success"><span>3</span><div><strong>Tu factura</strong><small>Descarga PDF y XML</small></div></div>
+      </nav>
+
+      <div class="availability-card" id="portalUnavailable" hidden>
+        <div class="availability-icon"><i class="ph-bold ph-clock-countdown"></i></div>
+        <div><strong>Portal en preparación</strong><p>Este negocio está terminando de configurar su facturación electrónica. Intenta nuevamente más tarde o comunícate directamente con el negocio.</p></div>
+      </div>
+
+      <section class="portal-card lookup-card" id="lookupStep">
+        <div class="card-heading">
+          <span class="step-number">01</span>
+          <div><span class="card-kicker">Comencemos</span><h2>Encuentra tu compra</h2><p>Los datos vienen impresos en la parte final de tu ticket. Si abriste el enlace desde el QR, ya estarán capturados.</p></div>
+        </div>
+
+        <form id="lookupForm" class="portal-form">
+          <div class="form-field">
+            <label for="ticket">Número de ticket</label>
+            <div class="input-shell"><i class="ph-bold ph-receipt"></i><input id="ticket" name="ticket" type="number" min="1" required inputmode="numeric" autocomplete="off" placeholder="Ej. 1548" /><span class="input-check"><i class="ph-bold ph-check"></i></span></div>
+            <small>Está junto a la palabra “Ticket” o “Folio de venta”.</small>
+          </div>
+          <div class="form-field">
+            <label for="token">Código de facturación</label>
+            <div class="input-shell"><i class="ph-bold ph-key"></i><input id="token" name="token" required autocomplete="off" spellcheck="false" placeholder="Pega el código incluido en tu ticket" /><span class="input-check"><i class="ph-bold ph-check"></i></span></div>
+            <small>Es un código único que protege el acceso a tu compra.</small>
+          </div>
+          <button class="primary action-button" type="submit"><span class="button-label"><i class="ph-bold ph-magnifying-glass"></i> Buscar mi compra</span><span class="button-loading"><i class="ph-bold ph-spinner-gap"></i> Buscando ticket…</span></button>
+        </form>
+
+        <div class="form-help"><i class="ph-bold ph-qr-code"></i><div><strong>La forma más fácil</strong><span>Escanea el código QR de tu ticket y llegarás aquí con la compra lista para facturar.</span></div></div>
+      </section>
+
+      <section class="portal-card receiver-card" id="receiverStep" hidden>
+        <div class="card-heading">
+          <span class="step-number">02</span>
+          <div><span class="card-kicker">Información del SAT</span><h2>Completa tus datos fiscales</h2><p>Captúralos exactamente como aparecen en tu Constancia de Situación Fiscal.</p></div>
+        </div>
+
+        <div id="ticketSummary" class="ticket-summary"></div>
+
+        <form id="invoiceForm" class="portal-form form-grid-two">
+          <div class="form-field">
+            <label for="receiverRfc">RFC</label>
+            <div class="input-shell"><i class="ph-bold ph-identification-card"></i><input id="receiverRfc" maxlength="13" required autocapitalize="characters" autocomplete="off" placeholder="XAXX010101000" /></div>
+          </div>
+          <div class="form-field">
+            <label for="receiverPostal">Código postal fiscal</label>
+            <div class="input-shell"><i class="ph-bold ph-map-pin-line"></i><input id="receiverPostal" inputmode="numeric" maxlength="5" required autocomplete="postal-code" placeholder="00000" /></div>
+          </div>
+          <div class="form-field full-field">
+            <label for="receiverName">Nombre o razón social</label>
+            <div class="input-shell"><i class="ph-bold ph-buildings"></i><input id="receiverName" maxlength="254" required autocomplete="organization" placeholder="Tal como aparece en tu constancia" /></div>
+          </div>
+          <div class="form-field">
+            <label for="receiverRegime">Régimen fiscal</label>
+            <div class="input-shell select-shell"><i class="ph-bold ph-scales"></i><select id="receiverRegime" required>
+              <option value="">Selecciona tu régimen</option>
+              <option value="601">601 · General de Ley Personas Morales</option>
+              <option value="603">603 · Personas Morales con Fines no Lucrativos</option>
+              <option value="605">605 · Sueldos y Salarios</option>
+              <option value="606">606 · Arrendamiento</option>
+              <option value="612">612 · Personas Físicas con Actividades Empresariales</option>
+              <option value="616">616 · Sin obligaciones fiscales</option>
+              <option value="621">621 · Incorporación Fiscal</option>
+              <option value="625">625 · Actividades Empresariales vía Plataformas</option>
+              <option value="626">626 · Régimen Simplificado de Confianza</option>
+            </select></div>
+          </div>
+          <div class="form-field">
+            <label for="receiverUse">Uso del CFDI</label>
+            <div class="input-shell select-shell"><i class="ph-bold ph-file-text"></i><select id="receiverUse" required>
+              <option value="G03">G03 · Gastos en general</option>
+              <option value="S01">S01 · Sin efectos fiscales</option>
+              <option value="G01">G01 · Adquisición de mercancías</option>
+              <option value="D01">D01 · Honorarios médicos</option>
+              <option value="CP01">CP01 · Pagos</option>
+            </select></div>
+          </div>
+          <div class="form-field full-field">
+            <label for="receiverEmail">Correo de contacto <span>Opcional</span></label>
+            <div class="input-shell"><i class="ph-bold ph-envelope-simple"></i><input id="receiverEmail" type="email" maxlength="160" autocomplete="email" inputmode="email" placeholder="cliente@correo.com" /></div>
+          </div>
+          <div class="fiscal-notice full-field"><i class="ph-bold ph-info"></i><span>Antes de timbrar, revisa especialmente RFC, razón social, régimen y código postal. El SAT exige que coincidan con tu constancia.</span></div>
+          <button class="primary action-button full-field" type="submit"><span class="button-label"><i class="ph-bold ph-seal-check"></i> Revisar y timbrar mi factura</span><span class="button-loading"><i class="ph-bold ph-spinner-gap"></i> Timbrando CFDI…</span></button>
+        </form>
+        <button class="text-button" type="button" id="backToLookup"><i class="ph-bold ph-arrow-left"></i> Usar otro ticket</button>
+      </section>
+
+      <section class="portal-card success-card" id="successStep" hidden>
+        <div class="success-illustration"><span><i class="ph-bold ph-check"></i></span><i class="ph-bold ph-confetti"></i></div>
+        <span class="success-kicker">CFDI emitido correctamente</span>
+        <h2>¡Tu factura está lista!</h2>
+        <p>Guarda los dos archivos. El PDF es la representación visual y el XML es tu comprobante fiscal oficial.</p>
+        <div class="invoice-identity" id="invoiceIdentity"></div>
+        <div class="download-row">
+          <a id="downloadPdf" class="primary download-button" target="_blank" rel="noopener"><i class="ph-bold ph-file-pdf"></i><span><strong>Descargar PDF</strong><small>Representación impresa</small></span><i class="ph-bold ph-download-simple"></i></a>
+          <a id="downloadXml" class="secondary download-button" target="_blank" rel="noopener"><i class="ph-bold ph-file-code"></i><span><strong>Descargar XML</strong><small>Comprobante fiscal</small></span><i class="ph-bold ph-download-simple"></i></a>
+        </div>
+        <button class="text-button" type="button" id="invoiceAnother"><i class="ph-bold ph-arrow-counter-clockwise"></i> Facturar otro ticket</button>
+      </section>
+
+      <div class="message" id="portalMessage" role="alert" aria-live="polite" hidden></div>
+
+      <footer class="workspace-footer">
+        <div><i class="ph-bold ph-shield-check"></i><span>Sitio seguro · Tus datos viajan cifrados</span></div>
+        <span>CFDI 4.0 · Timbrado mediante Facturama</span>
+      </footer>
+    </section>
   </main>
   <script src="/static/js/invoice.js" defer></script>
 </body>
