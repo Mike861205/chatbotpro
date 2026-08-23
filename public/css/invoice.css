@@ -334,6 +334,22 @@ body.portal-unavailable .lookup-card input, body.portal-unavailable .lookup-card
 .download-button small { font-size: 8px; opacity: .73; }
 .download-button.primary { color: white; background: var(--brand); box-shadow: 0 11px 22px color-mix(in srgb, var(--brand) 22%, transparent); }
 .download-button.secondary { color: var(--ink); border: 1px solid var(--line); background: white; }
+.success-email-card { max-width: 530px; margin: 18px auto 0; padding: 17px; border: 1px solid #d9eee7; border-radius: 17px; background: linear-gradient(145deg, #f4fcf9, #fff); text-align: left; }
+.success-email-heading { display: flex; align-items: center; gap: 11px; }
+.success-email-heading > span { width: 38px; height: 38px; flex: 0 0 auto; display: grid; place-items: center; border-radius: 11px; background: #dcf8ed; color: var(--success); font-size: 19px; }
+.success-email-heading > div { min-width: 0; display: grid; gap: 3px; }
+.success-email-heading strong { font-size: 12px; }
+.success-email-heading small { color: var(--muted); font-size: 8px; line-height: 1.45; }
+.success-email-form { margin-top: 14px; }
+.success-email-form label { display: block; margin-bottom: 6px; color: var(--ink); font-size: 9px; font-weight: 800; }
+.success-email-form > div { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; }
+.success-email-form input { min-width: 0; height: 45px; padding: 0 13px; border: 1px solid var(--line); border-radius: 11px; background: white; color: var(--ink); font: inherit; font-size: 11px; outline: none; }
+.success-email-form input:focus { border-color: var(--brand); box-shadow: 0 0 0 3px color-mix(in srgb, var(--brand) 12%, transparent); }
+.success-email-form button { min-height: 45px; padding: 0 15px; border-radius: 11px; background: var(--brand); color: white; font-size: 10px; font-weight: 800; }
+.success-email-form button:disabled { cursor: wait; opacity: .7; }
+.email-delivery-status { margin-top: 10px; padding: 10px 12px; border-radius: 10px; font-size: 9px; font-weight: 700; line-height: 1.45; }
+.email-delivery-status.success { border: 1px solid #bce8d7; background: #ebfaf4; color: #08795a; }
+.email-delivery-status.error { border: 1px solid #f3c7c7; background: #fff2f2; color: var(--danger); }
 .text-button { margin-top: 22px; padding: 9px; display: inline-flex; align-items: center; gap: 7px; background: transparent; color: var(--muted); font-size: 10px; font-weight: 700; }
 .text-button:hover { color: var(--brand); }
 
@@ -394,6 +410,9 @@ body.portal-unavailable .lookup-card input, body.portal-unavailable .lookup-card
   .availability-card { padding: 17px; border-radius: 18px; }
   .download-row { grid-template-columns: 1fr; }
   .download-button { min-height: 66px; }
+  .success-email-card { padding: 15px; }
+  .success-email-form > div { grid-template-columns: 1fr; }
+  .success-email-form input, .success-email-form button { width: 100%; min-height: 50px; font-size: 12px; }
   .workspace-footer { padding-top: 18px; justify-content: center; text-align: center; }
   .workspace-footer > span { display: none; }
 }

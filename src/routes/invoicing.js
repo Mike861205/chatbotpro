@@ -11,6 +11,8 @@ const {
   invoicingPortalUrl,
   validateFiscalProfile,
   validateReceiver,
+  validateInvoiceEmail,
+  maskInvoiceEmail,
   globalInformationForReceiver,
   resolveExpeditionPostalCode,
   paymentFormFromSale,
@@ -165,6 +167,45 @@ async function loadInvoiceFiles(invoice, profile) {
     }
   }));
   return files;
+}
+
+async function sendInvoiceEmail({ tenant, tenantDb, invoiceId, emailInput, actor, publicToken = null }) {
+  const email = validateInvoiceEmail(emailInput);
+  const invoice = await tenantDb.get(
+    `SELECT i.*, o.invoice_token, o.invoice_code
+     FROM {s}.invoices i JOIN {s}.orders o ON o.id=i.order_id
+     WHERE i.id=$1 LIMIT 1`,
+    [invoiceId]
+  );
+  if (!invoice || (publicToken !== null && !invoiceAccessMatches(invoice, publicToken))) {
+    throw Object.assign(new Error('CFDI no encontrado'), { status: 404 });
+  }
+  if (invoice.status !== 'active') {
+    throw Object.assign(new Error('Sólo se pueden enviar CFDI timbrados y activos'), { status: 409 });
+  }
+  if (!invoice.provider_id) {
+    throw Object.assign(new Error('El CFDI todavía no está disponible en Facturama'), { status: 409 });
+  }
+  const profile = await getProfile(tenantDb);
+  const maskedEmail = maskInvoiceEmail(email);
+  const identity = [invoice.series, invoice.folio].filter(Boolean).join('-') || invoice.uuid || invoice.id;
+  try {
+    const response = await facturama.sendCfdiEmail(invoice.provider_id, email, profile?.api_mode, {
+      subject: `Factura ${identity} · ${tenant?.business_name || 'ChatBotPro'}`,
+      comments: 'Adjuntamos la representación PDF y el archivo XML de tu CFDI.',
+    });
+    await tenantDb.run(
+      "INSERT INTO {s}.invoice_events (invoice_id,event_type,detail,actor) VALUES ($1,'email_sent',$2,$3)",
+      [invoice.id, `Enviado mediante Facturama a ${maskedEmail}`, actor]
+    );
+    return { invoice: invoiceSummary(invoice, false), providerMessage: String(response?.msj || response?.Message || '') };
+  } catch (error) {
+    await tenantDb.run(
+      "INSERT INTO {s}.invoice_events (invoice_id,event_type,detail,actor) VALUES ($1,'email_failed',$2,$3)",
+      [invoice.id, `No enviado a ${maskedEmail}: ${String(error.message || 'Error de Facturama').slice(0, 700)}`, actor]
+    ).catch(() => {});
+    throw error;
+  }
 }
 
 async function issueSaleInvoice({ tenant, tenantDb, orderId, receiverInput, requestedPaymentForm = '', conceptMode = 'detailed', actor = '', publicToken = '' }) {
@@ -403,6 +444,25 @@ router.post('/public/:slug/issue', publicLimiter, async (req, res, next) => {
   }
 });
 
+router.post('/public/:slug/invoices/:id/email', publicLimiter, async (req, res, next) => {
+  try {
+    const tenant = await findPublicTenant(req.params.slug);
+    if (!tenant) return res.status(404).json({ error: 'Portal de facturación no disponible' });
+    const result = await sendInvoiceEmail({
+      tenant,
+      tenantDb: tdb(tenant.slug),
+      invoiceId: Number(req.params.id),
+      emailInput: req.body?.email,
+      actor: 'autofacturación',
+      publicToken: String(req.body?.code || req.body?.token || '').trim(),
+    });
+    res.json({ ok: true, message: 'Factura enviada por correo mediante Facturama', ...result });
+  } catch (error) {
+    if (error.status) return res.status(error.status).json({ error: error.message });
+    next(error);
+  }
+});
+
 router.get('/public/:slug/invoices/:id/:format', publicLimiter, async (req, res, next) => {
   try {
     const tenant = await findPublicTenant(req.params.slug);
@@ -564,6 +624,22 @@ router.post('/sales/:id/issue', async (req, res, next) => {
     res.json({ ok: true, ...result });
   } catch (error) {
     if (error.status) return res.status(error.status).json({ error: error.message, uncertain: Boolean(error.uncertain) });
+    next(error);
+  }
+});
+
+router.post('/invoices/:id/email', async (req, res, next) => {
+  try {
+    const result = await sendInvoiceEmail({
+      tenant: req.tenant,
+      tenantDb: req.tdb,
+      invoiceId: Number(req.params.id),
+      emailInput: req.body?.email,
+      actor: req.user.username,
+    });
+    res.json({ ok: true, message: 'Factura enviada por correo mediante Facturama', ...result });
+  } catch (error) {
+    if (error.status) return res.status(error.status).json({ error: error.message });
     next(error);
   }
 });

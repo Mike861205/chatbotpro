@@ -7,6 +7,7 @@
   const apiBase = `/api/invoicing/public/${encodeURIComponent(slug || '')}`;
   const steps = ['lookup', 'receiver', 'success'];
   let currentTicket = null;
+  let currentInvoice = null;
   let currentPortal = null;
   let portalAvailable = false;
 
@@ -206,10 +207,16 @@
   }
 
   function invoiceDownloads(invoice, token) {
+    currentInvoice = invoice;
     const suffix = `?code=${encodeURIComponent(token)}`;
     $('#downloadPdf').href = `${apiBase}/invoices/${invoice.id}/pdf${suffix}`;
     $('#downloadXml').href = `${apiBase}/invoices/${invoice.id}/xml${suffix}`;
     setText('#invoiceIdentity', invoice.uuid ? `UUID · ${invoice.uuid}` : `Serie ${invoice.series || '—'} · Folio ${invoice.folio || '—'}`);
+    const receiverEmail = String($('#receiverEmail')?.value || invoice.receiver?.email || '').trim();
+    $('#invoiceEmail').value = receiverEmail;
+    const emailStatus = $('#invoiceEmailStatus');
+    emailStatus.hidden = true;
+    emailStatus.textContent = '';
     message('');
     showSection('success');
     window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -316,12 +323,38 @@
 
   $('#invoiceAnother').addEventListener('click', () => {
     currentTicket = null;
+    currentInvoice = null;
     $('#lookupForm').reset();
     $('#invoiceForm').reset();
     message('');
     showSection('lookup');
     history.replaceState({}, '', location.pathname);
     window.scrollTo({ top: 0, behavior: 'smooth' });
+  });
+
+  $('#invoiceEmailForm').addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const status = $('#invoiceEmailStatus');
+    status.hidden = true;
+    status.textContent = '';
+    setBusy(form, true);
+    try {
+      if (!currentInvoice || !currentTicket) throw new Error('Primero genera o consulta tu factura');
+      const data = await request(`/invoices/${currentInvoice.id}/email`, {
+        method: 'POST',
+        body: JSON.stringify({ code: currentTicket.token, email: $('#invoiceEmail').value.trim() }),
+      });
+      status.className = 'email-delivery-status success';
+      status.textContent = data.message || 'Factura enviada correctamente';
+      status.hidden = false;
+    } catch (error) {
+      status.className = 'email-delivery-status error';
+      status.textContent = error.message;
+      status.hidden = false;
+    } finally {
+      setBusy(form, false);
+    }
   });
 
   $('#backToLookup').addEventListener('click', () => {

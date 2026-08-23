@@ -5145,7 +5145,33 @@ $('#posInvoiceForm')?.addEventListener('submit', async (event) => {
     const data = await api(`/api/invoicing/sales/${saleId}/issue`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ receiver: { rfc: $('#posInvoiceRfc').value, name: $('#posInvoiceName').value, fiscalRegime: $('#posInvoiceRegime').value, postalCode: $('#posInvoicePostal').value, cfdiUse: $('#posInvoiceUse').value, email: $('#posInvoiceEmail').value } }) });
     const invoice = data.invoice;
     form.hidden = true; const result = $('#posInvoiceResult'); result.hidden = false;
-    result.innerHTML = `<div class="invoice-pos-success"><i class="ph-bold ph-check-circle"></i><h3>CFDI timbrado</h3><p>${esc(invoice.uuid || `${invoice.series}-${invoice.folio}`)}</p><div><a class="btn btn-primary" target="_blank" href="/api/invoicing/invoices/${invoice.id}/pdf">Descargar PDF</a><a class="btn btn-ghost" target="_blank" href="/api/invoicing/invoices/${invoice.id}/xml">Descargar XML</a></div></div>`;
+    const receiverEmail = String($('#posInvoiceEmail').value || '').trim();
+    result.innerHTML = `<div class="invoice-pos-success"><i class="ph-bold ph-check-circle"></i><h3>CFDI timbrado</h3><p>${esc(invoice.uuid || `${invoice.series}-${invoice.folio}`)}</p><div class="invoice-download-actions"><a class="btn btn-primary" target="_blank" href="/api/invoicing/invoices/${invoice.id}/pdf">Descargar PDF</a><a class="btn btn-ghost" target="_blank" href="/api/invoicing/invoices/${invoice.id}/xml">Descargar XML</a></div><form class="invoice-email-card" data-pos-invoice-email-form><div><i class="ph-bold ph-envelope-simple"></i><span><b>Enviar al cliente</b><small>Facturama enviará el PDF y XML a su correo.</small></span></div><div class="invoice-email-row"><input type="email" required maxlength="254" autocomplete="email" inputmode="email" placeholder="cliente@correo.com" value="${esc(receiverEmail)}"><button class="btn btn-primary" type="submit"><i class="ph-bold ph-paper-plane-tilt"></i> Enviar factura</button></div><p class="invoice-email-status" role="status" aria-live="polite" hidden></p></form></div>`;
+    const emailForm = result.querySelector('[data-pos-invoice-email-form]');
+    emailForm.addEventListener('submit', async (emailEvent) => {
+      emailEvent.preventDefault();
+      const stableForm = emailEvent.currentTarget;
+      const emailButton = stableForm.querySelector('button[type="submit"]');
+      const emailStatus = stableForm.querySelector('.invoice-email-status');
+      const email = stableForm.querySelector('input[type="email"]').value.trim();
+      emailButton.disabled = true;
+      emailButton.innerHTML = '<i class="ph-bold ph-spinner-gap"></i> Enviando…';
+      emailStatus.hidden = true;
+      try {
+        const sent = await api(`/api/invoicing/invoices/${invoice.id}/email`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email }) });
+        emailStatus.className = 'invoice-email-status success';
+        emailStatus.textContent = sent.message || 'Factura enviada correctamente';
+        emailStatus.hidden = false;
+        toast('Factura enviada por correo');
+      } catch (emailError) {
+        emailStatus.className = 'invoice-email-status error';
+        emailStatus.textContent = emailError.message;
+        emailStatus.hidden = false;
+      } finally {
+        emailButton.disabled = false;
+        emailButton.innerHTML = '<i class="ph-bold ph-paper-plane-tilt"></i> Enviar factura';
+      }
+    });
     toast(data.reused ? 'Este ticket ya estaba facturado' : 'Factura timbrada correctamente');
   } catch (error) {
     showPosInvoiceError(error);

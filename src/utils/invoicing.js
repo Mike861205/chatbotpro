@@ -7,6 +7,7 @@ const SAT_UNIT_RE = /^[A-Z0-9]{2,3}$/;
 const FISCAL_REGIMES = new Set(['601','603','605','606','607','608','610','611','612','614','615','616','620','621','622','623','624','625','626']);
 const CFDI_USES = new Set(['G01','G02','G03','I01','I02','I03','I04','I05','I06','I07','I08','D01','D02','D03','D04','D05','D06','D07','D08','D09','D10','S01','CP01','CN01']);
 const PAYMENT_FORMS = new Set(['01','02','03','04','05','06','08','12','13','14','15','17','23','24','25','26','27','28','29','30','31','99']);
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 function cleanUpper(value, max = 200) {
   return String(value || '').trim().replace(/\s+/g, ' ').toUpperCase().slice(0, max);
@@ -87,8 +88,21 @@ function validateReceiver(input = {}, options = {}) {
   if (!FISCAL_REGIMES.has(receiver.fiscalRegime)) throw Object.assign(new Error('El régimen fiscal del receptor no es válido'), { status: 400 });
   if (!POSTAL_RE.test(receiver.postalCode)) throw Object.assign(new Error('El código postal fiscal del receptor debe tener 5 dígitos'), { status: 400 });
   if (!CFDI_USES.has(receiver.cfdiUse)) throw Object.assign(new Error('El uso de CFDI no es válido'), { status: 400 });
-  if (receiver.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(receiver.email)) throw Object.assign(new Error('El correo electrónico no es válido'), { status: 400 });
+  if (receiver.email && !EMAIL_RE.test(receiver.email)) throw Object.assign(new Error('El correo electrónico no es válido'), { status: 400 });
   return receiver;
+}
+
+function validateInvoiceEmail(value) {
+  const email = String(value || '').trim().toLowerCase().slice(0, 254);
+  if (!EMAIL_RE.test(email)) throw Object.assign(new Error('Captura un correo electrónico válido'), { status: 400 });
+  return email;
+}
+
+function maskInvoiceEmail(value) {
+  const email = String(value || '').trim().toLowerCase();
+  const [local = '', domain = ''] = email.split('@');
+  if (!local || !domain) return 'correo no disponible';
+  return `${local.slice(0, 1)}***@${domain}`;
 }
 
 function globalInformationForReceiver(receiver = {}, issuedAt = new Date()) {
@@ -246,6 +260,6 @@ function createRequestKey() {
 
 module.exports = {
   RFC_RE, POSTAL_RE, FISCAL_REGIMES, CFDI_USES, PAYMENT_FORMS,
-  isMexicoIdentity, invoicingPortalUrl, validateFiscalProfile, validateReceiver, globalInformationForReceiver, resolveExpeditionPostalCode, roundMoney,
+  isMexicoIdentity, invoicingPortalUrl, validateFiscalProfile, validateReceiver, validateInvoiceEmail, maskInvoiceEmail, globalInformationForReceiver, resolveExpeditionPostalCode, roundMoney,
   paymentFormFromSale, buildFacturamaItems, extractFacturamaIdentity, createRequestKey,
 };

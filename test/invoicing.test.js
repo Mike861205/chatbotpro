@@ -7,6 +7,8 @@ const {
   invoicingPortalUrl,
   validateFiscalProfile,
   validateReceiver,
+  validateInvoiceEmail,
+  maskInvoiceEmail,
   globalInformationForReceiver,
   resolveExpeditionPostalCode,
   paymentFormFromSale,
@@ -59,6 +61,12 @@ test('valida datos fiscales CFDI 4.0 de emisor y receptor', () => {
   assert.equal(resolveExpeditionPostalCode({ environment: 'sandbox', sandbox_shared: true, postal_code: '78240' }, '23456'), '78240');
   assert.equal(resolveExpeditionPostalCode({ environment: 'production', sandbox_shared: false, postal_code: '78240' }, '23456'), '23456');
   assert.throws(() => validateReceiver({ rfc: 'INVALIDO' }), /RFC/);
+});
+
+test('valida y protege el correo usado para entregar CFDI', () => {
+  assert.equal(validateInvoiceEmail(' Cliente@Ejemplo.MX '), 'cliente@ejemplo.mx');
+  assert.equal(maskInvoiceEmail('cliente@ejemplo.mx'), 'c***@ejemplo.mx');
+  assert.throws(() => validateInvoiceEmail('correo-invalido'), /correo electrónico válido/);
 });
 
 test('convierte precios POS con IVA incluido a conceptos Facturama sin alterar el total', () => {
@@ -167,6 +175,23 @@ test('la integración está montada, aislada por México y expone POS y portal p
   assert.match(app, /id="view-facturacion"/);
   assert.match(client, /C&Oacute;DIGO DE FACTURACI&Oacute;N/);
   assert.match(client, /friendlyInvoiceCode/);
+});
+
+test('el envío de facturas por Facturama está disponible en POS y portal público', () => {
+  const service = read('src/services/facturama.js');
+  const route = read('src/routes/invoicing.js');
+  const app = read('public/js/app.js');
+  const portal = read('public/js/invoice.js');
+  const html = read('public/invoice.html');
+  assert.match(service, /sendCfdiEmail/);
+  assert.match(service, /issuedLite/);
+  assert.match(route, /public\/:slug\/invoices\/:id\/email/);
+  assert.match(route, /router\.post\('\/invoices\/:id\/email'/);
+  assert.match(route, /event_type,detail,actor/);
+  assert.match(route, /'email_sent'/);
+  assert.match(app, /data-pos-invoice-email-form/);
+  assert.match(portal, /invoiceEmailForm/);
+  assert.match(html, /id="invoiceEmail"/);
 });
 
 test('el portal público es responsivo y presenta la identidad completa del tenant', () => {

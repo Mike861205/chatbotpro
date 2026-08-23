@@ -146,6 +146,27 @@ class FacturamaClient {
     return this.request(`/cfdi/${safeFormat}/${type}/${encodeURIComponent(id)}`);
   }
 
+  async sendCfdiEmail(id, email, apiMode = 'multi', options = {}) {
+    const query = new URLSearchParams({
+      CfdiType: apiMode === 'web' ? 'issued' : 'issuedLite',
+      CfdiId: String(id || ''),
+      Email: String(email || ''),
+    });
+    if (options.subject) query.set('Subject', String(options.subject).slice(0, 180));
+    if (options.comments) query.set('Comments', String(options.comments).slice(0, 500));
+    if (options.issuerEmail) query.set('IssuerEmail', String(options.issuerEmail));
+    query.set('IncludePayBtn', 'false');
+    const response = await this.request(`/Cfdi?${query}`, { method: 'POST' });
+    const success = response?.success ?? response?.Success;
+    if (success === false) {
+      throw new FacturamaError(String(response?.msj || response?.Message || 'Facturama no pudo enviar el CFDI'), {
+        status: 422,
+        details: response,
+      });
+    }
+    return response;
+  }
+
   cancelCfdi(id, motive = '02', uuidReplacement = '', apiMode = 'multi') {
     const query = new URLSearchParams({ motive });
     if (uuidReplacement) query.set('uuidReplacement', uuidReplacement);

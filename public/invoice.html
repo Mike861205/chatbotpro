@@ -10,7 +10,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/bold/style.css" />
-  <link rel="stylesheet" href="/static/css/invoice.css?v=20260823conceptmode" />
+  <link rel="stylesheet" href="/static/css/invoice.css?v=20260823invoiceemail" />
 </head>
 <body data-portal-step="lookup">
   <div class="page-glow page-glow-one" aria-hidden="true"></div>
@@ -186,6 +186,14 @@
           <a id="downloadPdf" class="primary download-button" target="_blank" rel="noopener"><i class="ph-bold ph-file-pdf"></i><span><strong>Descargar PDF</strong><small>Representación impresa</small></span><i class="ph-bold ph-download-simple"></i></a>
           <a id="downloadXml" class="secondary download-button" target="_blank" rel="noopener"><i class="ph-bold ph-file-code"></i><span><strong>Descargar XML</strong><small>Comprobante fiscal</small></span><i class="ph-bold ph-download-simple"></i></a>
         </div>
+        <div class="success-email-card">
+          <div class="success-email-heading"><span><i class="ph-bold ph-envelope-simple"></i></span><div><strong>Recíbela también por correo</strong><small>Facturama enviará el PDF y XML directamente a tu bandeja.</small></div></div>
+          <form id="invoiceEmailForm" class="success-email-form">
+            <label for="invoiceEmail">Correo del receptor</label>
+            <div><input id="invoiceEmail" type="email" required maxlength="254" autocomplete="email" inputmode="email" placeholder="cliente@correo.com" /><button class="primary" type="submit"><span class="button-label"><i class="ph-bold ph-paper-plane-tilt"></i> Enviar factura</span><span class="button-loading"><i class="ph-bold ph-spinner-gap"></i> Enviando…</span></button></div>
+          </form>
+          <div class="email-delivery-status" id="invoiceEmailStatus" role="status" aria-live="polite" hidden></div>
+        </div>
         <button class="text-button" type="button" id="invoiceAnother"><i class="ph-bold ph-arrow-counter-clockwise"></i> Facturar otro ticket</button>
       </section>
 
@@ -197,6 +205,6 @@
       </footer>
     </section>
   </main>
-  <script src="/static/js/invoice.js?v=20260823conceptmode" defer></script>
+  <script src="/static/js/invoice.js?v=20260823invoiceemail" defer></script>
 </body>
 </html>
