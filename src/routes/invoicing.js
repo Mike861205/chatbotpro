@@ -11,6 +11,7 @@ const {
   invoicingPortalUrl,
   validateFiscalProfile,
   validateReceiver,
+  globalInformationForReceiver,
   paymentFormFromSale,
   buildFacturamaItems,
   extractFacturamaIdentity,
@@ -169,8 +170,6 @@ async function issueSaleInvoice({ tenant, tenantDb, orderId, receiverInput, requ
   const profile = await getProfile(tenantDb);
   const readinessError = profileReadinessError(profile);
   if (readinessError) throw Object.assign(new Error(readinessError), { status: 409 });
-  const receiver = validateReceiver(receiverInput, { issuerPostalCode: profile.postal_code });
-
   const sale = await tenantDb.get(
     `SELECT id, items, subtotal::float AS subtotal, total::float AS total, status, channel, payment_method, payment_breakdown,
             delivery_fee::float AS delivery_fee, service_branch_id, invoice_token, invoice_code, created_at
@@ -202,6 +201,7 @@ async function issueSaleInvoice({ tenant, tenantDb, orderId, receiverInput, requ
     ? await tenantDb.get('SELECT fiscal_postal_code FROM {s}.branches WHERE id = $1 LIMIT 1', [sale.service_branch_id])
     : null;
   const expeditionPlace = /^\d{5}$/.test(String(branch?.fiscal_postal_code || '')) ? branch.fiscal_postal_code : profile.postal_code;
+  const receiver = validateReceiver(receiverInput, { expeditionPostalCode: expeditionPlace });
   const paymentForm = paymentFormFromSale(sale, profile.default_card_payment_form, requestedPaymentForm);
 
   const allocated = await tenantDb.tx(async (tx) => {
@@ -249,6 +249,8 @@ async function issueSaleInvoice({ tenant, tenantDb, orderId, receiverInput, requ
     Items: items,
     Observations: `Ticket POS #${sale.id}`,
   };
+  const globalInformation = globalInformationForReceiver(receiver, sale.created_at);
+  if (globalInformation) payload.GlobalInformation = globalInformation;
   if (profile.api_mode !== 'web') {
     payload.Issuer = { Rfc: profile.rfc, Name: profile.legal_name, FiscalRegime: profile.fiscal_regime };
   }

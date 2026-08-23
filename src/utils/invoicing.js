@@ -71,12 +71,16 @@ function validateReceiver(input = {}, options = {}) {
   // El RFC genérico nacional tiene valores obligatorios en CFDI 4.0. Los
   // normalizamos para que una prueba de público general no sea rechazada por
   // una combinación incompatible de régimen, uso o domicilio fiscal.
+  const expeditionPostalCode = String(options.expeditionPostalCode || options.issuerPostalCode || '').trim();
   if (receiver.rfc === 'XAXX010101000') {
     receiver.name = 'PUBLICO EN GENERAL';
     receiver.fiscalRegime = '616';
     receiver.cfdiUse = 'S01';
-    const issuerPostalCode = String(options.issuerPostalCode || '').trim();
-    if (POSTAL_RE.test(issuerPostalCode)) receiver.postalCode = issuerPostalCode;
+  }
+  // Los RFC genéricos nacional y extranjero deben usar como domicilio fiscal
+  // el mismo código postal declarado como lugar de expedición del CFDI.
+  if (['XAXX010101000', 'XEXX010101000'].includes(receiver.rfc) && POSTAL_RE.test(expeditionPostalCode)) {
+    receiver.postalCode = expeditionPostalCode;
   }
   if (!RFC_RE.test(receiver.rfc)) throw Object.assign(new Error('El RFC del receptor no tiene un formato válido'), { status: 400 });
   if (receiver.name.length < 3) throw Object.assign(new Error('Captura el nombre fiscal del receptor'), { status: 400 });
@@ -85,6 +89,17 @@ function validateReceiver(input = {}, options = {}) {
   if (!CFDI_USES.has(receiver.cfdiUse)) throw Object.assign(new Error('El uso de CFDI no es válido'), { status: 400 });
   if (receiver.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(receiver.email)) throw Object.assign(new Error('El correo electrónico no es válido'), { status: 400 });
   return receiver;
+}
+
+function globalInformationForReceiver(receiver = {}, issuedAt = new Date()) {
+  if (String(receiver.rfc || '').toUpperCase() !== 'XAXX010101000') return null;
+  const date = issuedAt instanceof Date ? issuedAt : new Date(issuedAt);
+  const safeDate = Number.isNaN(date.getTime()) ? new Date() : date;
+  return {
+    Periodicity: '01',
+    Months: String(safeDate.getMonth() + 1).padStart(2, '0'),
+    Year: safeDate.getFullYear(),
+  };
 }
 
 function roundMoney(value) {
@@ -205,6 +220,6 @@ function createRequestKey() {
 
 module.exports = {
   RFC_RE, POSTAL_RE, FISCAL_REGIMES, CFDI_USES, PAYMENT_FORMS,
-  isMexicoIdentity, invoicingPortalUrl, validateFiscalProfile, validateReceiver, roundMoney,
+  isMexicoIdentity, invoicingPortalUrl, validateFiscalProfile, validateReceiver, globalInformationForReceiver, roundMoney,
   paymentFormFromSale, buildFacturamaItems, extractFacturamaIdentity, createRequestKey,
 };

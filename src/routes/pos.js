@@ -439,6 +439,7 @@ async function listRecentSales(t, sessionId = null) {
   const rows = await t.all(
     `SELECT id, invoice_code, invoice_token, total::float AS total, status, payment_method, payment_breakdown, cash_received::float AS cash_received,
             cash_change::float AS cash_change, COALESCE(NULLIF(order_notes, ''), notes) AS notes, items, table_account_id, table_number, waiter_name,
+            service_branch_id, service_branch_name,
             delivery, delivery_fee::float AS delivery_fee, receiving_mode_label, receiving_mode_behavior, delivery_address, delivery_neighborhood, delivery_reference,
             to_char(created_at AT TIME ZONE '${tenantTimeZone(t)}', 'DD Mon YYYY, HH24:MI') AS created_at
      FROM {s}.orders
@@ -518,6 +519,7 @@ async function listSalesHistoryPage(t, options = {}) {
   const rows = await t.all(
     `SELECT id, invoice_code, invoice_token, total::float AS total, status, payment_method, payment_breakdown, cash_received::float AS cash_received,
             cash_change::float AS cash_change, COALESCE(NULLIF(order_notes, ''), notes) AS notes, items, table_account_id, table_number, waiter_name,
+            service_branch_id, service_branch_name,
             delivery, delivery_fee::float AS delivery_fee, receiving_mode_label, receiving_mode_behavior, delivery_address, delivery_neighborhood, delivery_reference,
             to_char(created_at AT TIME ZONE '${tenantTimeZone(t)}', 'DD Mon YYYY, HH24:MI') AS created_at
      FROM {s}.orders

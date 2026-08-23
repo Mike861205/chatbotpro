@@ -7,6 +7,7 @@ const {
   invoicingPortalUrl,
   validateFiscalProfile,
   validateReceiver,
+  globalInformationForReceiver,
   paymentFormFromSale,
   buildFacturamaItems,
 } = require('../src/utils/invoicing');
@@ -45,6 +46,15 @@ test('valida datos fiscales CFDI 4.0 de emisor y receptor', () => {
     { name: generic.name, fiscalRegime: generic.fiscalRegime, postalCode: generic.postalCode, cfdiUse: generic.cfdiUse },
     { name: 'PUBLICO EN GENERAL', fiscalRegime: '616', postalCode: '78240', cfdiUse: 'S01' }
   );
+  const branchGeneric = validateReceiver(
+    { rfc: 'XAXX010101000', name: 'Otro', fiscalRegime: '625', postalCode: '78240', cfdiUse: 'G03' },
+    { expeditionPostalCode: '23477', issuerPostalCode: '78240' }
+  );
+  assert.equal(branchGeneric.postalCode, '23477');
+  assert.deepEqual(globalInformationForReceiver(branchGeneric, '2026-08-23T15:51:00-06:00'), {
+    Periodicity: '01', Months: '08', Year: 2026,
+  });
+  assert.equal(globalInformationForReceiver({ rfc: 'EKU9003173C9' }), null);
   assert.throws(() => validateReceiver({ rfc: 'INVALIDO' }), /RFC/);
 });
 

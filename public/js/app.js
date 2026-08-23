@@ -5069,8 +5069,11 @@ $('#fiscalCsdForm')?.addEventListener('submit', async (event) => {
   } catch (error) { toast(error.message, true); } finally { button.disabled = false; }
 });
 
-function openPosInvoiceModal(saleId) {
+async function openPosInvoiceModal(saleId) {
   if (!ME?.tenant?.invoicingEligible) return toast('La facturación sólo está disponible para cuentas de México', true);
+  if (!INVOICING_DATA) {
+    try { await loadInvoicing(); } catch (error) { return toast(error.message, true); }
+  }
   $('#posInvoiceSaleId').value = saleId;
   $('#posInvoiceTicketLabel').textContent = `#${saleId}`;
   const environment = String(INVOICING_DATA?.provider?.environment || 'sandbox').toLowerCase();
@@ -5114,8 +5117,11 @@ function applyPosGenericReceiverDefaults() {
   $('#posInvoiceName').value = 'PUBLICO EN GENERAL';
   $('#posInvoiceRegime').value = '616';
   $('#posInvoiceUse').value = 'S01';
-  const issuerPostalCode = String(INVOICING_DATA?.profile?.postal_code || '').trim();
-  if (/^\d{5}$/.test(issuerPostalCode)) $('#posInvoicePostal').value = issuerPostalCode;
+  const saleId = Number($('#posInvoiceSaleId')?.value || 0);
+  const sale = POS_SALES_HISTORY_CACHE.find((row) => Number(row.id) === saleId);
+  const branch = (INVOICING_DATA?.branches || []).find((item) => Number(item.id) === Number(sale?.service_branch_id));
+  const expeditionPostalCode = String(branch?.fiscal_postal_code || INVOICING_DATA?.profile?.postal_code || '').trim();
+  if (/^\d{5}$/.test(expeditionPostalCode)) $('#posInvoicePostal').value = expeditionPostalCode;
 }
 
 $('#posInvoiceRfc')?.addEventListener('input', (event) => {
@@ -5223,7 +5229,7 @@ async function loadPosSalesHistory(page = 1) {
     button.addEventListener('click', () => openPosPaymentEditModal(button.dataset.editPosPayment))
   );
   document.querySelectorAll('[data-invoice-pos-sale]').forEach((button) =>
-    button.addEventListener('click', () => openPosInvoiceModal(button.dataset.invoicePosSale))
+    button.addEventListener('click', () => { openPosInvoiceModal(button.dataset.invoicePosSale); })
   );
   document.querySelectorAll('[data-cancel-pos-sale]').forEach((button) =>
     button.addEventListener('click', () => openPosCancelSaleModal(button.dataset.cancelPosSale))
