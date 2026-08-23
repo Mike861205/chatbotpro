@@ -132,6 +132,9 @@ test('el POS muestra errores de timbrado dentro del modal y prepara público gen
   assert.match(client, /function showPosInvoiceError/);
   assert.match(client, /function setPosGenericReceiver/);
   assert.match(client, /environment === 'sandbox'/);
+  assert.match(client, /const form = event\.currentTarget;/);
+  assert.match(client, /form\.hidden = true/);
+  assert.doesNotMatch(client, /event\.currentTarget\.hidden = true/);
   assert.match(read('public/invoice.html'), /name="conceptMode" value="total"/);
   assert.match(css, /\.pos-invoice-error/);
   assert.match(css, /z-index: 2500/);

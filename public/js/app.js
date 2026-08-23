@@ -5120,7 +5120,8 @@ function applyPosGenericReceiverDefaults() {
   const saleId = Number($('#posInvoiceSaleId')?.value || 0);
   const sale = POS_SALES_HISTORY_CACHE.find((row) => Number(row.id) === saleId);
   const branch = (INVOICING_DATA?.branches || []).find((item) => Number(item.id) === Number(sale?.service_branch_id));
-  const expeditionPostalCode = String(branch?.fiscal_postal_code || INVOICING_DATA?.profile?.postal_code || '').trim();
+  const providerPostalCode = String(INVOICING_DATA?.provider?.expeditionPostalCode || '').trim();
+  const expeditionPostalCode = String(providerPostalCode || branch?.fiscal_postal_code || INVOICING_DATA?.profile?.postal_code || '').trim();
   if (/^\d{5}$/.test(expeditionPostalCode)) $('#posInvoicePostal').value = expeditionPostalCode;
 }
 
@@ -5132,7 +5133,9 @@ $('#posInvoiceRfc')?.addEventListener('input', (event) => {
 $('#posInvoiceGeneric')?.addEventListener('click', setPosGenericReceiver);
 $('#posInvoiceCancel')?.addEventListener('click', () => $('#posInvoiceModal').classList.remove('show'));
 $('#posInvoiceForm')?.addEventListener('submit', async (event) => {
-  event.preventDefault(); const button = event.currentTarget.querySelector('button[type="submit"]'); button.disabled = true;
+  event.preventDefault();
+  const form = event.currentTarget;
+  const button = form.querySelector('button[type="submit"]'); button.disabled = true;
   clearPosInvoiceError();
   applyPosGenericReceiverDefaults();
   $('#posInvoiceModal .modal').classList.add('is-submitting');
@@ -5141,7 +5144,7 @@ $('#posInvoiceForm')?.addEventListener('submit', async (event) => {
     const saleId = $('#posInvoiceSaleId').value;
     const data = await api(`/api/invoicing/sales/${saleId}/issue`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ receiver: { rfc: $('#posInvoiceRfc').value, name: $('#posInvoiceName').value, fiscalRegime: $('#posInvoiceRegime').value, postalCode: $('#posInvoicePostal').value, cfdiUse: $('#posInvoiceUse').value, email: $('#posInvoiceEmail').value } }) });
     const invoice = data.invoice;
-    event.currentTarget.hidden = true; const result = $('#posInvoiceResult'); result.hidden = false;
+    form.hidden = true; const result = $('#posInvoiceResult'); result.hidden = false;
     result.innerHTML = `<div class="invoice-pos-success"><i class="ph-bold ph-check-circle"></i><h3>CFDI timbrado</h3><p>${esc(invoice.uuid || `${invoice.series}-${invoice.folio}`)}</p><div><a class="btn btn-primary" target="_blank" href="/api/invoicing/invoices/${invoice.id}/pdf">Descargar PDF</a><a class="btn btn-ghost" target="_blank" href="/api/invoicing/invoices/${invoice.id}/xml">Descargar XML</a></div></div>`;
     toast(data.reused ? 'Este ticket ya estaba facturado' : 'Factura timbrada correctamente');
   } catch (error) {

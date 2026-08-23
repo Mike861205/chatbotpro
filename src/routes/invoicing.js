@@ -435,9 +435,13 @@ router.get('/bootstrap', async (req, res, next) => {
       req.tdb.all('SELECT id,name,address,fiscal_postal_code,active FROM {s}.branches ORDER BY active DESC,name'),
       req.tdb.all(`SELECT i.*, o.total::float AS order_total FROM {s}.invoices i JOIN {s}.orders o ON o.id=i.order_id ORDER BY i.id DESC LIMIT 50`),
     ]);
+    let expeditionPostalCode = profile?.postal_code || '';
+    if (profile?.api_mode === 'web' && facturama.isConfigured()) {
+      try { expeditionPostalCode = await facturama.webExpeditionPostalCode(expeditionPostalCode); } catch {}
+    }
     res.json({
       eligible: true,
-      provider: { name: 'Facturama', configured: facturama.isConfigured(), environment: config.FACTURAMA_ENVIRONMENT },
+      provider: { name: 'Facturama', configured: facturama.isConfigured(), environment: config.FACTURAMA_ENVIRONMENT, expeditionPostalCode },
       profile,
       ready: profileReady(profile),
       sandboxSharedAvailable: config.FACTURAMA_ENVIRONMENT === 'sandbox' && config.FACTURAMA_SANDBOX_SHARED_ISSUER,
