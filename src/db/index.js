@@ -861,6 +861,72 @@ async function createTenantSchema(slug) {
     ALTER TABLE "${s}".fiscal_profiles ADD COLUMN IF NOT EXISTS csd_updated_at TIMESTAMPTZ;
     ALTER TABLE "${s}".fiscal_profiles ADD COLUMN IF NOT EXISTS default_isr_rate NUMERIC(8,6) NOT NULL DEFAULT 0;
 
+    CREATE TABLE IF NOT EXISTS "${s}".fiscal_emitters (
+      id BIGSERIAL PRIMARY KEY,
+      label TEXT NOT NULL DEFAULT 'Emisor principal',
+      enabled INTEGER NOT NULL DEFAULT 1,
+      environment TEXT NOT NULL DEFAULT 'sandbox',
+      api_mode TEXT NOT NULL DEFAULT 'multi',
+      sandbox_shared INTEGER NOT NULL DEFAULT 0,
+      rfc TEXT NOT NULL,
+      legal_name TEXT NOT NULL,
+      fiscal_regime TEXT NOT NULL,
+      postal_code TEXT NOT NULL,
+      series TEXT NOT NULL DEFAULT 'A',
+      next_folio BIGINT NOT NULL DEFAULT 1,
+      default_product_code TEXT NOT NULL DEFAULT '01010101',
+      default_unit_code TEXT NOT NULL DEFAULT 'E48',
+      default_unit_name TEXT NOT NULL DEFAULT 'Unidad de servicio',
+      default_tax_object TEXT NOT NULL DEFAULT '02',
+      default_iva_rate NUMERIC(8,6) NOT NULL DEFAULT 0.16,
+      default_isr_rate NUMERIC(8,6) NOT NULL DEFAULT 0,
+      delivery_product_code TEXT NOT NULL DEFAULT '',
+      prices_include_tax INTEGER NOT NULL DEFAULT 1,
+      default_card_payment_form TEXT NOT NULL DEFAULT '04',
+      csd_uploaded INTEGER NOT NULL DEFAULT 0,
+      csd_updated_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_${s}_fiscal_emitters_rfc ON "${s}".fiscal_emitters(rfc);
+    INSERT INTO "${s}".fiscal_emitters
+      (id,label,enabled,environment,api_mode,sandbox_shared,rfc,legal_name,fiscal_regime,postal_code,series,next_folio,
+       default_product_code,default_unit_code,default_unit_name,default_tax_object,default_iva_rate,default_isr_rate,
+       delivery_product_code,prices_include_tax,default_card_payment_form,csd_uploaded,csd_updated_at)
+    SELECT 1,'Emisor principal',enabled,environment,api_mode,sandbox_shared,rfc,legal_name,fiscal_regime,postal_code,series,next_folio,
+       default_product_code,default_unit_code,default_unit_name,default_tax_object,default_iva_rate,default_isr_rate,
+       delivery_product_code,prices_include_tax,default_card_payment_form,csd_uploaded,csd_updated_at
+      FROM "${s}".fiscal_profiles WHERE id=1
+    ON CONFLICT (id) DO NOTHING;
+    SELECT setval(pg_get_serial_sequence('"${s}".fiscal_emitters','id'),GREATEST(COALESCE((SELECT max(id) FROM "${s}".fiscal_emitters),1),1));
+
+    ALTER TABLE "${s}".branches ADD COLUMN IF NOT EXISTS fiscal_emitter_id BIGINT;
+    UPDATE "${s}".branches SET fiscal_emitter_id=1 WHERE fiscal_emitter_id IS NULL AND EXISTS (SELECT 1 FROM "${s}".fiscal_emitters WHERE id=1);
+
+    CREATE TABLE IF NOT EXISTS "${s}".stamp_wallet (
+      id INTEGER PRIMARY KEY DEFAULT 1 CHECK (id=1),
+      unlimited INTEGER NOT NULL DEFAULT 1,
+      balance INTEGER NOT NULL DEFAULT 0 CHECK (balance>=0),
+      reserved INTEGER NOT NULL DEFAULT 0 CHECK (reserved>=0),
+      low_balance_threshold INTEGER NOT NULL DEFAULT 20,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+    INSERT INTO "${s}".stamp_wallet(id,unlimited,balance,reserved) VALUES(1,1,0,0) ON CONFLICT(id) DO NOTHING;
+    CREATE TABLE IF NOT EXISTS "${s}".stamp_ledger (
+      id BIGSERIAL PRIMARY KEY,
+      movement_type TEXT NOT NULL,
+      quantity INTEGER NOT NULL,
+      balance_after INTEGER,
+      invoice_type TEXT,
+      invoice_id BIGINT,
+      fiscal_emitter_id BIGINT,
+      detail TEXT NOT NULL DEFAULT '',
+      actor TEXT NOT NULL DEFAULT '',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_${s}_stamp_ledger_invoice_reservation ON "${s}".stamp_ledger(invoice_type,invoice_id) WHERE movement_type='reserved';
+    CREATE INDEX IF NOT EXISTS idx_${s}_stamp_ledger_created ON "${s}".stamp_ledger(created_at DESC,id DESC);
+
     CREATE TABLE IF NOT EXISTS "${s}".fiscal_customers (
       id BIGSERIAL PRIMARY KEY,
       rfc_hash TEXT NOT NULL UNIQUE,
@@ -899,6 +965,8 @@ async function createTenantSchema(slug) {
       created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
+    ALTER TABLE "${s}".invoices ADD COLUMN IF NOT EXISTS fiscal_emitter_id BIGINT;
+    ALTER TABLE "${s}".invoices ADD COLUMN IF NOT EXISTS issuer_rfc TEXT;
     CREATE UNIQUE INDEX IF NOT EXISTS idx_${s}_invoices_uuid ON "${s}".invoices(uuid) WHERE uuid IS NOT NULL;
     CREATE UNIQUE INDEX IF NOT EXISTS idx_${s}_invoices_order_live ON "${s}".invoices(order_id) WHERE status IN ('pending','unknown','active','cancel_pending');
     CREATE INDEX IF NOT EXISTS idx_${s}_invoices_created ON "${s}".invoices(created_at DESC, id DESC);
@@ -942,6 +1010,8 @@ async function createTenantSchema(slug) {
       created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
+    ALTER TABLE "${s}".global_invoices ADD COLUMN IF NOT EXISTS fiscal_emitter_id BIGINT;
+    ALTER TABLE "${s}".global_invoices ADD COLUMN IF NOT EXISTS issuer_rfc TEXT;
     CREATE UNIQUE INDEX IF NOT EXISTS idx_${s}_global_invoices_uuid ON "${s}".global_invoices(uuid) WHERE uuid IS NOT NULL;
     CREATE INDEX IF NOT EXISTS idx_${s}_global_invoices_date ON "${s}".global_invoices(business_date DESC, service_branch_id, id DESC);
     ALTER TABLE "${s}".global_invoices ADD COLUMN IF NOT EXISTS concept_mode TEXT NOT NULL DEFAULT 'detailed';

@@ -480,6 +480,7 @@ function renderTenantTable() {
           ${waUrl ? `<a class="btn btn-ghost" href="${waUrl}" target="_blank" rel="noopener noreferrer"><i class="ph-bold ph-whatsapp-logo" style="color:#22c55e"></i> WhatsApp</a>` : '<button type="button" class="btn btn-ghost" disabled style="opacity:.3"><i class="ph-bold ph-whatsapp-logo"></i> WhatsApp</button>'}
           <button type="button" class="btn btn-ghost" data-sa-password="${t.id}"><i class="ph-bold ph-key"></i> Clave</button>
           <button type="button" class="btn btn-ghost" data-sa-payment="${t.id}"><i class="ph-bold ph-currency-circle-dollar"></i> Pago</button>
+          ${(t.phone_country === 'MX' || String(t.phone_calling_code || '').replace('+', '') === '52') ? `<button type="button" class="btn btn-ghost" data-sa-stamps="${t.id}"><i class="ph-bold ph-stamp"></i> Timbres</button>` : ''}
           ${t.phone_valid && t.phone_e164 ? `<button type="button" class="btn btn-ghost" data-sa-copy-phone="${esc(t.phone_e164)}"><i class="ph-bold ph-copy"></i> Copiar</button>` : '<button type="button" class="btn btn-ghost" disabled style="opacity:.3"><i class="ph-bold ph-copy"></i> Copiar</button>'}
           <button type="button" class="btn btn-ghost" data-sa-branches="${t.id}"><i class="ph-bold ph-storefront"></i> Sucursales</button>
           <button type="button" class="btn ${(t.account_status === 'active' && t.billing_status !== 'suspended') ? 'btn-danger' : 'btn-primary'}" data-sa-suspend="${t.id}">
@@ -500,6 +501,9 @@ function renderTenantTable() {
   });
   document.querySelectorAll('[data-sa-payment]').forEach((btn) => {
     btn.addEventListener('click', () => addTenantPayment(Number(btn.dataset.saPayment)).catch((err) => toast(err.message, true)));
+  });
+  document.querySelectorAll('[data-sa-stamps]').forEach((btn) => {
+    btn.addEventListener('click', () => manageTenantStamps(Number(btn.dataset.saStamps)).catch((err) => toast(err.message, true)));
   });
   document.querySelectorAll('[data-sa-suspend]').forEach((btn) => {
     btn.addEventListener('click', () => toggleTenantSuspend(Number(btn.dataset.saSuspend)).catch((err) => toast(err.message, true)));
@@ -523,6 +527,23 @@ function renderTenantTable() {
     };
   });
   bindPagination('tenant', renderTenantTable, () => SA_TENANT_PAGE, (v) => { SA_TENANT_PAGE = v; }, () => SA_TENANT_PER_PAGE, (v) => { SA_TENANT_PER_PAGE = v; });
+}
+
+async function manageTenantStamps(tenantId) {
+  const data = await api(`/api/superadmin/tenants/${tenantId}/stamps`);
+  const wallet = data.wallet || {};
+  const current = wallet.unlimited ? 'ilimitados' : `${Number(wallet.balance || 0)} (${Number(wallet.reserved || 0)} reservados)`;
+  const value = window.prompt(`Timbres actuales: ${current}.\n\nEscribe una cantidad para sumar (ej. 500), una negativa para ajustar, o ILIMITADO:`, '500');
+  if (value === null) return;
+  const unlimited = String(value).trim().toUpperCase() === 'ILIMITADO';
+  const quantity = unlimited ? 0 : Number(value);
+  if (!unlimited && (!Number.isInteger(quantity) || quantity === 0)) throw new Error('Captura una cantidad entera o ILIMITADO');
+  const note = window.prompt('Concepto del movimiento:', unlimited ? 'Plan ilimitado' : 'Recarga de timbres') || '';
+  const result = await api(`/api/superadmin/tenants/${tenantId}/stamps`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ unlimited, quantity, note }),
+  });
+  toast(result.wallet.unlimited ? 'Timbres ilimitados activados' : `Saldo actualizado: ${result.wallet.balance} timbres`);
 }
 
 function getFilteredDemoLeads() {

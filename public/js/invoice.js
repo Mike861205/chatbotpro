@@ -224,6 +224,11 @@
 
   async function lookup(ticket, token) {
     const data = await request('/lookup', { method: 'POST', body: JSON.stringify({ ticket, code: token }) });
+    if (data.issuer) {
+      setText('#issuerLegalName', data.issuer.legalName || currentPortal?.business?.name || 'Emisor fiscal');
+      setText('#issuerRfc', [data.issuer.rfc && `RFC ${data.issuer.rfc}`, data.issuer.postalCode && `CP ${data.issuer.postalCode}`].filter(Boolean).join(' · '));
+      $('#issuerDetail').hidden = false;
+    }
     currentTicket = { ticket: Number(ticket), token, ...data.ticket };
     if (data.invoice?.status === 'active') {
       invoiceDownloads(data.invoice, token);

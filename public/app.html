@@ -11,7 +11,7 @@
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/fill/style.css" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/duotone/style.css" />
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-  <link rel="stylesheet" href="/static/css/styles.css?v=20260823invoiceconcept" />
+  <link rel="stylesheet" href="/static/css/styles.css?v=20260823multiemisor" />
   <link rel="icon" type="image/svg+xml" href="/static/favicon.svg" />
   <link rel="icon" type="image/png" href="/static/chatbotpro100.png" />
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
@@ -1039,6 +1039,7 @@
             <h3><i class="ph-bold ph-certificate"></i> Sellos digitales (CSD)</h3>
             <p class="hint">En producción, cada tenant carga su .cer y .key. La contraseña sólo se envía directamente a Facturama y nunca se guarda.</p>
             <form id="fiscalCsdForm">
+              <div class="field"><label>Emisor fiscal</label><select name="emitterId" id="fiscalCsdEmitter"></select></div>
               <div class="field"><label>Certificado .cer</label><input name="certificate" type="file" accept=".cer" required /></div>
               <div class="field"><label>Llave privada .key</label><input name="privateKey" type="file" accept=".key" required /></div>
               <div class="field"><label>Contraseña de la llave</label><input name="privateKeyPassword" type="password" required autocomplete="new-password" /></div>
@@ -1046,11 +1047,15 @@
             </form>
           </div>
         </div>
-        <div class="card" style="margin-top:16px"><h3><i class="ph-bold ph-storefront"></i> Código postal por sucursal</h3><p class="hint">Define el lugar de expedición. Si queda vacío se usa el código postal fiscal principal.</p><div class="table-wrap" id="fiscalBranchesTable"></div></div>
+        <div class="card" style="margin-top:16px"><div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap"><div><h3><i class="ph-bold ph-identification-badge"></i> Emisores fiscales</h3><p class="hint">Registra RFC adicionales y asígnalos a sus sucursales. Cada emisor requiere su propio CSD.</p></div><button class="btn btn-primary" type="button" id="addFiscalEmitter"><i class="ph-bold ph-plus-circle"></i> Nuevo emisor</button></div><div class="table-wrap" id="fiscalEmittersTable" style="margin-top:14px"></div></div>
+        <div class="card invoice-stamp-wallet" style="margin-top:16px"><div><h3><i class="ph-bold ph-stamp"></i> Timbres disponibles</h3><p class="hint">El saldo es compartido por todos los RFC del tenant.</p></div><div id="invoiceStampBalance">—</div></div>
+        <div class="card" style="margin-top:16px"><h3><i class="ph-bold ph-storefront"></i> Emisor y lugar de expedición por sucursal</h3><p class="hint">Cada sucursal factura con el RFC asignado y su código postal de expedición. Varias sucursales pueden compartir el mismo emisor.</p><div class="table-wrap" id="fiscalBranchesTable"></div></div>
         <div class="card" style="margin-top:16px"><h3><i class="ph-bold ph-files"></i> CFDI emitidos</h3><div class="table-wrap" id="fiscalInvoicesTable"></div></div>
       </section>
 
       <!-- ──────── Mi negocio ──────── -->
+      <div class="modal-bg" id="fiscalEmitterModal"><div class="modal" style="max-width:680px"><div style="display:flex;justify-content:space-between;align-items:center"><h3><i class="ph-bold ph-identification-badge"></i> <span id="fiscalEmitterModalTitle">Nuevo emisor fiscal</span></h3><button type="button" class="modal-close" id="fiscalEmitterClose"><i class="ph-bold ph-x"></i></button></div><form id="fiscalEmitterForm"><input type="hidden" id="fiscalEmitterId"/><div class="field"><label>Nombre interno</label><input id="fiscalEmitterLabel" maxlength="80" required placeholder="Ej. Empresa Guadalajara"/></div><div class="row-2"><div class="field"><label>RFC</label><input id="fiscalEmitterRfc" maxlength="13" required/></div><div class="field"><label>Régimen fiscal</label><input id="fiscalEmitterRegime" maxlength="3" required/></div></div><div class="field"><label>Nombre o razón social</label><input id="fiscalEmitterLegalName" maxlength="254" required/></div><div class="row-2"><div class="field"><label>Código postal fiscal</label><input id="fiscalEmitterPostal" maxlength="5" required/></div><div class="field"><label>Serie</label><input id="fiscalEmitterSeries" maxlength="25" value="A" required/></div></div><div class="row-2"><div class="field"><label>Clave SAT predeterminada</label><input id="fiscalEmitterProductCode" maxlength="8" value="01010101" required/></div><div class="field"><label>Unidad SAT</label><input id="fiscalEmitterUnitCode" maxlength="3" value="E48" required/></div></div><div class="row-2"><div class="field"><label>Objeto de impuesto</label><select id="fiscalEmitterTaxObject"><option value="02">02 - Sí objeto</option><option value="01">01 - No objeto</option><option value="03">03 - Sí objeto, sin desglose</option></select></div><div class="field"><label>IVA</label><select id="fiscalEmitterIva"><option value="0.16">16%</option><option value="0.08">8%</option><option value="0">0%</option></select></div></div><div class="modal-actions"><button type="button" class="btn btn-ghost" id="fiscalEmitterCancel">Cancelar</button><button type="submit" class="btn btn-primary"><i class="ph-bold ph-floppy-disk"></i> Guardar emisor</button></div></form></div></div>
+
       <section class="section" id="view-config">
         <div class="grid-2">
           <div class="card">
@@ -2721,6 +2726,6 @@
     </div>
   </div>
 
-  <script src="/static/js/app.js?v=20260823invoiceconcept"></script>
+  <script src="/static/js/app.js?v=20260823multiemisor"></script>
 </body>
 </html>

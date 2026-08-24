@@ -240,6 +240,31 @@ test('la factura global enlaza tickets, bloquea duplicados y se opera desde el h
   assert.match(client, /conceptMode: selectedConceptMode/);
 });
 
+test('la facturación admite varios emisores por sucursal y controla el saldo de timbres', () => {
+  const database = read('src/db/index.js');
+  const invoicing = read('src/routes/invoicing.js');
+  const superadmin = read('src/routes/superadmin.js');
+  const app = read('public/app.html');
+  const client = read('public/js/app.js');
+  const superadminClient = read('public/js/superadmin.js');
+  assert.match(database, /CREATE TABLE IF NOT EXISTS "\$\{s\}"\.fiscal_emitters/);
+  assert.match(database, /fiscal_emitter_id BIGINT/);
+  assert.match(database, /CREATE TABLE IF NOT EXISTS "\$\{s\}"\.stamp_wallet/);
+  assert.match(database, /CREATE TABLE IF NOT EXISTS "\$\{s\}"\.stamp_ledger/);
+  assert.match(invoicing, /async function getEmitter/);
+  assert.match(invoicing, /async function reserveStamp/);
+  assert.match(invoicing, /async function finalizeStamp/);
+  assert.match(invoicing, /router\.post\('\/emitters'/);
+  assert.match(invoicing, /router\.put\('\/emitters\/:id'/);
+  assert.match(invoicing, /router\.put\('\/branches\/:id'/);
+  assert.match(superadmin, /router\.post\('\/tenants\/:id\/stamps'/);
+  assert.match(app, /id="fiscalEmitterModal"/);
+  assert.match(app, /id="invoiceStampBalance"/);
+  assert.match(client, /openFiscalEmitterModal/);
+  assert.match(client, /data-branch-emitter/);
+  assert.match(superadminClient, /data-sa-stamps/);
+});
+
 test('el portal público es responsivo y presenta la identidad completa del tenant', () => {
   const route = read('src/routes/invoicing.js');
   const html = read('public/invoice.html');

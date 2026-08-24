@@ -10,6 +10,7 @@ const { signToken, setAuthCookie } = require('../middleware/auth');
 const { createRateLimiter } = require('../middleware/security');
 const { describeStoredPhone, normalizeInternationalPhone } = require('../utils/phone');
 const { buildClientSummary } = require('../utils/customerLifecycle');
+const { isMexicoIdentity } = require('../utils/invoicing');
 const {
   signSuperAdminToken,
   setSuperAdminCookie,
@@ -1272,6 +1273,54 @@ router.patch('/tenants/:id', requireSuperAdmin, async (req, res, next) => {
     res.json({ ok: true });
   } catch (e) {
     next(e);
+  }
+});
+
+router.get('/tenants/:id/stamps', requireSuperAdmin, async (req, res, next) => {
+  try {
+    const tenant = await getTenantById(Number(req.params.id));
+    if (!tenant) return res.status(404).json({ error: 'Tenant no encontrado' });
+    if (!isMexicoIdentity(tenant) && tenant.slug !== config.DEMO_TENANT_SLUG) return res.status(403).json({ error: 'Los timbres sólo aplican a tenants de México' });
+    const tenantDb = tdb(tenant.slug);
+    const [wallet, movements] = await Promise.all([
+      tenantDb.get('SELECT * FROM {s}.stamp_wallet WHERE id=1'),
+      tenantDb.all('SELECT * FROM {s}.stamp_ledger ORDER BY id DESC LIMIT 30'),
+    ]);
+    res.json({ wallet: { unlimited: Boolean(Number(wallet?.unlimited)), balance: Number(wallet?.balance || 0), reserved: Number(wallet?.reserved || 0) }, movements });
+  } catch (error) { next(error); }
+});
+
+router.post('/tenants/:id/stamps', requireSuperAdmin, async (req, res, next) => {
+  try {
+    const tenant = await getTenantById(Number(req.params.id));
+    if (!tenant) return res.status(404).json({ error: 'Tenant no encontrado' });
+    if (!isMexicoIdentity(tenant) && tenant.slug !== config.DEMO_TENANT_SLUG) return res.status(403).json({ error: 'Los timbres sólo aplican a tenants de México' });
+    const unlimited = req.body?.unlimited === true;
+    const quantity = Number(req.body?.quantity || 0);
+    if (!unlimited && (!Number.isInteger(quantity) || quantity === 0 || Math.abs(quantity) > 1000000)) {
+      return res.status(400).json({ error: 'Indica una cantidad entera distinta de cero' });
+    }
+    const tenantDb = tdb(tenant.slug);
+    const result = await tenantDb.tx(async (tx) => {
+      const wallet = await tx.get('SELECT * FROM {s}.stamp_wallet WHERE id=1 FOR UPDATE');
+      const nextBalance = unlimited ? Number(wallet.balance || 0) : Number(wallet.balance || 0) + quantity;
+      if (nextBalance < Number(wallet.reserved || 0)) throw Object.assign(new Error('El saldo no puede quedar por debajo de los timbres reservados'), { status: 409 });
+      const updated = await tx.get(
+        'UPDATE {s}.stamp_wallet SET unlimited=$1,balance=$2,updated_at=now() WHERE id=1 RETURNING *',
+        [unlimited ? 1 : 0, nextBalance]
+      );
+      await tx.run(
+        `INSERT INTO {s}.stamp_ledger(movement_type,quantity,balance_after,detail,actor)
+         VALUES($1,$2,$3,$4,$5)`,
+        [unlimited ? 'unlimited' : (quantity > 0 ? 'credit' : 'adjustment'), unlimited ? 0 : quantity, nextBalance,
+          String(req.body?.note || (unlimited ? 'Plan de timbres ilimitado' : 'Ajuste por superadministrador')).slice(0,300), req.superadmin.username]
+      );
+      return updated;
+    });
+    res.json({ ok: true, wallet: { unlimited: Boolean(Number(result.unlimited)), balance: Number(result.balance), reserved: Number(result.reserved) } });
+  } catch (error) {
+    if (error.status) return res.status(error.status).json({ error: error.message });
+    next(error);
   }
 });
 

@@ -5018,9 +5018,21 @@ function renderInvoicing() {
   $('#fiscalIsrRate').value = String(profile.default_isr_rate ?? data.sandboxDefaults?.defaultIsrRate ?? 0);
   $('#fiscalEnabled').checked = profile.enabled ?? true;
   $('#fiscalCsdCard').hidden = Boolean(data.sandboxSharedAvailable && $('#fiscalSandboxShared').checked);
+  const emitters = data.emitters || [];
+  const uploadableEmitters = emitters.filter((item) => item.enabled && !item.sandbox_shared);
+  $('#fiscalCsdCard').hidden = Boolean(data.sandboxSharedAvailable && $('#fiscalSandboxShared').checked && !uploadableEmitters.length);
+  const emitterOptions = uploadableEmitters.map((item) => `<option value="${item.id}">${esc(item.label || item.legal_name)} · ${esc(item.rfc)}</option>`).join('');
+  $('#fiscalCsdEmitter').innerHTML = emitterOptions;
+  const wallet = data.stampWallet;
+  $('#invoiceStampBalance').innerHTML = wallet?.unlimited
+    ? '<strong>Ilimitados</strong><small>El superadministrador puede asignar un paquete cuando inicie la cobranza.</small>'
+    : `<strong>${Number(wallet?.available || 0)}</strong><small>${Number(wallet?.reserved || 0)} reservados · ${Number(wallet?.balance || 0)} saldo total</small>`;
+  $('#fiscalEmittersTable').innerHTML = emitters.length
+    ? `<table><thead><tr><th>Emisor</th><th>RFC</th><th>Serie</th><th>CSD</th><th>Estado</th><th></th></tr></thead><tbody>${emitters.map((emitter) => `<tr><td><b>${esc(emitter.label || emitter.legal_name)}</b><small class="fiscal-uuid">${esc(emitter.legal_name)}</small></td><td>${esc(emitter.rfc)}</td><td>${esc(emitter.series)}</td><td>${emitter.sandbox_shared || emitter.csd_uploaded ? '<span class="badge b-entregado">Listo</span>' : '<span class="badge b-pendiente">Pendiente</span>'}</td><td>${emitter.enabled ? 'Activo' : 'Inactivo'}</td><td><div class="invoice-actions">${Number(emitter.id) !== 1 ? `<button class="btn btn-ghost" data-edit-fiscal-emitter="${emitter.id}">Editar</button><button class="btn btn-danger" data-delete-fiscal-emitter="${emitter.id}">Eliminar</button>` : '<span class="hint">Principal</span>'}</div></td></tr>`).join('')}</tbody></table>`
+    : emptyHTML('ph-identification-badge', 'Sin emisores', 'Guarda primero el emisor principal.');
 
   $('#fiscalBranchesTable').innerHTML = data.branches?.length
-    ? `<table><thead><tr><th>Sucursal</th><th>Dirección</th><th>CP de expedición</th><th></th></tr></thead><tbody>${data.branches.map((branch) => `<tr data-fiscal-branch-row="${branch.id}"><td><b>${esc(branch.name)}</b></td><td>${esc(branch.address || '—')}</td><td><input class="fiscal-table-input" data-branch-postal value="${esc(branch.fiscal_postal_code || profile.postal_code || '')}" maxlength="5" inputmode="numeric" /></td><td><button class="btn btn-ghost" data-save-fiscal-branch="${branch.id}"><i class="ph-bold ph-floppy-disk"></i> Guardar</button></td></tr>`).join('')}</tbody></table>`
+    ? `<table><thead><tr><th>Sucursal</th><th>Dirección</th><th>Emisor fiscal</th><th>CP de expedición</th><th></th></tr></thead><tbody>${data.branches.map((branch) => `<tr data-fiscal-branch-row="${branch.id}"><td><b>${esc(branch.name)}</b></td><td>${esc(branch.address || '—')}</td><td><select class="fiscal-emitter-select" data-branch-emitter>${emitters.filter((item) => item.enabled).map((item) => `<option value="${item.id}" ${Number(branch.fiscal_emitter_id || 1) === Number(item.id) ? 'selected' : ''}>${esc(item.label || item.rfc)} · ${esc(item.rfc)}</option>`).join('')}</select></td><td><input class="fiscal-table-input" data-branch-postal value="${esc(branch.fiscal_postal_code || profile.postal_code || '')}" maxlength="5" inputmode="numeric" /></td><td><button class="btn btn-ghost" data-save-fiscal-branch="${branch.id}"><i class="ph-bold ph-floppy-disk"></i> Guardar</button></td></tr>`).join('')}</tbody></table>`
     : emptyHTML('ph-storefront', 'Sin sucursales', 'Agrega una sucursal para configurar su lugar de expedición.');
 
   $('#fiscalInvoicesTable').innerHTML = data.invoices?.length
@@ -5029,8 +5041,21 @@ function renderInvoicing() {
 
   document.querySelectorAll('[data-save-fiscal-branch]').forEach((button) => button.addEventListener('click', async () => {
     const row = button.closest('[data-fiscal-branch-row]');
-    try { await api(`/api/invoicing/branches/${button.dataset.saveFiscalBranch}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ postalCode: row.querySelector('[data-branch-postal]').value }) }); toast('Código postal guardado'); }
+    try { await api(`/api/invoicing/branches/${button.dataset.saveFiscalBranch}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ postalCode: row.querySelector('[data-branch-postal]').value, emitterId: Number(row.querySelector('[data-branch-emitter]').value) }) }); toast('Emisor y lugar de expedición guardados'); await loadInvoicing(); }
     catch (error) { toast(error.message, true); }
+  }));
+  document.querySelectorAll('[data-edit-fiscal-emitter]').forEach((button) => button.addEventListener('click', () => {
+    const emitter = emitters.find((item) => Number(item.id) === Number(button.dataset.editFiscalEmitter));
+    if (emitter) openFiscalEmitterModal(emitter);
+  }));
+  document.querySelectorAll('[data-delete-fiscal-emitter]').forEach((button) => button.addEventListener('click', async () => {
+    const emitter = emitters.find((item) => Number(item.id) === Number(button.dataset.deleteFiscalEmitter));
+    if (!emitter || !await askConfirm('¿Eliminar emisor fiscal?', `${emitter.label || emitter.rfc} dejará de estar disponible. Sólo puede eliminarse si no tiene sucursales ni CFDI asociados.`)) return;
+    try {
+      await api(`/api/invoicing/emitters/${emitter.id}`, { method: 'DELETE' });
+      toast('Emisor fiscal eliminado');
+      await loadInvoicing();
+    } catch (error) { toast(error.message, true); }
   }));
   document.querySelectorAll('[data-cancel-cfdi]').forEach((button) => button.addEventListener('click', async () => {
     if (!await askConfirm('¿Cancelar CFDI?', 'Se solicitará la cancelación ante el SAT con motivo 02: comprobante emitido con errores sin relación.')) return;
@@ -5045,8 +5070,71 @@ async function loadInvoicing() {
   renderInvoicing();
 }
 
+function closeFiscalEmitterModal() {
+  $('#fiscalEmitterModal')?.classList.remove('show');
+}
+
+function openFiscalEmitterModal(emitter = null) {
+  const form = $('#fiscalEmitterForm');
+  if (!form) return;
+  form.reset();
+  $('#fiscalEmitterId').value = emitter?.id || '';
+  $('#fiscalEmitterModalTitle').textContent = emitter ? 'Editar emisor fiscal' : 'Nuevo emisor fiscal';
+  $('#fiscalEmitterLabel').value = emitter?.label || '';
+  $('#fiscalEmitterRfc').value = emitter?.rfc || '';
+  $('#fiscalEmitterRegime').value = emitter?.fiscal_regime || '';
+  $('#fiscalEmitterLegalName').value = emitter?.legal_name || '';
+  $('#fiscalEmitterPostal').value = emitter?.postal_code || '';
+  $('#fiscalEmitterSeries').value = emitter?.series || 'A';
+  $('#fiscalEmitterProductCode').value = emitter?.default_product_code || '01010101';
+  $('#fiscalEmitterUnitCode').value = emitter?.default_unit_code || 'E48';
+  $('#fiscalEmitterTaxObject').value = emitter?.default_tax_object || '02';
+  $('#fiscalEmitterIva').value = String(emitter?.default_iva_rate ?? 0.16);
+  $('#fiscalEmitterModal').classList.add('show');
+  setTimeout(() => $('#fiscalEmitterLabel')?.focus(), 30);
+}
+
+$('#addFiscalEmitter')?.addEventListener('click', () => openFiscalEmitterModal());
+$('#fiscalEmitterClose')?.addEventListener('click', closeFiscalEmitterModal);
+$('#fiscalEmitterCancel')?.addEventListener('click', closeFiscalEmitterModal);
+$('#fiscalEmitterModal')?.addEventListener('click', (event) => {
+  if (event.target.id === 'fiscalEmitterModal') closeFiscalEmitterModal();
+});
+$('#fiscalEmitterForm')?.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const id = Number($('#fiscalEmitterId').value || 0);
+  const payload = {
+    label: $('#fiscalEmitterLabel').value,
+    enabled: true,
+    rfc: $('#fiscalEmitterRfc').value,
+    legalName: $('#fiscalEmitterLegalName').value,
+    fiscalRegime: $('#fiscalEmitterRegime').value,
+    postalCode: $('#fiscalEmitterPostal').value,
+    series: $('#fiscalEmitterSeries').value,
+    defaultProductCode: $('#fiscalEmitterProductCode').value,
+    defaultUnitCode: $('#fiscalEmitterUnitCode').value,
+    defaultUnitName: 'Unidad de servicio',
+    defaultTaxObject: $('#fiscalEmitterTaxObject').value,
+    defaultIvaRate: Number($('#fiscalEmitterIva').value),
+    defaultIsrRate: 0,
+    deliveryProductCode: $('#fiscalEmitterProductCode').value,
+    defaultCardPaymentForm: '04',
+  };
+  const button = event.currentTarget.querySelector('button[type="submit"]');
+  button.disabled = true;
+  try {
+    await api(id ? `/api/invoicing/emitters/${id}` : '/api/invoicing/emitters', {
+      method: id ? 'PUT' : 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
+    });
+    closeFiscalEmitterModal();
+    toast(id ? 'Emisor fiscal actualizado' : 'Emisor fiscal agregado');
+    await loadInvoicing();
+  } catch (error) { toast(error.message, true); } finally { button.disabled = false; }
+});
+
 $('#fiscalSandboxShared')?.addEventListener('change', (event) => {
-  $('#fiscalCsdCard').hidden = event.target.checked;
+  const hasUploadableEmitter = (INVOICING_DATA?.emitters || []).some((item) => item.enabled && !item.sandbox_shared);
+  $('#fiscalCsdCard').hidden = event.target.checked && !hasUploadableEmitter;
   if (event.target.checked && INVOICING_DATA?.sandboxDefaults) {
     const d = INVOICING_DATA.sandboxDefaults;
     $('#fiscalRfc').value = d.rfc; $('#fiscalLegalName').value = d.legalName; $('#fiscalRegime').value = d.fiscalRegime; $('#fiscalPostalCode').value = d.postalCode;

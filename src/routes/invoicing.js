@@ -66,7 +66,53 @@ function safeProfile(row) {
 }
 
 async function getProfile(t) {
-  return safeProfile(await t.get('SELECT * FROM {s}.fiscal_profiles WHERE id = 1'));
+  const emitter = await t.get('SELECT * FROM {s}.fiscal_emitters WHERE id=1 LIMIT 1').catch(() => null);
+  return safeProfile(emitter || await t.get('SELECT * FROM {s}.fiscal_profiles WHERE id = 1'));
+}
+
+async function getEmitter(t, emitterId = 0, branchId = 0) {
+  let row = null;
+  if (Number(branchId) > 0) {
+    row = await t.get(
+      `SELECT e.* FROM {s}.branches b JOIN {s}.fiscal_emitters e ON e.id=b.fiscal_emitter_id
+       WHERE b.id=$1 LIMIT 1`, [Number(branchId)]
+    );
+  }
+  if (!row && Number(emitterId) > 0) row = await t.get('SELECT * FROM {s}.fiscal_emitters WHERE id=$1 LIMIT 1', [Number(emitterId)]);
+  return safeProfile(row || await getProfile(t));
+}
+
+async function reserveStamp(tx, invoiceType, invoiceId, emitterId, actor) {
+  const wallet = await tx.get('SELECT * FROM {s}.stamp_wallet WHERE id=1 FOR UPDATE');
+  if (!wallet) throw Object.assign(new Error('El monedero de timbres no está configurado'), { status: 409 });
+  if (!Number(wallet.unlimited) && Number(wallet.balance) - Number(wallet.reserved) < 1) {
+    throw Object.assign(new Error('No tienes timbres disponibles. Solicita una recarga para continuar.'), { status: 402 });
+  }
+  await tx.run('UPDATE {s}.stamp_wallet SET reserved=reserved+1,updated_at=now() WHERE id=1');
+  await tx.run(
+    `INSERT INTO {s}.stamp_ledger(movement_type,quantity,balance_after,invoice_type,invoice_id,fiscal_emitter_id,detail,actor)
+     VALUES('reserved',0,$1,$2,$3,$4,'Timbre reservado para timbrado',$5)`,
+    [Number(wallet.balance), invoiceType, invoiceId, emitterId || null, actor]
+  );
+}
+
+async function finalizeStamp(t, invoiceType, invoiceId, outcome, emitterId, actor) {
+  await t.tx(async (tx) => {
+    const reservation = await tx.get(
+      `SELECT id FROM {s}.stamp_ledger WHERE invoice_type=$1 AND invoice_id=$2 AND movement_type='reserved' LIMIT 1 FOR UPDATE`,
+      [invoiceType, invoiceId]
+    );
+    if (!reservation) return;
+    const wallet = await tx.get('SELECT * FROM {s}.stamp_wallet WHERE id=1 FOR UPDATE');
+    if (outcome === 'consumed') {
+      const nextBalance = Number(wallet.unlimited) ? Number(wallet.balance) : Math.max(0, Number(wallet.balance) - 1);
+      await tx.run('UPDATE {s}.stamp_wallet SET balance=$1,reserved=GREATEST(0,reserved-1),updated_at=now() WHERE id=1', [nextBalance]);
+      await tx.run("UPDATE {s}.stamp_ledger SET movement_type='consumed',quantity=-1,balance_after=$1,detail='CFDI timbrado' WHERE id=$2", [nextBalance, reservation.id]);
+    } else {
+      await tx.run('UPDATE {s}.stamp_wallet SET reserved=GREATEST(0,reserved-1),updated_at=now() WHERE id=1');
+      await tx.run("UPDATE {s}.stamp_ledger SET movement_type='released',detail='Reserva liberada por timbrado no realizado' WHERE id=$1", [reservation.id]);
+    }
+  });
 }
 
 function sandboxIssuerDefaults() {
@@ -144,6 +190,8 @@ function invoiceSummary(row, includeReceiver = true) {
     series: row.series || '',
     folio: row.folio || '',
     status: row.status,
+    emitterId: row.fiscal_emitter_id ? Number(row.fiscal_emitter_id) : null,
+    issuerRfc: row.issuer_rfc || '',
     receiver,
     total: Number(row.order_total || row.total || 0),
     error: row.error_message || '',
@@ -164,6 +212,8 @@ function globalInvoiceSummary(row) {
     series: row.series || '',
     folio: row.folio || '',
     status: row.status,
+    emitterId: row.fiscal_emitter_id ? Number(row.fiscal_emitter_id) : null,
+    issuerRfc: row.issuer_rfc || '',
     businessDate: row.business_date || '',
     branchId: row.service_branch_id ? Number(row.service_branch_id) : null,
     orderCount: Number(row.order_count || 0),
@@ -206,7 +256,7 @@ async function sendInvoiceEmail({ tenant, tenantDb, invoiceId, emailInput, actor
   if (!invoice.provider_id) {
     throw Object.assign(new Error('El CFDI todavía no está disponible en Facturama'), { status: 409 });
   }
-  const profile = await getProfile(tenantDb);
+  const profile = await getEmitter(tenantDb, invoice.fiscal_emitter_id);
   const maskedEmail = maskInvoiceEmail(email);
   const identity = [invoice.series, invoice.folio].filter(Boolean).join('-') || invoice.uuid || invoice.id;
   try {
@@ -233,10 +283,6 @@ async function issueGlobalInvoice({ tenantDb, orderIds, conceptMode = 'total', a
   if (!ids.length) throw Object.assign(new Error('Selecciona al menos una venta sin facturar'), { status: 400 });
   if (ids.length > 500) throw Object.assign(new Error('Puedes incluir hasta 500 tickets por factura global'), { status: 400 });
   const normalizedConceptMode = conceptMode === 'detailed' ? 'detailed' : 'total';
-  const profile = await getProfile(tenantDb);
-  const readinessError = profileReadinessError(profile);
-  if (readinessError) throw Object.assign(new Error(readinessError), { status: 409 });
-
   const timezone = String(tenantDb.timezone || 'America/Mexico_City').replace(/'/g, '');
   const previewSales = await tenantDb.all(
     `SELECT id, items, total::float AS total, status, channel, payment_method, payment_breakdown,
@@ -255,7 +301,10 @@ async function issueGlobalInvoice({ tenantDb, orderIds, conceptMode = 'total', a
   if (allowedBranchId !== null && branchId !== Number(allowedBranchId)) {
     throw Object.assign(new Error('Sólo puedes facturar ventas de tu sucursal asignada'), { status: 403 });
   }
-  const branch = branchId ? await tenantDb.get('SELECT fiscal_postal_code FROM {s}.branches WHERE id=$1 LIMIT 1', [branchId]) : null;
+  const branch = branchId ? await tenantDb.get('SELECT fiscal_postal_code,fiscal_emitter_id FROM {s}.branches WHERE id=$1 LIMIT 1', [branchId]) : null;
+  const profile = await getEmitter(tenantDb, branch?.fiscal_emitter_id, branchId);
+  const readinessError = profileReadinessError(profile);
+  if (readinessError) throw Object.assign(new Error(readinessError), { status: 409 });
   let expeditionPlace = resolveExpeditionPostalCode(profile, branch?.fiscal_postal_code);
   let invoiceSeries = profile.series;
   if (profile.api_mode === 'web') {
@@ -310,9 +359,9 @@ async function issueGlobalInvoice({ tenantDb, orderIds, conceptMode = 'total', a
     const largestSale = sales.reduce((largest, sale) => Number(sale.total) > Number(largest.total) ? sale : largest, sales[0]);
     const paymentForm = paymentFormFromSale(largestSale, profile.default_card_payment_form);
     const total = Math.round(sales.reduce((sum, sale) => sum + Number(sale.total || 0), 0) * 100) / 100;
-    const lockedProfile = await tx.get('SELECT * FROM {s}.fiscal_profiles WHERE id=1 FOR UPDATE');
+    const lockedProfile = await tx.get('SELECT * FROM {s}.fiscal_emitters WHERE id=$1 FOR UPDATE', [profile.id || 1]);
     const folio = String(lockedProfile.next_folio || 1);
-    await tx.run('UPDATE {s}.fiscal_profiles SET next_folio=next_folio+1,updated_at=now() WHERE id=1');
+    await tx.run('UPDATE {s}.fiscal_emitters SET next_folio=next_folio+1,updated_at=now() WHERE id=$1', [lockedProfile.id]);
     const snapshot = {
       issuer: { rfc: profile.rfc, legalName: profile.legal_name, fiscalRegime: profile.fiscal_regime, postalCode: expeditionPlace },
       receiver, paymentForm, periodicity: '01', conceptMode: normalizedConceptMode, businessDate: sales[0].business_date,
@@ -320,11 +369,13 @@ async function issueGlobalInvoice({ tenantDb, orderIds, conceptMode = 'total', a
     };
     const row = await tx.get(
       `INSERT INTO {s}.global_invoices
-       (request_key,environment,series,folio,status,service_branch_id,business_date,periodicity,concept_mode,order_count,total,payment_form,receiver_data_enc,fiscal_snapshot_enc,issued_by)
-       VALUES ($1,$2,$3,$4,'pending',$5,$6,'01',$7,$8,$9,$10,$11,$12,$13) RETURNING *`,
+       (request_key,environment,series,folio,status,service_branch_id,business_date,periodicity,concept_mode,order_count,total,payment_form,receiver_data_enc,fiscal_snapshot_enc,issued_by,fiscal_emitter_id,issuer_rfc)
+       VALUES ($1,$2,$3,$4,'pending',$5,$6,'01',$7,$8,$9,$10,$11,$12,$13,$14,$15) RETURNING *`,
       [createRequestKey(), profile.environment, invoiceSeries, folio, branchId || null, sales[0].business_date,
-        normalizedConceptMode, sales.length, total, paymentForm, encrypt(JSON.stringify(receiver)), encrypt(JSON.stringify(snapshot)), actor]
+        normalizedConceptMode, sales.length, total, paymentForm, encrypt(JSON.stringify(receiver)), encrypt(JSON.stringify(snapshot)), actor,
+        lockedProfile.id, profile.rfc]
     );
+    await reserveStamp(tx, 'global', row.id, lockedProfile.id, actor);
     for (const sale of sales) {
       await tx.run(
         'INSERT INTO {s}.global_invoice_orders (global_invoice_id,order_id,amount,active) VALUES ($1,$2,$3,1)',
@@ -370,6 +421,7 @@ async function issueGlobalInvoice({ tenantDb, orderIds, conceptMode = 'total', a
       "INSERT INTO {s}.global_invoice_events (global_invoice_id,event_type,detail,actor) VALUES ($1,'stamped',$2,$3)",
       [updated.id, identity.uuid || identity.providerId, actor]
     );
+    await finalizeStamp(tenantDb, 'global', updated.id, 'consumed', profile.id, actor);
     return { invoice: globalInvoiceSummary(updated) };
   } catch (error) {
     const uncertain = Boolean(error.uncertain);
@@ -385,14 +437,12 @@ async function issueGlobalInvoice({ tenantDb, orderIds, conceptMode = 'total', a
         [allocated.row.id, status, String(error.message || '').slice(0, 900), actor]
       );
     });
+    if (!uncertain) await finalizeStamp(tenantDb, 'global', allocated.row.id, 'released', profile.id, actor);
     throw error;
   }
 }
 
 async function issueSaleInvoice({ tenant, tenantDb, orderId, receiverInput, requestedPaymentForm = '', conceptMode = 'detailed', actor = '', publicToken = '' }) {
-  const profile = await getProfile(tenantDb);
-  const readinessError = profileReadinessError(profile);
-  if (readinessError) throw Object.assign(new Error(readinessError), { status: 409 });
   const sale = await tenantDb.get(
     `SELECT id, items, subtotal::float AS subtotal, total::float AS total, status, channel, payment_method, payment_breakdown,
             delivery_fee::float AS delivery_fee, service_branch_id, invoice_token, invoice_code, created_at
@@ -402,6 +452,9 @@ async function issueSaleInvoice({ tenant, tenantDb, orderId, receiverInput, requ
   if (!sale || sale.channel !== 'pos') throw Object.assign(new Error('Ticket de punto de venta no encontrado'), { status: 404 });
   if (publicToken && !invoiceAccessMatches(sale, publicToken)) throw Object.assign(new Error('El código de facturación no es válido'), { status: 404 });
   if (sale.status === 'cancelado') throw Object.assign(new Error('No se puede facturar un ticket cancelado'), { status: 409 });
+  const profile = await getEmitter(tenantDb, 0, sale.service_branch_id);
+  const readinessError = profileReadinessError(profile);
+  if (readinessError) throw Object.assign(new Error(readinessError), { status: 409 });
 
   const globalInvoice = await tenantDb.get(
     `SELECT gi.id,gi.uuid,gi.status FROM {s}.global_invoice_orders gio
@@ -432,7 +485,7 @@ async function issueSaleInvoice({ tenant, tenantDb, orderId, receiverInput, requ
   const normalizedConceptMode = conceptMode === 'total' ? 'total' : 'detailed';
   const items = buildFacturamaItems(sale, productsById, profile, { conceptMode: normalizedConceptMode });
   const branch = sale.service_branch_id
-    ? await tenantDb.get('SELECT fiscal_postal_code FROM {s}.branches WHERE id = $1 LIMIT 1', [sale.service_branch_id])
+    ? await tenantDb.get('SELECT fiscal_postal_code,fiscal_emitter_id FROM {s}.branches WHERE id = $1 LIMIT 1', [sale.service_branch_id])
     : null;
   let expeditionPlace = resolveExpeditionPostalCode(profile, branch?.fiscal_postal_code);
   let invoiceSeries = profile.series;
@@ -445,7 +498,7 @@ async function issueSaleInvoice({ tenant, tenantDb, orderId, receiverInput, requ
   const paymentForm = paymentFormFromSale(sale, profile.default_card_payment_form, requestedPaymentForm);
 
   const allocated = await tenantDb.tx(async (tx) => {
-    const lockedProfile = await tx.get('SELECT * FROM {s}.fiscal_profiles WHERE id = 1 FOR UPDATE');
+    const lockedProfile = await tx.get('SELECT * FROM {s}.fiscal_emitters WHERE id=$1 FOR UPDATE', [profile.id || 1]);
     const duplicate = await tx.get(
       `SELECT * FROM {s}.invoices WHERE order_id = $1 AND status IN ('pending','unknown','active','cancel_pending') ORDER BY id DESC LIMIT 1 FOR UPDATE`,
       [sale.id]
@@ -453,17 +506,18 @@ async function issueSaleInvoice({ tenant, tenantDb, orderId, receiverInput, requ
     if (duplicate) return { duplicate };
     const folio = String(lockedProfile.next_folio || 1);
     const requestKey = createRequestKey();
-    await tx.run('UPDATE {s}.fiscal_profiles SET next_folio = next_folio + 1, updated_at = now() WHERE id = 1');
+    await tx.run('UPDATE {s}.fiscal_emitters SET next_folio=next_folio+1,updated_at=now() WHERE id=$1', [lockedProfile.id]);
     const snapshot = {
       issuer: { rfc: profile.rfc, legalName: profile.legal_name, fiscalRegime: profile.fiscal_regime, postalCode: expeditionPlace },
       receiver, paymentForm, conceptMode: normalizedConceptMode, items, total: Number(sale.total), orderId: Number(sale.id),
     };
     const row = await tx.get(
       `INSERT INTO {s}.invoices
-       (order_id, request_key, environment, series, folio, status, receiver_data_enc, fiscal_snapshot_enc, issued_by)
-       VALUES ($1,$2,$3,$4,$5,'pending',$6,$7,$8) RETURNING *`,
-      [sale.id, requestKey, profile.environment, invoiceSeries, folio, encrypt(JSON.stringify(receiver)), encrypt(JSON.stringify(snapshot)), actor]
+       (order_id, request_key, environment, series, folio, status, receiver_data_enc, fiscal_snapshot_enc, issued_by,fiscal_emitter_id,issuer_rfc)
+       VALUES ($1,$2,$3,$4,$5,'pending',$6,$7,$8,$9,$10) RETURNING *`,
+      [sale.id, requestKey, profile.environment, invoiceSeries, folio, encrypt(JSON.stringify(receiver)), encrypt(JSON.stringify(snapshot)), actor,lockedProfile.id,profile.rfc]
     );
+    await reserveStamp(tx, 'individual', row.id, lockedProfile.id, actor);
     await tx.run("INSERT INTO {s}.invoice_events (invoice_id, event_type, detail, actor) VALUES ($1,'created','Solicitud preparada',$2)", [row.id, actor]);
     return { row, folio, snapshot };
   });
@@ -515,6 +569,7 @@ async function issueSaleInvoice({ tenant, tenantDb, orderId, receiverInput, requ
         fileData.xml ? encrypt(fileData.xml) : null, fileData.pdf ? encrypt(fileData.pdf) : null, allocated.row.id]
     );
     await tenantDb.run("INSERT INTO {s}.invoice_events (invoice_id,event_type,detail,actor) VALUES ($1,'stamped',$2,$3)", [updated.id, identity.uuid || identity.providerId, actor]);
+    await finalizeStamp(tenantDb, 'individual', updated.id, 'consumed', profile.id, actor);
     await tenantDb.run(
       `INSERT INTO {s}.fiscal_customers (rfc_hash, fiscal_data_enc) VALUES ($1,$2)
        ON CONFLICT (rfc_hash) DO UPDATE SET fiscal_data_enc=EXCLUDED.fiscal_data_enc, updated_at=now()`,
@@ -529,6 +584,7 @@ async function issueSaleInvoice({ tenant, tenantDb, orderId, receiverInput, requ
       [status, String(error.message || 'Error de timbrado').slice(0, 900), error.details ? encrypt(JSON.stringify(error.details)) : null, allocated.row.id]
     );
     await tenantDb.run("INSERT INTO {s}.invoice_events (invoice_id,event_type,detail,actor) VALUES ($1,$2,$3,$4)", [allocated.row.id, status, String(error.message || '').slice(0, 900), actor]);
+    if (!uncertain) await finalizeStamp(tenantDb, 'individual', allocated.row.id, 'released', profile.id, actor);
     throw error;
   }
 }
@@ -539,8 +595,9 @@ router.get('/public/:slug', publicLimiter, async (req, res, next) => {
     const tenant = await findPublicTenant(req.params.slug);
     if (!tenant) return res.status(404).json({ error: 'Portal de facturación no disponible' });
     const tenantDb = tdb(tenant.slug);
-    const [profile, settingsRows, branches] = await Promise.all([
+    const [profile, emitters, settingsRows, branches] = await Promise.all([
       getProfile(tenantDb),
+      tenantDb.all('SELECT * FROM {s}.fiscal_emitters WHERE enabled=1 ORDER BY id'),
       tenantDb.all(
         `SELECT key,value FROM {s}.settings
          WHERE key = ANY($1::text[])`,
@@ -569,8 +626,8 @@ router.get('/public/:slug', publicLimiter, async (req, res, next) => {
         fiscalRegime: profile.fiscal_regime,
         postalCode: profile.postal_code,
       } : null,
-      available: profileReady(profile),
-      unavailableReason: profileReadinessError(profile),
+      available: emitters.some((emitter) => profileReady(safeProfile(emitter))) || profileReady(profile),
+      unavailableReason: emitters.length ? 'Ningún emisor fiscal está listo para timbrar' : profileReadinessError(profile),
       environment: profile?.environment || config.FACTURAMA_ENVIRONMENT,
     });
   } catch (error) { next(error); }
@@ -594,7 +651,7 @@ router.post('/public/:slug/lookup', publicLimiter, async (req, res, next) => {
     );
     if (!sale || !invoiceAccessMatches(sale, token)) return res.status(404).json({ error: 'No encontramos el ticket con ese código de facturación' });
     if (sale.status === 'cancelado') return res.status(409).json({ error: 'El ticket está cancelado' });
-    const [invoice, globalInvoice, profile, branch] = await Promise.all([
+    const [invoice, globalInvoice, branch] = await Promise.all([
       tenantDb.get('SELECT * FROM {s}.invoices WHERE order_id=$1 ORDER BY id DESC LIMIT 1', [ticket]),
       tenantDb.get(
         `SELECT gi.id,gi.uuid,gi.status,gi.series,gi.folio
@@ -602,17 +659,18 @@ router.post('/public/:slug/lookup', publicLimiter, async (req, res, next) => {
          WHERE gio.order_id=$1 AND gio.active=1 AND gi.status IN ('pending','unknown','active') LIMIT 1`,
         [ticket]
       ),
-      getProfile(tenantDb),
       sale.service_branch_id
-        ? tenantDb.get('SELECT fiscal_postal_code FROM {s}.branches WHERE id=$1 LIMIT 1', [sale.service_branch_id])
+        ? tenantDb.get('SELECT fiscal_postal_code,fiscal_emitter_id FROM {s}.branches WHERE id=$1 LIMIT 1', [sale.service_branch_id])
         : null,
     ]);
+    const profile = await getEmitter(tenantDb, branch?.fiscal_emitter_id, sale.service_branch_id);
     let expeditionPostalCode = resolveExpeditionPostalCode(profile, branch?.fiscal_postal_code);
     if (profile?.api_mode === 'web') {
       try { expeditionPostalCode = await facturama.webExpeditionPostalCode(expeditionPostalCode); } catch {}
     }
     res.json({
       ticket: { id: sale.id, items: parseJson(sale.items, []).map((item) => ({ name: item.name, qty: item.qty, price: item.price })), total: sale.total, createdAt: sale.created_at, expeditionPostalCode },
+      issuer: profileCompleteness(profile) ? { legalName: profile.legal_name, rfc: profile.rfc, postalCode: profile.postal_code } : null,
       invoice: globalInvoice ? {
         id: Number(globalInvoice.id), uuid: globalInvoice.uuid || '', series: globalInvoice.series || '', folio: globalInvoice.folio || '',
         status: globalInvoice.status === 'active' ? 'global_active' : 'global_pending', total: Number(sale.total || 0),
@@ -690,10 +748,13 @@ router.use(requireMexico);
 
 router.get('/bootstrap', async (req, res, next) => {
   try {
-    const [profile, branches, invoices] = await Promise.all([
+    const [profile, emitters, branches, invoices, wallet, stampMovements] = await Promise.all([
       getProfile(req.tdb),
-      req.tdb.all('SELECT id,name,address,fiscal_postal_code,active FROM {s}.branches ORDER BY active DESC,name'),
+      req.tdb.all('SELECT * FROM {s}.fiscal_emitters ORDER BY id'),
+      req.tdb.all('SELECT id,name,address,fiscal_postal_code,fiscal_emitter_id,active FROM {s}.branches ORDER BY active DESC,name'),
       req.tdb.all(`SELECT i.*, o.total::float AS order_total FROM {s}.invoices i JOIN {s}.orders o ON o.id=i.order_id ORDER BY i.id DESC LIMIT 50`),
+      req.tdb.get('SELECT * FROM {s}.stamp_wallet WHERE id=1'),
+      req.tdb.all('SELECT * FROM {s}.stamp_ledger ORDER BY id DESC LIMIT 20'),
     ]);
     let expeditionPostalCode = profile?.postal_code || '';
     if (profile?.api_mode === 'web' && facturama.isConfigured()) {
@@ -703,12 +764,15 @@ router.get('/bootstrap', async (req, res, next) => {
       eligible: true,
       provider: { name: 'Facturama', configured: facturama.isConfigured(), environment: config.FACTURAMA_ENVIRONMENT, expeditionPostalCode },
       profile,
+      emitters: emitters.map(safeProfile),
       ready: profileReady(profile),
       sandboxSharedAvailable: config.FACTURAMA_ENVIRONMENT === 'sandbox' && config.FACTURAMA_SANDBOX_SHARED_ISSUER,
       sandboxDefaults: sandboxIssuerDefaults(),
       portalUrl: invoicingPortalUrl(req, config.INVOICING_PORTAL_ORIGIN, req.tenant.slug),
       branches,
       invoices: invoices.map((row) => invoiceSummary(row)),
+      stampWallet: wallet ? { unlimited: Boolean(Number(wallet.unlimited)), balance: Number(wallet.balance), reserved: Number(wallet.reserved), available: Boolean(Number(wallet.unlimited)) ? null : Math.max(0, Number(wallet.balance)-Number(wallet.reserved)), lowBalanceThreshold: Number(wallet.low_balance_threshold || 20) } : null,
+      stampMovements,
     });
   } catch (error) { next(error); }
 });
@@ -752,6 +816,24 @@ router.put('/profile', requireOwner, async (req, res, next) => {
         profile.defaultUnitName, profile.defaultTaxObject, profile.defaultIvaRate, profile.defaultIsrRate,
         String(req.body?.deliveryProductCode || profile.defaultProductCode).trim(), profile.defaultCardPaymentForm]
     );
+    await req.tdb.run(
+      `INSERT INTO {s}.fiscal_emitters
+       (id,label,enabled,environment,api_mode,sandbox_shared,rfc,legal_name,fiscal_regime,postal_code,series,next_folio,
+        default_product_code,default_unit_code,default_unit_name,default_tax_object,default_iva_rate,default_isr_rate,
+        delivery_product_code,prices_include_tax,default_card_payment_form,csd_uploaded,csd_updated_at,updated_at)
+       SELECT 1,'Emisor principal',enabled,environment,api_mode,sandbox_shared,rfc,legal_name,fiscal_regime,postal_code,series,next_folio,
+        default_product_code,default_unit_code,default_unit_name,default_tax_object,default_iva_rate,default_isr_rate,
+        delivery_product_code,prices_include_tax,default_card_payment_form,csd_uploaded,csd_updated_at,now()
+       FROM {s}.fiscal_profiles WHERE id=1
+       ON CONFLICT(id) DO UPDATE SET enabled=EXCLUDED.enabled,environment=EXCLUDED.environment,api_mode=EXCLUDED.api_mode,
+        sandbox_shared=EXCLUDED.sandbox_shared,rfc=EXCLUDED.rfc,legal_name=EXCLUDED.legal_name,fiscal_regime=EXCLUDED.fiscal_regime,
+        postal_code=EXCLUDED.postal_code,series=EXCLUDED.series,default_product_code=EXCLUDED.default_product_code,
+        default_unit_code=EXCLUDED.default_unit_code,default_unit_name=EXCLUDED.default_unit_name,default_tax_object=EXCLUDED.default_tax_object,
+        default_iva_rate=EXCLUDED.default_iva_rate,default_isr_rate=EXCLUDED.default_isr_rate,delivery_product_code=EXCLUDED.delivery_product_code,
+        default_card_payment_form=EXCLUDED.default_card_payment_form,
+        csd_uploaded=CASE WHEN fiscal_emitters.rfc=EXCLUDED.rfc THEN fiscal_emitters.csd_uploaded ELSE 0 END,updated_at=now()`
+    );
+    await req.tdb.run('UPDATE {s}.branches SET fiscal_emitter_id=1 WHERE fiscal_emitter_id IS NULL');
     res.json({ ok: true, profile: safeProfile(row), ready: profileReady(safeProfile(row)) });
   } catch (error) {
     if (error.status) return res.status(error.status).json({ error: error.message });
@@ -759,9 +841,74 @@ router.put('/profile', requireOwner, async (req, res, next) => {
   }
 });
 
+router.post('/emitters', requireOwner, async (req, res, next) => {
+  try {
+    const profile = validateFiscalProfile(req.body || {});
+    const label = String(req.body?.label || profile.legalName).trim().slice(0, 80);
+    const row = await req.tdb.get(
+      `INSERT INTO {s}.fiscal_emitters
+       (label,enabled,environment,api_mode,sandbox_shared,rfc,legal_name,fiscal_regime,postal_code,series,
+        default_product_code,default_unit_code,default_unit_name,default_tax_object,default_iva_rate,default_isr_rate,
+        delivery_product_code,prices_include_tax,default_card_payment_form)
+       VALUES($1,$2,$3,'multi',0,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,1,$16) RETURNING *`,
+      [label, req.body?.enabled === false ? 0 : 1, config.FACTURAMA_ENVIRONMENT, profile.rfc, profile.legalName,
+        profile.fiscalRegime, profile.postalCode, profile.series, profile.defaultProductCode, profile.defaultUnitCode,
+        profile.defaultUnitName, profile.defaultTaxObject, profile.defaultIvaRate, profile.defaultIsrRate,
+        String(req.body?.deliveryProductCode || profile.defaultProductCode).trim(), profile.defaultCardPaymentForm]
+    );
+    res.status(201).json({ ok: true, emitter: safeProfile(row) });
+  } catch (error) {
+    if (String(error?.message || '').includes('fiscal_emitters_rfc')) return res.status(409).json({ error: 'Ese RFC ya está registrado como emisor' });
+    if (error.status) return res.status(error.status).json({ error: error.message });
+    next(error);
+  }
+});
+
+router.put('/emitters/:id', requireOwner, async (req, res, next) => {
+  try {
+    const id = Number(req.params.id);
+    if (id === 1) return res.status(409).json({ error: 'Edita el emisor principal desde Datos fiscales del emisor' });
+    const profile = validateFiscalProfile(req.body || {});
+    const current = await req.tdb.get('SELECT * FROM {s}.fiscal_emitters WHERE id=$1', [id]);
+    if (!current) return res.status(404).json({ error: 'Emisor no encontrado' });
+    const row = await req.tdb.get(
+      `UPDATE {s}.fiscal_emitters SET label=$1,enabled=$2,rfc=$3,legal_name=$4,fiscal_regime=$5,postal_code=$6,series=$7,
+       default_product_code=$8,default_unit_code=$9,default_unit_name=$10,default_tax_object=$11,default_iva_rate=$12,
+       default_isr_rate=$13,delivery_product_code=$14,default_card_payment_form=$15,
+       csd_uploaded=CASE WHEN rfc=$3 THEN csd_uploaded ELSE 0 END,updated_at=now() WHERE id=$16 RETURNING *`,
+      [String(req.body?.label || profile.legalName).trim().slice(0,80), req.body?.enabled === false ? 0 : 1, profile.rfc,
+        profile.legalName, profile.fiscalRegime, profile.postalCode, profile.series, profile.defaultProductCode,
+        profile.defaultUnitCode, profile.defaultUnitName, profile.defaultTaxObject, profile.defaultIvaRate,
+        profile.defaultIsrRate, String(req.body?.deliveryProductCode || profile.defaultProductCode).trim(),
+        profile.defaultCardPaymentForm, id]
+    );
+    res.json({ ok: true, emitter: safeProfile(row) });
+  } catch (error) {
+    if (String(error?.message || '').includes('fiscal_emitters_rfc')) return res.status(409).json({ error: 'Ese RFC ya está registrado como emisor' });
+    if (error.status) return res.status(error.status).json({ error: error.message });
+    next(error);
+  }
+});
+
+router.delete('/emitters/:id', requireOwner, async (req, res, next) => {
+  try {
+    const id = Number(req.params.id);
+    if (id === 1) return res.status(409).json({ error: 'El emisor principal no se puede eliminar' });
+    const used = await req.tdb.get(
+      `SELECT (SELECT count(*) FROM {s}.branches WHERE fiscal_emitter_id=$1)::int AS branches,
+              ((SELECT count(*) FROM {s}.invoices WHERE fiscal_emitter_id=$1)+(SELECT count(*) FROM {s}.global_invoices WHERE fiscal_emitter_id=$1))::int AS invoices`, [id]
+    );
+    if (Number(used?.branches) || Number(used?.invoices)) return res.status(409).json({ error: 'No puedes eliminar un emisor asignado a sucursales o con CFDI emitidos' });
+    const result = await req.tdb.run('DELETE FROM {s}.fiscal_emitters WHERE id=$1', [id]);
+    if (!result.rowCount) return res.status(404).json({ error: 'Emisor no encontrado' });
+    res.json({ ok: true });
+  } catch (error) { next(error); }
+});
+
 router.post('/csd', requireOwner, csdUpload.fields([{ name: 'certificate', maxCount: 1 }, { name: 'privateKey', maxCount: 1 }]), async (req, res, next) => {
   try {
-    const profile = await getProfile(req.tdb);
+    const emitterId = Number(req.body?.emitterId || 1);
+    const profile = safeProfile(await req.tdb.get('SELECT * FROM {s}.fiscal_emitters WHERE id=$1 LIMIT 1', [emitterId]));
     if (!profile || profile.sandbox_shared) return res.status(409).json({ error: 'Guarda primero los datos fiscales del emisor multi-RFC' });
     const certificate = req.files?.certificate?.[0];
     const privateKey = req.files?.privateKey?.[0];
@@ -773,7 +920,8 @@ router.post('/csd', requireOwner, csdUpload.fields([{ name: 'certificate', maxCo
       privateKey: privateKey.buffer.toString('base64'),
       privateKeyPassword: password,
     });
-    await req.tdb.run('UPDATE {s}.fiscal_profiles SET csd_uploaded=1,csd_updated_at=now(),updated_at=now() WHERE id=1');
+    await req.tdb.run('UPDATE {s}.fiscal_emitters SET csd_uploaded=1,csd_updated_at=now(),updated_at=now() WHERE id=$1', [emitterId]);
+    if (emitterId === 1) await req.tdb.run('UPDATE {s}.fiscal_profiles SET csd_uploaded=1,csd_updated_at=now(),updated_at=now() WHERE id=1');
     res.json({ ok: true });
   } catch (error) {
     if (error.status) return res.status(error.status).json({ error: error.message });
@@ -805,7 +953,9 @@ router.put('/branches/:id', requireOwner, async (req, res, next) => {
   try {
     const postalCode = String(req.body?.postalCode || '').trim();
     if (!/^\d{5}$/.test(postalCode)) return res.status(400).json({ error: 'El código postal de expedición debe tener 5 dígitos' });
-    const result = await req.tdb.run('UPDATE {s}.branches SET fiscal_postal_code=$1 WHERE id=$2', [postalCode, req.params.id]);
+    const emitterId = Number(req.body?.emitterId || 0);
+    if (!emitterId || !(await req.tdb.get('SELECT id FROM {s}.fiscal_emitters WHERE id=$1 AND enabled=1', [emitterId]))) return res.status(400).json({ error: 'Selecciona un emisor fiscal activo' });
+    const result = await req.tdb.run('UPDATE {s}.branches SET fiscal_postal_code=$1,fiscal_emitter_id=$2 WHERE id=$3', [postalCode, emitterId, req.params.id]);
     if (!result.rowCount) return res.status(404).json({ error: 'Sucursal no encontrada' });
     res.json({ ok: true });
   } catch (error) { next(error); }
@@ -911,7 +1061,7 @@ router.get('/global-invoices/:id/:format', async (req, res, next) => {
     const format = req.params.format;
     let content = decrypt(format === 'xml' ? invoice.xml_enc : invoice.pdf_enc);
     if (!content && invoice.provider_id) {
-      const profile = await getProfile(req.tdb);
+      const profile = await getEmitter(req.tdb, invoice.fiscal_emitter_id);
       const result = await facturama.downloadCfdi(invoice.provider_id, format, profile.api_mode);
       content = String(result?.Content || '');
       if (content) await req.tdb.run(
@@ -933,8 +1083,8 @@ router.post('/invoices/:id/cancel', requireOwner, async (req, res, next) => {
     if (!['01','02','03','04'].includes(motive)) return res.status(400).json({ error: 'Motivo de cancelación no válido' });
     if (motive === '01' && !/^[0-9A-F-]{36}$/.test(replacementUuid)) return res.status(400).json({ error: 'Captura el UUID que sustituye al CFDI' });
     const invoice = await req.tdb.get('SELECT * FROM {s}.invoices WHERE id=$1 LIMIT 1', [req.params.id]);
-    const profile = await getProfile(req.tdb);
     if (!invoice || !invoice.provider_id) return res.status(404).json({ error: 'CFDI no encontrado' });
+    const profile = await getEmitter(req.tdb, invoice.fiscal_emitter_id);
     if (!['active','cancel_pending'].includes(invoice.status)) return res.status(409).json({ error: 'El CFDI no se puede cancelar en su estado actual' });
     const response = await facturama.cancelCfdi(invoice.provider_id, motive, replacementUuid, profile.api_mode);
     const providerStatus = String(response?.Status || response?.status || '').toLowerCase();
@@ -963,7 +1113,7 @@ router.get('/invoices/:id/:format', async (req, res, next) => {
     const format = req.params.format;
     let content = decrypt(format === 'xml' ? invoice.xml_enc : invoice.pdf_enc);
     if (!content && invoice.provider_id) {
-      const profile = await getProfile(req.tdb);
+      const profile = await getEmitter(req.tdb, invoice.fiscal_emitter_id);
       const result = await facturama.downloadCfdi(invoice.provider_id, format, profile.api_mode);
       content = String(result?.Content || '');
       if (content) await req.tdb.run(`UPDATE {s}.invoices SET ${format === 'xml' ? 'xml_enc' : 'pdf_enc'}=$1,updated_at=now() WHERE id=$2`, [encrypt(content), invoice.id]);
