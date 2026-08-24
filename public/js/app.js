@@ -47,6 +47,8 @@ let BRANCH_STOCK_ONLY_AVAILABLE = false;
 let BRANCH_STOCK_BRANCH = 'all';
 let BRANCH_STOCK_PAGE = 1;
 let BRANCH_STOCK_PAGE_SIZE = 10;
+let CFDI_QUERY = { page: 1, limit: 10, status: 'all', type: 'all', dateFrom: '', dateTo: '', search: '' };
+let CFDI_DATA = { rows: [], pagination: { page: 1, pages: 1, total: 0, limit: 10 } };
 try {
   const savedBranchStockPageSize = Number(localStorage.getItem('branchStockPageSize'));
   if ([10, 20, 50, 100].includes(savedBranchStockPageSize)) BRANCH_STOCK_PAGE_SIZE = savedBranchStockPageSize;
@@ -730,6 +732,7 @@ const VIEW_META = {
   kds: ['Pantallas KDS', 'Comandas automáticas por área de preparación', 'ph-monitor-play'],
   ventas: ['Ventas', 'Reportes diarios y mensuales por sucursal', 'ph-chart-line-up'],
   facturacion: ['Facturación MX', 'CFDI 4.0, timbrado y portal de autofacturación', 'ph-file-text'],
+  cfdi: ['CFDI emitidos', 'Facturas, archivos fiscales y seguimiento de cancelaciones', 'ph-files'],
   cancelaciones: ['Cancelaciones', 'Auditoría de ventas y correcciones', 'ph-file-magnifying-glass'],
   cortes: ['Cortes', 'Aperturas, cierres y diferencias de caja', 'ph-safe'],
   productos: ['Productos', 'Tu menú visible en el chatbot', 'ph-hamburger'],
@@ -752,6 +755,7 @@ const VIEW_LOADERS = {
   kds: loadKds,
   ventas: loadSalesReport,
   facturacion: loadInvoicing,
+  cfdi: loadCfdiDocuments,
   cancelaciones: () => loadAuditLog(1),
   cortes: () => loadCutsHistory(1),
   productos: loadProducts,
@@ -774,7 +778,7 @@ function normalizeView(view) {
   if (isCashierUser()) {
     return CASHIER_ALLOWED_VIEWS.has(view) ? view : 'pos';
   }
-  if (view === 'facturacion' && !ME?.tenant?.invoicingEligible) return 'dashboard';
+  if (['facturacion', 'cfdi'].includes(view) && !ME?.tenant?.invoicingEligible) return 'dashboard';
   return VIEW_META[view] ? view : 'dashboard';
 }
 
@@ -5035,7 +5039,7 @@ function renderInvoicing() {
     ? `<table><thead><tr><th>Sucursal</th><th>Dirección</th><th>Emisor fiscal</th><th>CP de expedición</th><th></th></tr></thead><tbody>${data.branches.map((branch) => `<tr data-fiscal-branch-row="${branch.id}"><td><b>${esc(branch.name)}</b></td><td>${esc(branch.address || '—')}</td><td><select class="fiscal-emitter-select" data-branch-emitter>${emitters.filter((item) => item.enabled).map((item) => `<option value="${item.id}" ${Number(branch.fiscal_emitter_id || 1) === Number(item.id) ? 'selected' : ''}>${esc(item.label || item.rfc)} · ${esc(item.rfc)}</option>`).join('')}</select></td><td><input class="fiscal-table-input" data-branch-postal value="${esc(branch.fiscal_postal_code || profile.postal_code || '')}" maxlength="5" inputmode="numeric" /></td><td><button class="btn btn-ghost" data-save-fiscal-branch="${branch.id}"><i class="ph-bold ph-floppy-disk"></i> Guardar</button></td></tr>`).join('')}</tbody></table>`
     : emptyHTML('ph-storefront', 'Sin sucursales', 'Agrega una sucursal para configurar su lugar de expedición.');
 
-  $('#fiscalInvoicesTable').innerHTML = data.invoices?.length
+  if ($('#fiscalInvoicesTable')) $('#fiscalInvoicesTable').innerHTML = data.invoices?.length
     ? `<table><thead><tr><th>Ticket</th><th>CFDI</th><th>Receptor</th><th>Total</th><th>Estado</th><th>Fecha</th><th>Acciones</th></tr></thead><tbody>${data.invoices.map((invoice) => `<tr><td>#${invoice.orderId}</td><td><b>${esc([invoice.series, invoice.folio].filter(Boolean).join('-') || '—')}</b><small class="fiscal-uuid">${esc(invoice.uuid || '')}</small></td><td>${esc(invoice.receiver?.rfc || '—')}<small class="fiscal-uuid">${esc(invoice.receiver?.name || '')}</small></td><td>${fmtMoney(invoice.total)}</td><td>${esc(fiscalStatusLabel(invoice.status))}</td><td>${esc(invoice.issuedAt || invoice.createdAt || '')}</td><td><div class="invoice-actions">${invoice.status === 'active' ? `<a class="btn btn-ghost" href="/api/invoicing/invoices/${invoice.id}/pdf" target="_blank">PDF</a><a class="btn btn-ghost" href="/api/invoicing/invoices/${invoice.id}/xml" target="_blank">XML</a>${!isCashierUser() ? `<button class="btn btn-danger" data-cancel-cfdi="${invoice.id}">Cancelar</button>` : ''}` : ''}</div></td></tr>`).join('')}</tbody></table>`
     : emptyHTML('ph-files', 'Sin CFDI emitidos', 'Las facturas timbradas aparecerán aquí.');
 
@@ -5069,6 +5073,100 @@ async function loadInvoicing() {
   INVOICING_DATA = await api('/api/invoicing/bootstrap');
   renderInvoicing();
 }
+
+function cfdiStatusMeta(status) {
+  const map = {
+    active: ['Vigente', 'active', 'ph-check-circle'], cancel_pending: ['Pendiente de aceptación', 'pending', 'ph-clock-countdown'],
+    canceled: ['Cancelado', 'canceled', 'ph-x-circle'], failed: ['Fallido', 'failed', 'ph-warning-circle'],
+    unknown: ['Por verificar', 'unknown', 'ph-question'], pending: ['Timbrando', 'pending', 'ph-spinner-gap'],
+  };
+  return map[status] || [status || 'Sin estado', 'unknown', 'ph-question'];
+}
+
+function cfdiDate(value) {
+  if (!value) return '—';
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? String(value) : new Intl.DateTimeFormat('es-MX', { dateStyle: 'medium', timeStyle: 'short' }).format(date);
+}
+
+function renderCfdiDocuments() {
+  const rows = CFDI_DATA.rows || [];
+  const pagination = CFDI_DATA.pagination || { page: 1, pages: 1, total: 0, limit: 10 };
+  $('#cfdiSummary').innerHTML = `<div><i class="ph-bold ph-files"></i><span><b>${pagination.total}</b> CFDI encontrados</span></div><div class="cfdi-page-size"><label>Mostrar</label><select id="cfdiPageSize"><option value="10" ${pagination.limit === 10 ? 'selected' : ''}>10</option><option value="20" ${pagination.limit === 20 ? 'selected' : ''}>20</option><option value="50" ${pagination.limit === 50 ? 'selected' : ''}>50</option></select></div>`;
+  $('#cfdiDocuments').innerHTML = rows.length ? `<div class="cfdi-document-grid">${rows.map((doc) => {
+    const [statusLabel, statusClass, statusIcon] = cfdiStatusMeta(doc.status);
+    const identity = [doc.series, doc.folio].filter(Boolean).join('-') || doc.uuid || `#${doc.id}`;
+    const base = doc.type === 'global' ? `/api/invoicing/global-invoices/${doc.id}` : `/api/invoicing/invoices/${doc.id}`;
+    const receiver = doc.receiver || {};
+    return `<article class="cfdi-document-card ${statusClass}">
+      <header><div class="cfdi-doc-icon"><i class="ph-bold ${doc.type === 'global' ? 'ph-stack' : 'ph-file-text'}"></i></div><div><span>${doc.type === 'global' ? `Factura global · ${doc.orderCount} tickets` : `Ticket #${doc.orderId}`}</span><h3>${esc(identity)}</h3></div><span class="cfdi-status ${statusClass}"><i class="ph-bold ${statusIcon}"></i>${esc(statusLabel)}</span></header>
+      <div class="cfdi-doc-body"><div><span>UUID</span><b class="cfdi-copy-value">${esc(doc.uuid || 'Pendiente')}</b></div><div><span>Emisor</span><b>${esc(doc.issuerRfc || '—')}</b></div><div><span>Receptor</span><b>${esc(receiver.rfc || '—')}</b><small>${esc(receiver.name || '')}</small></div><div><span>Total</span><b class="cfdi-total">${fmtMoney(doc.total)}</b></div><div><span>Emisión</span><b>${esc(cfdiDate(doc.issuedAt || doc.createdAt))}</b></div>${doc.cancellationMotive ? `<div><span>Cancelación</span><b>Motivo ${esc(doc.cancellationMotive)}</b><small>${esc(doc.cancellationMessage || doc.cancellationStatus || '')}</small></div>` : ''}</div>
+      ${doc.error ? `<div class="cfdi-doc-alert"><i class="ph-bold ph-warning-circle"></i>${esc(doc.error)}</div>` : ''}
+      <footer>${doc.status !== 'failed' && doc.providerId ? `<a class="btn btn-ghost" href="${base}/pdf" target="_blank"><i class="ph-bold ph-file-pdf"></i> PDF</a><a class="btn btn-ghost" href="${base}/xml" target="_blank"><i class="ph-bold ph-code"></i> XML</a>` : ''}${doc.hasCancellationReceipt ? `<a class="btn btn-ghost" href="/api/invoicing/documents/${doc.type}/${doc.id}/cancellation-receipt" target="_blank"><i class="ph-bold ph-seal-check"></i> Acuse</a>` : ''}${doc.status === 'cancel_pending' ? `<button class="btn btn-ghost" data-refresh-cfdi="${doc.type}:${doc.id}"><i class="ph-bold ph-arrows-clockwise"></i> Actualizar estado</button>` : ''}${doc.status === 'active' ? `<button class="btn btn-danger" data-open-cfdi-cancel="${doc.type}:${doc.id}"><i class="ph-bold ph-x-circle"></i> Solicitar cancelación</button>` : ''}</footer>
+    </article>`;
+  }).join('')}</div>` : emptyHTML('ph-files', 'No encontramos CFDI', 'Modifica los filtros o selecciona otro periodo.');
+  $('#cfdiPagination').innerHTML = pagination.total ? `<button class="btn btn-ghost" data-cfdi-page="${pagination.page - 1}" ${pagination.page <= 1 ? 'disabled' : ''}><i class="ph-bold ph-caret-left"></i> Anterior</button><span>Página <b>${pagination.page}</b> de <b>${pagination.pages}</b></span><button class="btn btn-ghost" data-cfdi-page="${pagination.page + 1}" ${pagination.page >= pagination.pages ? 'disabled' : ''}>Siguiente <i class="ph-bold ph-caret-right"></i></button>` : '';
+  $('#cfdiPageSize')?.addEventListener('change', (event) => { CFDI_QUERY.limit = Number(event.target.value); CFDI_QUERY.page = 1; loadCfdiDocuments(); });
+  document.querySelectorAll('[data-cfdi-page]').forEach((button) => button.addEventListener('click', () => { if (!button.disabled) { CFDI_QUERY.page = Number(button.dataset.cfdiPage); loadCfdiDocuments(); } }));
+  document.querySelectorAll('[data-open-cfdi-cancel]').forEach((button) => button.addEventListener('click', () => {
+    const [type, id] = button.dataset.openCfdiCancel.split(':');
+    const doc = rows.find((item) => item.type === type && Number(item.id) === Number(id));
+    openCfdiCancelModal(doc);
+  }));
+  document.querySelectorAll('[data-refresh-cfdi]').forEach((button) => button.addEventListener('click', async () => {
+    const [type, id] = button.dataset.refreshCfdi.split(':');
+    button.disabled = true;
+    try { await api(`/api/invoicing/documents/${type}/${id}/refresh-cancellation`, { method: 'POST' }); toast('Estado consultado en Facturama'); await loadCfdiDocuments(); }
+    catch (error) { toast(error.message, true); } finally { button.disabled = false; }
+  }));
+}
+
+async function loadCfdiDocuments() {
+  if (!ME?.tenant?.invoicingEligible) return;
+  const query = new URLSearchParams(Object.entries(CFDI_QUERY).filter(([, value]) => value !== ''));
+  CFDI_DATA = await api(`/api/invoicing/documents?${query}`);
+  renderCfdiDocuments();
+}
+
+function closeCfdiCancelModal() { $('#cfdiCancelModal')?.classList.remove('show'); }
+function openCfdiCancelModal(doc) {
+  if (!doc) return;
+  $('#cfdiCancelForm').reset();
+  $('#cfdiCancelId').value = doc.id;
+  $('#cfdiCancelType').value = doc.type;
+  $('#cfdiCancelIdentity').textContent = [doc.series, doc.folio].filter(Boolean).join('-') || doc.uuid || `#${doc.id}`;
+  $('#cfdiReplacementRow').hidden = true;
+  $('#cfdiCancelModal').classList.add('show');
+}
+
+$('#cfdiApplyFilters')?.addEventListener('click', () => {
+  CFDI_QUERY = { ...CFDI_QUERY, page: 1, search: $('#cfdiSearch').value.trim(), dateFrom: $('#cfdiDateFrom').value, dateTo: $('#cfdiDateTo').value, status: $('#cfdiStatus').value, type: $('#cfdiType').value };
+  loadCfdiDocuments().catch((error) => toast(error.message, true));
+});
+$('#cfdiClearFilters')?.addEventListener('click', () => {
+  ['#cfdiSearch','#cfdiDateFrom','#cfdiDateTo'].forEach((selector) => { $(selector).value = ''; });
+  $('#cfdiStatus').value = 'all'; $('#cfdiType').value = 'all';
+  CFDI_QUERY = { page: 1, limit: CFDI_QUERY.limit, status: 'all', type: 'all', dateFrom: '', dateTo: '', search: '' };
+  loadCfdiDocuments().catch((error) => toast(error.message, true));
+});
+$('#cfdiCancelMotive')?.addEventListener('change', (event) => { $('#cfdiReplacementRow').hidden = event.target.value !== '01'; });
+$('#cfdiCancelClose')?.addEventListener('click', closeCfdiCancelModal);
+$('#cfdiCancelBack')?.addEventListener('click', closeCfdiCancelModal);
+$('#cfdiCancelModal')?.addEventListener('click', (event) => { if (event.target.id === 'cfdiCancelModal') closeCfdiCancelModal(); });
+$('#cfdiCancelForm')?.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const type = $('#cfdiCancelType').value;
+  const id = $('#cfdiCancelId').value;
+  const endpoint = type === 'global' ? `/api/invoicing/global-invoices/${id}/cancel` : `/api/invoicing/invoices/${id}/cancel`;
+  const button = event.currentTarget.querySelector('button[type="submit"]'); button.disabled = true;
+  try {
+    const result = await api(endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ motive: $('#cfdiCancelMotive').value, replacementUuid: $('#cfdiReplacementUuid').value.trim() }) });
+    closeCfdiCancelModal();
+    const status = result.invoice?.status;
+    toast(status === 'canceled' ? 'CFDI cancelado y conservado en el historial' : status === 'active' ? 'La cancelación no procedió; el CFDI continúa vigente' : 'Solicitud enviada; espera la respuesta del receptor');
+    await loadCfdiDocuments();
+  } catch (error) { toast(error.message, true); } finally { button.disabled = false; }
+});
 
 function closeFiscalEmitterModal() {
   $('#fiscalEmitterModal')?.classList.remove('show');

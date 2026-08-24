@@ -11,7 +11,7 @@
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/fill/style.css" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/duotone/style.css" />
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-  <link rel="stylesheet" href="/static/css/styles.css?v=20260823multiemisor" />
+  <link rel="stylesheet" href="/static/css/styles.css?v=20260823cfdiadmin" />
   <link rel="icon" type="image/svg+xml" href="/static/favicon.svg" />
   <link rel="icon" type="image/png" href="/static/chatbotpro100.png" />
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
@@ -40,6 +40,7 @@
         <a href="#pos" data-view="pos" data-color="emerald"><span class="nav-ic"><i class="ph-duotone ph-cash-register"></i></span><span>Punto de venta</span></a>
         <a href="#ventas" data-view="ventas" data-color="blue"><span class="nav-ic"><i class="ph-duotone ph-chart-line-up"></i></span><span>Ventas</span></a>
         <a href="#facturacion" data-view="facturacion" data-mexico-only="true" data-color="emerald"><span class="nav-ic"><i class="ph-duotone ph-file-text"></i></span><span>Facturación MX</span></a>
+        <a href="#cfdi" data-view="cfdi" data-mexico-only="true" data-color="cyan"><span class="nav-ic"><i class="ph-duotone ph-files"></i></span><span>CFDI emitidos</span></a>
         <a href="#cancelaciones" data-view="cancelaciones" data-color="rose"><span class="nav-ic"><i class="ph-duotone ph-file-magnifying-glass"></i></span><span>Cancelaciones</span></a>
         <a href="#cortes" data-view="cortes" data-color="emerald"><span class="nav-ic"><i class="ph-duotone ph-safe"></i></span><span>Cortes</span></a>
         <div class="nav-label nav-label-operacion"><i class="ph-fill ph-monitor-play"></i> Operación</div>
@@ -1050,11 +1051,30 @@
         <div class="card" style="margin-top:16px"><div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap"><div><h3><i class="ph-bold ph-identification-badge"></i> Emisores fiscales</h3><p class="hint">Registra RFC adicionales y asígnalos a sus sucursales. Cada emisor requiere su propio CSD.</p></div><button class="btn btn-primary" type="button" id="addFiscalEmitter"><i class="ph-bold ph-plus-circle"></i> Nuevo emisor</button></div><div class="table-wrap" id="fiscalEmittersTable" style="margin-top:14px"></div></div>
         <div class="card invoice-stamp-wallet" style="margin-top:16px"><div><h3><i class="ph-bold ph-stamp"></i> Timbres disponibles</h3><p class="hint">El saldo es compartido por todos los RFC del tenant.</p></div><div id="invoiceStampBalance">—</div></div>
         <div class="card" style="margin-top:16px"><h3><i class="ph-bold ph-storefront"></i> Emisor y lugar de expedición por sucursal</h3><p class="hint">Cada sucursal factura con el RFC asignado y su código postal de expedición. Varias sucursales pueden compartir el mismo emisor.</p><div class="table-wrap" id="fiscalBranchesTable"></div></div>
-        <div class="card" style="margin-top:16px"><h3><i class="ph-bold ph-files"></i> CFDI emitidos</h3><div class="table-wrap" id="fiscalInvoicesTable"></div></div>
+      </section>
+
+      <section class="section" id="view-cfdi">
+        <div class="cfdi-hero"><div><span><i class="ph-bold ph-shield-check"></i> Expediente fiscal propio</span><h2>CFDI emitidos</h2><p>Consulta facturas individuales y globales, descarga sus archivos y da seguimiento real a las cancelaciones.</p></div><div class="cfdi-hero-badge"><i class="ph-bold ph-cloud-check"></i> Administrado por ChatBotPro</div></div>
+        <div class="card cfdi-filter-card">
+          <div class="cfdi-filters">
+            <div class="field"><label>Buscar</label><input id="cfdiSearch" placeholder="UUID, folio, RFC emisor o ticket" /></div>
+            <div class="field"><label>Desde</label><input id="cfdiDateFrom" type="date" /></div>
+            <div class="field"><label>Hasta</label><input id="cfdiDateTo" type="date" /></div>
+            <div class="field"><label>Estado</label><select id="cfdiStatus"><option value="all">Todos</option><option value="active">Vigentes</option><option value="cancel_pending">Cancelación pendiente</option><option value="canceled">Cancelados</option><option value="failed">Fallidos</option><option value="unknown">Por verificar</option></select></div>
+            <div class="field"><label>Tipo</label><select id="cfdiType"><option value="all">Todos</option><option value="individual">Por ticket</option><option value="global">Globales</option></select></div>
+            <button class="btn btn-primary" type="button" id="cfdiApplyFilters"><i class="ph-bold ph-magnifying-glass"></i> Consultar</button>
+            <button class="btn btn-ghost" type="button" id="cfdiClearFilters"><i class="ph-bold ph-eraser"></i> Limpiar</button>
+          </div>
+        </div>
+        <div class="cfdi-summary" id="cfdiSummary"></div>
+        <div id="cfdiDocuments"></div>
+        <div class="cfdi-pagination" id="cfdiPagination"></div>
       </section>
 
       <!-- ──────── Mi negocio ──────── -->
       <div class="modal-bg" id="fiscalEmitterModal"><div class="modal" style="max-width:680px"><div style="display:flex;justify-content:space-between;align-items:center"><h3><i class="ph-bold ph-identification-badge"></i> <span id="fiscalEmitterModalTitle">Nuevo emisor fiscal</span></h3><button type="button" class="modal-close" id="fiscalEmitterClose"><i class="ph-bold ph-x"></i></button></div><form id="fiscalEmitterForm"><input type="hidden" id="fiscalEmitterId"/><div class="field"><label>Nombre interno</label><input id="fiscalEmitterLabel" maxlength="80" required placeholder="Ej. Empresa Guadalajara"/></div><div class="row-2"><div class="field"><label>RFC</label><input id="fiscalEmitterRfc" maxlength="13" required/></div><div class="field"><label>Régimen fiscal</label><input id="fiscalEmitterRegime" maxlength="3" required/></div></div><div class="field"><label>Nombre o razón social</label><input id="fiscalEmitterLegalName" maxlength="254" required/></div><div class="row-2"><div class="field"><label>Código postal fiscal</label><input id="fiscalEmitterPostal" maxlength="5" required/></div><div class="field"><label>Serie</label><input id="fiscalEmitterSeries" maxlength="25" value="A" required/></div></div><div class="row-2"><div class="field"><label>Clave SAT predeterminada</label><input id="fiscalEmitterProductCode" maxlength="8" value="01010101" required/></div><div class="field"><label>Unidad SAT</label><input id="fiscalEmitterUnitCode" maxlength="3" value="E48" required/></div></div><div class="row-2"><div class="field"><label>Objeto de impuesto</label><select id="fiscalEmitterTaxObject"><option value="02">02 - Sí objeto</option><option value="01">01 - No objeto</option><option value="03">03 - Sí objeto, sin desglose</option></select></div><div class="field"><label>IVA</label><select id="fiscalEmitterIva"><option value="0.16">16%</option><option value="0.08">8%</option><option value="0">0%</option></select></div></div><div class="modal-actions"><button type="button" class="btn btn-ghost" id="fiscalEmitterCancel">Cancelar</button><button type="submit" class="btn btn-primary"><i class="ph-bold ph-floppy-disk"></i> Guardar emisor</button></div></form></div></div>
+
+      <div class="modal-bg" id="cfdiCancelModal"><div class="modal cfdi-cancel-modal"><div class="cfdi-cancel-head"><div><span>Solicitud ante el SAT</span><h3><i class="ph-bold ph-file-x"></i> Cancelar <b id="cfdiCancelIdentity">CFDI</b></h3></div><button type="button" class="modal-close" id="cfdiCancelClose"><i class="ph-bold ph-x"></i></button></div><div class="cfdi-cancel-warning"><i class="ph-bold ph-info"></i><div><b>El CFDI no se eliminará.</b><span>Se conservará en el historial y su estado cambiará según la respuesta de Facturama y, cuando corresponda, la aceptación del receptor.</span></div></div><form id="cfdiCancelForm"><input type="hidden" id="cfdiCancelId"/><input type="hidden" id="cfdiCancelType"/><div class="field"><label>Motivo de cancelación</label><select id="cfdiCancelMotive"><option value="02">02 · Comprobante con errores sin relación</option><option value="01">01 · Comprobante con errores con relación</option><option value="03">03 · No se llevó a cabo la operación</option><option value="04">04 · Operación nominativa relacionada en factura global</option></select></div><div class="field" id="cfdiReplacementRow" hidden><label>UUID del CFDI que lo sustituye</label><input id="cfdiReplacementUuid" maxlength="36" placeholder="XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX"/><p class="hint">El nuevo CFDI debe estar relacionado con tipo de relación 04.</p></div><div class="cfdi-cancel-note"><i class="ph-bold ph-clock-countdown"></i><span>Si requiere aceptación, el receptor dispone del plazo fiscal aplicable para aceptar o rechazar. Mientras tanto aparecerá como pendiente.</span></div><div class="modal-actions"><button type="button" class="btn btn-ghost" id="cfdiCancelBack">Regresar</button><button class="btn btn-danger" type="submit"><i class="ph-bold ph-paper-plane-tilt"></i> Enviar solicitud</button></div></form></div></div>
 
       <section class="section" id="view-config">
         <div class="grid-2">
@@ -2726,6 +2746,6 @@
     </div>
   </div>
 
-  <script src="/static/js/app.js?v=20260823multiemisor"></script>
+  <script src="/static/js/app.js?v=20260823cfdiadmin"></script>
 </body>
 </html>

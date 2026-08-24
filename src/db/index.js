@@ -1012,6 +1012,13 @@ async function createTenantSchema(slug) {
     );
     ALTER TABLE "${s}".global_invoices ADD COLUMN IF NOT EXISTS fiscal_emitter_id BIGINT;
     ALTER TABLE "${s}".global_invoices ADD COLUMN IF NOT EXISTS issuer_rfc TEXT;
+    ALTER TABLE "${s}".global_invoices ADD COLUMN IF NOT EXISTS cancellation_motive TEXT;
+    ALTER TABLE "${s}".global_invoices ADD COLUMN IF NOT EXISTS replacement_uuid TEXT;
+    ALTER TABLE "${s}".global_invoices ADD COLUMN IF NOT EXISTS cancellation_status TEXT;
+    ALTER TABLE "${s}".global_invoices ADD COLUMN IF NOT EXISTS cancellation_message TEXT;
+    ALTER TABLE "${s}".global_invoices ADD COLUMN IF NOT EXISTS cancellation_receipt_enc TEXT;
+    ALTER TABLE "${s}".global_invoices ADD COLUMN IF NOT EXISTS cancel_requested_at TIMESTAMPTZ;
+    ALTER TABLE "${s}".global_invoices ADD COLUMN IF NOT EXISTS canceled_at TIMESTAMPTZ;
     CREATE UNIQUE INDEX IF NOT EXISTS idx_${s}_global_invoices_uuid ON "${s}".global_invoices(uuid) WHERE uuid IS NOT NULL;
     CREATE INDEX IF NOT EXISTS idx_${s}_global_invoices_date ON "${s}".global_invoices(business_date DESC, service_branch_id, id DESC);
     ALTER TABLE "${s}".global_invoices ADD COLUMN IF NOT EXISTS concept_mode TEXT NOT NULL DEFAULT 'detailed';

@@ -221,7 +221,44 @@ function globalInvoiceSummary(row) {
     total: Number(row.total || 0),
     paymentForm: row.payment_form || '',
     error: row.error_message || '',
+    cancellationStatus: row.cancellation_status || '',
+    cancellationMessage: row.cancellation_message || '',
+    cancellationMotive: row.cancellation_motive || '',
+    hasCancellationReceipt: Boolean(row.cancellation_receipt_enc),
     issuedAt: row.issued_at || '',
+  };
+}
+
+function cancellationResult(response = {}, currentStatus = 'active') {
+  const nested = response?.Cancellation || response?.Cancelation || response?.Cfdi || response?.Result || {};
+  const raw = String(
+    response?.CancellationStatus || response?.CancelationStatus || nested?.CancellationStatus || nested?.CancelationStatus
+    || response?.Status || response?.status || nested?.Status || nested?.status || ''
+  ).trim().toLowerCase();
+  const canceled = ['canceled', 'cancelled', 'cancelado', 'acepted', 'accepted', 'expired'].includes(raw);
+  const pending = ['pending', 'requested', 'solicitada', 'en proceso'].includes(raw);
+  const rejected = ['rejected', 'rechazada'].includes(raw) || (raw === 'active' && currentStatus !== 'cancel_pending');
+  return {
+    raw: raw || String(currentStatus || ''),
+    status: canceled ? 'canceled' : pending ? 'cancel_pending' : rejected ? 'active' : currentStatus,
+    message: String(response?.Message || response?.message || nested?.Message || nested?.message || '').slice(0, 700),
+    receipt: String(response?.AcuseXmlBase64 || nested?.AcuseXmlBase64 || ''),
+    canceled,
+  };
+}
+
+function cfdiDocumentSummary(row) {
+  const receiver = parseJson(decrypt(row.receiver_data_enc), {});
+  return {
+    id: Number(row.id), type: row.document_type, orderId: row.order_id ? Number(row.order_id) : null,
+    providerId: row.provider_id || '', uuid: row.uuid || '', series: row.series || '', folio: row.folio || '',
+    status: row.status || '', issuerRfc: row.issuer_rfc || '', receiver, total: Number(row.total || 0),
+    branchId: row.service_branch_id ? Number(row.service_branch_id) : null,
+    orderCount: Number(row.order_count || (row.order_id ? 1 : 0)),
+    cancellationMotive: row.cancellation_motive || '', cancellationStatus: row.cancellation_status || '',
+    cancellationMessage: row.cancellation_message || '', hasCancellationReceipt: Boolean(row.cancellation_receipt_enc),
+    cancelRequestedAt: row.cancel_requested_at || '', canceledAt: row.canceled_at || '',
+    issuedAt: row.issued_at || '', createdAt: row.created_at || '', error: row.error_message || '',
   };
 }
 
@@ -777,6 +814,51 @@ router.get('/bootstrap', async (req, res, next) => {
   } catch (error) { next(error); }
 });
 
+router.get('/documents', async (req, res, next) => {
+  try {
+    const type = ['individual', 'global'].includes(String(req.query.type || '')) ? String(req.query.type) : 'all';
+    const status = ['active', 'cancel_pending', 'canceled', 'failed', 'unknown', 'pending'].includes(String(req.query.status || '')) ? String(req.query.status) : 'all';
+    const page = Math.max(1, Number.parseInt(req.query.page, 10) || 1);
+    const limit = [10, 20, 50].includes(Number(req.query.limit)) ? Number(req.query.limit) : 10;
+    const dateFrom = /^\d{4}-\d{2}-\d{2}$/.test(String(req.query.dateFrom || '')) ? String(req.query.dateFrom) : '';
+    const dateTo = /^\d{4}-\d{2}-\d{2}$/.test(String(req.query.dateTo || '')) ? String(req.query.dateTo) : '';
+    const search = String(req.query.search || '').trim().slice(0, 80);
+    const params = [];
+    const where = [];
+    const bind = (value) => { params.push(value); return `$${params.length}`; };
+    if (type !== 'all') where.push(`document_type=${bind(type)}`);
+    if (status !== 'all') where.push(`status=${bind(status)}`);
+    if (dateFrom) where.push(`COALESCE(issued_at,created_at) >= ${bind(dateFrom)}::date`);
+    if (dateTo) where.push(`COALESCE(issued_at,created_at) < (${bind(dateTo)}::date + interval '1 day')`);
+    if (search) {
+      const term = `%${search}%`;
+      where.push(`(COALESCE(uuid,'') ILIKE ${bind(term)} OR COALESCE(series,'') ILIKE ${bind(term)} OR COALESCE(folio,'') ILIKE ${bind(term)} OR COALESCE(issuer_rfc,'') ILIKE ${bind(term)} OR COALESCE(order_id::text,'') ILIKE ${bind(term)})`);
+    }
+    params.push(limit, (page - 1) * limit);
+    const rows = await req.tdb.all(
+      `WITH documents AS (
+         SELECT 'individual'::text AS document_type,i.id,i.order_id,i.provider_id,i.uuid,i.series,i.folio,i.status,
+           i.receiver_data_enc,o.total::float AS total,o.service_branch_id,1::int AS order_count,COALESCE(i.issuer_rfc,(SELECT rfc FROM {s}.fiscal_emitters WHERE id=1)) AS issuer_rfc,
+           i.cancellation_motive,i.replacement_uuid,i.cancellation_status,i.cancellation_message,i.cancellation_receipt_enc,
+           i.cancel_requested_at,i.canceled_at,i.issued_at,i.created_at,i.error_message
+         FROM {s}.invoices i JOIN {s}.orders o ON o.id=i.order_id
+         UNION ALL
+         SELECT 'global'::text,gi.id,NULL::integer,gi.provider_id,gi.uuid,gi.series,gi.folio,gi.status,
+           gi.receiver_data_enc,gi.total::float,gi.service_branch_id,gi.order_count,COALESCE(gi.issuer_rfc,(SELECT rfc FROM {s}.fiscal_emitters WHERE id=1)),
+           gi.cancellation_motive,gi.replacement_uuid,gi.cancellation_status,gi.cancellation_message,gi.cancellation_receipt_enc,
+           gi.cancel_requested_at,gi.canceled_at,gi.issued_at,gi.created_at,gi.error_message
+         FROM {s}.global_invoices gi
+       )
+       SELECT *,count(*) OVER()::int AS total_rows FROM documents
+       ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
+       ORDER BY COALESCE(issued_at,created_at) DESC,id DESC LIMIT $${params.length - 1} OFFSET $${params.length}`,
+      params
+    );
+    const total = Number(rows[0]?.total_rows || 0);
+    res.json({ rows: rows.map(cfdiDocumentSummary), pagination: { page, limit, total, pages: Math.max(1, Math.ceil(total / limit)) } });
+  } catch (error) { next(error); }
+});
+
 router.put('/profile', requireOwner, async (req, res, next) => {
   try {
     const useSandboxShared = config.FACTURAMA_ENVIRONMENT === 'sandbox'
@@ -1087,22 +1169,93 @@ router.post('/invoices/:id/cancel', requireOwner, async (req, res, next) => {
     const profile = await getEmitter(req.tdb, invoice.fiscal_emitter_id);
     if (!['active','cancel_pending'].includes(invoice.status)) return res.status(409).json({ error: 'El CFDI no se puede cancelar en su estado actual' });
     const response = await facturama.cancelCfdi(invoice.provider_id, motive, replacementUuid, profile.api_mode);
-    const providerStatus = String(response?.Status || response?.status || '').toLowerCase();
-    const canceled = ['canceled','acepted','accepted','expired'].includes(providerStatus);
-    const nextStatus = canceled ? 'canceled' : 'cancel_pending';
+    const cancellation = cancellationResult(response, 'cancel_pending');
+    const nextStatus = cancellation.status === 'active' ? 'active' : cancellation.status;
     const updated = await req.tdb.get(
       `UPDATE {s}.invoices SET status=$1,cancellation_motive=$2,replacement_uuid=$3,cancellation_status=$4,
        cancellation_message=$5,cancellation_receipt_enc=$6,cancel_requested_at=COALESCE(cancel_requested_at,now()),
        canceled_at=CASE WHEN $7 THEN now() ELSE canceled_at END,updated_at=now() WHERE id=$8 RETURNING *`,
-      [nextStatus, motive, replacementUuid || null, providerStatus, String(response?.Message || ''),
-        response?.AcuseXmlBase64 ? encrypt(String(response.AcuseXmlBase64)) : null, canceled, invoice.id]
+      [nextStatus, motive, replacementUuid || null, cancellation.raw, cancellation.message,
+        cancellation.receipt ? encrypt(cancellation.receipt) : null, cancellation.canceled, invoice.id]
     );
-    await req.tdb.run("INSERT INTO {s}.invoice_events (invoice_id,event_type,detail,actor) VALUES ($1,'cancel_requested',$2,$3)", [invoice.id, providerStatus || 'solicitada', req.user.username]);
+    await req.tdb.run("INSERT INTO {s}.invoice_events (invoice_id,event_type,detail,actor) VALUES ($1,'cancel_requested',$2,$3)", [invoice.id, cancellation.raw || 'solicitada', req.user.username]);
     res.json({ ok: true, invoice: invoiceSummary(updated) });
   } catch (error) {
     if (error.status) return res.status(error.status).json({ error: error.message });
     next(error);
   }
+});
+
+router.post('/global-invoices/:id/cancel', requireOwner, async (req, res, next) => {
+  try {
+    const motive = String(req.body?.motive || '02');
+    const replacementUuid = String(req.body?.replacementUuid || '').trim().toUpperCase();
+    if (!['01','02','03','04'].includes(motive)) return res.status(400).json({ error: 'Motivo de cancelación no válido' });
+    if (motive === '01' && !/^[0-9A-F-]{36}$/.test(replacementUuid)) return res.status(400).json({ error: 'Captura el UUID que sustituye al CFDI' });
+    const invoice = await req.tdb.get('SELECT * FROM {s}.global_invoices WHERE id=$1 LIMIT 1', [req.params.id]);
+    if (!invoice || !invoice.provider_id) return res.status(404).json({ error: 'CFDI global no encontrado' });
+    if (!['active','cancel_pending'].includes(invoice.status)) return res.status(409).json({ error: 'El CFDI no se puede cancelar en su estado actual' });
+    const profile = await getEmitter(req.tdb, invoice.fiscal_emitter_id);
+    const response = await facturama.cancelCfdi(invoice.provider_id, motive, replacementUuid, profile.api_mode);
+    const cancellation = cancellationResult(response, 'cancel_pending');
+    const nextStatus = cancellation.status === 'active' ? 'active' : cancellation.status;
+    const updated = await req.tdb.get(
+      `UPDATE {s}.global_invoices SET status=$1,cancellation_motive=$2,replacement_uuid=$3,cancellation_status=$4,
+       cancellation_message=$5,cancellation_receipt_enc=$6,cancel_requested_at=COALESCE(cancel_requested_at,now()),
+       canceled_at=CASE WHEN $7 THEN now() ELSE canceled_at END,updated_at=now() WHERE id=$8 RETURNING *`,
+      [nextStatus,motive,replacementUuid || null,cancellation.raw,cancellation.message,
+        cancellation.receipt ? encrypt(cancellation.receipt) : null,cancellation.canceled,invoice.id]
+    );
+    if (cancellation.canceled) await req.tdb.run('UPDATE {s}.global_invoice_orders SET active=0 WHERE global_invoice_id=$1', [invoice.id]);
+    await req.tdb.run("INSERT INTO {s}.global_invoice_events (global_invoice_id,event_type,detail,actor) VALUES ($1,'cancel_requested',$2,$3)", [invoice.id,cancellation.raw || 'solicitada',req.user.username]);
+    res.json({ ok: true, invoice: globalInvoiceSummary(updated) });
+  } catch (error) {
+    if (error.status) return res.status(error.status).json({ error: error.message });
+    next(error);
+  }
+});
+
+router.post('/documents/:type/:id/refresh-cancellation', requireOwner, async (req, res, next) => {
+  try {
+    const globalDocument = req.params.type === 'global';
+    if (!globalDocument && req.params.type !== 'individual') return res.status(400).json({ error: 'Tipo de CFDI no válido' });
+    const table = globalDocument ? 'global_invoices' : 'invoices';
+    const eventTable = globalDocument ? 'global_invoice_events' : 'invoice_events';
+    const eventForeignKey = globalDocument ? 'global_invoice_id' : 'invoice_id';
+    const invoice = await req.tdb.get(`SELECT * FROM {s}.${table} WHERE id=$1 LIMIT 1`, [req.params.id]);
+    if (!invoice || !invoice.provider_id) return res.status(404).json({ error: 'CFDI no encontrado' });
+    if (!['cancel_pending','canceled'].includes(invoice.status)) return res.status(409).json({ error: 'Este CFDI no tiene una cancelación pendiente' });
+    const profile = await getEmitter(req.tdb, invoice.fiscal_emitter_id);
+    const response = await facturama.getCfdi(invoice.provider_id, profile.api_mode);
+    const cancellation = cancellationResult(response, invoice.status);
+    const nextStatus = cancellation.canceled ? 'canceled' : invoice.status;
+    const updated = await req.tdb.get(
+      `UPDATE {s}.${table} SET status=$1,cancellation_status=$2,
+       cancellation_message=CASE WHEN $3<>'' THEN $3 ELSE cancellation_message END,
+       cancellation_receipt_enc=CASE WHEN $4 IS NOT NULL THEN $4 ELSE cancellation_receipt_enc END,
+       canceled_at=CASE WHEN $5 THEN COALESCE(canceled_at,now()) ELSE canceled_at END,updated_at=now() WHERE id=$6 RETURNING *`,
+      [nextStatus,cancellation.raw,cancellation.message,cancellation.receipt ? encrypt(cancellation.receipt) : null,cancellation.canceled,invoice.id]
+    );
+    if (globalDocument && cancellation.canceled) await req.tdb.run('UPDATE {s}.global_invoice_orders SET active=0 WHERE global_invoice_id=$1', [invoice.id]);
+    await req.tdb.run(`INSERT INTO {s}.${eventTable} (${eventForeignKey},event_type,detail,actor) VALUES ($1,'cancel_status_checked',$2,$3)`, [invoice.id,cancellation.raw,req.user.username]);
+    res.json({ ok: true, document: cfdiDocumentSummary({ ...updated, document_type: req.params.type, total: updated.total || 0 }) });
+  } catch (error) {
+    if (error.status) return res.status(error.status).json({ error: error.message });
+    next(error);
+  }
+});
+
+router.get('/documents/:type/:id/cancellation-receipt', async (req, res, next) => {
+  try {
+    const table = req.params.type === 'global' ? 'global_invoices' : req.params.type === 'individual' ? 'invoices' : '';
+    if (!table) return res.status(400).json({ error: 'Tipo de CFDI no válido' });
+    const invoice = await req.tdb.get(`SELECT uuid,folio,cancellation_receipt_enc FROM {s}.${table} WHERE id=$1 LIMIT 1`, [req.params.id]);
+    const content = decrypt(invoice?.cancellation_receipt_enc);
+    if (!content) return res.status(404).json({ error: 'El acuse de cancelación todavía no está disponible' });
+    res.type('application/xml');
+    res.setHeader('Content-Disposition', `attachment; filename="Acuse-Cancelacion-${invoice.uuid || invoice.folio}.xml"`);
+    res.send(Buffer.from(content, 'base64'));
+  } catch (error) { next(error); }
 });
 
 router.get('/invoices/:id/:format', async (req, res, next) => {

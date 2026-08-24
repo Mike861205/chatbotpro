@@ -265,6 +265,28 @@ test('la facturación admite varios emisores por sucursal y controla el saldo de
   assert.match(superadminClient, /data-sa-stamps/);
 });
 
+test('ChatBotPro administra el expediente Multiemisor con filtros, paginación y cancelaciones persistentes', () => {
+  const database = read('src/db/index.js');
+  const route = read('src/routes/invoicing.js');
+  const html = read('public/app.html');
+  const client = read('public/js/app.js');
+  const css = read('public/css/styles.css');
+  assert.match(route, /router\.get\('\/documents'/);
+  assert.match(route, /\[10, 20, 50\]/);
+  assert.match(route, /refresh-cancellation/);
+  assert.match(route, /cancellation-receipt/);
+  assert.match(route, /router\.post\('\/global-invoices\/:id\/cancel'/);
+  assert.match(database, /global_invoices ADD COLUMN IF NOT EXISTS cancellation_status/);
+  assert.match(html, /data-view="cfdi"/);
+  assert.match(html, /id="view-cfdi"/);
+  assert.match(html, /id="cfdiCancelModal"/);
+  assert.match(client, /function renderCfdiDocuments/);
+  assert.match(client, /Solicitar cancelación/);
+  assert.match(css, /\.cfdi-document-card/);
+  assert.match(css, /@media\(max-width:480px\)/);
+  assert.doesNotMatch(route, /DELETE FROM \{s\}\.invoices/);
+});
+
 test('el portal público es responsivo y presenta la identidad completa del tenant', () => {
   const route = read('src/routes/invoicing.js');
   const html = read('public/invoice.html');
