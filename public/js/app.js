@@ -5068,9 +5068,7 @@ function renderInvoicing() {
   const emitterOptions = uploadableEmitters.map((item) => `<option value="${item.id}">${esc(item.label || item.legal_name)} · ${esc(item.rfc)}</option>`).join('');
   $('#fiscalCsdEmitter').innerHTML = emitterOptions;
   const wallet = data.stampWallet;
-  $('#invoiceStampBalance').innerHTML = wallet?.unlimited
-    ? '<strong>Ilimitados</strong><small>El superadministrador puede asignar un paquete cuando inicie la cobranza.</small>'
-    : `<strong>${Number(wallet?.available || 0)}</strong><small>${Number(wallet?.reserved || 0)} reservados · ${Number(wallet?.balance || 0)} saldo total</small>`;
+  $('#invoiceStampBalance').innerHTML = `<strong>${Number(wallet?.available ?? wallet?.balance ?? 0)}</strong><small>${Number(wallet?.reserved || 0)} reservados · ${Number(wallet?.balance || 0)} saldo total</small>`;
   $('#fiscalEmittersTable').innerHTML = emitters.length
     ? `<table><thead><tr><th>Emisor</th><th>RFC</th><th>Serie</th><th>CSD</th><th>Estado</th><th></th></tr></thead><tbody>${emitters.map((emitter) => `<tr><td><b>${esc(emitter.label || emitter.legal_name)}</b><small class="fiscal-uuid">${esc(emitter.legal_name)}</small></td><td>${esc(emitter.rfc)}</td><td>${esc(emitter.series)}</td><td>${emitter.sandbox_shared || emitter.csd_uploaded ? '<span class="badge b-entregado">Listo</span>' : '<span class="badge b-pendiente">Pendiente</span>'}</td><td>${emitter.enabled ? 'Activo' : 'Inactivo'}</td><td><div class="invoice-actions">${Number(emitter.id) !== 1 ? `<button class="btn btn-ghost" data-edit-fiscal-emitter="${emitter.id}">Editar</button><button class="btn btn-danger" data-delete-fiscal-emitter="${emitter.id}">Eliminar</button>` : '<span class="hint">Principal</span>'}</div></td></tr>`).join('')}</tbody></table>`
     : emptyHTML('ph-identification-badge', 'Sin emisores', 'Guarda primero el emisor principal.');

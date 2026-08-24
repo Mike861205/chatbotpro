@@ -302,10 +302,11 @@ async function initMaster() {
   await ensureSuperAdminSeed();
 
   // Migra/asegura el esquema aislado de tenants existentes.
-  const existing = await q('SELECT slug, business_name FROM tenants');
+  const existing = await q('SELECT id, slug, business_name FROM tenants');
   for (const t of existing.rows) {
     await createTenantSchema(t.slug);
     await ensureTenantDefaults(t.slug, t.business_name);
+    await ensureTenantCourtesyStamps(t.slug, t.id, 'system:migration');
   }
 
   console.log('[db] Neon conectado — schema maestro listo');
@@ -1114,6 +1115,56 @@ async function ensureTenantDefaults(slug, businessName = slug, regional = {}) {
   );
 }
 
+async function ensureTenantCourtesyStamps(slug, tenantId = null, actor = 'system:registration') {
+  const tenantDb = tdb(slug);
+  const resolvedTenantId = Number(tenantId || 0) || Number((await q('SELECT id FROM tenants WHERE slug=$1 LIMIT 1', [slug])).rows[0]?.id || 0);
+  if (!resolvedTenantId) throw new Error('No se encontró el tenant para asignar sus timbres de cortesía');
+  return tenantDb.tx(async (tx) => {
+    const tenant = await tx.get('SELECT invoicing_trial_granted_at FROM public.tenants WHERE id=$1 FOR UPDATE', [resolvedTenantId]);
+    if (!tenant) throw new Error('Tenant no encontrado');
+    await tx.run(`INSERT INTO {s}.stamp_wallet(id,unlimited,balance,reserved) VALUES(1,0,0,0) ON CONFLICT(id) DO NOTHING`);
+    const wallet = await tx.get('SELECT * FROM {s}.stamp_wallet WHERE id=1 FOR UPDATE');
+    if (tenant.invoicing_trial_granted_at) {
+      const priorTrial = await tx.get("SELECT COALESCE(SUM(quantity),0)::int AS quantity FROM {s}.stamp_ledger WHERE movement_type='trial_grant'");
+      const priorAdjustment = await tx.get("SELECT id FROM {s}.stamp_ledger WHERE movement_type='courtesy_policy_adjustment' LIMIT 1");
+      if (Number(priorTrial?.quantity || 0) > 2 && !priorAdjustment) {
+        const reduction = Number(priorTrial.quantity) - 2;
+        const nextBalance = Math.max(Number(wallet.reserved || 0), Number(wallet.balance || 0) - reduction);
+        const quantity = nextBalance - Number(wallet.balance || 0);
+        const updated = await tx.get('UPDATE {s}.stamp_wallet SET unlimited=0,balance=$1,updated_at=now() WHERE id=1 RETURNING *', [nextBalance]);
+        if (quantity) {
+          await tx.run(
+            `INSERT INTO {s}.stamp_ledger(movement_type,quantity,balance_after,detail,actor)
+             VALUES('courtesy_policy_adjustment',$1,$2,'Ajuste de cortesía inicial de 10 a 2 timbres',$3)`,
+            [quantity, nextBalance, actor]
+          );
+        }
+        return updated;
+      }
+      if (Number(wallet.unlimited)) {
+        return tx.get('UPDATE {s}.stamp_wallet SET unlimited=0,updated_at=now() WHERE id=1 RETURNING *');
+      }
+      return wallet;
+    }
+    const courtesy = 2;
+    const nextBalance = (Number(wallet.unlimited) ? 0 : Number(wallet.balance || 0)) + courtesy;
+    const updated = await tx.get(
+      'UPDATE {s}.stamp_wallet SET unlimited=0,balance=$1,updated_at=now() WHERE id=1 RETURNING *',
+      [nextBalance]
+    );
+    await tx.run(
+      `INSERT INTO {s}.stamp_ledger(movement_type,quantity,balance_after,detail,actor)
+       VALUES('courtesy_grant',$1,$2,'2 timbres de cortesía para pruebas de Facturación MX',$3)`,
+      [courtesy, nextBalance, actor]
+    );
+    await tx.run(
+      'UPDATE public.tenants SET invoicing_trial_granted_at=COALESCE(invoicing_trial_granted_at,now()) WHERE id=$1',
+      [resolvedTenantId]
+    );
+    return updated;
+  });
+}
+
 async function getSetting(t, key, fallback = '') {
   const row = await t.get('SELECT value FROM {s}.settings WHERE key = $1', [key]);
   return row ? row.value : fallback;
@@ -1164,9 +1215,10 @@ async function refreshTenantBillingStatuses() {
   };
 }
 
-async function initTenantDefaults(slug, businessName, regional = {}) {
+async function initTenantDefaults(slug, businessName, regional = {}, tenantId = null) {
   await createTenantSchema(slug);
   await ensureTenantDefaults(slug, businessName, regional);
+  await ensureTenantCourtesyStamps(slug, tenantId, 'system:registration');
   const t = tdb(slug);
   return t;
 }
@@ -1179,6 +1231,7 @@ module.exports = {
   initMaster,
   createTenantSchema,
   initTenantDefaults,
+  ensureTenantCourtesyStamps,
   getSetting,
   setSetting,
   getSuperAdminSetting,

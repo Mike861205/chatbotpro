@@ -539,7 +539,7 @@ async function manageTenantStamps(tenantId) {
 }
 
 const SA_STAMP_MOVEMENT_LABELS = {
-  trial_grant: 'Bono inicial', credit: 'Recarga', adjustment: 'Ajuste', consumed: 'CFDI timbrado',
+  courtesy_grant: 'Cortesía inicial', trial_grant: 'Bono inicial', courtesy_policy_adjustment: 'Ajuste de cortesía', credit: 'Recarga', adjustment: 'Ajuste', consumed: 'CFDI timbrado',
   reserved: 'Reserva', released: 'Reserva liberada', invoicing_enabled: 'Activación', invoicing_disabled: 'Desactivación',
 };
 
@@ -559,15 +559,15 @@ function renderStampControl() {
   license?.classList.toggle('is-active', active);
   $('#saStampLicenseTitle').textContent = active ? 'Facturación activa' : 'Facturación desactivada';
   $('#saStampLicenseHelp').textContent = active
-    ? (pendingTrial ? 'Confirma la activación para convertir el saldo en consumible y otorgar los 10 timbres iniciales.' : `Bono inicial aplicado${tenant.activatedBy ? ` por ${tenant.activatedBy}` : ''}.`)
-    : (pendingTrial ? 'Al activar se otorgarán 10 timbres gratis una sola vez.' : 'El saldo se conserva y volverá a estar disponible al reactivar.');
+    ? (pendingTrial ? 'Confirma la activación para preparar los 2 timbres de cortesía.' : `Cortesía inicial aplicada${tenant.activatedBy ? ` por ${tenant.activatedBy}` : ''}.`)
+    : (pendingTrial ? 'Al activar se otorgarán 2 timbres de cortesía una sola vez.' : 'El saldo se conserva y volverá a estar disponible al reactivar.');
   const activationBtn = $('#saStampActivationBtn');
   if (activationBtn) {
     activationBtn.dataset.nextEnabled = (!active || pendingTrial) ? '1' : '0';
     activationBtn.className = `btn ${active && !pendingTrial ? 'btn-danger' : 'btn-primary'}`;
     activationBtn.innerHTML = active && !pendingTrial
       ? '<i class="ph-bold ph-pause-circle"></i> Desactivar facturación'
-      : `<i class="ph-bold ph-power"></i> ${active ? 'Aplicar bono de 10' : 'Activar y otorgar 10'}`;
+      : `<i class="ph-bold ph-power"></i> ${active ? 'Aplicar cortesía de 2' : 'Activar facturación'}`;
   }
   const submit = $('#saStampSubmit');
   if (submit) submit.disabled = !active || pendingTrial;
@@ -594,7 +594,7 @@ async function toggleTenantInvoicing() {
   const result = await api(`/api/superadmin/tenants/${SA_STAMP_TENANT_ID}/invoicing`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled }),
   });
-  toast(result.trialGrant ? 'Facturación activada: se otorgaron 10 timbres gratis' : (enabled ? 'Facturación activada' : 'Facturación desactivada'));
+  toast(result.trialGrant ? 'Facturación activada: se otorgaron 2 timbres de cortesía' : (enabled ? 'Facturación activada' : 'Facturación desactivada'));
   SA_STAMP_DATA = await api(`/api/superadmin/tenants/${SA_STAMP_TENANT_ID}/stamps`);
   renderStampControl();
   await Promise.all([loadTenants(), loadClients()]);

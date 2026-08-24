@@ -247,7 +247,7 @@ router.post('/register', authAttemptLimiter, async (req, res, next) => {
     const owner = created.rows[0].owner;
 
     // Crea el SCHEMA AISLADO del tenant en Neon con valores por defecto
-    await initTenantDefaults(cleanSlug, cleanBusinessName, regional);
+    await initTenantDefaults(cleanSlug, cleanBusinessName, regional, tenant.id);
 
     // Notificación por email del nuevo registro
     sendRegistrationNotification({

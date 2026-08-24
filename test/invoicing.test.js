@@ -285,7 +285,8 @@ test('la facturación admite varios emisores por sucursal y controla el saldo de
   assert.match(invoicing, /router\.put\('\/branches\/:id'/);
   assert.match(superadmin, /router\.post\('\/tenants\/:id\/stamps'/);
   assert.match(superadmin, /router\.post\('\/tenants\/:id\/invoicing'/);
-  assert.match(superadmin, /trialGrant = enabled && !lockedTenant\.invoicing_trial_granted_at \? 10 : 0/);
+  assert.match(superadmin, /trialGrant = enabled && !lockedTenant\.invoicing_trial_granted_at \? 2 : 0/);
+  assert.match(database, /ensureTenantCourtesyStamps/);
   assert.match(database, /invoicing_enabled INTEGER NOT NULL DEFAULT 0/);
   assert.match(database, /unlimited INTEGER NOT NULL DEFAULT 0/);
   assert.match(app, /id="fiscalEmitterModal"/);

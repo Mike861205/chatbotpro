@@ -1344,7 +1344,7 @@ router.post('/tenants/:id/invoicing', requireSuperAdmin, async (req, res, next) 
       await tx.run(`INSERT INTO {s}.stamp_wallet(id,unlimited,balance,reserved)
                     VALUES(1,0,0,0) ON CONFLICT(id) DO NOTHING`);
       const wallet = await tx.get('SELECT * FROM {s}.stamp_wallet WHERE id=1 FOR UPDATE');
-      const trialGrant = enabled && !lockedTenant.invoicing_trial_granted_at ? 10 : 0;
+      const trialGrant = enabled && !lockedTenant.invoicing_trial_granted_at ? 2 : 0;
       const nextBalance = Number(wallet.balance || 0) + trialGrant;
       const updatedWallet = await tx.get(
         'UPDATE {s}.stamp_wallet SET unlimited=0,balance=$1,updated_at=now() WHERE id=1 RETURNING *',
@@ -1362,7 +1362,7 @@ router.post('/tenants/:id/invoicing', requireSuperAdmin, async (req, res, next) 
       if (trialGrant) {
         await tx.run(
           `INSERT INTO {s}.stamp_ledger(movement_type,quantity,balance_after,detail,actor)
-           VALUES('trial_grant',$1,$2,'Bono inicial único por activación de Facturación MX',$3)`,
+           VALUES('courtesy_grant',$1,$2,'2 timbres de cortesía para pruebas de Facturación MX',$3)`,
           [trialGrant, nextBalance, req.superadmin.username]
         );
       }

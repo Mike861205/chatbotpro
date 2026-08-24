@@ -2,7 +2,7 @@ const express = require('express');
 const multer = require('multer');
 const { X509Certificate } = require('node:crypto');
 const config = require('../config');
-const { q, tdb } = require('../db');
+const { q, tdb, ensureTenantCourtesyStamps } = require('../db');
 const { encrypt, decrypt, lookupHash } = require('../utils/crypto');
 const { requireAuth, requireOwner } = require('../middleware/auth');
 const { createRateLimiter } = require('../middleware/security');
@@ -948,6 +948,7 @@ router.put('/profile', requireOwner, async (req, res, next) => {
         csd_uploaded=CASE WHEN fiscal_emitters.rfc=EXCLUDED.rfc THEN fiscal_emitters.csd_uploaded ELSE 0 END,updated_at=now()`
     );
     await req.tdb.run('UPDATE {s}.branches SET fiscal_emitter_id=1 WHERE fiscal_emitter_id IS NULL');
+    await ensureTenantCourtesyStamps(req.tenant.slug, req.tenant.id, req.user?.username || 'tenant:emitter');
     res.json({ ok: true, profile: safeProfile(row), ready: profileReady(safeProfile(row)) });
   } catch (error) {
     if (error.status) return res.status(error.status).json({ error: error.message });
@@ -970,6 +971,7 @@ router.post('/emitters', requireOwner, async (req, res, next) => {
         profile.defaultUnitName, profile.defaultTaxObject, profile.defaultIvaRate, profile.defaultIsrRate,
         String(req.body?.deliveryProductCode || profile.defaultProductCode).trim(), profile.defaultCardPaymentForm]
     );
+    await ensureTenantCourtesyStamps(req.tenant.slug, req.tenant.id, req.user?.username || 'tenant:emitter');
     res.status(201).json({ ok: true, emitter: safeProfile(row) });
   } catch (error) {
     if (String(error?.message || '').includes('fiscal_emitters_rfc')) return res.status(409).json({ error: 'Ese RFC ya está registrado como emisor' });

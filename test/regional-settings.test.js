@@ -40,7 +40,7 @@ test('asigna automáticamente moneda y zona horaria usando el país del teléfon
   assert.match(auth, /isSupportedTimeZone\(timezone\)/);
   assert.match(read('public', 'register.html'), /resolvedOptions\(\)\.timeZone/);
   assert.match(auth, /phone_calling_code, timezone/);
-  assert.match(auth, /initTenantDefaults\(cleanSlug, cleanBusinessName, regional\)/);
+  assert.match(auth, /initTenantDefaults\(cleanSlug, cleanBusinessName, regional, tenant\.id\)/);
 });
 
 test('todas las zonas ofrecidas son IANA válidas', () => {
