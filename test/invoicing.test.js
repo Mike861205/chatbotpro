@@ -13,6 +13,7 @@ const {
   resolveExpeditionPostalCode,
   paymentFormFromSale,
   buildFacturamaItems,
+  buildGlobalFacturamaItems,
 } = require('../src/utils/invoicing');
 
 const root = path.join(__dirname, '..');
@@ -99,6 +100,21 @@ test('conserva seis decimales fiscales y permite consumo total o desglosado', ()
   assert.equal(total.length, 1);
   assert.equal(total[0].Description, 'Consumo');
   assert.equal(total[0].Total, 279);
+});
+
+test('la factura global conserva cada ticket y cuadra el total seleccionado', () => {
+  const profile = {
+    default_product_code: '01010101', default_unit_code: 'E48', default_unit_name: 'Unidad de servicio',
+    default_tax_object: '02', default_iva_rate: 0.16, default_isr_rate: 0,
+  };
+  const concepts = buildGlobalFacturamaItems([
+    { id: 67, items: [{ name: 'Aros', qty: 1, price: 80 }], delivery_fee: 0, total: 80 },
+    { id: 68, items: [{ name: 'Combo', qty: 1, price: 199 }], delivery_fee: 0, total: 199 },
+  ], new Map(), profile);
+  assert.equal(concepts.length, 2);
+  assert.match(concepts[0].Description, /^Ticket #67/);
+  assert.match(concepts[1].Description, /^Ticket #68/);
+  assert.equal(concepts.reduce((sum, item) => sum + item.Total, 0), 279);
 });
 
 test('calcula IVA e ISR retenido por producto conservando el total cobrado', () => {
@@ -192,6 +208,26 @@ test('el envío de facturas por Facturama está disponible en POS y portal públ
   assert.match(app, /data-pos-invoice-email-form/);
   assert.match(portal, /invoiceEmailForm/);
   assert.match(html, /id="invoiceEmail"/);
+});
+
+test('la factura global enlaza tickets, bloquea duplicados y se opera desde el historial POS', () => {
+  const database = read('src/db/index.js');
+  const invoicing = read('src/routes/invoicing.js');
+  const pos = read('src/routes/pos.js');
+  const app = read('public/app.html');
+  const client = read('public/js/app.js');
+  assert.match(database, /CREATE TABLE IF NOT EXISTS "\$\{s\}"\.global_invoices/);
+  assert.match(database, /global_invoice_orders_live/);
+  assert.match(invoicing, /router\.post\('\/global\/issue'/);
+  assert.match(invoicing, /router\.get\('\/global\/eligible'/);
+  assert.match(invoicing, /buildGlobalFacturamaItems/);
+  assert.match(invoicing, /Este ticket ya está incluido en la factura global/);
+  assert.match(invoicing, /Sólo puedes facturar ventas de tu sucursal asignada/);
+  assert.match(invoicing, /req\.user\.role === 'cashier'/);
+  assert.match(pos, /global_invoice_status/);
+  assert.match(app, /id="posGlobalIssue"/);
+  assert.match(client, /POS_GLOBAL_INVOICE_SELECTION/);
+  assert.match(client, /data-global-ticket/);
 });
 
 test('el portal público es responsivo y presenta la identidad completa del tenant', () => {

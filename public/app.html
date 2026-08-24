@@ -11,7 +11,7 @@
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/fill/style.css" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/duotone/style.css" />
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-  <link rel="stylesheet" href="/static/css/styles.css?v=20260823invoiceemail" />
+  <link rel="stylesheet" href="/static/css/styles.css?v=20260823globalinvoice" />
   <link rel="icon" type="image/svg+xml" href="/static/favicon.svg" />
   <link rel="icon" type="image/png" href="/static/chatbotpro100.png" />
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
@@ -2282,7 +2282,7 @@
 
   <!-- ════════ Modal historial de ventas POS ════════ -->
   <div class="modal-bg" id="posSalesHistoryModal">
-    <div class="modal" style="max-width:980px">
+    <div class="modal pos-sales-history-modal" style="max-width:1180px">
       <h3><i class="ph-bold ph-receipt"></i> Historial de ventas POS</h3>
       <div class="field" style="margin-bottom:10px">
         <div class="segmented" id="posSalesFilters" style="margin-bottom:10px">
@@ -2305,6 +2305,19 @@
           </div>
         </div>
       </div>
+      <section class="pos-global-invoice-bar" id="posGlobalInvoiceBar" data-mexico-only="true">
+        <div class="pos-global-invoice-heading">
+          <span><i class="ph-bold ph-files"></i></span>
+          <div><b>Factura global de público general</b><small>Selecciona ventas sin facturar del mismo día y sucursal.</small></div>
+        </div>
+        <div class="pos-global-invoice-summary"><b id="posGlobalSelectedCount">0 tickets</b><strong id="posGlobalSelectedTotal">$0.00</strong></div>
+        <div class="pos-global-invoice-actions">
+          <button type="button" class="btn btn-ghost" id="posGlobalSelectAll"><i class="ph-bold ph-checks"></i> Todas sin facturar</button>
+          <button type="button" class="btn btn-ghost" id="posGlobalClear" disabled><i class="ph-bold ph-eraser"></i> Limpiar</button>
+          <button type="button" class="btn btn-primary" id="posGlobalIssue" disabled><i class="ph-bold ph-seal-check"></i> Timbrar global</button>
+        </div>
+        <div class="pos-global-invoice-message" id="posGlobalInvoiceMessage" role="status" aria-live="polite" hidden></div>
+      </section>
       <div class="table-wrap" id="posSalesHistoryTable"></div>
       <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-top:14px">
         <div class="hint" id="posSalesHistoryPageInfo">Página 1 de 1</div>
@@ -2707,6 +2720,6 @@
     </div>
   </div>
 
-  <script src="/static/js/app.js?v=20260823invoiceemail"></script>
+  <script src="/static/js/app.js?v=20260823globalinvoice"></script>
 </body>
 </html>

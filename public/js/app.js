@@ -86,6 +86,7 @@ let POS_SALES_PAGE = 1;
 const POS_SALES_PAGE_SIZE = 10;
 let POS_SALES_TOTAL_PAGES = 1;
 let POS_SALES_HISTORY_CACHE = [];
+let POS_GLOBAL_INVOICE_SELECTION = new Map();
 let POS_SALES_FILTER = 'today';
 let POS_SALES_START_DATE = '';
 let POS_SALES_END_DATE = '';
@@ -5193,6 +5194,72 @@ function syncPosSalesFilterUI() {
   if ($('#posSalesEndDate')) $('#posSalesEndDate').value = POS_SALES_END_DATE || '';
 }
 
+function posGlobalInvoiceDate() {
+  if (POS_SALES_FILTER === 'today') return getLocalIsoDate();
+  if (POS_SALES_FILTER === 'custom' && POS_SALES_START_DATE && POS_SALES_START_DATE === POS_SALES_END_DATE) return POS_SALES_START_DATE;
+  return '';
+}
+
+function posFiscalStatus(row) {
+  const individual = String(row.fiscal_invoice_status || '');
+  const global = String(row.global_invoice_status || '');
+  if (global === 'active') return '<span class="badge b-confirmado"><i class="ph-bold ph-files"></i> Factura global</span>';
+  if (['pending', 'unknown'].includes(global)) return '<span class="badge b-pendiente"><i class="ph-bold ph-spinner"></i> Global en proceso</span>';
+  if (individual === 'active') return '<span class="badge b-confirmado"><i class="ph-bold ph-seal-check"></i> Facturada</span>';
+  if (['pending', 'unknown', 'cancel_pending'].includes(individual)) return '<span class="badge b-pendiente"><i class="ph-bold ph-spinner"></i> Factura en proceso</span>';
+  if (individual === 'canceled') return '<span class="badge b-cancelado"><i class="ph-bold ph-x-circle"></i> Factura cancelada</span>';
+  if (individual === 'failed') return '<span class="badge b-cancelado"><i class="ph-bold ph-warning-circle"></i> Timbrado fallido</span>';
+  return '<span class="badge"><i class="ph-bold ph-receipt"></i> Sin facturar</span>';
+}
+
+function posSaleIsInvoiceEligible(row) {
+  const individual = String(row.fiscal_invoice_status || '');
+  const global = String(row.global_invoice_status || '');
+  return row.status !== 'cancelado'
+    && !['pending', 'unknown', 'active', 'cancel_pending'].includes(individual)
+    && !['pending', 'unknown', 'active'].includes(global);
+}
+
+function setPosGlobalInvoiceMessage(text = '', type = '') {
+  const element = $('#posGlobalInvoiceMessage');
+  if (!element) return;
+  element.hidden = !text;
+  element.className = `pos-global-invoice-message ${type}`.trim();
+  element.textContent = text;
+}
+
+function updatePosGlobalInvoiceSummary() {
+  const rows = [...POS_GLOBAL_INVOICE_SELECTION.values()];
+  const total = rows.reduce((sum, row) => sum + Number(row.total || 0), 0);
+  $('#posGlobalSelectedCount').textContent = `${rows.length} ${rows.length === 1 ? 'ticket' : 'tickets'}`;
+  $('#posGlobalSelectedTotal').textContent = fmtMoney(total);
+  $('#posGlobalClear').disabled = rows.length === 0;
+  $('#posGlobalIssue').disabled = rows.length === 0;
+  const date = posGlobalInvoiceDate();
+  $('#posGlobalSelectAll').disabled = !date;
+  if (!date && ['week', 'month'].includes(POS_SALES_FILTER)) {
+    setPosGlobalInvoiceMessage('Para facturar globalmente elige Hoy o un rango de una sola fecha.', 'info');
+  }
+}
+
+function togglePosGlobalInvoiceSale(row, checked) {
+  if (checked) {
+    const selected = [...POS_GLOBAL_INVOICE_SELECTION.values()];
+    const selectedDate = selected[0]?.business_date;
+    const selectedBranch = Number(selected[0]?.service_branch_id || 0);
+    if ((selectedDate && selectedDate !== row.business_date) || (selected.length && selectedBranch !== Number(row.service_branch_id || 0))) {
+      setPosGlobalInvoiceMessage('Selecciona tickets del mismo día y de una sola sucursal.', 'error');
+      return false;
+    }
+    POS_GLOBAL_INVOICE_SELECTION.set(Number(row.id), row);
+  } else {
+    POS_GLOBAL_INVOICE_SELECTION.delete(Number(row.id));
+  }
+  setPosGlobalInvoiceMessage('');
+  updatePosGlobalInvoiceSummary();
+  return true;
+}
+
 async function loadPosSalesHistory(page = 1) {
   const safePage = Math.max(1, Number(page) || 1);
   if (POS_SALES_FILTER === 'custom') {
@@ -5220,7 +5287,7 @@ async function loadPosSalesHistory(page = 1) {
   const table = $('#posSalesHistoryTable');
   if (!table) return;
   table.innerHTML = POS_SALES_HISTORY_CACHE.length
-    ? `<table><thead><tr><th>Ticket</th><th>Productos</th><th>Pago</th><th>Total</th><th>Estado</th><th>Nota</th><th>Fecha</th><th>Acciones</th></tr></thead><tbody>${POS_SALES_HISTORY_CACHE
+    ? `<table><thead><tr><th><span class="sr-only">Seleccionar</span></th><th>Ticket</th><th>Productos</th><th>Pago</th><th>Total</th><th>Estado</th><th>Facturación</th><th>Nota</th><th>Fecha</th><th>Acciones</th></tr></thead><tbody>${POS_SALES_HISTORY_CACHE
         .map((row) => {
           const paymentBreakdown = row.payment_breakdown
             ? Object.entries(row.payment_breakdown)
@@ -5230,18 +5297,24 @@ async function loadPosSalesHistory(page = 1) {
             : posMethodLabel(row.payment_method);
           const noteText = String(row.notes || '').trim();
           const isCanceled = row.status === 'cancelado';
+          const invoiceEligible = posSaleIsInvoiceEligible(row);
+          const isSelected = POS_GLOBAL_INVOICE_SELECTION.has(Number(row.id));
           return `<tr>
+            <td><input class="pos-global-ticket-check" type="checkbox" data-global-ticket="${row.id}" ${isSelected ? 'checked' : ''} ${invoiceEligible ? '' : 'disabled'} aria-label="Seleccionar ticket ${row.id} para factura global"></td>
             <td><b>#${row.id}</b></td>
             <td>${esc(row.items.map((item) => `${item.qty}x ${item.name}`).join(', '))}</td>
             <td><div><b>${esc(posMethodLabel(row.payment_method))}</b></div><div style="font-size:12px;color:var(--ink-3)">${esc(paymentBreakdown)}</div></td>
             <td><b>${fmtMoney(row.total)}</b>${row.cash_change ? `<div style="font-size:12px;color:var(--ink-3)">Cambio ${fmtMoney(row.cash_change)}</div>` : ''}</td>
             <td>${posSaleStatusBadge(row.status)}</td>
+            <td>${posFiscalStatus(row)}</td>
             <td style="max-width:220px;white-space:normal;line-height:1.4">${noteText ? esc(noteText) : '<span style="color:var(--ink-3)">—</span>'}</td>
             <td>${esc(row.created_at || '')}</td>
             <td>
               <div style="display:flex;gap:6px;flex-wrap:wrap">
                 <button type="button" class="btn btn-ghost" data-print-pos-sale="${row.id}"><i class="ph-bold ph-printer"></i> Ticket</button>
-                ${ME?.tenant?.invoicingEligible && !isCanceled ? `<button type="button" class="btn btn-ghost" data-invoice-pos-sale="${row.id}"><i class="ph-bold ph-file-text"></i> Facturar</button>` : ''}
+                ${ME?.tenant?.invoicingEligible && invoiceEligible ? `<button type="button" class="btn btn-ghost" data-invoice-pos-sale="${row.id}"><i class="ph-bold ph-file-text"></i> Facturar</button>` : ''}
+                ${row.fiscal_invoice_status === 'active' ? `<a class="btn btn-ghost" target="_blank" href="/api/invoicing/invoices/${row.fiscal_invoice_id}/pdf"><i class="ph-bold ph-file-pdf"></i> Ver factura</a>` : ''}
+                ${row.global_invoice_status === 'active' ? `<a class="btn btn-ghost" target="_blank" href="/api/invoicing/global-invoices/${row.global_invoice_id}/pdf"><i class="ph-bold ph-files"></i> Ver global</a>` : ''}
                 <button type="button" class="btn btn-ghost" data-edit-pos-payment="${row.id}" ${isCanceled ? 'disabled' : ''}><i class="ph-bold ph-credit-card"></i> Pago</button>
                 ${POS_OVERVIEW?.policy?.sameDayCancelEnabled ? `<button type="button" class="btn btn-danger" data-cancel-pos-sale="${row.id}" ${isCanceled ? 'disabled' : ''}><i class="ph-bold ph-x-circle"></i> Cancelar</button>` : ''}
               </div>
@@ -5260,6 +5333,12 @@ async function loadPosSalesHistory(page = 1) {
   document.querySelectorAll('[data-invoice-pos-sale]').forEach((button) =>
     button.addEventListener('click', () => { openPosInvoiceModal(button.dataset.invoicePosSale); })
   );
+  document.querySelectorAll('[data-global-ticket]').forEach((checkbox) => {
+    checkbox.addEventListener('change', () => {
+      const row = POS_SALES_HISTORY_CACHE.find((item) => Number(item.id) === Number(checkbox.dataset.globalTicket));
+      if (!row || !togglePosGlobalInvoiceSale(row, checkbox.checked)) checkbox.checked = false;
+    });
+  });
   document.querySelectorAll('[data-cancel-pos-sale]').forEach((button) =>
     button.addEventListener('click', () => openPosCancelSaleModal(button.dataset.cancelPosSale))
   );
@@ -5267,6 +5346,7 @@ async function loadPosSalesHistory(page = 1) {
   $('#posSalesHistoryPageInfo').textContent = `Página ${POS_SALES_PAGE} de ${POS_SALES_TOTAL_PAGES} · ${Number(data.total || 0)} ventas`;
   $('#posSalesPrevPage').disabled = POS_SALES_PAGE <= 1;
   $('#posSalesNextPage').disabled = POS_SALES_PAGE >= POS_SALES_TOTAL_PAGES;
+  updatePosGlobalInvoiceSummary();
 }
 
 function openPosSalesHistoryModal() {
@@ -5274,6 +5354,8 @@ function openPosSalesHistoryModal() {
   POS_SALES_FILTER = 'today';
   POS_SALES_START_DATE = today;
   POS_SALES_END_DATE = today;
+  POS_GLOBAL_INVOICE_SELECTION.clear();
+  setPosGlobalInvoiceMessage('');
   syncPosSalesFilterUI();
   $('#posSalesHistoryModal').classList.add('show');
   loadPosSalesHistory(1).catch((err) => toast(err.message, true));
@@ -5817,6 +5899,75 @@ $('#posTableOpenForm')?.addEventListener('submit', async (e) => {
   }
 });
 $('#posSalesHistoryClose')?.addEventListener('click', () => $('#posSalesHistoryModal').classList.remove('show'));
+$('#posGlobalClear')?.addEventListener('click', () => {
+  POS_GLOBAL_INVOICE_SELECTION.clear();
+  setPosGlobalInvoiceMessage('');
+  document.querySelectorAll('[data-global-ticket]').forEach((checkbox) => { checkbox.checked = false; });
+  updatePosGlobalInvoiceSummary();
+});
+$('#posGlobalSelectAll')?.addEventListener('click', async () => {
+  const button = $('#posGlobalSelectAll');
+  const date = posGlobalInvoiceDate();
+  if (!date) return setPosGlobalInvoiceMessage('Selecciona Hoy o un rango de una sola fecha.', 'error');
+  const selectedBranch = [...POS_GLOBAL_INVOICE_SELECTION.values()][0]?.service_branch_id;
+  const visibleBranch = selectedBranch || POS_SALES_HISTORY_CACHE.find((row) => row.service_branch_id)?.service_branch_id || 0;
+  button.disabled = true;
+  button.innerHTML = '<i class="ph-bold ph-spinner-gap"></i> Buscando…';
+  try {
+    const query = new URLSearchParams({ date });
+    if (visibleBranch) query.set('branchId', visibleBranch);
+    const data = await api(`/api/invoicing/global/eligible?${query}`);
+    if (!data.rows?.length) throw new Error('No hay ventas pendientes de facturar para esta fecha y sucursal');
+    const branchKeys = new Set(data.rows.map((row) => Number(row.service_branch_id || 0)));
+    if (branchKeys.size > 1) throw new Error('Hay ventas de varias sucursales. Selecciona primero una venta de la sucursal que deseas facturar.');
+    POS_GLOBAL_INVOICE_SELECTION = new Map(data.rows.map((row) => [Number(row.id), row]));
+    document.querySelectorAll('[data-global-ticket]').forEach((checkbox) => {
+      checkbox.checked = POS_GLOBAL_INVOICE_SELECTION.has(Number(checkbox.dataset.globalTicket));
+    });
+    setPosGlobalInvoiceMessage(`${data.count} tickets elegibles seleccionados por ${fmtMoney(data.total)}.`, 'success');
+    updatePosGlobalInvoiceSummary();
+  } catch (error) {
+    setPosGlobalInvoiceMessage(error.message, 'error');
+  } finally {
+    button.innerHTML = '<i class="ph-bold ph-checks"></i> Todas sin facturar';
+    button.disabled = !posGlobalInvoiceDate();
+  }
+});
+$('#posGlobalIssue')?.addEventListener('click', async () => {
+  const rows = [...POS_GLOBAL_INVOICE_SELECTION.values()];
+  if (!rows.length) return;
+  const total = rows.reduce((sum, row) => sum + Number(row.total || 0), 0);
+  const accepted = await askConfirm(
+    'Timbrar factura global',
+    `Se timbrará un CFDI global por ${rows.length} tickets y un total de ${fmtMoney(total)}. Los tickets quedarán bloqueados para facturación individual.`,
+    { yesLabel: '<i class="ph-bold ph-seal-check"></i> Sí, timbrar global', noLabel: 'Revisar selección' }
+  );
+  if (!accepted) return;
+  const button = $('#posGlobalIssue');
+  button.disabled = true;
+  button.innerHTML = '<i class="ph-bold ph-spinner-gap"></i> Timbrando…';
+  setPosGlobalInvoiceMessage('Enviando la factura global a Facturama. No cierres esta ventana.', 'info');
+  try {
+    const data = await api('/api/invoicing/global/issue', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ orderIds: rows.map((row) => Number(row.id)) }),
+    });
+    const invoice = data.invoice;
+    const message = $('#posGlobalInvoiceMessage');
+    message.className = 'pos-global-invoice-message success';
+    message.innerHTML = `<b>Factura global timbrada</b><span>${esc(invoice.uuid || `${invoice.series}-${invoice.folio}`)} · ${invoice.orderCount} tickets · ${fmtMoney(invoice.total)}</span><div><a class="btn btn-primary" target="_blank" href="/api/invoicing/global-invoices/${invoice.id}/pdf">Descargar PDF</a><a class="btn btn-ghost" target="_blank" href="/api/invoicing/global-invoices/${invoice.id}/xml">Descargar XML</a></div>`;
+    message.hidden = false;
+    POS_GLOBAL_INVOICE_SELECTION.clear();
+    await loadPosSalesHistory(POS_SALES_PAGE);
+    toast('Factura global timbrada correctamente');
+  } catch (error) {
+    setPosGlobalInvoiceMessage(error.message, 'error');
+    toast(error.message, true);
+  } finally {
+    button.innerHTML = '<i class="ph-bold ph-seal-check"></i> Timbrar global';
+    updatePosGlobalInvoiceSummary();
+  }
+});
 $('#posChatbotQueueClose')?.addEventListener('click', () => $('#posChatbotQueueModal').classList.remove('show'));
 $('#posChatbotQueueRefresh')?.addEventListener('click', () => {
   loadPosChatbotQueue(POS_CHATBOT_PAGE).catch((err) => toast(err.message, true));
@@ -5841,6 +5992,8 @@ $('#posSalesNextPage')?.addEventListener('click', () => {
 document.querySelectorAll('#posSalesFilters [data-sales-filter]').forEach((button) =>
   button.addEventListener('click', () => {
     POS_SALES_FILTER = button.dataset.salesFilter;
+    POS_GLOBAL_INVOICE_SELECTION.clear();
+    setPosGlobalInvoiceMessage('');
     syncPosSalesFilterUI();
     if (POS_SALES_FILTER !== 'custom') {
       loadPosSalesHistory(1).catch((err) => toast(err.message, true));
@@ -5851,6 +6004,8 @@ document.querySelectorAll('#posSalesFilters [data-sales-filter]').forEach((butto
 $('#posSalesApplyCustomRange')?.addEventListener('click', () => {
   POS_SALES_START_DATE = $('#posSalesStartDate')?.value || '';
   POS_SALES_END_DATE = $('#posSalesEndDate')?.value || '';
+  POS_GLOBAL_INVOICE_SELECTION.clear();
+  setPosGlobalInvoiceMessage('');
   loadPosSalesHistory(1).catch((err) => toast(err.message, true));
 });
 

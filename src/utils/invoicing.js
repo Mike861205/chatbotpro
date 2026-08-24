@@ -234,6 +234,26 @@ function buildFacturamaItems(sale, productsById, profile, options = {}) {
   return items;
 }
 
+function buildGlobalFacturamaItems(sales, productsById, profile) {
+  const concepts = [];
+  for (const sale of sales || []) {
+    const ticketItems = buildFacturamaItems(sale, productsById, profile, { conceptMode: 'detailed' });
+    for (const item of ticketItems) {
+      concepts.push({
+        ...item,
+        Description: `Ticket #${sale.id} · ${item.Description}`.slice(0, 1000),
+      });
+    }
+  }
+  if (!concepts.length) throw Object.assign(new Error('No hay ventas elegibles para la factura global'), { status: 400 });
+  const expected = roundMoney((sales || []).reduce((sum, sale) => sum + Number(sale.total || 0), 0));
+  const calculated = roundMoney(concepts.reduce((sum, item) => sum + Number(item.Total || 0), 0));
+  if (Math.abs(calculated - expected) > 0.01) {
+    throw Object.assign(new Error('El total fiscal global no coincide con las ventas seleccionadas'), { status: 409 });
+  }
+  return concepts;
+}
+
 function deepValue(value, wantedKeys) {
   if (!value || typeof value !== 'object') return '';
   for (const [key, nested] of Object.entries(value)) {
@@ -261,5 +281,5 @@ function createRequestKey() {
 module.exports = {
   RFC_RE, POSTAL_RE, FISCAL_REGIMES, CFDI_USES, PAYMENT_FORMS,
   isMexicoIdentity, invoicingPortalUrl, validateFiscalProfile, validateReceiver, validateInvoiceEmail, maskInvoiceEmail, globalInformationForReceiver, resolveExpeditionPostalCode, roundMoney,
-  paymentFormFromSale, buildFacturamaItems, extractFacturamaIdentity, createRequestKey,
+  paymentFormFromSale, buildFacturamaItems, buildGlobalFacturamaItems, extractFacturamaIdentity, createRequestKey,
 };

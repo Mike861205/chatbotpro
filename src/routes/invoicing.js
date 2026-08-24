@@ -17,6 +17,7 @@ const {
   resolveExpeditionPostalCode,
   paymentFormFromSale,
   buildFacturamaItems,
+  buildGlobalFacturamaItems,
   extractFacturamaIdentity,
   createRequestKey,
 } = require('../utils/invoicing');
@@ -155,6 +156,24 @@ function invoiceSummary(row, includeReceiver = true) {
   };
 }
 
+function globalInvoiceSummary(row) {
+  return {
+    id: Number(row.id),
+    providerId: row.provider_id || '',
+    uuid: row.uuid || '',
+    series: row.series || '',
+    folio: row.folio || '',
+    status: row.status,
+    businessDate: row.business_date || '',
+    branchId: row.service_branch_id ? Number(row.service_branch_id) : null,
+    orderCount: Number(row.order_count || 0),
+    total: Number(row.total || 0),
+    paymentForm: row.payment_form || '',
+    error: row.error_message || '',
+    issuedAt: row.issued_at || '',
+  };
+}
+
 async function loadInvoiceFiles(invoice, profile) {
   const files = {};
   if (!invoice.provider_id) return files;
@@ -208,6 +227,166 @@ async function sendInvoiceEmail({ tenant, tenantDb, invoiceId, emailInput, actor
   }
 }
 
+async function issueGlobalInvoice({ tenantDb, orderIds, actor = '', allowedBranchId = null }) {
+  const ids = [...new Set((orderIds || []).map(Number).filter((id) => Number.isInteger(id) && id > 0))];
+  if (!ids.length) throw Object.assign(new Error('Selecciona al menos una venta sin facturar'), { status: 400 });
+  if (ids.length > 500) throw Object.assign(new Error('Puedes incluir hasta 500 tickets por factura global'), { status: 400 });
+  const profile = await getProfile(tenantDb);
+  const readinessError = profileReadinessError(profile);
+  if (readinessError) throw Object.assign(new Error(readinessError), { status: 409 });
+
+  const timezone = String(tenantDb.timezone || 'America/Mexico_City').replace(/'/g, '');
+  const previewSales = await tenantDb.all(
+    `SELECT id, items, total::float AS total, status, channel, payment_method, payment_breakdown,
+            delivery_fee::float AS delivery_fee, service_branch_id,
+            to_char(created_at AT TIME ZONE '${timezone}', 'YYYY-MM-DD') AS business_date
+     FROM {s}.orders WHERE id=ANY($1::int[]) AND channel='pos' ORDER BY id`,
+    [ids]
+  );
+  if (previewSales.length !== ids.length) throw Object.assign(new Error('Una o más ventas seleccionadas ya no están disponibles'), { status: 409 });
+  if (previewSales.some((sale) => sale.status === 'cancelado')) throw Object.assign(new Error('No se pueden incluir tickets cancelados'), { status: 409 });
+  const businessDates = new Set(previewSales.map((sale) => sale.business_date));
+  if (businessDates.size !== 1) throw Object.assign(new Error('La factura global diaria sólo puede incluir ventas de una misma fecha'), { status: 409 });
+  const branchKeys = new Set(previewSales.map((sale) => Number(sale.service_branch_id || 0)));
+  if (branchKeys.size !== 1) throw Object.assign(new Error('Selecciona ventas de una sola sucursal por factura global'), { status: 409 });
+  const branchId = Number(previewSales[0].service_branch_id || 0);
+  if (allowedBranchId !== null && branchId !== Number(allowedBranchId)) {
+    throw Object.assign(new Error('Sólo puedes facturar ventas de tu sucursal asignada'), { status: 403 });
+  }
+  const branch = branchId ? await tenantDb.get('SELECT fiscal_postal_code FROM {s}.branches WHERE id=$1 LIMIT 1', [branchId]) : null;
+  let expeditionPlace = resolveExpeditionPostalCode(profile, branch?.fiscal_postal_code);
+  let invoiceSeries = profile.series;
+  if (profile.api_mode === 'web') {
+    const issuanceContext = await facturama.ensureWebIssuanceContext(expeditionPlace, profile.series);
+    expeditionPlace = issuanceContext.postalCode;
+    invoiceSeries = issuanceContext.series;
+  }
+  const receiver = validateReceiver({
+    rfc: 'XAXX010101000', name: 'PUBLICO EN GENERAL', fiscalRegime: '616',
+    postalCode: expeditionPlace, cfdiUse: 'S01',
+  }, { expeditionPostalCode: expeditionPlace });
+
+  const rawItems = previewSales.flatMap((sale) => parseJson(sale.items, []));
+  const productIds = [...new Set(rawItems.map((item) => Number(item.id || item.productId || 0)).filter((id) => id > 0))];
+  const productRows = productIds.length ? await tenantDb.all(
+    `SELECT id,name,sat_product_code,sat_unit_code,sat_unit_name,tax_object,
+            iva_rate::float AS iva_rate,isr_rate::float AS isr_rate
+     FROM {s}.products WHERE id=ANY($1::int[])`, [productIds]
+  ) : [];
+  const productsById = new Map(productRows.map((row) => [Number(row.id), row]));
+
+  const allocated = await tenantDb.tx(async (tx) => {
+    const sales = await tx.all(
+      `SELECT id,items,total::float AS total,status,channel,payment_method,payment_breakdown,
+              delivery_fee::float AS delivery_fee,service_branch_id,
+              to_char(created_at AT TIME ZONE '${timezone}', 'YYYY-MM-DD') AS business_date
+       FROM {s}.orders WHERE id=ANY($1::int[]) ORDER BY id FOR UPDATE`, [ids]
+    );
+    if (sales.length !== ids.length || sales.some((sale) => sale.channel !== 'pos' || sale.status === 'cancelado')) {
+      throw Object.assign(new Error('Una o más ventas dejaron de ser elegibles'), { status: 409 });
+    }
+    if (new Set(sales.map((sale) => sale.business_date)).size !== 1 || new Set(sales.map((sale) => Number(sale.service_branch_id || 0))).size !== 1) {
+      throw Object.assign(new Error('Las ventas deben pertenecer al mismo día y sucursal'), { status: 409 });
+    }
+    if (allowedBranchId !== null && Number(sales[0].service_branch_id || 0) !== Number(allowedBranchId)) {
+      throw Object.assign(new Error('Sólo puedes facturar ventas de tu sucursal asignada'), { status: 403 });
+    }
+    const individual = await tx.get(
+      `SELECT order_id FROM {s}.invoices WHERE order_id=ANY($1::int[])
+       AND status IN ('pending','unknown','active','cancel_pending') LIMIT 1`, [ids]
+    );
+    if (individual) throw Object.assign(new Error(`El ticket #${individual.order_id} ya tiene una factura individual`), { status: 409 });
+    const global = await tx.get(
+      `SELECT gio.order_id FROM {s}.global_invoice_orders gio
+       JOIN {s}.global_invoices gi ON gi.id=gio.global_invoice_id
+       WHERE gio.order_id=ANY($1::int[]) AND gio.active=1
+         AND gi.status IN ('pending','unknown','active') LIMIT 1`, [ids]
+    );
+    if (global) throw Object.assign(new Error(`El ticket #${global.order_id} ya pertenece a una factura global`), { status: 409 });
+
+    const items = buildGlobalFacturamaItems(sales, productsById, profile);
+    const largestSale = sales.reduce((largest, sale) => Number(sale.total) > Number(largest.total) ? sale : largest, sales[0]);
+    const paymentForm = paymentFormFromSale(largestSale, profile.default_card_payment_form);
+    const total = Math.round(sales.reduce((sum, sale) => sum + Number(sale.total || 0), 0) * 100) / 100;
+    const lockedProfile = await tx.get('SELECT * FROM {s}.fiscal_profiles WHERE id=1 FOR UPDATE');
+    const folio = String(lockedProfile.next_folio || 1);
+    await tx.run('UPDATE {s}.fiscal_profiles SET next_folio=next_folio+1,updated_at=now() WHERE id=1');
+    const snapshot = {
+      issuer: { rfc: profile.rfc, legalName: profile.legal_name, fiscalRegime: profile.fiscal_regime, postalCode: expeditionPlace },
+      receiver, paymentForm, periodicity: '01', businessDate: sales[0].business_date,
+      orderIds: sales.map((sale) => Number(sale.id)), items, total,
+    };
+    const row = await tx.get(
+      `INSERT INTO {s}.global_invoices
+       (request_key,environment,series,folio,status,service_branch_id,business_date,periodicity,order_count,total,payment_form,receiver_data_enc,fiscal_snapshot_enc,issued_by)
+       VALUES ($1,$2,$3,$4,'pending',$5,$6,'01',$7,$8,$9,$10,$11,$12) RETURNING *`,
+      [createRequestKey(), profile.environment, invoiceSeries, folio, branchId || null, sales[0].business_date,
+        sales.length, total, paymentForm, encrypt(JSON.stringify(receiver)), encrypt(JSON.stringify(snapshot)), actor]
+    );
+    for (const sale of sales) {
+      await tx.run(
+        'INSERT INTO {s}.global_invoice_orders (global_invoice_id,order_id,amount,active) VALUES ($1,$2,$3,1)',
+        [row.id, sale.id, sale.total]
+      );
+    }
+    await tx.run(
+      "INSERT INTO {s}.global_invoice_events (global_invoice_id,event_type,detail,actor) VALUES ($1,'created',$2,$3)",
+      [row.id, `${sales.length} tickets · ${sales[0].business_date}`, actor]
+    );
+    return { row, snapshot };
+  });
+
+  const payload = {
+    NameId: 1, CfdiType: 'I', Currency: 'MXN', Exportation: '01', ExpeditionPlace: expeditionPlace,
+    PaymentForm: allocated.snapshot.paymentForm, PaymentMethod: 'PUE', Serie: invoiceSeries, Folio: allocated.row.folio,
+    Receiver: { Rfc: receiver.rfc, Name: receiver.name, FiscalRegime: receiver.fiscalRegime, TaxZipCode: receiver.postalCode, CfdiUse: receiver.cfdiUse },
+    Items: allocated.snapshot.items,
+    GlobalInformation: globalInformationForReceiver(receiver, `${allocated.snapshot.businessDate}T12:00:00`),
+    Observations: `Factura global diaria · ${allocated.snapshot.businessDate} · ${allocated.snapshot.orderIds.length} tickets`,
+  };
+  if (profile.api_mode !== 'web') payload.Issuer = { Rfc: profile.rfc, Name: profile.legal_name, FiscalRegime: profile.fiscal_regime };
+
+  try {
+    let response = await facturama.createCfdi(payload, profile.api_mode);
+    let identity = extractFacturamaIdentity(response);
+    if (identity.providerId && !identity.uuid) {
+      try {
+        const detail = await facturama.getCfdi(identity.providerId, profile.api_mode);
+        response = { ...response, Detail: detail };
+        identity = extractFacturamaIdentity(response);
+      } catch {}
+    }
+    if (!identity.providerId) throw new FacturamaError('Facturama no devolvió el identificador del CFDI global', { status: 502, uncertain: true });
+    const fileData = await loadInvoiceFiles({ provider_id: identity.providerId }, profile);
+    const updated = await tenantDb.get(
+      `UPDATE {s}.global_invoices SET provider_id=$1,uuid=$2,certificate_number=$3,status='active',provider_response_enc=$4,
+       xml_enc=$5,pdf_enc=$6,issued_at=now(),updated_at=now(),error_message='' WHERE id=$7 RETURNING *`,
+      [identity.providerId, identity.uuid || null, identity.certificateNumber || null, encrypt(JSON.stringify(response)),
+        fileData.xml ? encrypt(fileData.xml) : null, fileData.pdf ? encrypt(fileData.pdf) : null, allocated.row.id]
+    );
+    await tenantDb.run(
+      "INSERT INTO {s}.global_invoice_events (global_invoice_id,event_type,detail,actor) VALUES ($1,'stamped',$2,$3)",
+      [updated.id, identity.uuid || identity.providerId, actor]
+    );
+    return { invoice: globalInvoiceSummary(updated) };
+  } catch (error) {
+    const uncertain = Boolean(error.uncertain);
+    const status = uncertain ? 'unknown' : 'failed';
+    await tenantDb.tx(async (tx) => {
+      await tx.run(
+        'UPDATE {s}.global_invoices SET status=$1,error_message=$2,provider_response_enc=$3,updated_at=now() WHERE id=$4',
+        [status, String(error.message || 'Error de timbrado').slice(0, 900), error.details ? encrypt(JSON.stringify(error.details)) : null, allocated.row.id]
+      );
+      if (!uncertain) await tx.run('UPDATE {s}.global_invoice_orders SET active=0 WHERE global_invoice_id=$1', [allocated.row.id]);
+      await tx.run(
+        'INSERT INTO {s}.global_invoice_events (global_invoice_id,event_type,detail,actor) VALUES ($1,$2,$3,$4)',
+        [allocated.row.id, status, String(error.message || '').slice(0, 900), actor]
+      );
+    });
+    throw error;
+  }
+}
+
 async function issueSaleInvoice({ tenant, tenantDb, orderId, receiverInput, requestedPaymentForm = '', conceptMode = 'detailed', actor = '', publicToken = '' }) {
   const profile = await getProfile(tenantDb);
   const readinessError = profileReadinessError(profile);
@@ -221,6 +400,16 @@ async function issueSaleInvoice({ tenant, tenantDb, orderId, receiverInput, requ
   if (!sale || sale.channel !== 'pos') throw Object.assign(new Error('Ticket de punto de venta no encontrado'), { status: 404 });
   if (publicToken && !invoiceAccessMatches(sale, publicToken)) throw Object.assign(new Error('El código de facturación no es válido'), { status: 404 });
   if (sale.status === 'cancelado') throw Object.assign(new Error('No se puede facturar un ticket cancelado'), { status: 409 });
+
+  const globalInvoice = await tenantDb.get(
+    `SELECT gi.id,gi.uuid,gi.status FROM {s}.global_invoice_orders gio
+     JOIN {s}.global_invoices gi ON gi.id=gio.global_invoice_id
+     WHERE gio.order_id=$1 AND gio.active=1 AND gi.status IN ('pending','unknown','active') LIMIT 1`,
+    [sale.id]
+  );
+  if (globalInvoice) {
+    throw Object.assign(new Error(`Este ticket ya está incluido en la factura global ${globalInvoice.uuid || `#${globalInvoice.id}`}`), { status: 409 });
+  }
 
   const current = await tenantDb.get(
     `SELECT * FROM {s}.invoices WHERE order_id = $1 AND status IN ('pending','unknown','active','cancel_pending') ORDER BY id DESC LIMIT 1`,
@@ -403,8 +592,14 @@ router.post('/public/:slug/lookup', publicLimiter, async (req, res, next) => {
     );
     if (!sale || !invoiceAccessMatches(sale, token)) return res.status(404).json({ error: 'No encontramos el ticket con ese código de facturación' });
     if (sale.status === 'cancelado') return res.status(409).json({ error: 'El ticket está cancelado' });
-    const [invoice, profile, branch] = await Promise.all([
+    const [invoice, globalInvoice, profile, branch] = await Promise.all([
       tenantDb.get('SELECT * FROM {s}.invoices WHERE order_id=$1 ORDER BY id DESC LIMIT 1', [ticket]),
+      tenantDb.get(
+        `SELECT gi.id,gi.uuid,gi.status,gi.series,gi.folio
+         FROM {s}.global_invoice_orders gio JOIN {s}.global_invoices gi ON gi.id=gio.global_invoice_id
+         WHERE gio.order_id=$1 AND gio.active=1 AND gi.status IN ('pending','unknown','active') LIMIT 1`,
+        [ticket]
+      ),
       getProfile(tenantDb),
       sale.service_branch_id
         ? tenantDb.get('SELECT fiscal_postal_code FROM {s}.branches WHERE id=$1 LIMIT 1', [sale.service_branch_id])
@@ -416,7 +611,10 @@ router.post('/public/:slug/lookup', publicLimiter, async (req, res, next) => {
     }
     res.json({
       ticket: { id: sale.id, items: parseJson(sale.items, []).map((item) => ({ name: item.name, qty: item.qty, price: item.price })), total: sale.total, createdAt: sale.created_at, expeditionPostalCode },
-      invoice: invoice ? invoiceSummary({ ...invoice, order_total: sale.total }, false) : null,
+      invoice: globalInvoice ? {
+        id: Number(globalInvoice.id), uuid: globalInvoice.uuid || '', series: globalInvoice.series || '', folio: globalInvoice.folio || '',
+        status: globalInvoice.status === 'active' ? 'global_active' : 'global_pending', total: Number(sale.total || 0),
+      } : (invoice ? invoiceSummary({ ...invoice, order_total: sale.total }, false) : null),
     });
   } catch (error) { next(error); }
 });
@@ -642,6 +840,87 @@ router.post('/invoices/:id/email', async (req, res, next) => {
     if (error.status) return res.status(error.status).json({ error: error.message });
     next(error);
   }
+});
+
+router.get('/global/eligible', async (req, res, next) => {
+  try {
+    const date = String(req.query.date || '').trim();
+    const requestedBranchId = Number(req.query.branchId || 0);
+    const cashierBranchId = req.user.role === 'cashier' ? Number(req.user.branchId || 0) : null;
+    if (req.user.role === 'cashier' && !cashierBranchId) {
+      return res.status(403).json({ error: 'Tu usuario de caja no tiene una sucursal asignada' });
+    }
+    const branchId = cashierBranchId || requestedBranchId;
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return res.status(400).json({ error: 'Selecciona una fecha válida' });
+    const timezone = String(req.tdb.timezone || 'America/Mexico_City').replace(/'/g, '');
+    const params = [date];
+    let branchClause = '';
+    if (Number.isInteger(branchId) && branchId > 0) {
+      params.push(branchId);
+      branchClause = `AND o.service_branch_id=$${params.length}`;
+    }
+    const rows = await req.tdb.all(
+      `SELECT o.id,o.total::float AS total,o.service_branch_id,o.service_branch_name,o.payment_method,
+              to_char(o.created_at AT TIME ZONE '${timezone}', 'YYYY-MM-DD') AS business_date
+       FROM {s}.orders o
+       WHERE o.channel='pos' AND o.status!='cancelado'
+         AND (o.created_at AT TIME ZONE '${timezone}')::date=$1::date ${branchClause}
+         AND NOT EXISTS (
+           SELECT 1 FROM {s}.invoices i WHERE i.order_id=o.id
+             AND i.status IN ('pending','unknown','active','cancel_pending')
+         )
+         AND NOT EXISTS (
+           SELECT 1 FROM {s}.global_invoice_orders gio
+           JOIN {s}.global_invoices gi ON gi.id=gio.global_invoice_id
+           WHERE gio.order_id=o.id AND gio.active=1 AND gi.status IN ('pending','unknown','active')
+         )
+       ORDER BY o.id`, params
+    );
+    res.json({
+      date,
+      rows,
+      count: rows.length,
+      total: Math.round(rows.reduce((sum, row) => sum + Number(row.total || 0), 0) * 100) / 100,
+    });
+  } catch (error) { next(error); }
+});
+
+router.post('/global/issue', async (req, res, next) => {
+  try {
+    const result = await issueGlobalInvoice({
+      tenantDb: req.tdb,
+      orderIds: req.body?.orderIds,
+      actor: req.user.username,
+      allowedBranchId: req.user.role === 'cashier' ? Number(req.user.branchId || 0) : null,
+    });
+    res.json({ ok: true, message: 'Factura global timbrada correctamente', ...result });
+  } catch (error) {
+    if (error.status) return res.status(error.status).json({ error: error.message, uncertain: Boolean(error.uncertain) });
+    next(error);
+  }
+});
+
+router.get('/global-invoices/:id/:format', async (req, res, next) => {
+  try {
+    const invoice = await req.tdb.get('SELECT * FROM {s}.global_invoices WHERE id=$1 LIMIT 1', [req.params.id]);
+    if (!invoice) return res.status(404).end();
+    if (!['xml', 'pdf'].includes(req.params.format)) return res.status(400).json({ error: 'Formato no válido' });
+    const format = req.params.format;
+    let content = decrypt(format === 'xml' ? invoice.xml_enc : invoice.pdf_enc);
+    if (!content && invoice.provider_id) {
+      const profile = await getProfile(req.tdb);
+      const result = await facturama.downloadCfdi(invoice.provider_id, format, profile.api_mode);
+      content = String(result?.Content || '');
+      if (content) await req.tdb.run(
+        `UPDATE {s}.global_invoices SET ${format === 'xml' ? 'xml_enc' : 'pdf_enc'}=$1,updated_at=now() WHERE id=$2`,
+        [encrypt(content), invoice.id]
+      );
+    }
+    if (!content) return res.status(404).json({ error: 'El archivo todavía no está disponible' });
+    res.type(format === 'xml' ? 'application/xml' : 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="CFDI-Global-${invoice.uuid || invoice.folio}.${format}"`);
+    res.send(Buffer.from(content, 'base64'));
+  } catch (error) { next(error); }
 });
 
 router.post('/invoices/:id/cancel', requireOwner, async (req, res, next) => {

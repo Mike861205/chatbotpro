@@ -229,6 +229,8 @@
       invoiceDownloads(data.invoice, token);
       return;
     }
+    if (data.invoice?.status === 'global_active') throw new Error('Este ticket ya está incluido en una factura global del negocio. Comunícate con el establecimiento si necesitas una factura individual.');
+    if (data.invoice?.status === 'global_pending') throw new Error('Este ticket está reservado en una factura global en proceso. Intenta nuevamente más tarde o comunícate con el negocio.');
     if (['pending', 'unknown'].includes(data.invoice?.status)) throw new Error('La factura de este ticket está en proceso de validación. Intenta nuevamente en unos minutos.');
     if (data.invoice?.status === 'cancel_pending') throw new Error('La factura de este ticket tiene una cancelación en proceso. Comunícate con el negocio.');
     if (data.invoice?.status === 'canceled') throw new Error('La factura asociada a este ticket fue cancelada. Comunícate con el negocio.');

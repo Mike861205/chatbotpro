@@ -912,6 +912,58 @@ async function createTenantSchema(slug) {
       created_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
     CREATE INDEX IF NOT EXISTS idx_${s}_invoice_events_invoice ON "${s}".invoice_events(invoice_id, created_at DESC);
+
+    CREATE TABLE IF NOT EXISTS "${s}".global_invoices (
+      id BIGSERIAL PRIMARY KEY,
+      request_key UUID NOT NULL UNIQUE,
+      provider TEXT NOT NULL DEFAULT 'facturama',
+      environment TEXT NOT NULL DEFAULT 'sandbox',
+      provider_id TEXT,
+      uuid TEXT,
+      series TEXT NOT NULL DEFAULT '',
+      folio TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending',
+      service_branch_id INTEGER,
+      business_date DATE NOT NULL,
+      periodicity TEXT NOT NULL DEFAULT '01',
+      order_count INTEGER NOT NULL DEFAULT 0,
+      total NUMERIC(12,2) NOT NULL DEFAULT 0,
+      payment_form TEXT NOT NULL DEFAULT '01',
+      receiver_data_enc TEXT NOT NULL,
+      fiscal_snapshot_enc TEXT NOT NULL,
+      provider_response_enc TEXT,
+      xml_enc TEXT,
+      pdf_enc TEXT,
+      certificate_number TEXT,
+      error_message TEXT NOT NULL DEFAULT '',
+      issued_by TEXT NOT NULL DEFAULT '',
+      issued_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_${s}_global_invoices_uuid ON "${s}".global_invoices(uuid) WHERE uuid IS NOT NULL;
+    CREATE INDEX IF NOT EXISTS idx_${s}_global_invoices_date ON "${s}".global_invoices(business_date DESC, service_branch_id, id DESC);
+
+    CREATE TABLE IF NOT EXISTS "${s}".global_invoice_orders (
+      global_invoice_id BIGINT NOT NULL REFERENCES "${s}".global_invoices(id) ON DELETE CASCADE,
+      order_id INTEGER NOT NULL REFERENCES "${s}".orders(id),
+      amount NUMERIC(12,2) NOT NULL DEFAULT 0,
+      active INTEGER NOT NULL DEFAULT 1,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      PRIMARY KEY (global_invoice_id, order_id)
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_${s}_global_invoice_orders_live ON "${s}".global_invoice_orders(order_id) WHERE active=1;
+    CREATE INDEX IF NOT EXISTS idx_${s}_global_invoice_orders_batch ON "${s}".global_invoice_orders(global_invoice_id, order_id);
+
+    CREATE TABLE IF NOT EXISTS "${s}".global_invoice_events (
+      id BIGSERIAL PRIMARY KEY,
+      global_invoice_id BIGINT NOT NULL REFERENCES "${s}".global_invoices(id) ON DELETE CASCADE,
+      event_type TEXT NOT NULL,
+      detail TEXT NOT NULL DEFAULT '',
+      actor TEXT NOT NULL DEFAULT '',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS idx_${s}_global_invoice_events_invoice ON "${s}".global_invoice_events(global_invoice_id, created_at DESC);
   `);
 }
 

@@ -521,8 +521,15 @@ async function listSalesHistoryPage(t, options = {}) {
             cash_change::float AS cash_change, COALESCE(NULLIF(order_notes, ''), notes) AS notes, items, table_account_id, table_number, waiter_name,
             service_branch_id, service_branch_name,
             delivery, delivery_fee::float AS delivery_fee, receiving_mode_label, receiving_mode_behavior, delivery_address, delivery_neighborhood, delivery_reference,
-            to_char(created_at AT TIME ZONE '${tenantTimeZone(t)}', 'DD Mon YYYY, HH24:MI') AS created_at
-     FROM {s}.orders
+            to_char(created_at AT TIME ZONE '${tenantTimeZone(t)}', 'DD Mon YYYY, HH24:MI') AS created_at,
+            to_char(created_at AT TIME ZONE '${tenantTimeZone(t)}', 'YYYY-MM-DD') AS business_date,
+            (SELECT i.id FROM {s}.invoices i WHERE i.order_id=o.id ORDER BY i.id DESC LIMIT 1) AS fiscal_invoice_id,
+            (SELECT i.status FROM {s}.invoices i WHERE i.order_id=o.id ORDER BY i.id DESC LIMIT 1) AS fiscal_invoice_status,
+            (SELECT i.uuid FROM {s}.invoices i WHERE i.order_id=o.id ORDER BY i.id DESC LIMIT 1) AS fiscal_invoice_uuid,
+            (SELECT gi.id FROM {s}.global_invoice_orders gio JOIN {s}.global_invoices gi ON gi.id=gio.global_invoice_id WHERE gio.order_id=o.id AND gio.active=1 ORDER BY gi.id DESC LIMIT 1) AS global_invoice_id,
+            (SELECT gi.status FROM {s}.global_invoice_orders gio JOIN {s}.global_invoices gi ON gi.id=gio.global_invoice_id WHERE gio.order_id=o.id AND gio.active=1 ORDER BY gi.id DESC LIMIT 1) AS global_invoice_status,
+            (SELECT gi.uuid FROM {s}.global_invoice_orders gio JOIN {s}.global_invoices gi ON gi.id=gio.global_invoice_id WHERE gio.order_id=o.id AND gio.active=1 ORDER BY gi.id DESC LIMIT 1) AS global_invoice_uuid
+     FROM {s}.orders o
      ${whereSql}
      ORDER BY id DESC
      LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
@@ -1686,6 +1693,13 @@ router.post('/sales/:id/cancel', async (req, res, next) => {
       if (fiscalInvoice) {
         throw Object.assign(new Error('Cancela primero el CFDI de esta venta desde Facturación MX'), { statusCode: 409 });
       }
+      const globalInvoice = await tx.get(
+        `SELECT gi.status FROM {s}.global_invoice_orders gio JOIN {s}.global_invoices gi ON gi.id=gio.global_invoice_id
+         WHERE gio.order_id=$1 AND gio.active=1 AND gi.status IN ('pending','unknown','active') LIMIT 1`, [id]
+      );
+      if (globalInvoice) {
+        throw Object.assign(new Error('Esta venta pertenece a una factura global; cancela y regenera primero el CFDI global'), { statusCode: 409 });
+      }
       await tx.run(
         `UPDATE {s}.orders SET status='cancelado', branch_stock_applied=0,
          notes=CASE WHEN COALESCE(notes,'')='' THEN $1 ELSE notes || E'\n' || $1 END WHERE id=$2`,
@@ -1729,6 +1743,11 @@ router.put('/sales/:id/payment', async (req, res, next) => {
       [id]
     );
     if (fiscalInvoice) return res.status(409).json({ error: 'No puedes cambiar el pago después de timbrar; cancela primero el CFDI' });
+    const globalInvoice = await req.tdb.get(
+      `SELECT gi.status FROM {s}.global_invoice_orders gio JOIN {s}.global_invoices gi ON gi.id=gio.global_invoice_id
+       WHERE gio.order_id=$1 AND gio.active=1 AND gi.status IN ('pending','unknown','active') LIMIT 1`, [id]
+    );
+    if (globalInvoice) return res.status(409).json({ error: 'No puedes cambiar el pago de una venta incluida en una factura global' });
 
     const paymentMethod = String(req.body?.paymentMethod || '').trim();
     const payment = normalizePayment(paymentMethod, req.body?.payments || {}, n(sale.total), req.body?.cashReceived);
