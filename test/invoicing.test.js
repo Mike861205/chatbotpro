@@ -341,3 +341,12 @@ test('no hay credenciales Facturama embebidas en archivos versionados', () => {
   assert.doesNotMatch(combined, /pamm861205/i);
   assert.match(read('.env.example'), /FACTURAMA_PASSWORD=\s*(?:\r?\n|$)/);
 });
+
+test('la carga de CSD valida RFC, vigencia y sincroniza el nombre fiscal del certificado', () => {
+  const route = fs.readFileSync(path.join(__dirname, '../src/routes/invoicing.js'), 'utf8');
+  assert.match(route, /new X509Certificate\(buffer\)/);
+  assert.match(route, /certificateIdentity\.rfc !== profile\.rfc/);
+  assert.match(route, /El CSD pertenece al RFC/);
+  assert.match(route, /SET legal_name=\$1,csd_uploaded=1/);
+  assert.match(route, /El certificado CSD está vencido/);
+});

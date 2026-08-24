@@ -5292,7 +5292,7 @@ $('#fiscalCsdForm')?.addEventListener('submit', async (event) => {
     const headers = {}; const scope = getAuthScope(); if (scope) headers['x-cbp-auth-scope'] = scope;
     const response = await fetch('/api/invoicing/csd', { method: 'POST', headers, body: new FormData(event.currentTarget) });
     const data = await response.json().catch(() => ({})); if (!response.ok) throw new Error(data.error || 'No se pudo cargar el CSD');
-    event.currentTarget.reset(); toast('Sellos digitales cargados'); await loadInvoicing();
+    event.currentTarget.reset(); toast(`Sellos digitales cargados · ${data.legalName || 'emisor validado'}`); await loadInvoicing();
   } catch (error) { toast(error.message, true); } finally { button.disabled = false; }
 });
 

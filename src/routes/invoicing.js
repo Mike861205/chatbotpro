@@ -1,5 +1,6 @@
 const express = require('express');
 const multer = require('multer');
+const { X509Certificate } = require('node:crypto');
 const config = require('../config');
 const { q, tdb } = require('../db');
 const { encrypt, decrypt, lookupHash } = require('../utils/crypto');
@@ -37,6 +38,25 @@ const csdUpload = multer({
 
 function parseJson(raw, fallback = {}) {
   try { return JSON.parse(String(raw || '')); } catch { return fallback; }
+}
+
+function csdCertificateIdentity(buffer) {
+  try {
+    const certificate = new X509Certificate(buffer);
+    const attributes = {};
+    String(certificate.subject || '').split(/\r?\n/).forEach((line) => {
+      const separator = line.indexOf('=');
+      if (separator > 0) attributes[line.slice(0, separator).trim().toLowerCase()] = line.slice(separator + 1).trim();
+    });
+    const rfc = String(attributes.x500uniqueidentifier || '').trim().toUpperCase();
+    const legalName = String(attributes.cn || attributes.name || attributes.o || '').trim().toUpperCase();
+    if (!rfc || !legalName) throw new Error('El certificado no contiene RFC y nombre fiscal identificables');
+    const validTo = new Date(certificate.validTo);
+    if (!Number.isNaN(validTo.getTime()) && validTo.getTime() < Date.now()) throw new Error('El certificado CSD está vencido');
+    return { rfc, legalName, validTo: certificate.validTo };
+  } catch (error) {
+    throw Object.assign(new Error(`No se pudo validar el certificado .cer: ${error.message}`), { status: 422 });
+  }
 }
 
 function compactInvoiceCode(value) {
@@ -962,6 +982,9 @@ router.put('/emitters/:id', requireOwner, async (req, res, next) => {
     const profile = validateFiscalProfile(req.body || {});
     const current = await req.tdb.get('SELECT * FROM {s}.fiscal_emitters WHERE id=$1', [id]);
     if (!current) return res.status(404).json({ error: 'Emisor no encontrado' });
+    if (Number(current.csd_uploaded) && current.rfc === profile.rfc && current.legal_name !== profile.legalName) {
+      return res.status(409).json({ error: `El nombre fiscal debe permanecer como ${current.legal_name}, que es el identificado al cargar el CSD. Si cambió el RFC, carga primero sus sellos correctos.` });
+    }
     const row = await req.tdb.get(
       `UPDATE {s}.fiscal_emitters SET label=$1,enabled=$2,rfc=$3,legal_name=$4,fiscal_regime=$5,postal_code=$6,series=$7,
        default_product_code=$8,default_unit_code=$9,default_unit_name=$10,default_tax_object=$11,default_iva_rate=$12,
@@ -1005,15 +1028,19 @@ router.post('/csd', requireOwner, csdUpload.fields([{ name: 'certificate', maxCo
     const privateKey = req.files?.privateKey?.[0];
     const password = String(req.body?.privateKeyPassword || '');
     if (!certificate || !privateKey || !password) return res.status(400).json({ error: 'Carga .cer, .key y la contraseña de la llave privada' });
+    const certificateIdentity = csdCertificateIdentity(certificate.buffer);
+    if (certificateIdentity.rfc !== profile.rfc) {
+      return res.status(422).json({ error: `El CSD pertenece al RFC ${certificateIdentity.rfc}, pero el emisor está registrado como ${profile.rfc}. Corrige el RFC o carga los archivos correspondientes.` });
+    }
     await facturama.uploadCsd({
       rfc: profile.rfc,
       certificate: certificate.buffer.toString('base64'),
       privateKey: privateKey.buffer.toString('base64'),
       privateKeyPassword: password,
     });
-    await req.tdb.run('UPDATE {s}.fiscal_emitters SET csd_uploaded=1,csd_updated_at=now(),updated_at=now() WHERE id=$1', [emitterId]);
-    if (emitterId === 1) await req.tdb.run('UPDATE {s}.fiscal_profiles SET csd_uploaded=1,csd_updated_at=now(),updated_at=now() WHERE id=1');
-    res.json({ ok: true });
+    await req.tdb.run('UPDATE {s}.fiscal_emitters SET legal_name=$1,csd_uploaded=1,csd_updated_at=now(),updated_at=now() WHERE id=$2', [certificateIdentity.legalName, emitterId]);
+    if (emitterId === 1) await req.tdb.run('UPDATE {s}.fiscal_profiles SET legal_name=$1,csd_uploaded=1,csd_updated_at=now(),updated_at=now() WHERE id=1', [certificateIdentity.legalName]);
+    res.json({ ok: true, rfc: certificateIdentity.rfc, legalName: certificateIdentity.legalName, validTo: certificateIdentity.validTo });
   } catch (error) {
     if (error.status) return res.status(error.status).json({ error: error.message });
     next(error);
