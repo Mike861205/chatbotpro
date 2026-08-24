@@ -1602,7 +1602,7 @@ async function createPosSale(req, res, next) {
       const row = await tx.get(
         `INSERT INTO {s}.orders
          (customer_id, items, subtotal, total, status, channel, delivery, notes, payment_method, payment_breakdown, cash_received, cash_change, pos_session_id, delivery_fee, service_branch_id, service_branch_name, cogs_total, order_notes, delivery_address, delivery_neighborhood, delivery_reference)
-         VALUES (NULL, $1, $2, $3, 'entregado', 'pos', $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
+         VALUES (NULL, $1, $2, $3, 'confirmado', 'pos', $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
          RETURNING id, invoice_code, invoice_token`,
         [
           JSON.stringify(saleItems),

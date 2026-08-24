@@ -24,6 +24,14 @@ async function decorate(t, o) {
   const customer = o.customer_id
     ? await t.get('SELECT * FROM {s}.customers WHERE id = $1', [o.customer_id])
     : null;
+  let paymentBreakdown = null;
+  try {
+    paymentBreakdown = typeof o.payment_breakdown === 'string'
+      ? JSON.parse(o.payment_breakdown || 'null')
+      : (o.payment_breakdown || null);
+  } catch {
+    paymentBreakdown = null;
+  }
   return {
     ...o,
     delivery_address: String(o.delivery_address || (customer ? decrypt(customer.address_enc) : '') || ''),
@@ -32,6 +40,7 @@ async function decorate(t, o) {
     order_note: operationalOrderNote(o),
     subtotal: Number(o.subtotal || 0),
     total: Number(o.total),
+    payment_breakdown: paymentBreakdown,
     delivery_fee: Number(o.delivery_fee || 0),
     items: JSON.parse(o.items || '[]'),
     customer: customer
@@ -48,7 +57,7 @@ router.get('/', async (req, res, next) => {
   try {
     const { status, limit, todayOnly, startDate, endDate } = req.query;
     let sql = `SELECT id, customer_id, items, subtotal::float AS subtotal, total::float AS total,
-      delivery_fee::float AS delivery_fee, delivery_zone_name, receiving_mode_label, receiving_mode_behavior, delivery_address, delivery_neighborhood, delivery_reference, cancel_note, status, channel, delivery, notes, order_notes, payment_method,
+      delivery_fee::float AS delivery_fee, delivery_zone_name, receiving_mode_label, receiving_mode_behavior, delivery_address, delivery_neighborhood, delivery_reference, cancel_note, status, channel, delivery, notes, order_notes, payment_method, payment_breakdown,
         pickup_branch_name, service_branch_name, customer_location_lat, customer_location_lng, customer_location_text,
         customer_location_resolved,
                       to_char(created_at AT TIME ZONE '${req.timezone}', 'DD Mon YYYY, HH24:MI') AS created_at

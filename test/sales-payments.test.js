@@ -24,3 +24,18 @@ test('la interfaz de ventas renderiza tarjetas de efectivo, tarjeta y transferen
   assert.match(appJs, /sales-pay-chip sales-pay-card/);
   assert.match(appJs, /sales-pay-chip sales-pay-transfer/);
 });
+
+test('las ventas POS nuevas entran a Pedidos con sucursal y tipo de tarjeta', () => {
+  const posJs = fs.readFileSync(path.join(__dirname, '../src/routes/pos.js'), 'utf8');
+  const ordersJs = fs.readFileSync(path.join(__dirname, '../src/routes/orders.js'), 'utf8');
+  const appJs = fs.readFileSync(path.join(__dirname, '../public/js/app.js'), 'utf8');
+
+  assert.match(posJs, /VALUES \(NULL, \$1, \$2, \$3, 'confirmado', 'pos'/);
+  assert.match(posJs, /breakdown\.cardType = cardType/);
+  assert.match(ordersJs, /payment_method, payment_breakdown/);
+  assert.match(ordersJs, /payment_breakdown: paymentBreakdown/);
+  assert.match(appJs, /function orderBranchLabel\(order\)/);
+  assert.match(appJs, /orderPaymentLabel\(o\.payment_method, o\.payment_breakdown\)/);
+  assert.match(appJs, /Tarjeta débito/);
+  assert.match(appJs, /Tarjeta crédito/);
+});

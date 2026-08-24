@@ -2729,12 +2729,31 @@ function custAvatar(name) {
   return `<div class="cav" style="background:linear-gradient(135deg,hsl(${hue} 70% 48%),hsl(${hue} 75% 62%))">${esc(initials)}</div>`;
 }
 
-function orderPaymentLabel(method) {
+function orderPaymentLabel(method, breakdown = null) {
+  const normalizedMethod = String(method || '').toLowerCase();
+  const cardType = String(breakdown?.cardType || breakdown?.card_type || '').toLowerCase();
+  if (normalizedMethod === 'card') {
+    if (cardType === 'debit') return 'Tarjeta débito';
+    if (cardType === 'credit') return 'Tarjeta crédito';
+    return 'Tarjeta';
+  }
+  if (normalizedMethod === 'mixed') {
+    if (Number(breakdown?.card || 0) > 0 && cardType === 'debit') return 'Mixto · tarjeta débito';
+    if (Number(breakdown?.card || 0) > 0 && cardType === 'credit') return 'Mixto · tarjeta crédito';
+    return 'Pago mixto';
+  }
   return {
     cash: 'Efectivo',
     transfer: 'Transferencia',
-    card: 'Tarjeta',
-  }[String(method || '')] || '—';
+  }[normalizedMethod] || '—';
+}
+
+function orderBranchLabel(order) {
+  const serviceBranch = String(order?.service_branch_name || '').trim();
+  const pickupBranch = String(order?.pickup_branch_name || '').trim();
+  const isAddressDelivery = order?.receiving_mode_behavior === 'delivery' || order?.delivery === 'domicilio';
+  if (order?.channel === 'pos') return serviceBranch || pickupBranch || '—';
+  return isAddressDelivery ? (serviceBranch || pickupBranch || '—') : (pickupBranch || serviceBranch || '—');
 }
 
 function buildOrderDeliveryLabel(order) {
@@ -2793,7 +2812,7 @@ function buildComandaHtml(order, areaItems, areaLabel) {
   const customerPhone = esc(order?.customer?.phone || '');
   const delivery = esc(buildOrderDeliveryLabel(order));
   const addressDelivery = order?.receiving_mode_behavior === 'delivery' || order?.delivery === 'domicilio';
-  const branch = esc(addressDelivery ? (order?.service_branch_name || '—') : (order?.pickup_branch_name || '—'));
+  const branch = esc(orderBranchLabel(order));
   const createdAt = esc(order?.created_at || fmtBusinessDateTime());
   const notes = esc(operationalOrderNote(order));
   const deliveryAddress = esc(order?.delivery_address || order?.customer?.address || '');
@@ -2963,7 +2982,7 @@ function ordersTableHTML(orders, editable = true) {
         o.status === 'cancelado' && o.cancel_note
           ? `<div style="font-size:12px;color:#b42318;margin-top:4px"><i class="ph-bold ph-note-pencil"></i> Motivo: ${esc(o.cancel_note)}</div>`
           : '';
-      const paymentText = `<span class="badge b-confirmado"><span style="display:none"></span>${esc(orderPaymentLabel(o.payment_method))}</span>`;
+      const paymentText = `<span class="badge b-confirmado"><span style="display:none"></span>${esc(orderPaymentLabel(o.payment_method, o.payment_breakdown))}</span>`;
       const comandaBtn = editable
         ? `<button type="button" class="btn btn-ghost btn-sm order-print-comanda" data-order-print="${o.id}" title="Imprimir comanda"><i class="ph-bold ph-printer"></i> Comanda</button>`
         : '';
@@ -2972,7 +2991,7 @@ function ordersTableHTML(orders, editable = true) {
         <td><div class="cust">${custAvatar(o.customer?.name)}<div class="cmeta"><b>${esc(o.customer?.name || '—')}</b><span>${esc(o.customer?.phone || '')}</span></div></div></td>
         <td style="max-width:280px">${esc(items)}${noteCallout}</td>
         <td style="white-space:nowrap">${deliveryText}${deliveryFeeText}${locationText}${cancelNoteText}</td>
-        <td style="white-space:nowrap;font-size:13px"><b>${esc(isAddressDelivery ? (o.service_branch_name || '—') : (o.pickup_branch_name || '—'))}</b></td>
+        <td style="white-space:nowrap;font-size:13px"><b>${esc(orderBranchLabel(o))}</b></td>
         <td><b>${fmtMoney(o.total)}</b></td>
         <td>${paymentText}</td>
         <td>${statusCell}</td>
@@ -3241,8 +3260,7 @@ $('#customersClearFilters')?.addEventListener('click', () => {
 
 function formatExportRows(orders) {
   return orders.map((o) => {
-    const isAddressDelivery = o.receiving_mode_behavior === 'delivery' || o.delivery === 'domicilio';
-    const sucursal = isAddressDelivery ? (o.service_branch_name || '—') : (o.pickup_branch_name || '—');
+    const sucursal = orderBranchLabel(o);
     return {
       pedido: `#${o.id}`,
       cliente: o.customer?.name || '—',
@@ -3252,7 +3270,7 @@ function formatExportRows(orders) {
       sucursal: sucursal,
       ubicacion: o.customer_location_text || '',
       motivo_cancelacion: o.cancel_note || '',
-      metodo_pago: orderPaymentLabel(o.payment_method),
+      metodo_pago: orderPaymentLabel(o.payment_method, o.payment_breakdown),
       total: Number(o.total || 0),
       estatus: o.status,
       fecha: o.created_at || '',
