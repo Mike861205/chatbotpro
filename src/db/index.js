@@ -1082,8 +1082,11 @@ async function createTenantSchema(slug) {
   if (config.FACTURAMA_PRODUCTION_RFC) {
     await q(
       `UPDATE "${s}".fiscal_profiles
-          SET api_mode=CASE WHEN environment='production' AND upper(rfc)=$1 THEN 'web' WHEN environment='production' THEN 'multi' ELSE api_mode END;
-       UPDATE "${s}".fiscal_emitters
+          SET api_mode=CASE WHEN environment='production' AND upper(rfc)=$1 THEN 'web' WHEN environment='production' THEN 'multi' ELSE api_mode END`,
+      [config.FACTURAMA_PRODUCTION_RFC]
+    );
+    await q(
+      `UPDATE "${s}".fiscal_emitters
           SET api_mode=CASE WHEN environment='production' AND upper(rfc)=$1 THEN 'web' WHEN environment='production' THEN 'multi' ELSE api_mode END`,
       [config.FACTURAMA_PRODUCTION_RFC]
     );
