@@ -879,6 +879,19 @@ router.get('/clients', requireSuperAdmin, async (req, res, next) => {
     );
 
     const clients = mapBusinessRows(rows.rows);
+    await Promise.all(clients.map(async (client) => {
+      if (!Number(client.invoicing_enabled)) return;
+      const tenantDb = tdb(client.slug);
+      const [wallet, totals] = await Promise.all([
+        tenantDb.get('SELECT unlimited,balance,reserved FROM {s}.stamp_wallet WHERE id=1'),
+        tenantDb.get(`SELECT COUNT(*) FILTER (WHERE movement_type='consumed')::int AS consumed
+                      FROM {s}.stamp_ledger`),
+      ]);
+      const serializedWallet = serializeStampWallet(wallet);
+      client.stamp_available = serializedWallet.available;
+      client.stamp_unlimited = serializedWallet.unlimited;
+      client.stamp_consumed = Number(totals?.consumed || 0);
+    }));
     res.json({ clients, summary: buildClientSummary(clients) });
   } catch (e) {
     next(e);

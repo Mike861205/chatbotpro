@@ -165,7 +165,7 @@ function sandboxIssuerDefaults() {
     legalName: config.FACTURAMA_SANDBOX_NAME,
     fiscalRegime: config.FACTURAMA_SANDBOX_REGIME,
     postalCode: config.FACTURAMA_SANDBOX_POSTAL_CODE,
-    series: 'TEST',
+    series: 'FAC',
     defaultProductCode: '01010101',
     defaultUnitCode: 'E48',
     defaultUnitName: 'Unidad de servicio',

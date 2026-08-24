@@ -1016,15 +1016,15 @@
             <div class="field"><label>Nombre o razón social</label><input id="fiscalLegalName" maxlength="254" required /></div>
             <div class="row-2">
               <div class="field"><label>Código postal fiscal</label><input id="fiscalPostalCode" maxlength="5" inputmode="numeric" required /></div>
-              <div class="field"><label>Serie de facturación</label><input id="fiscalSeries" maxlength="25" required value="A" /></div>
+              <div class="field"><label>Serie de facturación</label><input id="fiscalSeries" maxlength="25" required value="FAC" /></div>
             </div>
             <details class="invoice-advanced"><summary>Valores SAT predeterminados</summary>
               <div class="row-2">
-                <div class="field"><label>Clave producto/servicio</label><input id="fiscalProductCode" maxlength="8" value="01010101" required /></div>
-                <div class="field"><label>Clave unidad</label><input id="fiscalUnitCode" maxlength="3" value="E48" required /></div>
+                <div class="field"><label>Clave producto/servicio</label><select id="fiscalProductCode" required></select></div>
+                <div class="field"><label>Clave unidad</label><select id="fiscalUnitCode" required></select></div>
               </div>
               <div class="row-2">
-                <div class="field"><label>Nombre unidad</label><input id="fiscalUnitName" value="Unidad de servicio" required /></div>
+                <div class="field"><label>Nombre unidad</label><select id="fiscalUnitName" required></select></div>
                 <div class="field"><label>Objeto de impuesto</label><select id="fiscalTaxObject"><option value="02">02 - Sí objeto de impuesto</option><option value="01">01 - No objeto de impuesto</option><option value="03">03 - Sí objeto, no obligado al desglose</option></select></div>
               </div>
               <div class="row-2">
@@ -2789,6 +2789,6 @@
     </div>
   </div>
 
-<script src="/static/js/app.js?v=20260823prodapi"></script>
+<script src="/static/js/app.js?v=20260824satcatalog"></script>
 </body>
 </html>

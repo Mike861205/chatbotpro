@@ -550,9 +550,9 @@ router.get('/me', requireAuth, async (req, res, next) => {
     let phoneCountry = req.tenant.phone_country || '';
     let phoneCallingCode = req.tenant.phone_calling_code || '';
     const isDemoTenant = req.tenant.slug === config.DEMO_TENANT_SLUG;
-    // El módulo y la configuración fiscal están disponibles para toda cuenta México.
-    // La licencia de timbrado se informa por separado en invoicingActivated.
-    let invoicingEligible = isDemoTenant || isMexicoIdentity(req.tenant);
+    // La activación explícita de SuperAdmin también cubre tenants históricos
+    // que todavía no tienen país o lada normalizados.
+    let invoicingEligible = isDemoTenant || Boolean(Number(req.tenant.invoicing_enabled)) || isMexicoIdentity(req.tenant);
     const demoLeadId = Number(req.user.demoLeadId || 0);
     if (!invoicingEligible && Number.isInteger(demoLeadId) && demoLeadId > 0) {
       const lead = await q('SELECT phone_country, phone_calling_code FROM demo_leads WHERE id = $1 LIMIT 1', [demoLeadId]);

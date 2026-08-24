@@ -5037,6 +5037,110 @@ function posCardTypeLabel(breakdown = {}) {
   return type === 'debit' ? 'Débito' : type === 'credit' ? 'Crédito' : '';
 }
 
+const SAT_PRODUCT_SERVICE_CATALOG = [
+  ['01010101', 'No existe en el catálogo'],
+  ['50192701', 'Comidas combinadas frescas'],
+  ['50192703', 'Comidas preparadas para llevar'],
+  ['50201706', 'Café'],
+  ['50202301', 'Agua'],
+  ['50202306', 'Refrescos'],
+  ['90101500', 'Establecimientos para comer y beber'],
+  ['90101501', 'Restaurantes'],
+  ['90101700', 'Servicios de cafetería'],
+  ['43211500', 'Computadoras'],
+  ['44103103', 'Tóner para impresoras'],
+  ['53131600', 'Baño y cuidado corporal'],
+  ['60121000', 'Arte'],
+  ['72101500', 'Servicios de apoyo para la construcción'],
+  ['78101800', 'Transporte de carga por carretera'],
+  ['80141600', 'Actividades de ventas y promoción'],
+  ['81112100', 'Servicios de internet'],
+  ['82101500', 'Publicidad impresa'],
+  ['85121600', 'Servicios médicos'],
+];
+
+const SAT_UNIT_CATALOG = [
+  ['E48', 'Unidad de servicio'],
+  ['H87', 'Pieza'],
+  ['ACT', 'Actividad'],
+  ['C62', 'Uno'],
+  ['EA', 'Elemento'],
+  ['KGM', 'Kilogramo'],
+  ['GRM', 'Gramo'],
+  ['LTR', 'Litro'],
+  ['MTR', 'Metro'],
+  ['MTK', 'Metro cuadrado'],
+  ['HUR', 'Hora'],
+  ['DAY', 'Día'],
+  ['MON', 'Mes'],
+  ['XBX', 'Caja'],
+  ['XPK', 'Paquete'],
+];
+
+function ensureSatCatalogSelect(selector) {
+  let select = $(selector);
+  if (!select && selector === '#fiscalEmitterUnitName') {
+    const unitRow = $('#fiscalEmitterUnitCode')?.closest('.row-2');
+    if (unitRow) {
+      const field = document.createElement('div');
+      field.className = 'field';
+      field.innerHTML = '<label>Nombre unidad</label><select id="fiscalEmitterUnitName" required></select>';
+      unitRow.insertAdjacentElement('afterend', field);
+      select = $('#fiscalEmitterUnitName');
+    }
+  }
+  if (select && select.tagName !== 'SELECT') {
+    const replacement = document.createElement('select');
+    replacement.id = select.id;
+    replacement.required = select.required;
+    select.replaceWith(replacement);
+    select = replacement;
+  }
+  return select;
+}
+
+function setSatCatalogValue(selector, catalog, value, label = '') {
+  const select = ensureSatCatalogSelect(selector);
+  if (!select) return;
+  const selected = String(value || catalog[0][0]);
+  select.innerHTML = catalog.map(([code, name]) => `<option value="${esc(code)}">${esc(code)} · ${esc(name)}</option>`).join('');
+  if (!catalog.some(([code]) => code === selected)) {
+    select.insertAdjacentHTML('beforeend', `<option value="${esc(selected)}">${esc(selected)} · ${esc(label || 'Valor guardado')}</option>`);
+  }
+  select.value = selected;
+}
+
+function setSatUnitValues(codeSelector, nameSelector, code, name) {
+  const selectedCode = String(code || 'E48');
+  const catalogUnit = SAT_UNIT_CATALOG.find(([unitCode]) => unitCode === selectedCode);
+  const selectedName = String(catalogUnit?.[1] || name || 'Unidad de servicio');
+  setSatCatalogValue(codeSelector, SAT_UNIT_CATALOG, selectedCode, selectedName);
+  setSatCatalogValue(nameSelector, SAT_UNIT_CATALOG.map(([unitCode, unitName]) => [unitName, unitCode]), selectedName, selectedCode);
+}
+
+function bindSatUnitCatalog(codeSelector, nameSelector) {
+  $(codeSelector)?.addEventListener('change', (event) => {
+    const unit = SAT_UNIT_CATALOG.find(([code]) => code === event.target.value);
+    if (unit) $(nameSelector).value = unit[1];
+  });
+  $(nameSelector)?.addEventListener('change', (event) => {
+    const unit = SAT_UNIT_CATALOG.find(([, name]) => name === event.target.value);
+    if (unit) $(codeSelector).value = unit[0];
+  });
+}
+
+function preferredInvoiceSeries(value) {
+  const series = String(value || '').trim().toUpperCase();
+  return !series || ['A', 'TEST'].includes(series) ? 'FAC' : series;
+}
+
+setSatCatalogValue('#fiscalProductCode', SAT_PRODUCT_SERVICE_CATALOG, '01010101');
+setSatCatalogValue('#fiscalEmitterProductCode', SAT_PRODUCT_SERVICE_CATALOG, '01010101');
+setSatUnitValues('#fiscalUnitCode', '#fiscalUnitName', 'E48', 'Unidad de servicio');
+setSatUnitValues('#fiscalEmitterUnitCode', '#fiscalEmitterUnitName', 'E48', 'Unidad de servicio');
+bindSatUnitCatalog('#fiscalUnitCode', '#fiscalUnitName');
+bindSatUnitCatalog('#fiscalEmitterUnitCode', '#fiscalEmitterUnitName');
+
 function renderInvoicing() {
   if (!INVOICING_DATA) return;
   const data = INVOICING_DATA;
@@ -5054,10 +5158,9 @@ function renderInvoicing() {
   $('#fiscalLegalName').value = profile.legal_name || data.sandboxDefaults?.legalName || '';
   $('#fiscalRegime').value = profile.fiscal_regime || data.sandboxDefaults?.fiscalRegime || '';
   $('#fiscalPostalCode').value = profile.postal_code || data.sandboxDefaults?.postalCode || '';
-  $('#fiscalSeries').value = profile.series || data.sandboxDefaults?.series || 'A';
-  $('#fiscalProductCode').value = profile.default_product_code || data.sandboxDefaults?.defaultProductCode || '01010101';
-  $('#fiscalUnitCode').value = profile.default_unit_code || data.sandboxDefaults?.defaultUnitCode || 'E48';
-  $('#fiscalUnitName').value = profile.default_unit_name || data.sandboxDefaults?.defaultUnitName || 'Unidad de servicio';
+  $('#fiscalSeries').value = preferredInvoiceSeries(profile.series || data.sandboxDefaults?.series);
+  setSatCatalogValue('#fiscalProductCode', SAT_PRODUCT_SERVICE_CATALOG, profile.default_product_code || data.sandboxDefaults?.defaultProductCode || '01010101');
+  setSatUnitValues('#fiscalUnitCode', '#fiscalUnitName', profile.default_unit_code || data.sandboxDefaults?.defaultUnitCode || 'E48', profile.default_unit_name || data.sandboxDefaults?.defaultUnitName || 'Unidad de servicio');
   $('#fiscalTaxObject').value = profile.default_tax_object || data.sandboxDefaults?.defaultTaxObject || '02';
   $('#fiscalIvaRate').value = String(profile.default_iva_rate ?? data.sandboxDefaults?.defaultIvaRate ?? 0.16);
   $('#fiscalIsrRate').value = String(profile.default_isr_rate ?? data.sandboxDefaults?.defaultIsrRate ?? 0);
@@ -5222,9 +5325,9 @@ function openFiscalEmitterModal(emitter = null) {
   $('#fiscalEmitterRegime').value = emitter?.fiscal_regime || '';
   $('#fiscalEmitterLegalName').value = emitter?.legal_name || '';
   $('#fiscalEmitterPostal').value = emitter?.postal_code || '';
-  $('#fiscalEmitterSeries').value = emitter?.series || 'A';
-  $('#fiscalEmitterProductCode').value = emitter?.default_product_code || '01010101';
-  $('#fiscalEmitterUnitCode').value = emitter?.default_unit_code || 'E48';
+  $('#fiscalEmitterSeries').value = preferredInvoiceSeries(emitter?.series);
+  setSatCatalogValue('#fiscalEmitterProductCode', SAT_PRODUCT_SERVICE_CATALOG, emitter?.default_product_code || '01010101');
+  setSatUnitValues('#fiscalEmitterUnitCode', '#fiscalEmitterUnitName', emitter?.default_unit_code || 'E48', emitter?.default_unit_name || 'Unidad de servicio');
   $('#fiscalEmitterTaxObject').value = emitter?.default_tax_object || '02';
   $('#fiscalEmitterIva').value = String(emitter?.default_iva_rate ?? 0.16);
   $('#fiscalEmitterModal').classList.add('show');
@@ -5250,7 +5353,7 @@ $('#fiscalEmitterForm')?.addEventListener('submit', async (event) => {
     series: $('#fiscalEmitterSeries').value,
     defaultProductCode: $('#fiscalEmitterProductCode').value,
     defaultUnitCode: $('#fiscalEmitterUnitCode').value,
-    defaultUnitName: 'Unidad de servicio',
+    defaultUnitName: $('#fiscalEmitterUnitName').value,
     defaultTaxObject: $('#fiscalEmitterTaxObject').value,
     defaultIvaRate: Number($('#fiscalEmitterIva').value),
     defaultIsrRate: 0,

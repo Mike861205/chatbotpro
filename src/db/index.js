@@ -862,9 +862,9 @@ async function createTenantSchema(slug) {
       legal_name TEXT NOT NULL DEFAULT '',
       fiscal_regime TEXT NOT NULL DEFAULT '',
       postal_code TEXT NOT NULL DEFAULT '',
-      series TEXT NOT NULL DEFAULT 'POS',
+      series TEXT NOT NULL DEFAULT 'FAC',
       next_folio BIGINT NOT NULL DEFAULT 1,
-      default_product_code TEXT NOT NULL DEFAULT '',
+      default_product_code TEXT NOT NULL DEFAULT '01010101',
       default_unit_code TEXT NOT NULL DEFAULT 'E48',
       default_unit_name TEXT NOT NULL DEFAULT 'Unidad de servicio',
       default_tax_object TEXT NOT NULL DEFAULT '02',
@@ -885,6 +885,8 @@ async function createTenantSchema(slug) {
     ALTER TABLE "${s}".fiscal_profiles ADD COLUMN IF NOT EXISTS csd_uploaded INTEGER NOT NULL DEFAULT 0;
     ALTER TABLE "${s}".fiscal_profiles ADD COLUMN IF NOT EXISTS csd_updated_at TIMESTAMPTZ;
     ALTER TABLE "${s}".fiscal_profiles ADD COLUMN IF NOT EXISTS default_isr_rate NUMERIC(8,6) NOT NULL DEFAULT 0;
+    ALTER TABLE "${s}".fiscal_profiles ALTER COLUMN series SET DEFAULT 'FAC';
+    ALTER TABLE "${s}".fiscal_profiles ALTER COLUMN default_product_code SET DEFAULT '01010101';
 
     CREATE TABLE IF NOT EXISTS "${s}".fiscal_emitters (
       id BIGSERIAL PRIMARY KEY,
@@ -897,7 +899,7 @@ async function createTenantSchema(slug) {
       legal_name TEXT NOT NULL,
       fiscal_regime TEXT NOT NULL,
       postal_code TEXT NOT NULL,
-      series TEXT NOT NULL DEFAULT 'A',
+      series TEXT NOT NULL DEFAULT 'FAC',
       next_folio BIGINT NOT NULL DEFAULT 1,
       default_product_code TEXT NOT NULL DEFAULT '01010101',
       default_unit_code TEXT NOT NULL DEFAULT 'E48',
@@ -913,6 +915,7 @@ async function createTenantSchema(slug) {
       created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
+    ALTER TABLE "${s}".fiscal_emitters ALTER COLUMN series SET DEFAULT 'FAC';
     ALTER TABLE "${s}".fiscal_emitters ADD COLUMN IF NOT EXISTS api_mode TEXT NOT NULL DEFAULT 'multi';
     CREATE UNIQUE INDEX IF NOT EXISTS idx_${s}_fiscal_emitters_rfc ON "${s}".fiscal_emitters(rfc);
     INSERT INTO "${s}".fiscal_emitters

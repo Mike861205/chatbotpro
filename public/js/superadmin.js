@@ -586,7 +586,7 @@ function renderStampControl() {
   $('#saStampHistory').innerHTML = (data.movements || []).length
     ? data.movements.map((movement) => {
       const quantity = Number(movement.quantity || 0);
-      return `<div class="sa-stamp-history-row"><small>${esc(formatDateTime(movement.created_at))}</small><div><b>${esc(SA_STAMP_MOVEMENT_LABELS[movement.movement_type] || movement.movement_type)}</b><small>${esc(movement.detail || '')}${movement.actor ? ` · ${esc(movement.actor)}` : ''}</small></div><strong class="${quantity > 0 ? 'positive' : quantity < 0 ? 'negative' : ''}">${quantity > 0 ? '+' : ''}${quantity}</strong><small>Saldo ${Number(movement.balance_after ?? wallet.balance ?? 0)}</small></div>`;
+      return `<div class="sa-stamp-history-row"><small>${esc(fmtDateTime(movement.created_at))}</small><div><b>${esc(SA_STAMP_MOVEMENT_LABELS[movement.movement_type] || movement.movement_type)}</b><small>${esc(movement.detail || '')}${movement.actor ? ` · ${esc(movement.actor)}` : ''}</small></div><strong class="${quantity > 0 ? 'positive' : quantity < 0 ? 'negative' : ''}">${quantity > 0 ? '+' : ''}${quantity}</strong><small>Saldo ${Number(movement.balance_after ?? wallet.balance ?? 0)}</small></div>`;
     }).join('')
     : '<div class="empty-mini">Aún no hay movimientos de timbres.</div>';
 }
@@ -1067,7 +1067,7 @@ function renderClientsTable() {
   }
 
   table.innerHTML = `<div class="table-wrap"><table><thead><tr>
-    <th>Cliente</th><th>Contacto</th><th>Cliente desde</th><th>Estado</th><th>Plan / cupos</th><th>Último pago</th><th>Vencimiento</th><th>Ingresos</th><th>Acciones</th>
+    <th>Cliente</th><th>Contacto</th><th>Cliente desde</th><th>Estado</th><th>Plan / cupos</th><th>Timbres</th><th>Último pago</th><th>Vencimiento</th><th>Ingresos</th><th>Acciones</th>
   </tr></thead><tbody>${filtered.map((client) => {
     const waUrl = client.phone_valid && client.phone_digits ? `https://wa.me/${client.phone_digits}` : '';
     return `<tr>
@@ -1076,6 +1076,7 @@ function renderClientsTable() {
       <td>${fmtDate(client.customer_since)}</td>
       <td>${statusChip('billing', client.billing_status)}<div class="meta">${Number(client.mora_days || 0) > 0 ? `${Number(client.mora_days)} días de mora` : 'Cuenta ' + (client.account_status === 'active' ? 'activa' : 'inactiva')}</div></td>
       <td><b>${esc(client.plan_name || 'starter')}</b><div class="meta">${Number(client.license_count || 1)} licencia${Number(client.license_count || 1) === 1 ? '' : 's'} · Hasta ${Number(client.branch_limit || 2)} sucursales</div></td>
+      <td>${Number(client.invoicing_enabled) ? `<b>${client.stamp_unlimited ? 'Ilimitados' : Number(client.stamp_available || 0)} disponibles</b><div class="meta">${Number(client.stamp_consumed || 0)} gastados</div>` : '<span class="meta">No activa</span>'}</td>
       <td>${fmtMoney(client.last_payment_amount)}<div class="meta">${fmtDate(client.last_payment_at)} · ${esc(client.last_payment_method || '—')}</div></td>
       <td>${fmtDate(client.billing_due_date)}</td>
       <td><b>${fmtMoney(client.total_paid)}</b><div class="meta">${Number(client.payment_count || 0)} pago${Number(client.payment_count || 0) === 1 ? '' : 's'}</div></td>
@@ -1086,7 +1087,7 @@ function renderClientsTable() {
         <button type="button" class="btn btn-ghost" data-sa-payments="${client.id}"><i class="ph-bold ph-receipt"></i> Historial</button>
         <button type="button" class="btn btn-ghost" data-sa-licenses="${client.id}"><i class="ph-bold ph-key"></i> Licencias</button>
         <button type="button" class="btn btn-ghost" data-sa-branches="${client.id}"><i class="ph-bold ph-storefront"></i> Sucursales</button>
-        ${(client.phone_country === 'MX' || String(client.phone_calling_code || '').replace('+', '') === '52') ? `<button type="button" class="btn btn-ghost" data-sa-stamps="${client.id}"><i class="ph-bold ph-stamp"></i> ${Number(client.invoicing_enabled) ? 'Facturación activa' : 'Activar facturación'}</button>` : ''}
+        ${(Number(client.invoicing_enabled) || client.phone_country === 'MX' || String(client.phone_calling_code || '').replace('+', '') === '52') ? `<button type="button" class="btn btn-ghost" data-sa-stamps="${client.id}"><i class="ph-bold ph-stamp"></i> ${Number(client.invoicing_enabled) ? 'Facturación activa' : 'Activar facturación'}</button>` : ''}
         ${waUrl ? `<a class="btn btn-ghost" href="${waUrl}" target="_blank" rel="noopener noreferrer"><i class="ph-bold ph-whatsapp-logo" style="color:#22c55e"></i> WhatsApp</a>` : '<button type="button" class="btn btn-ghost" disabled style="opacity:.3"><i class="ph-bold ph-whatsapp-logo"></i> WhatsApp</button>'}
         <button type="button" class="btn ${(client.account_status === 'active' && client.billing_status !== 'suspended') ? 'btn-danger' : 'btn-primary'}" data-sa-suspend="${client.id}">
           <i class="ph-bold ${(client.account_status === 'active' && client.billing_status !== 'suspended') ? 'ph-pause-circle' : 'ph-play-circle'}"></i>

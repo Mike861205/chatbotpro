@@ -29,7 +29,7 @@ test('habilita facturación sólo para identidad México o lada +52', () => {
 test('separa el acceso al módulo México de la autorización para consumir timbres', () => {
   const auth = read('src/routes/auth.js');
   const routes = read('src/routes/invoicing.js');
-  assert.match(auth, /invoicingEligible = isDemoTenant \|\| isMexicoIdentity\(req\.tenant\)/);
+  assert.match(auth, /invoicingEligible = isDemoTenant \|\| Boolean\(Number\(req\.tenant\.invoicing_enabled\)\) \|\| isMexicoIdentity\(req\.tenant\)/);
   assert.match(auth, /invoicingActivated: Boolean\(Number\(req\.tenant\.invoicing_enabled\)\)/);
   assert.match(routes, /function requireInvoicingActivated/);
   assert.match(routes, /post\('\/sales\/:id\/issue', requireInvoicingActivated/);
@@ -162,6 +162,15 @@ test('los datos SAT por producto viven en Productos y Facturación conserva sól
   assert.doesNotMatch(app, /id="fiscalProductsTable"/);
   assert.match(client, /fd\.append\('satProductCode'/);
   assert.match(productsRoute, /isr_rate::float AS isr_rate/);
+  assert.match(app, /<select id="fiscalProductCode" required>/);
+  assert.match(app, /<select id="fiscalUnitCode" required>/);
+  assert.match(app, /<select id="fiscalUnitName" required>/);
+  assert.match(client, /SAT_PRODUCT_SERVICE_CATALOG/);
+  assert.match(client, /SAT_UNIT_CATALOG/);
+  assert.match(client, /bindSatUnitCatalog\('#fiscalUnitCode', '#fiscalUnitName'\)/);
+  assert.match(client, /defaultUnitName: \$\('#fiscalEmitterUnitName'\)\.value/);
+  assert.match(client, /\['A', 'TEST'\]\.includes\(series\) \? 'FAC'/);
+  assert.match(read('src/routes/invoicing.js'), /series: 'FAC'/);
 });
 
 test('el POS muestra errores de timbrado dentro del modal y prepara público general en sandbox', () => {
@@ -310,6 +319,12 @@ test('la facturación admite varios emisores por sucursal y controla el saldo de
   assert.match(client, /data-branch-emitter/);
   assert.match(superadminClient, /data-sa-stamps/);
   assert.match(superadminClient, /toggleTenantInvoicing/);
+  assert.match(superadminClient, /fmtDateTime\(movement\.created_at\)/);
+  assert.doesNotMatch(superadminClient, /formatDateTime\(/);
+  assert.match(superadmin, /client\.stamp_available = serializedWallet\.available/);
+  assert.match(superadmin, /client\.stamp_consumed = Number\(totals\?\.consumed \|\| 0\)/);
+  assert.match(superadminClient, /<th>Timbres<\/th>/);
+  assert.match(superadminClient, /gastados/);
 });
 
 test('ChatBotPro administra el expediente Multiemisor con filtros, paginación y cancelaciones persistentes', () => {
