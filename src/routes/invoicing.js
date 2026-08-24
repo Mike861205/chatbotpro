@@ -167,6 +167,7 @@ function globalInvoiceSummary(row) {
     businessDate: row.business_date || '',
     branchId: row.service_branch_id ? Number(row.service_branch_id) : null,
     orderCount: Number(row.order_count || 0),
+    conceptMode: row.concept_mode || 'detailed',
     total: Number(row.total || 0),
     paymentForm: row.payment_form || '',
     error: row.error_message || '',
@@ -227,10 +228,11 @@ async function sendInvoiceEmail({ tenant, tenantDb, invoiceId, emailInput, actor
   }
 }
 
-async function issueGlobalInvoice({ tenantDb, orderIds, actor = '', allowedBranchId = null }) {
+async function issueGlobalInvoice({ tenantDb, orderIds, conceptMode = 'total', actor = '', allowedBranchId = null }) {
   const ids = [...new Set((orderIds || []).map(Number).filter((id) => Number.isInteger(id) && id > 0))];
   if (!ids.length) throw Object.assign(new Error('Selecciona al menos una venta sin facturar'), { status: 400 });
   if (ids.length > 500) throw Object.assign(new Error('Puedes incluir hasta 500 tickets por factura global'), { status: 400 });
+  const normalizedConceptMode = conceptMode === 'detailed' ? 'detailed' : 'total';
   const profile = await getProfile(tenantDb);
   const readinessError = profileReadinessError(profile);
   if (readinessError) throw Object.assign(new Error(readinessError), { status: 409 });
@@ -304,7 +306,7 @@ async function issueGlobalInvoice({ tenantDb, orderIds, actor = '', allowedBranc
     );
     if (global) throw Object.assign(new Error(`El ticket #${global.order_id} ya pertenece a una factura global`), { status: 409 });
 
-    const items = buildGlobalFacturamaItems(sales, productsById, profile);
+    const items = buildGlobalFacturamaItems(sales, productsById, profile, { conceptMode: normalizedConceptMode });
     const largestSale = sales.reduce((largest, sale) => Number(sale.total) > Number(largest.total) ? sale : largest, sales[0]);
     const paymentForm = paymentFormFromSale(largestSale, profile.default_card_payment_form);
     const total = Math.round(sales.reduce((sum, sale) => sum + Number(sale.total || 0), 0) * 100) / 100;
@@ -313,15 +315,15 @@ async function issueGlobalInvoice({ tenantDb, orderIds, actor = '', allowedBranc
     await tx.run('UPDATE {s}.fiscal_profiles SET next_folio=next_folio+1,updated_at=now() WHERE id=1');
     const snapshot = {
       issuer: { rfc: profile.rfc, legalName: profile.legal_name, fiscalRegime: profile.fiscal_regime, postalCode: expeditionPlace },
-      receiver, paymentForm, periodicity: '01', businessDate: sales[0].business_date,
+      receiver, paymentForm, periodicity: '01', conceptMode: normalizedConceptMode, businessDate: sales[0].business_date,
       orderIds: sales.map((sale) => Number(sale.id)), items, total,
     };
     const row = await tx.get(
       `INSERT INTO {s}.global_invoices
-       (request_key,environment,series,folio,status,service_branch_id,business_date,periodicity,order_count,total,payment_form,receiver_data_enc,fiscal_snapshot_enc,issued_by)
-       VALUES ($1,$2,$3,$4,'pending',$5,$6,'01',$7,$8,$9,$10,$11,$12) RETURNING *`,
+       (request_key,environment,series,folio,status,service_branch_id,business_date,periodicity,concept_mode,order_count,total,payment_form,receiver_data_enc,fiscal_snapshot_enc,issued_by)
+       VALUES ($1,$2,$3,$4,'pending',$5,$6,'01',$7,$8,$9,$10,$11,$12,$13) RETURNING *`,
       [createRequestKey(), profile.environment, invoiceSeries, folio, branchId || null, sales[0].business_date,
-        sales.length, total, paymentForm, encrypt(JSON.stringify(receiver)), encrypt(JSON.stringify(snapshot)), actor]
+        normalizedConceptMode, sales.length, total, paymentForm, encrypt(JSON.stringify(receiver)), encrypt(JSON.stringify(snapshot)), actor]
     );
     for (const sale of sales) {
       await tx.run(
@@ -890,6 +892,7 @@ router.post('/global/issue', async (req, res, next) => {
     const result = await issueGlobalInvoice({
       tenantDb: req.tdb,
       orderIds: req.body?.orderIds,
+      conceptMode: req.body?.conceptMode,
       actor: req.user.username,
       allowedBranchId: req.user.role === 'cashier' ? Number(req.user.branchId || 0) : null,
     });

@@ -107,14 +107,19 @@ test('la factura global conserva cada ticket y cuadra el total seleccionado', ()
     default_product_code: '01010101', default_unit_code: 'E48', default_unit_name: 'Unidad de servicio',
     default_tax_object: '02', default_iva_rate: 0.16, default_isr_rate: 0,
   };
-  const concepts = buildGlobalFacturamaItems([
+  const sales = [
     { id: 67, items: [{ name: 'Aros', qty: 1, price: 80 }], delivery_fee: 0, total: 80 },
     { id: 68, items: [{ name: 'Combo', qty: 1, price: 199 }], delivery_fee: 0, total: 199 },
-  ], new Map(), profile);
+  ];
+  const concepts = buildGlobalFacturamaItems(sales, new Map(), profile, { conceptMode: 'detailed' });
   assert.equal(concepts.length, 2);
   assert.match(concepts[0].Description, /^Ticket #67/);
   assert.match(concepts[1].Description, /^Ticket #68/);
   assert.equal(concepts.reduce((sum, item) => sum + item.Total, 0), 279);
+  const totalConcept = buildGlobalFacturamaItems(sales, new Map(), profile, { conceptMode: 'total' });
+  assert.equal(totalConcept.length, 1);
+  assert.equal(totalConcept[0].Description, 'Consumo');
+  assert.equal(totalConcept[0].Total, 279);
 });
 
 test('calcula IVA e ISR retenido por producto conservando el total cobrado', () => {
@@ -218,6 +223,7 @@ test('la factura global enlaza tickets, bloquea duplicados y se opera desde el h
   const client = read('public/js/app.js');
   assert.match(database, /CREATE TABLE IF NOT EXISTS "\$\{s\}"\.global_invoices/);
   assert.match(database, /global_invoice_orders_live/);
+  assert.match(database, /concept_mode TEXT NOT NULL DEFAULT 'detailed'/);
   assert.match(invoicing, /router\.post\('\/global\/issue'/);
   assert.match(invoicing, /router\.get\('\/global\/eligible'/);
   assert.match(invoicing, /buildGlobalFacturamaItems/);
@@ -226,8 +232,12 @@ test('la factura global enlaza tickets, bloquea duplicados y se opera desde el h
   assert.match(invoicing, /req\.user\.role === 'cashier'/);
   assert.match(pos, /global_invoice_status/);
   assert.match(app, /id="posGlobalIssue"/);
+  assert.match(app, /id="posGlobalConceptMode"/);
+  assert.match(app, /id="posInvoiceClose"/);
   assert.match(client, /POS_GLOBAL_INVOICE_SELECTION/);
   assert.match(client, /data-global-ticket/);
+  assert.match(client, /data-pos-invoice-return/);
+  assert.match(client, /conceptMode: selectedConceptMode/);
 });
 
 test('el portal público es responsivo y presenta la identidad completa del tenant', () => {

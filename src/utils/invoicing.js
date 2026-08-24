@@ -234,7 +234,13 @@ function buildFacturamaItems(sale, productsById, profile, options = {}) {
   return items;
 }
 
-function buildGlobalFacturamaItems(sales, productsById, profile) {
+function buildGlobalFacturamaItems(sales, productsById, profile, options = {}) {
+  const conceptMode = options.conceptMode === 'total' ? 'total' : 'detailed';
+  const expected = roundMoney((sales || []).reduce((sum, sale) => sum + Number(sale.total || 0), 0));
+  if (conceptMode === 'total') {
+    if (!(sales || []).length) throw Object.assign(new Error('No hay ventas elegibles para la factura global'), { status: 400 });
+    return buildFacturamaItems({ items: [], delivery_fee: 0, total: expected }, productsById, profile, { conceptMode: 'total' });
+  }
   const concepts = [];
   for (const sale of sales || []) {
     const ticketItems = buildFacturamaItems(sale, productsById, profile, { conceptMode: 'detailed' });
@@ -246,7 +252,6 @@ function buildGlobalFacturamaItems(sales, productsById, profile) {
     }
   }
   if (!concepts.length) throw Object.assign(new Error('No hay ventas elegibles para la factura global'), { status: 400 });
-  const expected = roundMoney((sales || []).reduce((sum, sale) => sum + Number(sale.total || 0), 0));
   const calculated = roundMoney(concepts.reduce((sum, item) => sum + Number(item.Total || 0), 0));
   if (Math.abs(calculated - expected) > 0.01) {
     throw Object.assign(new Error('El total fiscal global no coincide con las ventas seleccionadas'), { status: 409 });

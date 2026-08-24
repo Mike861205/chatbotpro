@@ -5133,6 +5133,7 @@ $('#posInvoiceRfc')?.addEventListener('input', (event) => {
 });
 $('#posInvoiceGeneric')?.addEventListener('click', setPosGenericReceiver);
 $('#posInvoiceCancel')?.addEventListener('click', () => $('#posInvoiceModal').classList.remove('show'));
+$('#posInvoiceClose')?.addEventListener('click', () => $('#posInvoiceModal').classList.remove('show'));
 $('#posInvoiceForm')?.addEventListener('submit', async (event) => {
   event.preventDefault();
   const form = event.currentTarget;
@@ -5147,7 +5148,12 @@ $('#posInvoiceForm')?.addEventListener('submit', async (event) => {
     const invoice = data.invoice;
     form.hidden = true; const result = $('#posInvoiceResult'); result.hidden = false;
     const receiverEmail = String($('#posInvoiceEmail').value || '').trim();
-    result.innerHTML = `<div class="invoice-pos-success"><i class="ph-bold ph-check-circle"></i><h3>CFDI timbrado</h3><p>${esc(invoice.uuid || `${invoice.series}-${invoice.folio}`)}</p><div class="invoice-download-actions"><a class="btn btn-primary" target="_blank" href="/api/invoicing/invoices/${invoice.id}/pdf">Descargar PDF</a><a class="btn btn-ghost" target="_blank" href="/api/invoicing/invoices/${invoice.id}/xml">Descargar XML</a></div><form class="invoice-email-card" data-pos-invoice-email-form><div><i class="ph-bold ph-envelope-simple"></i><span><b>Enviar al cliente</b><small>Facturama enviará el PDF y XML a su correo.</small></span></div><div class="invoice-email-row"><input type="email" required maxlength="254" autocomplete="email" inputmode="email" placeholder="cliente@correo.com" value="${esc(receiverEmail)}"><button class="btn btn-primary" type="submit"><i class="ph-bold ph-paper-plane-tilt"></i> Enviar factura</button></div><p class="invoice-email-status" role="status" aria-live="polite" hidden></p></form></div>`;
+    result.innerHTML = `<div class="invoice-pos-success"><i class="ph-bold ph-check-circle"></i><h3>CFDI timbrado</h3><p>${esc(invoice.uuid || `${invoice.series}-${invoice.folio}`)}</p><div class="invoice-download-actions"><a class="btn btn-primary" target="_blank" href="/api/invoicing/invoices/${invoice.id}/pdf">Descargar PDF</a><a class="btn btn-ghost" target="_blank" href="/api/invoicing/invoices/${invoice.id}/xml">Descargar XML</a></div><form class="invoice-email-card" data-pos-invoice-email-form><div><i class="ph-bold ph-envelope-simple"></i><span><b>Enviar al cliente</b><small>Facturama enviará el PDF y XML a su correo.</small></span></div><div class="invoice-email-row"><input type="email" required maxlength="254" autocomplete="email" inputmode="email" placeholder="cliente@correo.com" value="${esc(receiverEmail)}"><button class="btn btn-primary" type="submit"><i class="ph-bold ph-paper-plane-tilt"></i> Enviar factura</button></div><p class="invoice-email-status" role="status" aria-live="polite" hidden></p></form><button class="btn btn-ghost invoice-pos-return" type="button" data-pos-invoice-return><i class="ph-bold ph-arrow-left"></i> Cerrar y volver al punto de venta</button></div>`;
+    result.querySelector('[data-pos-invoice-return]')?.addEventListener('click', async () => {
+      $('#posInvoiceModal').classList.remove('show');
+      $('#posSalesHistoryModal').classList.remove('show');
+      try { await loadPos(); } catch (refreshError) { toast(refreshError.message, true); }
+    });
     const emailForm = result.querySelector('[data-pos-invoice-email-form]');
     emailForm.addEventListener('submit', async (emailEvent) => {
       emailEvent.preventDefault();
@@ -5937,9 +5943,11 @@ $('#posGlobalIssue')?.addEventListener('click', async () => {
   const rows = [...POS_GLOBAL_INVOICE_SELECTION.values()];
   if (!rows.length) return;
   const total = rows.reduce((sum, row) => sum + Number(row.total || 0), 0);
+  const selectedConceptMode = $('#posGlobalConceptMode')?.value === 'detailed' ? 'detailed' : 'total';
+  const selectedConceptLabel = selectedConceptMode === 'detailed' ? 'productos desglosados' : 'un solo concepto de Consumo';
   const accepted = await askConfirm(
     'Timbrar factura global',
-    `Se timbrará un CFDI global por ${rows.length} tickets y un total de ${fmtMoney(total)}. Los tickets quedarán bloqueados para facturación individual.`,
+    `Se timbrará un CFDI global por ${rows.length} tickets y un total de ${fmtMoney(total)}, usando ${selectedConceptLabel}. Los tickets quedarán bloqueados para facturación individual.`,
     { yesLabel: '<i class="ph-bold ph-seal-check"></i> Sí, timbrar global', noLabel: 'Revisar selección' }
   );
   if (!accepted) return;
@@ -5950,12 +5958,13 @@ $('#posGlobalIssue')?.addEventListener('click', async () => {
   try {
     const data = await api('/api/invoicing/global/issue', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ orderIds: rows.map((row) => Number(row.id)) }),
+      body: JSON.stringify({ orderIds: rows.map((row) => Number(row.id)), conceptMode: selectedConceptMode }),
     });
     const invoice = data.invoice;
     const message = $('#posGlobalInvoiceMessage');
     message.className = 'pos-global-invoice-message success';
-    message.innerHTML = `<b>Factura global timbrada</b><span>${esc(invoice.uuid || `${invoice.series}-${invoice.folio}`)} · ${invoice.orderCount} tickets · ${fmtMoney(invoice.total)}</span><div><a class="btn btn-primary" target="_blank" href="/api/invoicing/global-invoices/${invoice.id}/pdf">Descargar PDF</a><a class="btn btn-ghost" target="_blank" href="/api/invoicing/global-invoices/${invoice.id}/xml">Descargar XML</a></div>`;
+    const conceptLabel = invoice.conceptMode === 'detailed' ? 'Productos desglosados' : 'Consumo total';
+    message.innerHTML = `<b>Factura global timbrada</b><span>${esc(invoice.uuid || `${invoice.series}-${invoice.folio}`)} · ${invoice.orderCount} tickets · ${fmtMoney(invoice.total)} · ${conceptLabel}</span><div><a class="btn btn-primary" target="_blank" href="/api/invoicing/global-invoices/${invoice.id}/pdf">Descargar PDF</a><a class="btn btn-ghost" target="_blank" href="/api/invoicing/global-invoices/${invoice.id}/xml">Descargar XML</a></div>`;
     message.hidden = false;
     POS_GLOBAL_INVOICE_SELECTION.clear();
     await loadPosSalesHistory(POS_SALES_PAGE);

@@ -926,6 +926,7 @@ async function createTenantSchema(slug) {
       service_branch_id INTEGER,
       business_date DATE NOT NULL,
       periodicity TEXT NOT NULL DEFAULT '01',
+      concept_mode TEXT NOT NULL DEFAULT 'detailed',
       order_count INTEGER NOT NULL DEFAULT 0,
       total NUMERIC(12,2) NOT NULL DEFAULT 0,
       payment_form TEXT NOT NULL DEFAULT '01',
@@ -943,6 +944,7 @@ async function createTenantSchema(slug) {
     );
     CREATE UNIQUE INDEX IF NOT EXISTS idx_${s}_global_invoices_uuid ON "${s}".global_invoices(uuid) WHERE uuid IS NOT NULL;
     CREATE INDEX IF NOT EXISTS idx_${s}_global_invoices_date ON "${s}".global_invoices(business_date DESC, service_branch_id, id DESC);
+    ALTER TABLE "${s}".global_invoices ADD COLUMN IF NOT EXISTS concept_mode TEXT NOT NULL DEFAULT 'detailed';
 
     CREATE TABLE IF NOT EXISTS "${s}".global_invoice_orders (
       global_invoice_id BIGINT NOT NULL REFERENCES "${s}".global_invoices(id) ON DELETE CASCADE,
