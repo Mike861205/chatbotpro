@@ -146,7 +146,7 @@ function paymentFormFromSale(sale, defaultCard = '04', requested = '') {
       : (PAYMENT_FORMS.has(defaultCard) ? defaultCard : '04');
   if (method === 'cash') return '01';
   if (method === 'transfer') return '03';
-  if (method === 'card') return cardPaymentForm;
+  if (method === 'card') return ['04', '28'].includes(String(requested || '')) ? String(requested) : cardPaymentForm;
   const options = [
     ['01', Number(breakdown.cash || 0)],
     [cardPaymentForm, Number(breakdown.card || 0)],

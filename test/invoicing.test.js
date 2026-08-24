@@ -175,6 +175,7 @@ test('mapea el medio de pago POS al catálogo SAT', () => {
   assert.equal(paymentFormFromSale({ payment_method: 'card' }, '04'), '04');
   assert.equal(paymentFormFromSale({ payment_method: 'card', payment_breakdown: { cardType: 'debit' } }), '28');
   assert.equal(paymentFormFromSale({ payment_method: 'card', payment_breakdown: { cardType: 'credit' } }), '04');
+  assert.equal(paymentFormFromSale({ payment_method: 'card' }, '04', '28'), '28');
   assert.equal(paymentFormFromSale({ payment_method: 'transfer' }), '03');
   assert.equal(paymentFormFromSale({ payment_method: 'mixed', payment_breakdown: { cash: 20, card: 80 } }), '04');
   assert.equal(paymentFormFromSales([
@@ -187,8 +188,18 @@ test('mapea el medio de pago POS al catálogo SAT', () => {
   const pos = read('src/routes/pos.js');
   assert.match(app, /id="fiscalEmitterRegime" required><option/);
   assert.match(app, /id="posPaymentEditCardType"/);
+  assert.match(app, /id="posInvoicePaymentForm"/);
+  assert.match(app, /value="D10"/);
+  assert.match(app, /value="CN01"/);
   assert.match(client, /id="posCardType"/);
+  assert.match(client, /paymentForm: \$\('#posInvoicePaymentWrap'\)/);
   assert.match(pos, /Selecciona si la tarjeta es de débito o crédito/);
+  const portalHtml = read('public/invoice.html');
+  const portalClient = read('public/js/invoice.js');
+  assert.match(portalHtml, /id="receiverPaymentForm"/);
+  assert.match(portalHtml, /value="I08"/);
+  assert.match(portalClient, /function configureTicketPayment/);
+  assert.match(read('src/routes/invoicing.js'), /Selecciona si el ticket se pagó con tarjeta de débito o crédito/);
 });
 
 test('la integración está montada, aislada por México y expone POS y portal público', () => {

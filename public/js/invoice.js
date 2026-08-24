@@ -206,6 +206,16 @@
     summary.append(items);
   }
 
+  function configureTicketPayment(ticket = {}) {
+    const row = $('#receiverPaymentFormRow');
+    const select = $('#receiverPaymentForm');
+    const cardPayment = String(ticket.paymentMethod || '').toLowerCase() === 'card';
+    const cardType = String(ticket.paymentBreakdown?.cardType || ticket.paymentBreakdown?.card_type || '').toLowerCase();
+    row.hidden = !cardPayment;
+    select.required = cardPayment;
+    select.value = cardType === 'debit' ? '28' : cardType === 'credit' ? '04' : '';
+  }
+
   function invoiceDownloads(invoice, token) {
     currentInvoice = invoice;
     const suffix = `?code=${encodeURIComponent(token)}`;
@@ -240,6 +250,7 @@
     if (data.invoice?.status === 'cancel_pending') throw new Error('La factura de este ticket tiene una cancelación en proceso. Comunícate con el negocio.');
     if (data.invoice?.status === 'canceled') throw new Error('La factura asociada a este ticket fue cancelada. Comunícate con el negocio.');
     renderTicketSummary(data.ticket);
+    configureTicketPayment(data.ticket);
     applyGenericReceiverDefaults();
     showSection('receiver');
     $('#receiverStep').scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -299,6 +310,7 @@
           ticket: currentTicket.ticket,
           code: currentTicket.token,
           conceptMode: form.elements.conceptMode.value,
+          paymentForm: $('#receiverPaymentFormRow').hidden ? '' : $('#receiverPaymentForm').value,
           receiver: {
             rfc: $('#receiverRfc').value.trim().toUpperCase(),
             name: $('#receiverName').value.trim(),
@@ -333,6 +345,7 @@
     currentInvoice = null;
     $('#lookupForm').reset();
     $('#invoiceForm').reset();
+    configureTicketPayment();
     message('');
     showSection('lookup');
     history.replaceState({}, '', location.pathname);

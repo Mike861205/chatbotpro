@@ -531,6 +531,11 @@ async function issueSaleInvoice({ tenant, tenantDb, orderId, receiverInput, requ
     invoiceSeries = issuanceContext.series;
   }
   const receiver = validateReceiver(receiverInput, { expeditionPostalCode: expeditionPlace });
+  const salePaymentBreakdown = parseJson(sale.payment_breakdown, {});
+  const storedCardType = String(salePaymentBreakdown.cardType || salePaymentBreakdown.card_type || '').toLowerCase();
+  if (sale.payment_method === 'card' && !['debit','credit'].includes(storedCardType) && !['04','28'].includes(String(requestedPaymentForm || ''))) {
+    throw Object.assign(new Error('Selecciona si el ticket se pagó con tarjeta de débito o crédito'), { status: 400 });
+  }
   const paymentForm = paymentFormFromSale(sale, profile.default_card_payment_form, requestedPaymentForm);
 
   const allocated = await tenantDb.tx(async (tx) => {
@@ -680,7 +685,7 @@ router.post('/public/:slug/lookup', publicLimiter, async (req, res, next) => {
     }
     const tenantDb = tdb(tenant.slug);
     const sale = await tenantDb.get(
-      `SELECT id, items, total::float AS total, status, invoice_token, invoice_code, service_branch_id,
+      `SELECT id, items, total::float AS total, status, invoice_token, invoice_code, service_branch_id,payment_method,payment_breakdown,
               to_char(created_at, 'YYYY-MM-DD HH24:MI') AS created_at
        FROM {s}.orders WHERE id=$1 AND channel='pos' LIMIT 1`,
       [ticket]
@@ -705,7 +710,12 @@ router.post('/public/:slug/lookup', publicLimiter, async (req, res, next) => {
       try { expeditionPostalCode = await facturama.webExpeditionPostalCode(expeditionPostalCode); } catch {}
     }
     res.json({
-      ticket: { id: sale.id, items: parseJson(sale.items, []).map((item) => ({ name: item.name, qty: item.qty, price: item.price })), total: sale.total, createdAt: sale.created_at, expeditionPostalCode },
+      ticket: {
+        id: sale.id, items: parseJson(sale.items, []).map((item) => ({ name: item.name, qty: item.qty, price: item.price })),
+        total: sale.total, createdAt: sale.created_at, expeditionPostalCode,
+        paymentMethod: sale.payment_method || '', paymentBreakdown: parseJson(sale.payment_breakdown, {}),
+        paymentForm: paymentFormFromSale(sale, profile.default_card_payment_form),
+      },
       issuer: profileCompleteness(profile) ? { legalName: profile.legal_name, rfc: profile.rfc, postalCode: profile.postal_code } : null,
       invoice: globalInvoice ? {
         id: Number(globalInvoice.id), uuid: globalInvoice.uuid || '', series: globalInvoice.series || '', folio: globalInvoice.folio || '',

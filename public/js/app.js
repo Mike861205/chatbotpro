@@ -5285,6 +5285,12 @@ async function openPosInvoiceModal(saleId) {
   }
   $('#posInvoiceSaleId').value = saleId;
   $('#posInvoiceTicketLabel').textContent = `#${saleId}`;
+  const sale = POS_SALES_HISTORY_CACHE.find((row) => Number(row.id) === Number(saleId));
+  const cardPayment = sale?.payment_method === 'card';
+  const cardType = String(sale?.payment_breakdown?.cardType || sale?.payment_breakdown?.card_type || '').toLowerCase();
+  $('#posInvoicePaymentWrap').hidden = !cardPayment;
+  $('#posInvoicePaymentForm').required = cardPayment;
+  $('#posInvoicePaymentForm').value = cardType === 'debit' ? '28' : cardType === 'credit' ? '04' : '';
   const environment = String(INVOICING_DATA?.provider?.environment || 'sandbox').toLowerCase();
   const environmentBadge = $('#posInvoiceEnvironment');
   environmentBadge.classList.toggle('production', environment === 'production');
@@ -5352,7 +5358,7 @@ $('#posInvoiceForm')?.addEventListener('submit', async (event) => {
   button.innerHTML = '<i class="ph-bold ph-spinner-gap"></i> Timbrando con Facturama…';
   try {
     const saleId = $('#posInvoiceSaleId').value;
-    const data = await api(`/api/invoicing/sales/${saleId}/issue`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ receiver: { rfc: $('#posInvoiceRfc').value, name: $('#posInvoiceName').value, fiscalRegime: $('#posInvoiceRegime').value, postalCode: $('#posInvoicePostal').value, cfdiUse: $('#posInvoiceUse').value, email: $('#posInvoiceEmail').value } }) });
+    const data = await api(`/api/invoicing/sales/${saleId}/issue`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ paymentForm: $('#posInvoicePaymentWrap').hidden ? '' : $('#posInvoicePaymentForm').value, receiver: { rfc: $('#posInvoiceRfc').value, name: $('#posInvoiceName').value, fiscalRegime: $('#posInvoiceRegime').value, postalCode: $('#posInvoicePostal').value, cfdiUse: $('#posInvoiceUse').value, email: $('#posInvoiceEmail').value } }) });
     const invoice = data.invoice;
     form.hidden = true; const result = $('#posInvoiceResult'); result.hidden = false;
     const receiverEmail = String($('#posInvoiceEmail').value || '').trim();
