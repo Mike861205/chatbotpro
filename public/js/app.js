@@ -123,9 +123,10 @@ const DELIVERY_ZONES_PAGE_SIZE = 5;
 let DELIVERY_ZONE_FILTER_BRANCH = 'all';
 const AUTH_SCOPE_KEY = 'cbp_auth_scope';
 const ORDER_ALERT_SOUND_KEY = 'cbp_order_alert_sound_enabled';
-const ORDER_ALERT_POLL_MS = 10000;
+const ORDER_ALERT_FALLBACK_MS = 30 * 60 * 1000;
 const ORDER_ALERT_MAX_MS = 5000;
 let ORDER_ALERT_TIMER = null;
+let ORDER_ALERT_SOCKET = null;
 let ORDER_ALERT_DAY_KEY = '';
 let ORDER_ALERT_SEEN_PENDING_IDS = new Set();
 let ORDER_ALERT_SOUND_ENABLED = true;
@@ -507,11 +508,43 @@ async function refreshPendingOrdersMonitor({ allowSound = true } = {}) {
 }
 
 function startOrdersRealtimeMonitor() {
-  if (ORDER_ALERT_TIMER) clearInterval(ORDER_ALERT_TIMER);
+  if (ORDER_ALERT_TIMER) clearTimeout(ORDER_ALERT_TIMER);
   refreshPendingOrdersMonitor({ allowSound: false });
-  ORDER_ALERT_TIMER = setInterval(() => {
+
+  const scheduleFallback = () => {
+    if (ORDER_ALERT_TIMER) clearTimeout(ORDER_ALERT_TIMER);
+    ORDER_ALERT_TIMER = null;
+    if (document.hidden) return;
+    ORDER_ALERT_TIMER = setTimeout(async () => {
+      await refreshPendingOrdersMonitor({ allowSound: true });
+      scheduleFallback();
+    }, ORDER_ALERT_FALLBACK_MS);
+  };
+
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) {
+      if (ORDER_ALERT_TIMER) clearTimeout(ORDER_ALERT_TIMER);
+      ORDER_ALERT_TIMER = null;
+      return;
+    }
     refreshPendingOrdersMonitor({ allowSound: true });
-  }, ORDER_ALERT_POLL_MS);
+    scheduleFallback();
+  });
+
+  if (typeof window.io === 'function') {
+    ORDER_ALERT_SOCKET = window.io({
+      auth: { scope: getAuthScope() || 'owner' },
+      reconnectionDelay: 2000,
+    });
+    ORDER_ALERT_SOCKET.on('new_order', () => {
+      if (!document.hidden) refreshPendingOrdersMonitor({ allowSound: true });
+    });
+    ORDER_ALERT_SOCKET.on('connect', () => {
+      if (!document.hidden) refreshPendingOrdersMonitor({ allowSound: false });
+    });
+  }
+
+  scheduleFallback();
 }
 
 function showSuspensionModal(message, whatsappUrl) {

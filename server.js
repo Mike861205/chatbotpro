@@ -5,7 +5,7 @@ const { Server: SocketIO } = require('socket.io');
 const cookieParser = require('cookie-parser');
 const multer = require('multer');
 const config = require('./src/config');
-const { initMaster, refreshTenantBillingStatuses, q } = require('./src/db');
+const { initMaster, refreshTenantBillingStatuses, q, tdb } = require('./src/db');
 const { setIo } = require('./src/notifications');
 const { verifyNotificationMailer } = require('./src/utils/mailer');
 const jwt = require('jsonwebtoken');
@@ -30,6 +30,7 @@ const chatLimiter = createRateLimiter({
   max: 90,
   message: 'Demasiados mensajes. Espera un momento.',
 });
+const BILLING_REFRESH_INTERVAL_MS = 24 * 60 * 60 * 1000;
 
 // Estáticos
 app.use('/static', express.static(path.join(__dirname, 'public')));
@@ -145,7 +146,7 @@ initMaster()
       } catch (e) {
         console.error('[billing] error en cron:', e.message);
       }
-    }, 60 * 60 * 1000);
+    }, BILLING_REFRESH_INTERVAL_MS);
 
     // HTTP server + Socket.io
     const httpServer = http.createServer(app);
@@ -154,34 +155,56 @@ initMaster()
       path: '/socket.io',
     });
 
-    // Auth de sockets: valida el JWT del cookie o del query param
+    // Auth de sockets: valida sesiones del panel o la liga privada de KDS.
     io.use(async (socket, next) => {
       try {
-        const rawToken =
-          socket.handshake.auth?.token ||
-          (socket.handshake.headers.cookie || '')
-            .split(';')
-            .map(c => c.trim())
-            .find(c => c.startsWith('cbp_owner_token='))
-            ?.split('=')
-            .slice(1)
-            .join('='); // reconstruye en caso de que el valor lleve '='
+        const kdsSlug = String(socket.handshake.auth?.kdsSlug || '').trim().toLowerCase();
+        const kdsToken = String(socket.handshake.auth?.kdsToken || '');
+        if (kdsSlug && kdsToken) {
+          const tenantResult = await q(
+            `SELECT slug FROM tenants
+             WHERE slug = $1 AND account_status = 'active' AND billing_status <> 'suspended'
+             LIMIT 1`,
+            [kdsSlug]
+          );
+          const tenant = tenantResult.rows[0];
+          if (!tenant) return next(new Error('auth'));
+          const area = await tdb(tenant.slug).get(
+            'SELECT id FROM {s}.kds_areas WHERE access_token = $1 AND active = 1 LIMIT 1',
+            [kdsToken]
+          );
+          if (!area) return next(new Error('auth'));
+          socket.tenantSlug = tenant.slug;
+          socket.clientType = 'kds';
+          return next();
+        }
+
+        const scope = String(socket.handshake.auth?.scope || 'owner').trim().toLowerCase() === 'cashier'
+          ? 'cashier'
+          : 'owner';
+        const cookieName = scope === 'cashier' ? 'cbp_cashier_token' : 'cbp_owner_token';
+        const rawToken = socket.handshake.auth?.token || (socket.handshake.headers.cookie || '')
+          .split(';')
+          .map((cookie) => cookie.trim())
+          .find((cookie) => cookie.startsWith(`${cookieName}=`))
+          ?.split('=')
+          .slice(1)
+          .join('=');
         if (!rawToken) return next(new Error('auth'));
         const decoded = jwt.verify(rawToken, config.JWT_SECRET, {
           issuer: 'chatbotpro',
-          audience: 'cbp:owner',
+          audience: `cbp:${scope}`,
         });
-        // El JWT usa 'slug' (no 'tenantSlug') y no incluye 'role'
         const tenantSlug = decoded?.slug;
-        if (!tenantSlug || decoded.typ !== 'owner') return next(new Error('auth'));
-        // Verificar tenant activo y que el usuario sea owner
+        if (!tenantSlug || decoded.typ !== scope) return next(new Error('auth'));
         const [{ rows: tRows }, { rows: uRows }] = await Promise.all([
           q('SELECT slug FROM tenants WHERE slug = $1 AND account_status = $2', [tenantSlug, 'active']),
           q('SELECT role FROM users WHERE id = $1 AND active = 1', [decoded.uid]),
         ]);
         if (!tRows[0]) return next(new Error('auth'));
-        if (!uRows[0] || uRows[0].role !== 'owner') return next(new Error('auth'));
+        if (uRows[0]?.role !== scope) return next(new Error('auth'));
         socket.tenantSlug = tenantSlug;
+        socket.clientType = scope;
         next();
       } catch {
         next(new Error('auth'));
@@ -190,9 +213,9 @@ initMaster()
 
     io.on('connection', (socket) => {
       socket.join(`tenant:${socket.tenantSlug}`);
-      console.log(`[ws] ${socket.tenantSlug} conectado (${socket.id})`);
+      console.log(`[ws] ${socket.tenantSlug}/${socket.clientType} conectado (${socket.id})`);
       socket.on('disconnect', () => {
-        console.log(`[ws] ${socket.tenantSlug} desconectado (${socket.id})`);
+        console.log(`[ws] ${socket.tenantSlug}/${socket.clientType} desconectado (${socket.id})`);
       });
     });
 

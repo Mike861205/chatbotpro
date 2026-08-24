@@ -3,7 +3,8 @@
   const slug = segments[1] || '';
   const token = segments[2] || '';
   const endpoint = `/api/kds/public/${encodeURIComponent(slug)}/${encodeURIComponent(token)}`;
-  const POLL_MS = 4000;
+  const ACTIVE_FALLBACK_MS = 60 * 1000;
+  const IDLE_FALLBACK_MS = 30 * 60 * 1000;
   const SOUND_KEY = `cbp:kds:sound:${slug}`;
   let payload = null;
   let loading = false;
@@ -12,6 +13,8 @@
   let soundEnabled = localStorage.getItem(SOUND_KEY) !== '0';
   let audioContext = null;
   let toastTimer = null;
+  let refreshTimer = null;
+  let socket = null;
 
   const $ = (selector) => document.querySelector(selector);
   const esc = (value) => String(value ?? '').replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]));
@@ -188,7 +191,35 @@
       if (!initial) toast(error.message, true);
     } finally {
       loading = false;
+      scheduleRefresh();
     }
+  }
+
+  function scheduleRefresh() {
+    if (refreshTimer) clearTimeout(refreshTimer);
+    refreshTimer = null;
+    if (document.hidden || !navigator.onLine) return;
+    const hasActiveTickets = Boolean(payload?.tickets?.length);
+    refreshTimer = setTimeout(
+      () => refresh(),
+      hasActiveTickets ? ACTIVE_FALLBACK_MS : IDLE_FALLBACK_MS
+    );
+  }
+
+  function connectSocket() {
+    if (typeof window.io !== 'function') return;
+    socket = window.io({
+      auth: { kdsSlug: slug, kdsToken: token },
+      reconnectionDelay: 2000,
+    });
+    socket.on('connect', () => {
+      setConnection('online', 'En línea');
+      if (!document.hidden) refresh();
+    });
+    socket.on('new_order', () => {
+      if (!document.hidden) refresh();
+    });
+    socket.on('disconnect', () => setConnection('offline', 'Reconectando'));
   }
 
   async function updateTicket(orderId, status, button) {
@@ -241,11 +272,23 @@
     $('#fullscreenBtn').querySelector('i').className = document.fullscreenElement ? 'ph-bold ph-corners-in' : 'ph-bold ph-corners-out';
   });
   window.addEventListener('online', () => refresh());
-  window.addEventListener('offline', () => setConnection('offline', 'Sin conexión'));
+  window.addEventListener('offline', () => {
+    if (refreshTimer) clearTimeout(refreshTimer);
+    refreshTimer = null;
+    setConnection('offline', 'Sin conexión');
+  });
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) {
+      if (refreshTimer) clearTimeout(refreshTimer);
+      refreshTimer = null;
+      return;
+    }
+    refresh();
+  });
   setInterval(() => { $('#clock').textContent = timeLabel(new Date()); }, 1000);
-  setInterval(() => refresh(), POLL_MS);
   setInterval(() => { if (payload) render(); }, 30000);
   syncSoundButton();
   $('#clock').textContent = timeLabel(new Date());
+  connectSocket();
   refresh({ initial: true });
 })();
