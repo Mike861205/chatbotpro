@@ -1275,7 +1275,9 @@ function openPaymentModal(tenant) {
   SA_PAYMENT_TENANT_ID = Number(tenant.id);
   $('#saPayTenantId').value = String(tenant.id);
   $('#saPayTenantName').value = tenant.business_name || tenant.slug || `Tenant #${tenant.id}`;
-  $('#saPayAmount').value = '';
+  const currentPlan = String(tenant.plan_name || '').toLowerCase();
+  $('#saPayPlan').value = ['mensual', 'annual', 'invoicing_sat'].includes(currentPlan) ? currentPlan : 'mensual';
+  $('#saPayAmount').value = currentPlan === 'invoicing_sat' ? '1499' : '';
   $('#saPayMethod').value = 'stripe';
   $('#saPayNote').value = '';
   $('#saPayDate').value = fmtInputDate(new Date());
@@ -1381,17 +1383,20 @@ async function submitPaymentForm(e) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(paidAt)) return toast('Fecha de pago inválida', true);
 
   const note = String($('#saPayNote')?.value || '').trim();
+  const planCode = String($('#saPayPlan')?.value || '').trim().toLowerCase();
+  if (!['mensual', 'annual', 'invoicing_sat'].includes(planCode)) return toast('Selecciona un plan válido', true);
 
   const payload = await api(`/api/superadmin/tenants/${tenantId}/payment`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ amount, method, note, paidAt }),
+    body: JSON.stringify({ amount, method, note, paidAt, planCode }),
   });
 
   closePaymentModal();
-  toast(payload?.becameClient
+  const bonusText = payload?.stampBonusGranted ? ' Se acreditaron 100 timbres de bienvenida.' : '';
+  toast((payload?.becameClient
     ? `Pago aplicado: el prospecto ya es cliente. Vence ${fmtDate(payload?.nextDueDate)}`
-    : `Pago aplicado. Próximo vencimiento: ${fmtDate(payload?.nextDueDate)}`);
+    : `Pago aplicado. Próximo vencimiento: ${fmtDate(payload?.nextDueDate)}`) + bonusText);
   await Promise.all([loadTenants(), loadClients()]);
 }
 
@@ -1882,6 +1887,9 @@ document.querySelectorAll('#saTenantFilters button').forEach((btn) => {
 });
 
 $('#saPayDate')?.addEventListener('change', updatePaymentNextDue);
+$('#saPayPlan')?.addEventListener('change', (event) => {
+  if (event.target.value === 'invoicing_sat') $('#saPayAmount').value = '1499';
+});
 $('#saPayCancel')?.addEventListener('click', closePaymentModal);
 $('#saPaymentModal')?.addEventListener('click', (e) => {
   if (e.target?.id === 'saPaymentModal') closePaymentModal();

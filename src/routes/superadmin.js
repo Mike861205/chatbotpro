@@ -1509,12 +1509,16 @@ router.post('/tenants/:id/payment', requireSuperAdmin, async (req, res, next) =>
     const methodRaw = String(req.body?.method || '').trim().toLowerCase();
     const method = ['stripe', 'transferencia', 'deposito'].includes(methodRaw) ? methodRaw : 'transferencia';
     const note = String(req.body?.note || '').trim().slice(0, 240);
+    const planCode = String(req.body?.planCode || '').trim().toLowerCase();
+    if (!['mensual', 'annual', 'invoicing_sat'].includes(planCode)) {
+      return res.status(400).json({ error: 'Plan contratado inválido' });
+    }
     if (!Number.isFinite(amount) || amount <= 0) {
       return res.status(400).json({ error: 'Monto de pago inválido' });
     }
 
     await client.query('BEGIN');
-    const tenantResult = await client.query('SELECT id, customer_since, sales_stage FROM tenants WHERE id = $1 FOR UPDATE', [tenantId]);
+    const tenantResult = await client.query('SELECT id, slug, customer_since, sales_stage, invoicing_plan_bonus_granted_at FROM tenants WHERE id = $1 FOR UPDATE', [tenantId]);
     const tenant = tenantResult.rows[0];
     if (!tenant) {
       await client.query('ROLLBACK');
@@ -1528,13 +1532,14 @@ router.post('/tenants/:id/payment', requireSuperAdmin, async (req, res, next) =>
 
     const dueDateRow = await client.query('SELECT ($1::date + INTERVAL \'1 month\')::date AS next_due_date', [paidAt]);
     const nextDueDate = dueDateRow.rows[0]?.next_due_date;
-    const paymentNote = `[PAGO ${paidAt}] ${amount.toFixed(2)} (${method})${note ? ` - ${note}` : ''}`;
+    const paymentNote = `[PAGO ${paidAt}] ${amount.toFixed(2)} (${method}) [plan:${planCode}]${note ? ` - ${note}` : ''}`;
 
     await client.query(
       `UPDATE tenants
        SET billing_status = 'active',
            account_status = 'active',
            billing_due_date = $1::date,
+           plan_name = $5,
            customer_since = COALESCE(customer_since, $2::date),
            sales_stage = 'won',
            next_follow_up_at = NULL,
@@ -1549,6 +1554,7 @@ router.post('/tenants/:id/payment', requireSuperAdmin, async (req, res, next) =>
         paidAt,
         paymentNote,
         tenantId,
+        planCode,
       ]
     );
 
@@ -1561,8 +1567,36 @@ router.post('/tenants/:id/payment', requireSuperAdmin, async (req, res, next) =>
       );
     }
 
+    let stampBonusGranted = false;
+    if (planCode === 'invoicing_sat' && !tenant.invoicing_plan_bonus_granted_at) {
+      const tenantSchema = schemaName(tenant.slug);
+      await client.query(`INSERT INTO "${tenantSchema}".stamp_wallet(id,unlimited,balance,reserved) VALUES(1,0,0,0) ON CONFLICT(id) DO NOTHING`);
+      const walletResult = await client.query(`SELECT unlimited,balance,reserved FROM "${tenantSchema}".stamp_wallet WHERE id=1 FOR UPDATE`);
+      const wallet = walletResult.rows[0] || { unlimited: 0, balance: 0, reserved: 0 };
+      const nextBalance = (Number(wallet.unlimited) ? 0 : Number(wallet.balance || 0)) + 100;
+      await client.query(
+        `UPDATE "${tenantSchema}".stamp_wallet SET unlimited=0,balance=$1,updated_at=now() WHERE id=1`,
+        [nextBalance]
+      );
+      await client.query(
+        `INSERT INTO "${tenantSchema}".stamp_ledger(movement_type,quantity,balance_after,detail,actor)
+         VALUES('subscription_bonus',100,$1,'100 timbres de bienvenida del Plan Facturación Electrónica SAT',$2)`,
+        [nextBalance, `superadmin:${req.superadmin.username}`]
+      );
+      await client.query(
+        `UPDATE tenants
+         SET invoicing_enabled=1,
+             invoicing_activated_at=COALESCE(invoicing_activated_at,now()),
+             invoicing_plan_bonus_granted_at=now(),
+             invoicing_activated_by=$1
+         WHERE id=$2`,
+        [`superadmin:${req.superadmin.username}`, tenantId]
+      );
+      stampBonusGranted = true;
+    }
+
     await client.query('COMMIT');
-    res.json({ ok: true, nextDueDate, becameClient: !tenant.customer_since });
+    res.json({ ok: true, nextDueDate, becameClient: !tenant.customer_since, stampBonusGranted, stampBonusQuantity: stampBonusGranted ? 100 : 0 });
   } catch (e) {
     try { await client.query('ROLLBACK'); } catch {}
     next(e);

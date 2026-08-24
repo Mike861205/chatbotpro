@@ -105,6 +105,7 @@ async function initMaster() {
       invoicing_enabled INTEGER NOT NULL DEFAULT 0,
       invoicing_activated_at TIMESTAMPTZ,
       invoicing_trial_granted_at TIMESTAMPTZ,
+      invoicing_plan_bonus_granted_at TIMESTAMPTZ,
       invoicing_activated_by TEXT DEFAULT '',
       notes TEXT DEFAULT '',
       created_at TIMESTAMPTZ DEFAULT now()
@@ -209,6 +210,7 @@ async function initMaster() {
   await q(`ALTER TABLE tenants ADD COLUMN IF NOT EXISTS invoicing_enabled INTEGER`);
   await q(`ALTER TABLE tenants ADD COLUMN IF NOT EXISTS invoicing_activated_at TIMESTAMPTZ`);
   await q(`ALTER TABLE tenants ADD COLUMN IF NOT EXISTS invoicing_trial_granted_at TIMESTAMPTZ`);
+  await q(`ALTER TABLE tenants ADD COLUMN IF NOT EXISTS invoicing_plan_bonus_granted_at TIMESTAMPTZ`);
   await q(`ALTER TABLE tenants ADD COLUMN IF NOT EXISTS invoicing_activated_by TEXT DEFAULT ''`);
   await q(`
     UPDATE tenants
@@ -1165,6 +1167,44 @@ async function ensureTenantCourtesyStamps(slug, tenantId = null, actor = 'system
   });
 }
 
+async function ensureTenantSubscriptionStampBonus(slug, tenantId, planCode, actor = 'system:subscription') {
+  if (String(planCode || '').toLowerCase() !== 'invoicing_sat') return { granted: false, quantity: 0 };
+  const tenantDb = tdb(slug);
+  return tenantDb.tx(async (tx) => {
+    const tenant = await tx.get(
+      'SELECT invoicing_plan_bonus_granted_at FROM public.tenants WHERE id=$1 FOR UPDATE',
+      [Number(tenantId)]
+    );
+    if (!tenant) throw new Error('Tenant no encontrado para acreditar timbres');
+    if (tenant.invoicing_plan_bonus_granted_at) return { granted: false, quantity: 0 };
+
+    await tx.run(`INSERT INTO {s}.stamp_wallet(id,unlimited,balance,reserved) VALUES(1,0,0,0) ON CONFLICT(id) DO NOTHING`);
+    const wallet = await tx.get('SELECT * FROM {s}.stamp_wallet WHERE id=1 FOR UPDATE');
+    const quantity = 100;
+    const nextBalance = (Number(wallet.unlimited) ? 0 : Number(wallet.balance || 0)) + quantity;
+    const updated = await tx.get(
+      'UPDATE {s}.stamp_wallet SET unlimited=0,balance=$1,updated_at=now() WHERE id=1 RETURNING *',
+      [nextBalance]
+    );
+    await tx.run(
+      `INSERT INTO {s}.stamp_ledger(movement_type,quantity,balance_after,detail,actor)
+       VALUES('subscription_bonus',$1,$2,'100 timbres de bienvenida del Plan Facturación Electrónica SAT',$3)`,
+      [quantity, nextBalance, actor]
+    );
+    await tx.run(
+      `UPDATE public.tenants
+       SET plan_name='invoicing_sat',
+           invoicing_enabled=1,
+           invoicing_activated_at=COALESCE(invoicing_activated_at,now()),
+           invoicing_plan_bonus_granted_at=now(),
+           invoicing_activated_by=$2
+       WHERE id=$1`,
+      [Number(tenantId), actor]
+    );
+    return { granted: true, quantity, wallet: updated };
+  });
+}
+
 async function getSetting(t, key, fallback = '') {
   const row = await t.get('SELECT value FROM {s}.settings WHERE key = $1', [key]);
   return row ? row.value : fallback;
@@ -1232,6 +1272,7 @@ module.exports = {
   createTenantSchema,
   initTenantDefaults,
   ensureTenantCourtesyStamps,
+  ensureTenantSubscriptionStampBonus,
   getSetting,
   setSetting,
   getSuperAdminSetting,

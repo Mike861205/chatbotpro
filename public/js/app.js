@@ -957,6 +957,7 @@ function subscriptionPlanLabel(planName) {
     mensual: 'Plan mensual',
     annual: 'Plan anual',
     anual: 'Plan anual',
+    invoicing_sat: 'Plan Facturación Electrónica SAT',
   };
   return labels[value.toLowerCase()] || value;
 }

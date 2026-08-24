@@ -21,21 +21,33 @@ test('informa que los pagos internacionales se convierten a pesos mexicanos', ()
   assert.match(appHtml, /conversión desde tu moneda local/);
 });
 
-test('mantiene los beneficios principales en las tres tarjetas', () => {
+test('agrega el plan de Facturación Electrónica SAT con Stripe y 100 timbres', () => {
+  assert.match(appHtml, /class="plan-card plan-invoicing"/);
+  assert.match(appHtml, /Facturación Electrónica/);
+  assert.match(appHtml, /<span class="amt">1,499<\/span>/);
+  assert.match(appHtml, /href="https:\/\/buy\.stripe\.com\/bJe8wO77v6fT5K37M24c80m"/);
+  assert.match(appHtml, /data-stripe-product="prod_V863lSz1ZCJG47"/);
+  assert.match(appHtml, /data-plan-code="invoicing_sat"/);
+  assert.match(appHtml, /100 timbres de bienvenida/);
+  assert.match(appHtml, /CFDI 4\.0 y facturación global ante el SAT/);
+  assert.match(appHtml, /Multiemisor por RFC y sucursal/);
+});
+
+test('mantiene los beneficios principales en las cuatro tarjetas', () => {
   for (const benefit of [
     'Punto de venta y caja por sucursal',
     'KDS de pedidos en tiempo real',
     'Costo de ventas, utilidad y márgenes',
     'Inventarios y stock por sucursal',
   ]) {
-    assert.equal(appHtml.split(benefit).length - 1, 3, `${benefit} debe aparecer en los tres planes`);
+    assert.equal(appHtml.split(benefit).length - 1, 4, `${benefit} debe aparecer en los cuatro planes`);
   }
 });
 
-test('las tres tarjetas explican que incluyen de una a dos sucursales', () => {
-  assert.equal(appHtml.split('Incluye de 1 a 2 sucursales').length - 1, 3);
-  assert.equal(appHtml.split('ph-fill ph-storefront').length >= 3, true);
-  assert.equal(appHtml.split('Activas al mismo tiempo').length - 1, 3);
+test('las cuatro tarjetas explican que incluyen de una a dos sucursales', () => {
+  assert.equal(appHtml.split('Incluye de 1 a 2 sucursales').length - 1, 4);
+  assert.equal(appHtml.split('ph-fill ph-storefront').length >= 4, true);
+  assert.equal(appHtml.split('Activas al mismo tiempo').length - 1, 4);
 });
 
 test('explica que tres o más sucursales requieren cotización personalizada', () => {

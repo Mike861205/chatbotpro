@@ -7,7 +7,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/regular/style.css" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/bold/style.css" />
-  <link rel="stylesheet" href="/static/css/styles.css" />
+  <link rel="stylesheet" href="/static/css/styles.css?v=20260823satplan" />
   <link rel="icon" type="image/svg+xml" href="/static/favicon.svg?v=20260623" />
   <link rel="icon" type="image/png" href="/static/chatbotpro100.png?v=20260623" />
   <link rel="shortcut icon" href="/static/chatbotpro100.png?v=20260623" />
@@ -269,6 +269,15 @@
           <label><i class="ph-bold ph-buildings"></i> Negocio</label>
           <input type="text" id="saPayTenantName" readonly />
         </div>
+        <div class="field">
+          <label><i class="ph-bold ph-package"></i> Plan contratado</label>
+          <select id="saPayPlan" required>
+            <option value="mensual">Plan mensual / promoción</option>
+            <option value="annual">Plan anual</option>
+            <option value="invoicing_sat">Facturación Electrónica SAT · $1,499</option>
+          </select>
+          <div class="hint" id="saPayPlanHint">El plan SAT activa facturación y acredita 100 timbres de bienvenida una sola vez.</div>
+        </div>
         <div class="row-2">
           <div class="field">
             <label><i class="ph-bold ph-money"></i> Monto</label>
@@ -501,6 +510,6 @@
       </form>
     </div>
   </div>
-  <script src="/static/js/superadmin.js?v=20260823courtesystamps"></script>
+  <script src="/static/js/superadmin.js?v=20260823satplan"></script>
 </body>
 </html>

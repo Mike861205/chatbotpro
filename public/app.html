@@ -11,7 +11,7 @@
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/fill/style.css" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/duotone/style.css" />
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-  <link rel="stylesheet" href="/static/css/styles.css?v=20260823cfdiuse" />
+  <link rel="stylesheet" href="/static/css/styles.css?v=20260823satplan" />
   <link rel="icon" type="image/svg+xml" href="/static/favicon.svg" />
   <link rel="icon" type="image/png" href="/static/chatbotpro100.png" />
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
@@ -1372,6 +1372,36 @@
               </a>
               <div class="plan-pay-foot annual"><i class="ph-bold ph-info"></i> Los 12 MSI aplican con tarjetas participantes y se confirman en Stripe.</div>
             </article>
+            <article class="plan-card plan-invoicing">
+              <span class="plan-flag invoicing"><i class="ph-fill ph-seal-check"></i> Sistema + Facturación SAT</span>
+              <div class="plan-icon invoicing"><i class="ph-fill ph-file-text"></i></div>
+              <div class="plan-label">Plan Facturación Electrónica</div>
+              <div class="plan-branch-limit invoicing"><i class="ph-fill ph-storefront"></i><span><strong>Incluye de 1 a 2 sucursales</strong><small>Activas al mismo tiempo</small></span></div>
+              <div class="plan-price invoicing-price"><span class="cur">$</span><span class="amt">1,499</span><span class="per">/ mes MXN</span></div>
+              <div class="plan-stamp-bonus"><i class="ph-fill ph-stamp"></i><span><strong>100 timbres de bienvenida</strong><small>Incluidos una sola vez al contratar el plan</small></span></div>
+              <ul class="plan-points">
+                <li><i class="ph-bold ph-check-circle"></i> Chatbot y pedidos automatizados 24/7</li>
+                <li><i class="ph-bold ph-check-circle"></i> Punto de venta y caja por sucursal</li>
+                <li><i class="ph-bold ph-check-circle"></i> KDS de pedidos en tiempo real</li>
+                <li><i class="ph-bold ph-check-circle"></i> Costo de ventas, utilidad y márgenes</li>
+                <li><i class="ph-bold ph-check-circle"></i> Inventarios y stock por sucursal</li>
+                <li><i class="ph-bold ph-check-circle"></i> Reportes de ventas y clientes</li>
+                <li><i class="ph-bold ph-check-circle"></i> Soporte y actualizaciones continuas</li>
+                <li><i class="ph-bold ph-check-circle"></i> CFDI 4.0 y facturación global ante el SAT</li>
+                <li><i class="ph-bold ph-check-circle"></i> Facturación desde POS y portal web para clientes</li>
+                <li><i class="ph-bold ph-check-circle"></i> Multiemisor por RFC y sucursal</li>
+                <li><i class="ph-bold ph-check-circle"></i> PDF, XML, correo, historial y cancelaciones</li>
+              </ul>
+              <div class="plan-pay-trust invoicing">
+                <span><i class="ph-fill ph-shield-check"></i> CFDI 4.0</span>
+                <span><i class="ph-fill ph-stamp"></i> 100 timbres</span>
+                <span><i class="ph-fill ph-lock-key"></i> Stripe protegido</span>
+              </div>
+              <a class="btn btn-primary plan-pay-cta invoicing" href="https://buy.stripe.com/bJe8wO77v6fT5K37M24c80m" target="_blank" rel="noopener noreferrer" data-plan-code="invoicing_sat" data-stripe-product="prod_V863lSz1ZCJG47">
+                <i class="ph-fill ph-file-text"></i> Contratar con Facturación SAT
+              </a>
+              <div class="plan-pay-foot invoicing"><i class="ph-bold ph-info"></i> La activación incluye 100 timbres de bienvenida para el tenant.</div>
+            </article>
           </div>
 
           <div class="subs-extra-branches-notice">
@@ -1473,6 +1503,9 @@
                 </a>
                 <a class="btn btn-primary pay-cta annual" href="https://buy.stripe.com/bJe6oGcrPaw92xRd6m4c80l" target="_blank" rel="noopener noreferrer" data-stripe-product="prod_V3VTGzS7W24dg2">
                   <i class="ph-fill ph-calendar-check"></i> Pagar plan anual · ahorra 12%
+                </a>
+                <a class="btn btn-primary pay-cta invoicing" href="https://buy.stripe.com/bJe8wO77v6fT5K37M24c80m" target="_blank" rel="noopener noreferrer" data-plan-code="invoicing_sat" data-stripe-product="prod_V863lSz1ZCJG47">
+                  <i class="ph-fill ph-file-text"></i> Plan SAT · $1,499 + 100 timbres
                 </a>
               </div>
               <div class="pay-foot"><i class="ph-bold ph-info"></i> Serás redirigido al checkout seguro de Stripe.</div>
@@ -2756,6 +2789,6 @@
     </div>
   </div>
 
-  <script src="/static/js/app.js?v=20260823courtesystamps"></script>
+  <script src="/static/js/app.js?v=20260823satplan"></script>
 </body>
 </html>
