@@ -1,6 +1,8 @@
 /* ============================================================
    ChatBotPro — Design System v2 (premium)
    ============================================================ */
+[hidden] { display: none !important; }
+
 :root {
   --primary: #ff6b35;
   --primary-600: color-mix(in srgb, var(--primary) 85%, #000);

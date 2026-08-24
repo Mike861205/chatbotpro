@@ -26,6 +26,17 @@ test('habilita facturación sólo para identidad México o lada +52', () => {
   assert.equal(isMexicoIdentity({ phoneCountry: 'US', phoneCallingCode: '1' }), false);
 });
 
+test('separa el acceso al módulo México de la autorización para consumir timbres', () => {
+  const auth = read('src/routes/auth.js');
+  const routes = read('src/routes/invoicing.js');
+  assert.match(auth, /invoicingEligible = isDemoTenant \|\| isMexicoIdentity\(req\.tenant\)/);
+  assert.match(auth, /invoicingActivated: Boolean\(Number\(req\.tenant\.invoicing_enabled\)\)/);
+  assert.match(routes, /function requireInvoicingActivated/);
+  assert.match(routes, /post\('\/sales\/:id\/issue', requireInvoicingActivated/);
+  assert.match(routes, /post\('\/global\/issue', requireInvoicingActivated/);
+  assert.match(read('public/css/styles.css'), /\[hidden\]\s*\{\s*display:\s*none\s*!important/);
+});
+
 test('el portal usa localhost durante pruebas y el subdominio configurado en producción', () => {
   const localReq = { hostname: 'localhost', protocol: 'http', get: (name) => name === 'host' ? 'localhost:3000' : '' };
   const productionReq = { hostname: 'chatbotpro.systemdem.online', protocol: 'https', get: () => 'chatbotpro.systemdem.online' };
@@ -370,6 +381,21 @@ test('separa Sandbox y Producción por tenant y conserva el origen de cada CFDI'
   assert.match(routes, /facturamaFor\(invoice\.environment \|\| profile\)/);
   assert.match(superadmin, /invoicing-environment/);
   assert.match(superadmin, /El tenant demo siempre debe permanecer en Sandbox/);
+});
+
+test('producción usa API Web para el RFC dueño de la cuenta y Multiemisor para RFC adicionales', () => {
+  const routes = read('src/routes/invoicing.js');
+  const superadmin = read('src/routes/superadmin.js');
+  const database = read('src/db/index.js');
+  const client = read('public/js/app.js');
+  assert.match(routes, /function issuerApiMode/);
+  assert.match(routes, /FACTURAMA_PRODUCTION_RFC/);
+  assert.match(routes, /profile\.api_mode === 'web'/);
+  assert.match(routes, /CSD se administran directamente en el perfil de Facturama/);
+  assert.match(superadmin, /request\('\/api\/BranchOffice'\)/);
+  assert.match(superadmin, /request\('\/api-lite\/csds'\)/);
+  assert.match(database, /upper\(rfc\)=\$1 THEN 'web'/);
+  assert.match(client, /Gestionado en Facturama/);
 });
 
 test('la carga de CSD valida RFC, vigencia y sincroniza el nombre fiscal del certificado', () => {

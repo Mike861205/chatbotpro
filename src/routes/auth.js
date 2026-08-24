@@ -30,6 +30,7 @@ const TRACKABLE_MODULES = new Set([
   'clientes',
   'pos',
   'facturacion',
+  'cfdi',
   'kds',
   'ventas',
   'productos',
@@ -549,7 +550,9 @@ router.get('/me', requireAuth, async (req, res, next) => {
     let phoneCountry = req.tenant.phone_country || '';
     let phoneCallingCode = req.tenant.phone_calling_code || '';
     const isDemoTenant = req.tenant.slug === config.DEMO_TENANT_SLUG;
-    let invoicingEligible = isDemoTenant || (isMexicoIdentity(req.tenant) && Boolean(Number(req.tenant.invoicing_enabled)));
+    // El módulo y la configuración fiscal están disponibles para toda cuenta México.
+    // La licencia de timbrado se informa por separado en invoicingActivated.
+    let invoicingEligible = isDemoTenant || isMexicoIdentity(req.tenant);
     const demoLeadId = Number(req.user.demoLeadId || 0);
     if (!invoicingEligible && Number.isInteger(demoLeadId) && demoLeadId > 0) {
       const lead = await q('SELECT phone_country, phone_calling_code FROM demo_leads WHERE id = $1 LIMIT 1', [demoLeadId]);

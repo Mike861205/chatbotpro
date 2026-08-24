@@ -1352,9 +1352,12 @@ router.post('/tenants/:id/invoicing-environment', requireSuperAdmin, async (req,
     }
     if (environment === 'production') {
       try {
-        await facturamaClients.production.request('/api/BranchOffice');
+        await Promise.all([
+          facturamaClients.production.request('/api/BranchOffice'),
+          facturamaClients.production.request('/api-lite/csds'),
+        ]);
       } catch (error) {
-        return res.status(409).json({ error: `Facturama Producción no autenticó las credenciales: ${error.message}` });
+        return res.status(409).json({ error: `Facturama Producción no autenticó API Web y Multiemisor: ${error.message}` });
       }
     }
     const tenantDb = tdb(tenant.slug);
@@ -1362,14 +1365,14 @@ router.post('/tenants/:id/invoicing-environment', requireSuperAdmin, async (req,
       const previous = tenant.invoicing_environment || 'sandbox';
       await tx.run('UPDATE public.tenants SET invoicing_environment=$1 WHERE id=$2', [environment, tenant.id]);
       await tx.run(
-        `UPDATE {s}.fiscal_profiles SET environment=$1,api_mode=CASE WHEN $1='production' THEN 'multi' ELSE api_mode END,
+        `UPDATE {s}.fiscal_profiles SET environment=$1,api_mode=CASE WHEN $1='production' AND upper(rfc)=$2 THEN 'web' WHEN $1='production' THEN 'multi' ELSE api_mode END,
          sandbox_shared=CASE WHEN $1='production' THEN 0 ELSE sandbox_shared END,
-         csd_uploaded=CASE WHEN environment<>$1 THEN 0 ELSE csd_uploaded END,updated_at=now()`, [environment]
+         csd_uploaded=CASE WHEN environment<>$1 THEN 0 ELSE csd_uploaded END,updated_at=now()`, [environment, config.FACTURAMA_PRODUCTION_RFC]
       );
       await tx.run(
-        `UPDATE {s}.fiscal_emitters SET environment=$1,api_mode=CASE WHEN $1='production' THEN 'multi' ELSE api_mode END,
+        `UPDATE {s}.fiscal_emitters SET environment=$1,api_mode=CASE WHEN $1='production' AND upper(rfc)=$2 THEN 'web' WHEN $1='production' THEN 'multi' ELSE api_mode END,
          sandbox_shared=CASE WHEN $1='production' THEN 0 ELSE sandbox_shared END,
-         csd_uploaded=CASE WHEN environment<>$1 THEN 0 ELSE csd_uploaded END,updated_at=now()`, [environment]
+         csd_uploaded=CASE WHEN environment<>$1 THEN 0 ELSE csd_uploaded END,updated_at=now()`, [environment, config.FACTURAMA_PRODUCTION_RFC]
       );
       const wallet = await tx.get('SELECT balance FROM {s}.stamp_wallet WHERE id=1');
       await tx.run(

@@ -39,6 +39,13 @@ function facturamaFor(source) {
   return facturamaClients[normalizeEnvironment(source?.environment || source)] || facturamaClients.sandbox;
 }
 
+function issuerApiMode(environment, rfc, sandboxShared = false) {
+  const normalizedEnvironment = normalizeEnvironment(environment);
+  if (normalizedEnvironment === 'sandbox') return sandboxShared ? 'web' : 'multi';
+  const normalizedRfc = String(rfc || '').trim().toUpperCase();
+  return config.FACTURAMA_PRODUCTION_RFC && normalizedRfc === config.FACTURAMA_PRODUCTION_RFC ? 'web' : 'multi';
+}
+
 function apiModeFor(document, profile) {
   return ['web', 'multi'].includes(document?.api_mode) ? document.api_mode : (profile?.api_mode || 'multi');
 }
@@ -177,6 +184,7 @@ function profileCompleteness(profile) {
 function profileReady(profile) {
   if (!profile?.enabled || !profileCompleteness(profile) || !facturamaFor(profile).isConfigured()) return false;
   if (profile.environment === 'sandbox' && profile.sandbox_shared) return true;
+  if (profile.api_mode === 'web') return true;
   return Boolean(profile.csd_uploaded);
 }
 
@@ -185,17 +193,23 @@ function profileReadinessError(profile) {
   if (!profileCompleteness(profile)) return 'Completa los datos fiscales y valores SAT predeterminados del negocio';
   if (!facturamaFor(profile).isConfigured()) return `Facturación en preparación: faltan las credenciales de Facturama ${normalizeEnvironment(profile?.environment) === 'sandbox' ? 'Sandbox' : 'Producción'} en el servidor. Comunícate con soporte.`;
   if (profile.environment === 'sandbox' && profile.sandbox_shared) return '';
+  if (profile.api_mode === 'web') return '';
   if (!profile.csd_uploaded) return 'Carga los certificados de sello digital del emisor';
   return '';
 }
 
 async function requestMexicoEligibility(req) {
   if (req.tenant?.slug === config.DEMO_TENANT_SLUG) return true;
-  if (isMexicoIdentity(req.tenant)) return Boolean(Number(req.tenant?.invoicing_enabled));
+  if (isMexicoIdentity(req.tenant)) return true;
   const leadId = Number(req.user?.demoLeadId || 0);
   if (!Number.isInteger(leadId) || leadId <= 0) return false;
   const lead = await q('SELECT phone_country, phone_calling_code FROM demo_leads WHERE id = $1 LIMIT 1', [leadId]);
   return isMexicoIdentity(lead.rows[0]);
+}
+
+function requireInvoicingActivated(req, res, next) {
+  if (req.tenant?.slug === config.DEMO_TENANT_SLUG || Number(req.tenant?.invoicing_enabled)) return next();
+  return res.status(403).json({ error: 'La facturación electrónica está disponible para configurar, pero el timbrado todavía no ha sido activado para este negocio.' });
 }
 
 async function requireMexico(req, res, next) {
@@ -942,7 +956,7 @@ router.put('/profile', requireOwner, async (req, res, next) => {
     } : req.body;
     const profile = validateFiscalProfile(source);
     const enabled = req.body?.enabled === false ? 0 : 1;
-    const apiMode = useSandboxShared ? 'web' : 'multi';
+    const apiMode = issuerApiMode(environment, profile.rfc, useSandboxShared);
     const row = await req.tdb.get(
       `INSERT INTO {s}.fiscal_profiles
        (id,enabled,environment,api_mode,sandbox_shared,rfc,legal_name,fiscal_regime,postal_code,series,
@@ -1001,8 +1015,8 @@ router.post('/emitters', requireOwner, async (req, res, next) => {
        (label,enabled,environment,api_mode,sandbox_shared,rfc,legal_name,fiscal_regime,postal_code,series,
         default_product_code,default_unit_code,default_unit_name,default_tax_object,default_iva_rate,default_isr_rate,
         delivery_product_code,prices_include_tax,default_card_payment_form)
-       VALUES($1,$2,$3,'multi',0,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,1,$16) RETURNING *`,
-      [label, req.body?.enabled === false ? 0 : 1, environment, profile.rfc, profile.legalName,
+       VALUES($1,$2,$3,$4,0,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,1,$17) RETURNING *`,
+      [label, req.body?.enabled === false ? 0 : 1, environment, issuerApiMode(environment, profile.rfc), profile.rfc, profile.legalName,
         profile.fiscalRegime, profile.postalCode, profile.series, profile.defaultProductCode, profile.defaultUnitCode,
         profile.defaultUnitName, profile.defaultTaxObject, profile.defaultIvaRate, profile.defaultIsrRate,
         String(req.body?.deliveryProductCode || profile.defaultProductCode).trim(), profile.defaultCardPaymentForm]
@@ -1030,12 +1044,12 @@ router.put('/emitters/:id', requireOwner, async (req, res, next) => {
       `UPDATE {s}.fiscal_emitters SET label=$1,enabled=$2,rfc=$3,legal_name=$4,fiscal_regime=$5,postal_code=$6,series=$7,
        default_product_code=$8,default_unit_code=$9,default_unit_name=$10,default_tax_object=$11,default_iva_rate=$12,
        default_isr_rate=$13,delivery_product_code=$14,default_card_payment_form=$15,
-       csd_uploaded=CASE WHEN rfc=$3 THEN csd_uploaded ELSE 0 END,updated_at=now() WHERE id=$16 RETURNING *`,
+       api_mode=$16,csd_uploaded=CASE WHEN rfc=$3 THEN csd_uploaded ELSE 0 END,updated_at=now() WHERE id=$17 RETURNING *`,
       [String(req.body?.label || profile.legalName).trim().slice(0,80), req.body?.enabled === false ? 0 : 1, profile.rfc,
         profile.legalName, profile.fiscalRegime, profile.postalCode, profile.series, profile.defaultProductCode,
         profile.defaultUnitCode, profile.defaultUnitName, profile.defaultTaxObject, profile.defaultIvaRate,
         profile.defaultIsrRate, String(req.body?.deliveryProductCode || profile.defaultProductCode).trim(),
-        profile.defaultCardPaymentForm, id]
+        profile.defaultCardPaymentForm, issuerApiMode(tenantEnvironment(req.tenant), profile.rfc), id]
     );
     res.json({ ok: true, emitter: safeProfile(row) });
   } catch (error) {
@@ -1065,6 +1079,7 @@ router.post('/csd', requireOwner, csdUpload.fields([{ name: 'certificate', maxCo
     const emitterId = Number(req.body?.emitterId || 1);
     const profile = safeProfile(await req.tdb.get('SELECT * FROM {s}.fiscal_emitters WHERE id=$1 LIMIT 1', [emitterId]));
     if (!profile || profile.sandbox_shared) return res.status(409).json({ error: 'Guarda primero los datos fiscales del emisor multi-RFC' });
+    if (profile.api_mode === 'web') return res.status(409).json({ error: 'El RFC principal usa API Web; sus CSD se administran directamente en el perfil de Facturama' });
     const certificate = req.files?.certificate?.[0];
     const privateKey = req.files?.privateKey?.[0];
     const password = String(req.body?.privateKeyPassword || '');
@@ -1121,7 +1136,7 @@ router.put('/branches/:id', requireOwner, async (req, res, next) => {
   } catch (error) { next(error); }
 });
 
-router.post('/sales/:id/issue', async (req, res, next) => {
+router.post('/sales/:id/issue', requireInvoicingActivated, async (req, res, next) => {
   try {
     const result = await issueSaleInvoice({
       tenant: req.tenant,
@@ -1197,7 +1212,7 @@ router.get('/global/eligible', async (req, res, next) => {
   } catch (error) { next(error); }
 });
 
-router.post('/global/issue', async (req, res, next) => {
+router.post('/global/issue', requireInvoicingActivated, async (req, res, next) => {
   try {
     const result = await issueGlobalInvoice({
       tenant: req.tenant,

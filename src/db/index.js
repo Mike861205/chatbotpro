@@ -857,7 +857,6 @@ async function createTenantSchema(slug) {
       provider TEXT NOT NULL DEFAULT 'facturama',
       environment TEXT NOT NULL DEFAULT 'sandbox',
       api_mode TEXT NOT NULL DEFAULT 'multi',
-      api_mode TEXT NOT NULL DEFAULT 'multi',
       sandbox_shared INTEGER NOT NULL DEFAULT 0,
       rfc TEXT NOT NULL DEFAULT '',
       legal_name TEXT NOT NULL DEFAULT '',
@@ -879,6 +878,7 @@ async function createTenantSchema(slug) {
       created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
+    ALTER TABLE "${s}".fiscal_profiles ADD COLUMN IF NOT EXISTS api_mode TEXT NOT NULL DEFAULT 'multi';
     ALTER TABLE "${s}".fiscal_profiles ADD COLUMN IF NOT EXISTS sandbox_shared INTEGER NOT NULL DEFAULT 0;
     ALTER TABLE "${s}".fiscal_profiles ADD COLUMN IF NOT EXISTS delivery_product_code TEXT NOT NULL DEFAULT '';
     ALTER TABLE "${s}".fiscal_profiles ADD COLUMN IF NOT EXISTS default_card_payment_form TEXT NOT NULL DEFAULT '04';
@@ -913,6 +913,7 @@ async function createTenantSchema(slug) {
       created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
+    ALTER TABLE "${s}".fiscal_emitters ADD COLUMN IF NOT EXISTS api_mode TEXT NOT NULL DEFAULT 'multi';
     CREATE UNIQUE INDEX IF NOT EXISTS idx_${s}_fiscal_emitters_rfc ON "${s}".fiscal_emitters(rfc);
     INSERT INTO "${s}".fiscal_emitters
       (id,label,enabled,environment,api_mode,sandbox_shared,rfc,legal_name,fiscal_regime,postal_code,series,next_folio,
@@ -1078,6 +1079,15 @@ async function createTenantSchema(slug) {
     );
     CREATE INDEX IF NOT EXISTS idx_${s}_global_invoice_events_invoice ON "${s}".global_invoice_events(global_invoice_id, created_at DESC);
   `);
+  if (config.FACTURAMA_PRODUCTION_RFC) {
+    await q(
+      `UPDATE "${s}".fiscal_profiles
+          SET api_mode=CASE WHEN environment='production' AND upper(rfc)=$1 THEN 'web' WHEN environment='production' THEN 'multi' ELSE api_mode END;
+       UPDATE "${s}".fiscal_emitters
+          SET api_mode=CASE WHEN environment='production' AND upper(rfc)=$1 THEN 'web' WHEN environment='production' THEN 'multi' ELSE api_mode END`,
+      [config.FACTURAMA_PRODUCTION_RFC]
+    );
+  }
 }
 
 async function ensureTenantDefaults(slug, businessName = slug, regional = {}) {
