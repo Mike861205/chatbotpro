@@ -540,7 +540,7 @@ async function manageTenantStamps(tenantId) {
 
 const SA_STAMP_MOVEMENT_LABELS = {
   courtesy_grant: 'Cortesía inicial', trial_grant: 'Bono inicial', courtesy_policy_adjustment: 'Ajuste de cortesía', credit: 'Recarga', adjustment: 'Ajuste', consumed: 'CFDI timbrado',
-  reserved: 'Reserva', released: 'Reserva liberada', invoicing_enabled: 'Activación', invoicing_disabled: 'Desactivación',
+  reserved: 'Reserva', released: 'Reserva liberada', invoicing_enabled: 'Activación', invoicing_disabled: 'Desactivación', environment_changed: 'Cambio de ambiente',
 };
 
 function renderStampControl() {
@@ -549,6 +549,15 @@ function renderStampControl() {
   const wallet = data.wallet || {};
   const active = Boolean(tenant.enabled);
   const pendingTrial = !tenant.trialGrantedAt;
+  const environmentSelect = $('#saStampEnvironment');
+  if (environmentSelect) {
+    environmentSelect.value = tenant.environment || 'sandbox';
+    environmentSelect.disabled = Boolean(tenant.isDemo);
+  }
+  const productionReady = Boolean(data.provider?.productionConfigured);
+  $('#saStampEnvironmentHelp').textContent = tenant.environment === 'production'
+    ? 'Producción activa: los timbres generan CFDI fiscales reales. Cada emisor necesita su CSD cargado en Producción.'
+    : `Sandbox activo: los CFDI son de prueba.${productionReady ? ' Producción ya está configurada en el servidor.' : ' Faltan credenciales de Producción en el servidor.'}`;
   $('#saStampBusiness').textContent = tenant.businessName || 'Control de timbres';
   $('#saStampSlug').textContent = tenant.slug ? `${tenant.slug} · ${active ? 'Licencia activa' : 'Licencia inactiva'}` : '';
   $('#saStampAvailable').textContent = String(wallet.available ?? wallet.balance ?? 0);
@@ -610,6 +619,17 @@ async function submitStampRecharge(event) {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ quantity, note }),
   });
   toast(`Se agregaron ${quantity} timbres al tenant`);
+  SA_STAMP_DATA = await api(`/api/superadmin/tenants/${SA_STAMP_TENANT_ID}/stamps`);
+  renderStampControl();
+}
+
+async function saveTenantInvoicingEnvironment() {
+  if (!SA_STAMP_TENANT_ID) return;
+  const environment = String($('#saStampEnvironment')?.value || 'sandbox');
+  await api(`/api/superadmin/tenants/${SA_STAMP_TENANT_ID}/invoicing-environment`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ environment }),
+  });
+  toast(environment === 'production' ? 'Producción activada; carga el CSD real de cada emisor' : 'Tenant cambiado a Sandbox');
   SA_STAMP_DATA = await api(`/api/superadmin/tenants/${SA_STAMP_TENANT_ID}/stamps`);
   renderStampControl();
 }
@@ -1899,6 +1919,7 @@ $('#saStampClose')?.addEventListener('click', closeStampModal);
 $('#saStampCancel')?.addEventListener('click', closeStampModal);
 $('#saStampModal')?.addEventListener('click', (e) => { if (e.target?.id === 'saStampModal') closeStampModal(); });
 $('#saStampActivationBtn')?.addEventListener('click', () => toggleTenantInvoicing().catch((err) => toast(err.message, true)));
+$('#saStampEnvironmentBtn')?.addEventListener('click', () => saveTenantInvoicingEnvironment().catch((err) => toast(err.message, true)));
 $('#saStampForm')?.addEventListener('submit', (e) => submitStampRecharge(e).catch((err) => toast(err.message, true)));
 $('#saBranchLimitCancel')?.addEventListener('click', closeBranchLimitModal);
 $('#saBranchLimitModal')?.addEventListener('click', (e) => {

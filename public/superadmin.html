@@ -325,6 +325,12 @@
         <div><b id="saStampLicenseTitle">Facturación desactivada</b><span id="saStampLicenseHelp">Actívala para usar sus 2 timbres de cortesía.</span></div>
         <button type="button" class="btn btn-primary" id="saStampActivationBtn"><i class="ph-bold ph-power"></i> Activar facturación</button>
       </div>
+      <section class="sa-stamp-panel">
+        <h4><i class="ph-bold ph-cloud-check"></i> Ambiente de Facturama</h4>
+        <div class="field"><label>Destino de los CFDI</label><select id="saStampEnvironment"><option value="sandbox">Sandbox · pruebas</option><option value="production">Producción · SAT real</option></select></div>
+        <p class="hint" id="saStampEnvironmentHelp"></p>
+        <button type="button" class="btn btn-primary" id="saStampEnvironmentBtn"><i class="ph-bold ph-floppy-disk"></i> Guardar ambiente</button>
+      </section>
       <div class="sa-stamp-stats">
         <article><i class="ph-bold ph-seal-check"></i><span>Disponibles</span><strong id="saStampAvailable">0</strong></article>
         <article><i class="ph-bold ph-wallet"></i><span>Saldo total</span><strong id="saStampBalance">0</strong></article>

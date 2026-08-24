@@ -220,8 +220,8 @@ router.post('/register', authAttemptLimiter, async (req, res, next) => {
     // Tenant y propietario se crean de forma atómica y en un solo viaje a Neon.
     const created = await q(
       `WITH new_tenant AS (
-         INSERT INTO tenants (slug, business_name, owner_name, phone_enc, phone_country, phone_calling_code, timezone, reseller_id)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $10)
+         INSERT INTO tenants (slug, business_name, owner_name, phone_enc, phone_country, phone_calling_code, timezone, reseller_id, invoicing_environment)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $10, $11)
          RETURNING *
        ), new_user AS (
          INSERT INTO users (tenant_id, username, password_hash, onboarding_completed)
@@ -241,6 +241,7 @@ router.post('/register', authAttemptLimiter, async (req, res, next) => {
         cleanUser,
         passwordHash,
         resellerId,
+        normalizedPhone.country === 'MX' || String(normalizedPhone.callingCode || '').replace(/\D/g, '') === '52' ? 'production' : 'sandbox',
       ]
     );
     const tenant = created.rows[0].tenant;

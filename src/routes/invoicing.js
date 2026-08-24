@@ -6,7 +6,7 @@ const { q, tdb, ensureTenantCourtesyStamps } = require('../db');
 const { encrypt, decrypt, lookupHash } = require('../utils/crypto');
 const { requireAuth, requireOwner } = require('../middleware/auth');
 const { createRateLimiter } = require('../middleware/security');
-const { FacturamaClient, FacturamaError } = require('../services/facturama');
+const { FacturamaError, createConfiguredFacturamaClients } = require('../services/facturama');
 const {
   isMexicoIdentity,
   invoicingPortalUrl,
@@ -24,7 +24,24 @@ const {
 } = require('../utils/invoicing');
 
 const router = express.Router();
-const facturama = new FacturamaClient();
+const facturamaClients = createConfiguredFacturamaClients();
+
+function normalizeEnvironment(value) {
+  return String(value || '').toLowerCase() === 'production' ? 'production' : 'sandbox';
+}
+
+function tenantEnvironment(tenant) {
+  if (config.NODE_ENV !== 'production' || tenant?.slug === config.DEMO_TENANT_SLUG) return 'sandbox';
+  return normalizeEnvironment(tenant?.invoicing_environment);
+}
+
+function facturamaFor(source) {
+  return facturamaClients[normalizeEnvironment(source?.environment || source)] || facturamaClients.sandbox;
+}
+
+function apiModeFor(document, profile) {
+  return ['web', 'multi'].includes(document?.api_mode) ? document.api_mode : (profile?.api_mode || 'multi');
+}
 const publicLimiter = createRateLimiter({ windowMs: 15 * 60 * 1000, max: 30, message: 'Demasiados intentos de facturación. Espera unos minutos.' });
 const csdUpload = multer({
   storage: multer.memoryStorage(),
@@ -158,7 +175,7 @@ function profileCompleteness(profile) {
 }
 
 function profileReady(profile) {
-  if (!profile?.enabled || !profileCompleteness(profile) || !facturama.isConfigured()) return false;
+  if (!profile?.enabled || !profileCompleteness(profile) || !facturamaFor(profile).isConfigured()) return false;
   if (profile.environment === 'sandbox' && profile.sandbox_shared) return true;
   return Boolean(profile.csd_uploaded);
 }
@@ -166,7 +183,7 @@ function profileReady(profile) {
 function profileReadinessError(profile) {
   if (!profile?.enabled) return 'Activa la facturación electrónica en la configuración fiscal';
   if (!profileCompleteness(profile)) return 'Completa los datos fiscales y valores SAT predeterminados del negocio';
-  if (!facturama.isConfigured()) return `Facturación en preparación: faltan las credenciales de Facturama ${config.FACTURAMA_ENVIRONMENT === 'sandbox' ? 'Sandbox' : 'Producción'} en el servidor. Comunícate con soporte.`;
+  if (!facturamaFor(profile).isConfigured()) return `Facturación en preparación: faltan las credenciales de Facturama ${normalizeEnvironment(profile?.environment) === 'sandbox' ? 'Sandbox' : 'Producción'} en el servidor. Comunícate con soporte.`;
   if (profile.environment === 'sandbox' && profile.sandbox_shared) return '';
   if (!profile.csd_uploaded) return 'Carga los certificados de sello digital del emisor';
   return '';
@@ -191,7 +208,7 @@ async function requireMexico(req, res, next) {
 
 async function findPublicTenant(slug) {
   const found = await q(
-    `SELECT id, slug, business_name, phone_country, phone_calling_code, logo, primary_color, account_status, billing_status, invoicing_enabled
+    `SELECT id, slug, business_name, phone_country, phone_calling_code, logo, primary_color, account_status, billing_status, invoicing_enabled, invoicing_environment
      FROM tenants WHERE slug = $1 LIMIT 1`,
     [String(slug || '').trim().toLowerCase()]
   );
@@ -215,6 +232,8 @@ function invoiceSummary(row, includeReceiver = true) {
     status: row.status,
     emitterId: row.fiscal_emitter_id ? Number(row.fiscal_emitter_id) : null,
     issuerRfc: row.issuer_rfc || '',
+    environment: normalizeEnvironment(row.environment),
+    apiMode: row.api_mode || 'multi',
     receiver,
     total: Number(row.order_total || row.total || 0),
     error: row.error_message || '',
@@ -276,6 +295,7 @@ function cfdiDocumentSummary(row) {
     id: Number(row.id), type: row.document_type, orderId: row.order_id ? Number(row.order_id) : null,
     providerId: row.provider_id || '', uuid: row.uuid || '', series: row.series || '', folio: row.folio || '',
     status: row.status || '', issuerRfc: row.issuer_rfc || '', receiver, total: Number(row.total || 0),
+    environment: normalizeEnvironment(row.environment), apiMode: row.api_mode || 'multi',
     branchId: row.service_branch_id ? Number(row.service_branch_id) : null,
     orderCount: Number(row.order_count || (row.order_id ? 1 : 0)),
     cancellationMotive: row.cancellation_motive || '', cancellationStatus: row.cancellation_status || '',
@@ -288,9 +308,10 @@ function cfdiDocumentSummary(row) {
 async function loadInvoiceFiles(invoice, profile) {
   const files = {};
   if (!invoice.provider_id) return files;
+  const facturama = facturamaFor(invoice.environment || profile);
   await Promise.all(['xml', 'pdf'].map(async (format) => {
     try {
-      const result = await facturama.downloadCfdi(invoice.provider_id, format, profile.api_mode);
+      const result = await facturama.downloadCfdi(invoice.provider_id, format, apiModeFor(invoice, profile));
       if (result?.Content) files[format] = String(result.Content);
     } catch (error) {
       console.warn(`[invoicing] No se pudo descargar ${format} de ${invoice.provider_id}:`, error.message);
@@ -317,10 +338,11 @@ async function sendInvoiceEmail({ tenant, tenantDb, invoiceId, emailInput, actor
     throw Object.assign(new Error('El CFDI todavía no está disponible en Facturama'), { status: 409 });
   }
   const profile = await getEmitter(tenantDb, invoice.fiscal_emitter_id);
+  const facturama = facturamaFor(invoice.environment || profile);
   const maskedEmail = maskInvoiceEmail(email);
   const identity = [invoice.series, invoice.folio].filter(Boolean).join('-') || invoice.uuid || invoice.id;
   try {
-    const response = await facturama.sendCfdiEmail(invoice.provider_id, email, profile?.api_mode, {
+    const response = await facturama.sendCfdiEmail(invoice.provider_id, email, apiModeFor(invoice, profile), {
       subject: `Factura ${identity} · ${tenant?.business_name || 'ChatBotPro'}`,
       comments: 'Adjuntamos la representación PDF y el archivo XML de tu CFDI.',
     });
@@ -338,7 +360,7 @@ async function sendInvoiceEmail({ tenant, tenantDb, invoiceId, emailInput, actor
   }
 }
 
-async function issueGlobalInvoice({ tenantDb, orderIds, conceptMode = 'total', actor = '', allowedBranchId = null }) {
+async function issueGlobalInvoice({ tenant, tenantDb, orderIds, conceptMode = 'total', actor = '', allowedBranchId = null }) {
   const ids = [...new Set((orderIds || []).map(Number).filter((id) => Number.isInteger(id) && id > 0))];
   if (!ids.length) throw Object.assign(new Error('Selecciona al menos una venta sin facturar'), { status: 400 });
   if (ids.length > 500) throw Object.assign(new Error('Puedes incluir hasta 500 tickets por factura global'), { status: 400 });
@@ -363,6 +385,8 @@ async function issueGlobalInvoice({ tenantDb, orderIds, conceptMode = 'total', a
   }
   const branch = branchId ? await tenantDb.get('SELECT fiscal_postal_code,fiscal_emitter_id FROM {s}.branches WHERE id=$1 LIMIT 1', [branchId]) : null;
   const profile = await getEmitter(tenantDb, branch?.fiscal_emitter_id, branchId);
+  profile.environment = tenantEnvironment(tenant);
+  const facturama = facturamaFor(profile);
   const readinessError = profileReadinessError(profile);
   if (readinessError) throw Object.assign(new Error(readinessError), { status: 409 });
   let expeditionPlace = resolveExpeditionPostalCode(profile, branch?.fiscal_postal_code);
@@ -428,9 +452,9 @@ async function issueGlobalInvoice({ tenantDb, orderIds, conceptMode = 'total', a
     };
     const row = await tx.get(
       `INSERT INTO {s}.global_invoices
-       (request_key,environment,series,folio,status,service_branch_id,business_date,periodicity,concept_mode,order_count,total,payment_form,receiver_data_enc,fiscal_snapshot_enc,issued_by,fiscal_emitter_id,issuer_rfc)
-       VALUES ($1,$2,$3,$4,'pending',$5,$6,'01',$7,$8,$9,$10,$11,$12,$13,$14,$15) RETURNING *`,
-      [createRequestKey(), profile.environment, invoiceSeries, folio, branchId || null, sales[0].business_date,
+       (request_key,environment,api_mode,series,folio,status,service_branch_id,business_date,periodicity,concept_mode,order_count,total,payment_form,receiver_data_enc,fiscal_snapshot_enc,issued_by,fiscal_emitter_id,issuer_rfc)
+       VALUES ($1,$2,$3,$4,$5,'pending',$6,$7,'01',$8,$9,$10,$11,$12,$13,$14,$15,$16) RETURNING *`,
+      [createRequestKey(), profile.environment, profile.api_mode, invoiceSeries, folio, branchId || null, sales[0].business_date,
         normalizedConceptMode, sales.length, total, paymentForm, encrypt(JSON.stringify(receiver)), encrypt(JSON.stringify(snapshot)), actor,
         lockedProfile.id, profile.rfc]
     );
@@ -469,7 +493,7 @@ async function issueGlobalInvoice({ tenantDb, orderIds, conceptMode = 'total', a
       } catch {}
     }
     if (!identity.providerId) throw new FacturamaError('Facturama no devolvió el identificador del CFDI global', { status: 502, uncertain: true });
-    const fileData = await loadInvoiceFiles({ provider_id: identity.providerId }, profile);
+    const fileData = await loadInvoiceFiles({ provider_id: identity.providerId, environment: profile.environment, api_mode: profile.api_mode }, profile);
     const updated = await tenantDb.get(
       `UPDATE {s}.global_invoices SET provider_id=$1,uuid=$2,certificate_number=$3,status='active',provider_response_enc=$4,
        xml_enc=$5,pdf_enc=$6,issued_at=now(),updated_at=now(),error_message='' WHERE id=$7 RETURNING *`,
@@ -512,6 +536,8 @@ async function issueSaleInvoice({ tenant, tenantDb, orderId, receiverInput, requ
   if (publicToken && !invoiceAccessMatches(sale, publicToken)) throw Object.assign(new Error('El código de facturación no es válido'), { status: 404 });
   if (sale.status === 'cancelado') throw Object.assign(new Error('No se puede facturar un ticket cancelado'), { status: 409 });
   const profile = await getEmitter(tenantDb, 0, sale.service_branch_id);
+  profile.environment = tenantEnvironment(tenant);
+  const facturama = facturamaFor(profile);
   const readinessError = profileReadinessError(profile);
   if (readinessError) throw Object.assign(new Error(readinessError), { status: 409 });
 
@@ -577,9 +603,9 @@ async function issueSaleInvoice({ tenant, tenantDb, orderId, receiverInput, requ
     };
     const row = await tx.get(
       `INSERT INTO {s}.invoices
-       (order_id, request_key, environment, series, folio, status, receiver_data_enc, fiscal_snapshot_enc, issued_by,fiscal_emitter_id,issuer_rfc)
-       VALUES ($1,$2,$3,$4,$5,'pending',$6,$7,$8,$9,$10) RETURNING *`,
-      [sale.id, requestKey, profile.environment, invoiceSeries, folio, encrypt(JSON.stringify(receiver)), encrypt(JSON.stringify(snapshot)), actor,lockedProfile.id,profile.rfc]
+       (order_id, request_key, environment, api_mode, series, folio, status, receiver_data_enc, fiscal_snapshot_enc, issued_by,fiscal_emitter_id,issuer_rfc)
+       VALUES ($1,$2,$3,$4,$5,$6,'pending',$7,$8,$9,$10,$11) RETURNING *`,
+      [sale.id, requestKey, profile.environment, profile.api_mode, invoiceSeries, folio, encrypt(JSON.stringify(receiver)), encrypt(JSON.stringify(snapshot)), actor,lockedProfile.id,profile.rfc]
     );
     await reserveStamp(tx, 'individual', row.id, lockedProfile.id, actor);
     await tx.run("INSERT INTO {s}.invoice_events (invoice_id, event_type, detail, actor) VALUES ($1,'created','Solicitud preparada',$2)", [row.id, actor]);
@@ -624,7 +650,7 @@ async function issueSaleInvoice({ tenant, tenantDb, orderId, receiverInput, requ
       } catch {}
     }
     if (!identity.providerId) throw new FacturamaError('Facturama no devolvió el identificador del CFDI', { status: 502, uncertain: true });
-    const fileData = await loadInvoiceFiles({ provider_id: identity.providerId }, profile);
+    const fileData = await loadInvoiceFiles({ provider_id: identity.providerId, environment: profile.environment, api_mode: profile.api_mode }, profile);
     const updated = await tenantDb.get(
       `UPDATE {s}.invoices SET provider_id=$1, uuid=$2, certificate_number=$3, status='active',
          provider_response_enc=$4, xml_enc=$5, pdf_enc=$6, issued_at=now(), updated_at=now(), error_message=''
@@ -672,6 +698,9 @@ router.get('/public/:slug', publicLimiter, async (req, res, next) => {
          WHERE active=1 ORDER BY id LIMIT 3`
       ),
     ]);
+    const environment = tenantEnvironment(tenant);
+    if (profile) profile.environment = environment;
+    emitters.forEach((emitter) => { emitter.environment = environment; });
     const settings = Object.fromEntries(settingsRows.map((row) => [row.key, String(row.value || '').trim()]));
     res.json({
       business: {
@@ -692,7 +721,7 @@ router.get('/public/:slug', publicLimiter, async (req, res, next) => {
       } : null,
       available: emitters.some((emitter) => profileReady(safeProfile(emitter))) || profileReady(profile),
       unavailableReason: emitters.length ? 'Ningún emisor fiscal está listo para timbrar' : profileReadinessError(profile),
-      environment: profile?.environment || config.FACTURAMA_ENVIRONMENT,
+      environment,
     });
   } catch (error) { next(error); }
 });
@@ -728,6 +757,8 @@ router.post('/public/:slug/lookup', publicLimiter, async (req, res, next) => {
         : null,
     ]);
     const profile = await getEmitter(tenantDb, branch?.fiscal_emitter_id, sale.service_branch_id);
+    profile.environment = tenantEnvironment(tenant);
+    const facturama = facturamaFor(profile);
     let expeditionPostalCode = resolveExpeditionPostalCode(profile, branch?.fiscal_postal_code);
     if (profile?.api_mode === 'web') {
       try { expeditionPostalCode = await facturama.webExpeditionPostalCode(expeditionPostalCode); } catch {}
@@ -825,17 +856,19 @@ router.get('/bootstrap', async (req, res, next) => {
       req.tdb.get('SELECT * FROM {s}.stamp_wallet WHERE id=1'),
       req.tdb.all('SELECT * FROM {s}.stamp_ledger ORDER BY id DESC LIMIT 20'),
     ]);
+    if (profile) profile.environment = tenantEnvironment(req.tenant);
+    const facturama = facturamaFor(profile?.environment || tenantEnvironment(req.tenant));
     let expeditionPostalCode = profile?.postal_code || '';
     if (profile?.api_mode === 'web' && facturama.isConfigured()) {
       try { expeditionPostalCode = await facturama.webExpeditionPostalCode(expeditionPostalCode); } catch {}
     }
     res.json({
       eligible: true,
-      provider: { name: 'Facturama', configured: facturama.isConfigured(), environment: config.FACTURAMA_ENVIRONMENT, expeditionPostalCode },
+      provider: { name: 'Facturama', configured: facturama.isConfigured(), environment: profile?.environment || tenantEnvironment(req.tenant), expeditionPostalCode },
       profile,
       emitters: emitters.map(safeProfile),
       ready: profileReady(profile),
-      sandboxSharedAvailable: config.FACTURAMA_ENVIRONMENT === 'sandbox' && config.FACTURAMA_SANDBOX_SHARED_ISSUER,
+      sandboxSharedAvailable: tenantEnvironment(req.tenant) === 'sandbox' && config.FACTURAMA_SANDBOX_SHARED_ISSUER,
       sandboxDefaults: sandboxIssuerDefaults(),
       portalUrl: invoicingPortalUrl(req, config.INVOICING_PORTAL_ORIGIN, req.tenant.slug),
       branches,
@@ -869,13 +902,13 @@ router.get('/documents', async (req, res, next) => {
     params.push(limit, (page - 1) * limit);
     const rows = await req.tdb.all(
       `WITH documents AS (
-         SELECT 'individual'::text AS document_type,i.id,i.order_id,i.provider_id,i.uuid,i.series,i.folio,i.status,
+         SELECT 'individual'::text AS document_type,i.id,i.order_id,i.provider_id,i.uuid,i.series,i.folio,i.status,i.environment,i.api_mode,
            i.receiver_data_enc,o.total::float AS total,o.service_branch_id,1::int AS order_count,COALESCE(i.issuer_rfc,(SELECT rfc FROM {s}.fiscal_emitters WHERE id=1)) AS issuer_rfc,
            i.cancellation_motive,i.replacement_uuid,i.cancellation_status,i.cancellation_message,i.cancellation_receipt_enc,
            i.cancel_requested_at,i.canceled_at,i.issued_at,i.created_at,i.error_message
          FROM {s}.invoices i JOIN {s}.orders o ON o.id=i.order_id
          UNION ALL
-         SELECT 'global'::text,gi.id,NULL::integer,gi.provider_id,gi.uuid,gi.series,gi.folio,gi.status,
+         SELECT 'global'::text,gi.id,NULL::integer,gi.provider_id,gi.uuid,gi.series,gi.folio,gi.status,gi.environment,gi.api_mode,
            gi.receiver_data_enc,gi.total::float,gi.service_branch_id,gi.order_count,COALESCE(gi.issuer_rfc,(SELECT rfc FROM {s}.fiscal_emitters WHERE id=1)),
            gi.cancellation_motive,gi.replacement_uuid,gi.cancellation_status,gi.cancellation_message,gi.cancellation_receipt_enc,
            gi.cancel_requested_at,gi.canceled_at,gi.issued_at,gi.created_at,gi.error_message
@@ -893,8 +926,10 @@ router.get('/documents', async (req, res, next) => {
 
 router.put('/profile', requireOwner, async (req, res, next) => {
   try {
-    const useSandboxShared = config.FACTURAMA_ENVIRONMENT === 'sandbox'
+    const environment = tenantEnvironment(req.tenant);
+    const useSandboxShared = environment === 'sandbox'
       && config.FACTURAMA_SANDBOX_SHARED_ISSUER
+      && req.tenant?.slug === config.DEMO_TENANT_SLUG
       && req.body?.sandboxShared !== false;
     const sandboxDefaults = sandboxIssuerDefaults();
     const source = useSandboxShared ? {
@@ -925,7 +960,7 @@ router.put('/profile', requireOwner, async (req, res, next) => {
         csd_uploaded=CASE WHEN fiscal_profiles.rfc=EXCLUDED.rfc THEN fiscal_profiles.csd_uploaded ELSE 0 END,
         updated_at=now()
        RETURNING *`,
-      [enabled, config.FACTURAMA_ENVIRONMENT, apiMode, useSandboxShared ? 1 : 0, profile.rfc, profile.legalName,
+      [enabled, environment, apiMode, useSandboxShared ? 1 : 0, profile.rfc, profile.legalName,
         profile.fiscalRegime, profile.postalCode, profile.series, profile.defaultProductCode, profile.defaultUnitCode,
         profile.defaultUnitName, profile.defaultTaxObject, profile.defaultIvaRate, profile.defaultIsrRate,
         String(req.body?.deliveryProductCode || profile.defaultProductCode).trim(), profile.defaultCardPaymentForm]
@@ -958,6 +993,7 @@ router.put('/profile', requireOwner, async (req, res, next) => {
 
 router.post('/emitters', requireOwner, async (req, res, next) => {
   try {
+    const environment = tenantEnvironment(req.tenant);
     const profile = validateFiscalProfile(req.body || {});
     const label = String(req.body?.label || profile.legalName).trim().slice(0, 80);
     const row = await req.tdb.get(
@@ -966,7 +1002,7 @@ router.post('/emitters', requireOwner, async (req, res, next) => {
         default_product_code,default_unit_code,default_unit_name,default_tax_object,default_iva_rate,default_isr_rate,
         delivery_product_code,prices_include_tax,default_card_payment_form)
        VALUES($1,$2,$3,'multi',0,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,1,$16) RETURNING *`,
-      [label, req.body?.enabled === false ? 0 : 1, config.FACTURAMA_ENVIRONMENT, profile.rfc, profile.legalName,
+      [label, req.body?.enabled === false ? 0 : 1, environment, profile.rfc, profile.legalName,
         profile.fiscalRegime, profile.postalCode, profile.series, profile.defaultProductCode, profile.defaultUnitCode,
         profile.defaultUnitName, profile.defaultTaxObject, profile.defaultIvaRate, profile.defaultIsrRate,
         String(req.body?.deliveryProductCode || profile.defaultProductCode).trim(), profile.defaultCardPaymentForm]
@@ -1037,7 +1073,8 @@ router.post('/csd', requireOwner, csdUpload.fields([{ name: 'certificate', maxCo
     if (certificateIdentity.rfc !== profile.rfc) {
       return res.status(422).json({ error: `El CSD pertenece al RFC ${certificateIdentity.rfc}, pero el emisor está registrado como ${profile.rfc}. Corrige el RFC o carga los archivos correspondientes.` });
     }
-    await facturama.uploadCsd({
+    profile.environment = tenantEnvironment(req.tenant);
+    await facturamaFor(profile).uploadCsd({
       rfc: profile.rfc,
       certificate: certificate.buffer.toString('base64'),
       privateKey: privateKey.buffer.toString('base64'),
@@ -1163,6 +1200,7 @@ router.get('/global/eligible', async (req, res, next) => {
 router.post('/global/issue', async (req, res, next) => {
   try {
     const result = await issueGlobalInvoice({
+      tenant: req.tenant,
       tenantDb: req.tdb,
       orderIds: req.body?.orderIds,
       conceptMode: req.body?.conceptMode,
@@ -1185,7 +1223,8 @@ router.get('/global-invoices/:id/:format', async (req, res, next) => {
     let content = decrypt(format === 'xml' ? invoice.xml_enc : invoice.pdf_enc);
     if (!content && invoice.provider_id) {
       const profile = await getEmitter(req.tdb, invoice.fiscal_emitter_id);
-      const result = await facturama.downloadCfdi(invoice.provider_id, format, profile.api_mode);
+      const facturama = facturamaFor(invoice.environment || profile);
+      const result = await facturama.downloadCfdi(invoice.provider_id, format, apiModeFor(invoice, profile));
       content = String(result?.Content || '');
       if (content) await req.tdb.run(
         `UPDATE {s}.global_invoices SET ${format === 'xml' ? 'xml_enc' : 'pdf_enc'}=$1,updated_at=now() WHERE id=$2`,
@@ -1209,7 +1248,7 @@ router.post('/invoices/:id/cancel', requireOwner, async (req, res, next) => {
     if (!invoice || !invoice.provider_id) return res.status(404).json({ error: 'CFDI no encontrado' });
     const profile = await getEmitter(req.tdb, invoice.fiscal_emitter_id);
     if (!['active','cancel_pending'].includes(invoice.status)) return res.status(409).json({ error: 'El CFDI no se puede cancelar en su estado actual' });
-    const response = await facturama.cancelCfdi(invoice.provider_id, motive, replacementUuid, profile.api_mode);
+    const response = await facturamaFor(invoice.environment || profile).cancelCfdi(invoice.provider_id, motive, replacementUuid, apiModeFor(invoice, profile));
     const cancellation = cancellationResult(response, 'cancel_pending');
     const nextStatus = cancellation.status === 'active' ? 'active' : cancellation.status;
     const updated = await req.tdb.get(
@@ -1237,7 +1276,7 @@ router.post('/global-invoices/:id/cancel', requireOwner, async (req, res, next) 
     if (!invoice || !invoice.provider_id) return res.status(404).json({ error: 'CFDI global no encontrado' });
     if (!['active','cancel_pending'].includes(invoice.status)) return res.status(409).json({ error: 'El CFDI no se puede cancelar en su estado actual' });
     const profile = await getEmitter(req.tdb, invoice.fiscal_emitter_id);
-    const response = await facturama.cancelCfdi(invoice.provider_id, motive, replacementUuid, profile.api_mode);
+    const response = await facturamaFor(invoice.environment || profile).cancelCfdi(invoice.provider_id, motive, replacementUuid, apiModeFor(invoice, profile));
     const cancellation = cancellationResult(response, 'cancel_pending');
     const nextStatus = cancellation.status === 'active' ? 'active' : cancellation.status;
     const updated = await req.tdb.get(
@@ -1267,7 +1306,7 @@ router.post('/documents/:type/:id/refresh-cancellation', requireOwner, async (re
     if (!invoice || !invoice.provider_id) return res.status(404).json({ error: 'CFDI no encontrado' });
     if (!['cancel_pending','canceled'].includes(invoice.status)) return res.status(409).json({ error: 'Este CFDI no tiene una cancelación pendiente' });
     const profile = await getEmitter(req.tdb, invoice.fiscal_emitter_id);
-    const response = await facturama.getCfdi(invoice.provider_id, profile.api_mode);
+    const response = await facturamaFor(invoice.environment || profile).getCfdi(invoice.provider_id, apiModeFor(invoice, profile));
     const cancellation = cancellationResult(response, invoice.status);
     const nextStatus = cancellation.canceled ? 'canceled' : invoice.status;
     const updated = await req.tdb.get(
@@ -1308,7 +1347,8 @@ router.get('/invoices/:id/:format', async (req, res, next) => {
     let content = decrypt(format === 'xml' ? invoice.xml_enc : invoice.pdf_enc);
     if (!content && invoice.provider_id) {
       const profile = await getEmitter(req.tdb, invoice.fiscal_emitter_id);
-      const result = await facturama.downloadCfdi(invoice.provider_id, format, profile.api_mode);
+      const facturama = facturamaFor(invoice.environment || profile);
+      const result = await facturama.downloadCfdi(invoice.provider_id, format, apiModeFor(invoice, profile));
       content = String(result?.Content || '');
       if (content) await req.tdb.run(`UPDATE {s}.invoices SET ${format === 'xml' ? 'xml_enc' : 'pdf_enc'}=$1,updated_at=now() WHERE id=$2`, [encrypt(content), invoice.id]);
     }

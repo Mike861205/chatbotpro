@@ -103,6 +103,7 @@ async function initMaster() {
       license_count INTEGER NOT NULL DEFAULT 1,
       branch_limit INTEGER NOT NULL DEFAULT 2,
       invoicing_enabled INTEGER NOT NULL DEFAULT 0,
+      invoicing_environment TEXT NOT NULL DEFAULT 'sandbox',
       invoicing_activated_at TIMESTAMPTZ,
       invoicing_trial_granted_at TIMESTAMPTZ,
       invoicing_plan_bonus_granted_at TIMESTAMPTZ,
@@ -208,6 +209,7 @@ async function initMaster() {
   await q(`ALTER TABLE tenants ADD COLUMN IF NOT EXISTS license_count INTEGER NOT NULL DEFAULT 1`);
   await q(`ALTER TABLE tenants ADD COLUMN IF NOT EXISTS branch_limit INTEGER NOT NULL DEFAULT 2`);
   await q(`ALTER TABLE tenants ADD COLUMN IF NOT EXISTS invoicing_enabled INTEGER`);
+  await q(`ALTER TABLE tenants ADD COLUMN IF NOT EXISTS invoicing_environment TEXT NOT NULL DEFAULT 'sandbox'`);
   await q(`ALTER TABLE tenants ADD COLUMN IF NOT EXISTS invoicing_activated_at TIMESTAMPTZ`);
   await q(`ALTER TABLE tenants ADD COLUMN IF NOT EXISTS invoicing_trial_granted_at TIMESTAMPTZ`);
   await q(`ALTER TABLE tenants ADD COLUMN IF NOT EXISTS invoicing_plan_bonus_granted_at TIMESTAMPTZ`);
@@ -855,6 +857,7 @@ async function createTenantSchema(slug) {
       provider TEXT NOT NULL DEFAULT 'facturama',
       environment TEXT NOT NULL DEFAULT 'sandbox',
       api_mode TEXT NOT NULL DEFAULT 'multi',
+      api_mode TEXT NOT NULL DEFAULT 'multi',
       sandbox_shared INTEGER NOT NULL DEFAULT 0,
       rfc TEXT NOT NULL DEFAULT '',
       legal_name TEXT NOT NULL DEFAULT '',
@@ -989,6 +992,10 @@ async function createTenantSchema(slug) {
     );
     ALTER TABLE "${s}".invoices ADD COLUMN IF NOT EXISTS fiscal_emitter_id BIGINT;
     ALTER TABLE "${s}".invoices ADD COLUMN IF NOT EXISTS issuer_rfc TEXT;
+    ALTER TABLE "${s}".invoices ADD COLUMN IF NOT EXISTS api_mode TEXT;
+    UPDATE "${s}".invoices i SET api_mode=COALESCE((SELECT e.api_mode FROM "${s}".fiscal_emitters e WHERE e.id=i.fiscal_emitter_id),'multi') WHERE i.api_mode IS NULL;
+    ALTER TABLE "${s}".invoices ALTER COLUMN api_mode SET DEFAULT 'multi';
+    ALTER TABLE "${s}".invoices ALTER COLUMN api_mode SET NOT NULL;
     CREATE UNIQUE INDEX IF NOT EXISTS idx_${s}_invoices_uuid ON "${s}".invoices(uuid) WHERE uuid IS NOT NULL;
     CREATE UNIQUE INDEX IF NOT EXISTS idx_${s}_invoices_order_live ON "${s}".invoices(order_id) WHERE status IN ('pending','unknown','active','cancel_pending');
     CREATE INDEX IF NOT EXISTS idx_${s}_invoices_created ON "${s}".invoices(created_at DESC, id DESC);
@@ -1008,6 +1015,7 @@ async function createTenantSchema(slug) {
       request_key UUID NOT NULL UNIQUE,
       provider TEXT NOT NULL DEFAULT 'facturama',
       environment TEXT NOT NULL DEFAULT 'sandbox',
+      api_mode TEXT NOT NULL DEFAULT 'multi',
       provider_id TEXT,
       uuid TEXT,
       series TEXT NOT NULL DEFAULT '',
@@ -1034,6 +1042,10 @@ async function createTenantSchema(slug) {
     );
     ALTER TABLE "${s}".global_invoices ADD COLUMN IF NOT EXISTS fiscal_emitter_id BIGINT;
     ALTER TABLE "${s}".global_invoices ADD COLUMN IF NOT EXISTS issuer_rfc TEXT;
+    ALTER TABLE "${s}".global_invoices ADD COLUMN IF NOT EXISTS api_mode TEXT;
+    UPDATE "${s}".global_invoices gi SET api_mode=COALESCE((SELECT e.api_mode FROM "${s}".fiscal_emitters e WHERE e.id=gi.fiscal_emitter_id),'multi') WHERE gi.api_mode IS NULL;
+    ALTER TABLE "${s}".global_invoices ALTER COLUMN api_mode SET DEFAULT 'multi';
+    ALTER TABLE "${s}".global_invoices ALTER COLUMN api_mode SET NOT NULL;
     ALTER TABLE "${s}".global_invoices ADD COLUMN IF NOT EXISTS cancellation_motive TEXT;
     ALTER TABLE "${s}".global_invoices ADD COLUMN IF NOT EXISTS replacement_uuid TEXT;
     ALTER TABLE "${s}".global_invoices ADD COLUMN IF NOT EXISTS cancellation_status TEXT;

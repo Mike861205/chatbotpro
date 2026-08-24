@@ -185,4 +185,19 @@ class FacturamaClient {
   }
 }
 
-module.exports = { FacturamaClient, FacturamaError, flattenProviderError };
+function createConfiguredFacturamaClients() {
+  return Object.freeze({
+    sandbox: new FacturamaClient({
+      username: config.FACTURAMA_SANDBOX_USERNAME,
+      password: config.FACTURAMA_SANDBOX_PASSWORD,
+      baseUrl: config.FACTURAMA_SANDBOX_BASE_URL,
+    }),
+    production: new FacturamaClient({
+      username: config.FACTURAMA_PRODUCTION_USERNAME,
+      password: config.FACTURAMA_PRODUCTION_PASSWORD,
+      baseUrl: config.FACTURAMA_PRODUCTION_BASE_URL,
+    }),
+  });
+}
+
+module.exports = { FacturamaClient, FacturamaError, flattenProviderError, createConfiguredFacturamaClients };

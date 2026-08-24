@@ -11,6 +11,7 @@ const { createRateLimiter } = require('../middleware/security');
 const { describeStoredPhone, normalizeInternationalPhone } = require('../utils/phone');
 const { buildClientSummary } = require('../utils/customerLifecycle');
 const { isMexicoIdentity } = require('../utils/invoicing');
+const { createConfiguredFacturamaClients } = require('../services/facturama');
 const {
   signSuperAdminToken,
   setSuperAdminCookie,
@@ -19,6 +20,7 @@ const {
 } = require('../middleware/superadmin');
 
 const router = express.Router();
+const facturamaClients = createConfiguredFacturamaClients();
 const SALES_STAGES = new Set(['new', 'contacted', 'interested', 'potential', 'follow_up', 'won', 'not_interested', 'lost']);
 const SALES_ACTIVITY_TYPES = new Set(['note', 'contact', 'follow_up', 'close_won', 'close_lost', 'stage_change']);
 const BULK_DELETE_STAGES = new Set(['not_interested', 'lost']);
@@ -1315,9 +1317,15 @@ router.get('/tenants/:id/stamps', requireSuperAdmin, async (req, res, next) => {
       tenant: {
         id: Number(tenant.id), slug: tenant.slug, businessName: tenant.business_name,
         enabled: Boolean(Number(tenant.invoicing_enabled)),
+        isDemo: tenant.slug === config.DEMO_TENANT_SLUG,
+        environment: tenant.slug === config.DEMO_TENANT_SLUG ? 'sandbox' : (tenant.invoicing_environment || 'sandbox'),
         activatedAt: tenant.invoicing_activated_at,
         trialGrantedAt: tenant.invoicing_trial_granted_at,
         activatedBy: tenant.invoicing_activated_by || '',
+      },
+      provider: {
+        sandboxConfigured: Boolean(config.FACTURAMA_SANDBOX_USERNAME && config.FACTURAMA_SANDBOX_PASSWORD),
+        productionConfigured: Boolean(config.FACTURAMA_PRODUCTION_USERNAME && config.FACTURAMA_PRODUCTION_PASSWORD),
       },
       wallet: serializeStampWallet(wallet),
       totals: { consumed: Number(totals?.consumed || 0), granted: Number(totals?.granted || 0) },
@@ -1328,6 +1336,49 @@ router.get('/tenants/:id/stamps', requireSuperAdmin, async (req, res, next) => {
       })),
       movements,
     });
+  } catch (error) { next(error); }
+});
+
+router.post('/tenants/:id/invoicing-environment', requireSuperAdmin, async (req, res, next) => {
+  try {
+    const tenant = await getTenantById(Number(req.params.id));
+    if (!tenant) return res.status(404).json({ error: 'Tenant no encontrado' });
+    if (!isMexicoIdentity(tenant) && tenant.slug !== config.DEMO_TENANT_SLUG) return res.status(403).json({ error: 'La facturación sólo aplica para tenants de México' });
+    const environment = String(req.body?.environment || '').trim().toLowerCase();
+    if (!['sandbox', 'production'].includes(environment)) return res.status(400).json({ error: 'Selecciona Sandbox o Producción' });
+    if (tenant.slug === config.DEMO_TENANT_SLUG && environment !== 'sandbox') return res.status(409).json({ error: 'El tenant demo siempre debe permanecer en Sandbox' });
+    if (environment === 'production' && !(config.FACTURAMA_PRODUCTION_USERNAME && config.FACTURAMA_PRODUCTION_PASSWORD)) {
+      return res.status(409).json({ error: 'Configura primero las credenciales de Facturama Producción en el servidor' });
+    }
+    if (environment === 'production') {
+      try {
+        await facturamaClients.production.request('/api/BranchOffice');
+      } catch (error) {
+        return res.status(409).json({ error: `Facturama Producción no autenticó las credenciales: ${error.message}` });
+      }
+    }
+    const tenantDb = tdb(tenant.slug);
+    await tenantDb.tx(async (tx) => {
+      const previous = tenant.invoicing_environment || 'sandbox';
+      await tx.run('UPDATE public.tenants SET invoicing_environment=$1 WHERE id=$2', [environment, tenant.id]);
+      await tx.run(
+        `UPDATE {s}.fiscal_profiles SET environment=$1,api_mode=CASE WHEN $1='production' THEN 'multi' ELSE api_mode END,
+         sandbox_shared=CASE WHEN $1='production' THEN 0 ELSE sandbox_shared END,
+         csd_uploaded=CASE WHEN environment<>$1 THEN 0 ELSE csd_uploaded END,updated_at=now()`, [environment]
+      );
+      await tx.run(
+        `UPDATE {s}.fiscal_emitters SET environment=$1,api_mode=CASE WHEN $1='production' THEN 'multi' ELSE api_mode END,
+         sandbox_shared=CASE WHEN $1='production' THEN 0 ELSE sandbox_shared END,
+         csd_uploaded=CASE WHEN environment<>$1 THEN 0 ELSE csd_uploaded END,updated_at=now()`, [environment]
+      );
+      const wallet = await tx.get('SELECT balance FROM {s}.stamp_wallet WHERE id=1');
+      await tx.run(
+        `INSERT INTO {s}.stamp_ledger(movement_type,quantity,balance_after,detail,actor)
+         VALUES('environment_changed',0,$1,$2,$3)`,
+        [Number(wallet?.balance || 0), `Facturama ${previous} → ${environment}. Se requiere CSD registrado en el ambiente seleccionado.`, req.superadmin.username]
+      );
+    });
+    res.json({ ok: true, environment, requiresCsd: true });
   } catch (error) { next(error); }
 });
 

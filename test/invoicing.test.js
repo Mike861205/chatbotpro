@@ -352,6 +352,26 @@ test('no hay credenciales Facturama embebidas en archivos versionados', () => {
   assert.match(read('.env.example'), /FACTURAMA_PASSWORD=\s*(?:\r?\n|$)/);
 });
 
+test('separa Sandbox y Producción por tenant y conserva el origen de cada CFDI', () => {
+  const configFile = read('src/config.js');
+  const service = read('src/services/facturama.js');
+  const database = read('src/db/index.js');
+  const auth = read('src/routes/auth.js');
+  const routes = read('src/routes/invoicing.js');
+  const superadmin = read('src/routes/superadmin.js');
+  assert.match(configFile, /FACTURAMA_SANDBOX_USERNAME/);
+  assert.match(configFile, /FACTURAMA_PRODUCTION_USERNAME/);
+  assert.match(service, /createConfiguredFacturamaClients/);
+  assert.match(database, /invoicing_environment TEXT NOT NULL DEFAULT 'sandbox'/);
+  assert.match(database, /api_mode TEXT NOT NULL DEFAULT 'multi'/);
+  assert.match(auth, /invoicing_environment/);
+  assert.match(routes, /config\.NODE_ENV !== 'production'/);
+  assert.match(routes, /tenant\?\.slug === config\.DEMO_TENANT_SLUG/);
+  assert.match(routes, /facturamaFor\(invoice\.environment \|\| profile\)/);
+  assert.match(superadmin, /invoicing-environment/);
+  assert.match(superadmin, /El tenant demo siempre debe permanecer en Sandbox/);
+});
+
 test('la carga de CSD valida RFC, vigencia y sincroniza el nombre fiscal del certificado', () => {
   const route = fs.readFileSync(path.join(__dirname, '../src/routes/invoicing.js'), 'utf8');
   assert.match(route, /new X509Certificate\(buffer\)/);
