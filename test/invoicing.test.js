@@ -29,11 +29,16 @@ test('habilita facturación sólo para identidad México o lada +52', () => {
 test('separa el acceso al módulo México de la autorización para consumir timbres', () => {
   const auth = read('src/routes/auth.js');
   const routes = read('src/routes/invoicing.js');
+  const superadmin = read('src/routes/superadmin.js');
   assert.match(auth, /invoicingEligible = isDemoTenant \|\| Boolean\(Number\(req\.tenant\.invoicing_enabled\)\) \|\| isMexicoIdentity\(req\.tenant\)/);
   assert.match(auth, /invoicingActivated: Boolean\(Number\(req\.tenant\.invoicing_enabled\)\)/);
   assert.match(routes, /function requireInvoicingActivated/);
   assert.match(routes, /post\('\/sales\/:id\/issue', requireInvoicingActivated/);
   assert.match(routes, /post\('\/global\/issue', requireInvoicingActivated/);
+  assert.match(routes, /if \(Number\(req\.tenant\?\.invoicing_enabled\)\) return true/);
+  assert.match(routes, /!isDemoTenant && !Number\(tenant\.invoicing_enabled\)/);
+  assert.match(superadmin, /describeStoredPhone\(decrypt\(tenant\.phone_enc\)/);
+  assert.match(superadmin, /phone_country=CASE WHEN \$1=1 AND \$4='MX' THEN 'MX'/);
   assert.match(read('public/css/styles.css'), /\[hidden\]\s*\{\s*display:\s*none\s*!important/);
 });
 

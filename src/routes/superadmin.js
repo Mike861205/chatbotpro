@@ -365,7 +365,14 @@ function mapBusinessRows(rows) {
 
 async function getTenantById(tenantId) {
   const found = await q('SELECT * FROM tenants WHERE id = $1', [tenantId]);
-  return found.rows[0] || null;
+  const tenant = found.rows[0];
+  if (!tenant) return null;
+  const phone = describeStoredPhone(decrypt(tenant.phone_enc) || '', tenant.phone_country, tenant.phone_calling_code);
+  return {
+    ...tenant,
+    phone_country: phone.country || tenant.phone_country || '',
+    phone_calling_code: phone.callingCode || tenant.phone_calling_code || '',
+  };
 }
 
 async function getTenantOwnerUser(tenantId) {
@@ -1422,9 +1429,12 @@ router.post('/tenants/:id/invoicing', requireSuperAdmin, async (req, res, next) 
           invoicing_enabled=$1,
           invoicing_activated_at=CASE WHEN $1=1 THEN COALESCE(invoicing_activated_at,now()) ELSE invoicing_activated_at END,
           invoicing_trial_granted_at=CASE WHEN $2=1 THEN COALESCE(invoicing_trial_granted_at,now()) ELSE invoicing_trial_granted_at END,
-          invoicing_activated_by=$3
-         WHERE id=$4 RETURNING *`,
-        [enabled ? 1 : 0, trialGrant ? 1 : 0, req.superadmin.username, tenant.id]
+          invoicing_activated_by=$3,
+          phone_country=CASE WHEN $1=1 AND $4='MX' THEN 'MX' ELSE phone_country END,
+          phone_calling_code=CASE WHEN $1=1 AND $5='52' THEN '52' ELSE phone_calling_code END
+         WHERE id=$6 RETURNING *`,
+        [enabled ? 1 : 0, trialGrant ? 1 : 0, req.superadmin.username,
+          tenant.phone_country || '', String(tenant.phone_calling_code || '').replace('+', ''), tenant.id]
       );
       if (trialGrant) {
         await tx.run(

@@ -200,6 +200,7 @@ function profileReadinessError(profile) {
 
 async function requestMexicoEligibility(req) {
   if (req.tenant?.slug === config.DEMO_TENANT_SLUG) return true;
+  if (Number(req.tenant?.invoicing_enabled)) return true;
   if (isMexicoIdentity(req.tenant)) return true;
   const leadId = Number(req.user?.demoLeadId || 0);
   if (!Number.isInteger(leadId) || leadId <= 0) return false;
@@ -229,7 +230,7 @@ async function findPublicTenant(slug) {
   const tenant = found.rows[0];
   if (!tenant || tenant.account_status !== 'active' || tenant.billing_status === 'suspended') return null;
   const isDemoTenant = tenant.slug === config.DEMO_TENANT_SLUG;
-  if (!isMexicoIdentity(tenant) && !isDemoTenant) return null;
+  if (!isMexicoIdentity(tenant) && !isDemoTenant && !Number(tenant.invoicing_enabled)) return null;
   if (!isDemoTenant && !Number(tenant.invoicing_enabled)) return null;
   return tenant;
 }
