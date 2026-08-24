@@ -9265,3 +9265,19 @@ body.onboarding-open { overflow: hidden; }
 @media(max-width:1100px){.pos-global-invoice-bar{grid-template-columns:minmax(230px,1fr) auto minmax(210px,260px)}.pos-global-invoice-actions{grid-column:1/-1;justify-content:flex-end}}
 @media(max-width:850px){.pos-global-invoice-bar{grid-template-columns:1fr auto}.pos-global-concept-mode{grid-column:1/-1}.pos-global-invoice-actions{grid-column:1/-1}}
 @media(max-width:600px){.pos-invoice-heading-actions{justify-content:space-between}.pos-global-concept-mode{grid-column:auto}.pos-global-invoice-actions{grid-column:auto}}
+/* SuperAdmin · control central de Facturación MX */
+.sa-stamp-modal{max-width:980px;max-height:min(92vh,900px);overflow:auto;padding:0}
+.sa-stamp-head{position:sticky;top:0;z-index:3;display:flex;justify-content:space-between;gap:18px;align-items:flex-start;padding:24px 26px 18px;background:rgba(255,255,255,.96);backdrop-filter:blur(12px);border-bottom:1px solid var(--line)}
+.sa-stamp-head h3{margin:5px 0 2px}.sa-stamp-head small{color:var(--ink-3)}
+.sa-stamp-kicker{display:inline-flex;align-items:center;gap:7px;color:var(--green);font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.08em}
+.sa-stamp-license{margin:22px 26px 0;padding:17px 18px;border:1px solid #fecaca;border-radius:16px;background:#fff7f7;display:flex;align-items:center;justify-content:space-between;gap:16px}
+.sa-stamp-license.is-active{border-color:#bbf7d0;background:#f0fdf4}.sa-stamp-license div{display:grid;gap:4px}.sa-stamp-license span{font-size:12px;color:var(--ink-2)}
+.sa-stamp-stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin:16px 26px}
+.sa-stamp-stats article{border:1px solid var(--line);border-radius:16px;padding:15px;background:#fff;display:grid;grid-template-columns:auto 1fr;align-items:center;gap:3px 10px}
+.sa-stamp-stats article>i{grid-row:1/3;width:38px;height:38px;border-radius:12px;background:var(--green-soft);color:var(--green);display:grid;place-items:center;font-size:18px}.sa-stamp-stats span{font-size:11px;color:var(--ink-3);font-weight:700}.sa-stamp-stats strong{font-size:22px}
+.sa-stamp-grid{display:grid;grid-template-columns:minmax(280px,.8fr) minmax(340px,1.2fr);gap:14px;margin:0 26px 14px}
+.sa-stamp-panel{border:1px solid var(--line);border-radius:16px;background:#fff;padding:18px}.sa-stamp-panel h4{margin:0 0 14px;display:flex;align-items:center;gap:7px}.sa-stamp-panel form .btn{width:100%}
+.sa-stamp-emitters{display:grid;gap:9px}.sa-stamp-emitter{padding:11px 12px;border-radius:12px;background:var(--bg);display:grid;grid-template-columns:1fr auto;gap:4px 12px}.sa-stamp-emitter b{font-size:13px}.sa-stamp-emitter span{font-size:11px;color:var(--ink-2)}.sa-stamp-emitter em{font-style:normal;font-size:10px;font-weight:800;color:var(--green)}
+.sa-stamp-history-panel{margin:0 26px}.sa-stamp-history{max-height:250px;overflow:auto}.sa-stamp-history-row{display:grid;grid-template-columns:125px 1fr 95px 95px;gap:10px;padding:10px 4px;border-top:1px solid var(--line);align-items:center;font-size:12px}.sa-stamp-history-row:first-child{border-top:0}.sa-stamp-history-row small{color:var(--ink-3)}.sa-stamp-history-row strong.positive{color:var(--green)}.sa-stamp-history-row strong.negative{color:var(--red)}
+.sa-stamp-modal>.modal-actions{padding:14px 26px 22px}
+@media(max-width:760px){.sa-stamp-modal{width:calc(100% - 18px);max-height:96vh}.sa-stamp-head{padding:18px}.sa-stamp-license{margin:14px 18px 0;align-items:stretch;flex-direction:column}.sa-stamp-license .btn{width:100%}.sa-stamp-stats{grid-template-columns:repeat(2,1fr);margin:14px 18px}.sa-stamp-grid{grid-template-columns:1fr;margin:0 18px 14px}.sa-stamp-history-panel{margin:0 18px}.sa-stamp-history-row{grid-template-columns:1fr auto}.sa-stamp-history-row small:last-child{display:none}}

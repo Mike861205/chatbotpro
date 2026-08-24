@@ -102,6 +102,10 @@ async function initMaster() {
       customer_since TIMESTAMPTZ,
       license_count INTEGER NOT NULL DEFAULT 1,
       branch_limit INTEGER NOT NULL DEFAULT 2,
+      invoicing_enabled INTEGER NOT NULL DEFAULT 0,
+      invoicing_activated_at TIMESTAMPTZ,
+      invoicing_trial_granted_at TIMESTAMPTZ,
+      invoicing_activated_by TEXT DEFAULT '',
       notes TEXT DEFAULT '',
       created_at TIMESTAMPTZ DEFAULT now()
     );
@@ -202,6 +206,21 @@ async function initMaster() {
   await q(`ALTER TABLE tenants ADD COLUMN IF NOT EXISTS customer_since TIMESTAMPTZ`);
   await q(`ALTER TABLE tenants ADD COLUMN IF NOT EXISTS license_count INTEGER NOT NULL DEFAULT 1`);
   await q(`ALTER TABLE tenants ADD COLUMN IF NOT EXISTS branch_limit INTEGER NOT NULL DEFAULT 2`);
+  await q(`ALTER TABLE tenants ADD COLUMN IF NOT EXISTS invoicing_enabled INTEGER`);
+  await q(`ALTER TABLE tenants ADD COLUMN IF NOT EXISTS invoicing_activated_at TIMESTAMPTZ`);
+  await q(`ALTER TABLE tenants ADD COLUMN IF NOT EXISTS invoicing_trial_granted_at TIMESTAMPTZ`);
+  await q(`ALTER TABLE tenants ADD COLUMN IF NOT EXISTS invoicing_activated_by TEXT DEFAULT ''`);
+  await q(`
+    UPDATE tenants
+    SET invoicing_enabled = CASE
+      WHEN upper(COALESCE(phone_country, '')) = 'MX'
+        OR regexp_replace(COALESCE(phone_calling_code, ''), '[^0-9]', '', 'g') = '52'
+        OR slug = $1
+      THEN 1 ELSE 0 END
+    WHERE invoicing_enabled IS NULL
+  `, [config.DEMO_TENANT_SLUG]);
+  await q(`ALTER TABLE tenants ALTER COLUMN invoicing_enabled SET DEFAULT 0`);
+  await q(`ALTER TABLE tenants ALTER COLUMN invoicing_enabled SET NOT NULL`);
   await q(`ALTER TABLE tenants ADD COLUMN IF NOT EXISTS notes TEXT DEFAULT ''`);
   await q(`ALTER TABLE tenants ADD COLUMN IF NOT EXISTS reseller_id INTEGER REFERENCES resellers(id) ON DELETE SET NULL`);
   await q(`ALTER TABLE tenants ADD COLUMN IF NOT EXISTS phone_country TEXT DEFAULT ''`);
@@ -905,13 +924,13 @@ async function createTenantSchema(slug) {
 
     CREATE TABLE IF NOT EXISTS "${s}".stamp_wallet (
       id INTEGER PRIMARY KEY DEFAULT 1 CHECK (id=1),
-      unlimited INTEGER NOT NULL DEFAULT 1,
+      unlimited INTEGER NOT NULL DEFAULT 0,
       balance INTEGER NOT NULL DEFAULT 0 CHECK (balance>=0),
       reserved INTEGER NOT NULL DEFAULT 0 CHECK (reserved>=0),
       low_balance_threshold INTEGER NOT NULL DEFAULT 20,
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
-    INSERT INTO "${s}".stamp_wallet(id,unlimited,balance,reserved) VALUES(1,1,0,0) ON CONFLICT(id) DO NOTHING;
+    INSERT INTO "${s}".stamp_wallet(id,unlimited,balance,reserved) VALUES(1,0,0,0) ON CONFLICT(id) DO NOTHING;
     CREATE TABLE IF NOT EXISTS "${s}".stamp_ledger (
       id BIGSERIAL PRIMARY KEY,
       movement_type TEXT NOT NULL,

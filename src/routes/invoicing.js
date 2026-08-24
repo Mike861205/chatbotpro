@@ -173,7 +173,8 @@ function profileReadinessError(profile) {
 }
 
 async function requestMexicoEligibility(req) {
-  if (isMexicoIdentity(req.tenant) || req.tenant?.slug === config.DEMO_TENANT_SLUG) return true;
+  if (req.tenant?.slug === config.DEMO_TENANT_SLUG) return true;
+  if (isMexicoIdentity(req.tenant)) return Boolean(Number(req.tenant?.invoicing_enabled));
   const leadId = Number(req.user?.demoLeadId || 0);
   if (!Number.isInteger(leadId) || leadId <= 0) return false;
   const lead = await q('SELECT phone_country, phone_calling_code FROM demo_leads WHERE id = $1 LIMIT 1', [leadId]);
@@ -183,13 +184,14 @@ async function requestMexicoEligibility(req) {
 async function requireMexico(req, res, next) {
   try {
     if (await requestMexicoEligibility(req)) return next();
+    if (isMexicoIdentity(req.tenant)) return res.status(403).json({ error: 'La facturación electrónica todavía no ha sido activada para este negocio. Solicítala al administrador.' });
     return res.status(403).json({ error: 'La facturación electrónica está disponible únicamente para cuentas registradas en México (+52)' });
   } catch (error) { next(error); }
 }
 
 async function findPublicTenant(slug) {
   const found = await q(
-    `SELECT id, slug, business_name, phone_country, phone_calling_code, logo, primary_color, account_status, billing_status
+    `SELECT id, slug, business_name, phone_country, phone_calling_code, logo, primary_color, account_status, billing_status, invoicing_enabled
      FROM tenants WHERE slug = $1 LIMIT 1`,
     [String(slug || '').trim().toLowerCase()]
   );
@@ -197,6 +199,7 @@ async function findPublicTenant(slug) {
   if (!tenant || tenant.account_status !== 'active' || tenant.billing_status === 'suspended') return null;
   const isDemoTenant = tenant.slug === config.DEMO_TENANT_SLUG;
   if (!isMexicoIdentity(tenant) && !isDemoTenant) return null;
+  if (!isDemoTenant && !Number(tenant.invoicing_enabled)) return null;
   return tenant;
 }
 

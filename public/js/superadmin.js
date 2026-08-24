@@ -13,6 +13,8 @@ let SA_PAYMENT_TENANT_ID = null;
 let SA_SUSPEND_TENANT_ID = null;
 let SA_ACTIVATE_TENANT_ID = null;
 let SA_ACTIVATE_MODE = 'account';
+let SA_STAMP_TENANT_ID = null;
+let SA_STAMP_DATA = null;
 let SA_DEPLOY_POLL_TIMER = null;
 let SA_DELETE_TARGET = null;
 let SA_TENANT_SORT = { key: 'created_at', dir: 'desc' };
@@ -480,7 +482,7 @@ function renderTenantTable() {
           ${waUrl ? `<a class="btn btn-ghost" href="${waUrl}" target="_blank" rel="noopener noreferrer"><i class="ph-bold ph-whatsapp-logo" style="color:#22c55e"></i> WhatsApp</a>` : '<button type="button" class="btn btn-ghost" disabled style="opacity:.3"><i class="ph-bold ph-whatsapp-logo"></i> WhatsApp</button>'}
           <button type="button" class="btn btn-ghost" data-sa-password="${t.id}"><i class="ph-bold ph-key"></i> Clave</button>
           <button type="button" class="btn btn-ghost" data-sa-payment="${t.id}"><i class="ph-bold ph-currency-circle-dollar"></i> Pago</button>
-          ${(t.phone_country === 'MX' || String(t.phone_calling_code || '').replace('+', '') === '52') ? `<button type="button" class="btn btn-ghost" data-sa-stamps="${t.id}"><i class="ph-bold ph-stamp"></i> Timbres</button>` : ''}
+          ${(t.phone_country === 'MX' || String(t.phone_calling_code || '').replace('+', '') === '52') ? `<button type="button" class="btn btn-ghost" data-sa-stamps="${t.id}"><i class="ph-bold ph-stamp"></i> ${Number(t.invoicing_enabled) ? 'Facturación activa' : 'Activar facturación'}</button>` : ''}
           ${t.phone_valid && t.phone_e164 ? `<button type="button" class="btn btn-ghost" data-sa-copy-phone="${esc(t.phone_e164)}"><i class="ph-bold ph-copy"></i> Copiar</button>` : '<button type="button" class="btn btn-ghost" disabled style="opacity:.3"><i class="ph-bold ph-copy"></i> Copiar</button>'}
           <button type="button" class="btn btn-ghost" data-sa-branches="${t.id}"><i class="ph-bold ph-storefront"></i> Sucursales</button>
           <button type="button" class="btn ${(t.account_status === 'active' && t.billing_status !== 'suspended') ? 'btn-danger' : 'btn-primary'}" data-sa-suspend="${t.id}">
@@ -530,20 +532,86 @@ function renderTenantTable() {
 }
 
 async function manageTenantStamps(tenantId) {
-  const data = await api(`/api/superadmin/tenants/${tenantId}/stamps`);
+  SA_STAMP_TENANT_ID = tenantId;
+  SA_STAMP_DATA = await api(`/api/superadmin/tenants/${tenantId}/stamps`);
+  renderStampControl();
+  $('#saStampModal')?.classList.add('show');
+}
+
+const SA_STAMP_MOVEMENT_LABELS = {
+  trial_grant: 'Bono inicial', credit: 'Recarga', adjustment: 'Ajuste', consumed: 'CFDI timbrado',
+  reserved: 'Reserva', released: 'Reserva liberada', invoicing_enabled: 'Activación', invoicing_disabled: 'Desactivación',
+};
+
+function renderStampControl() {
+  const data = SA_STAMP_DATA || {};
+  const tenant = data.tenant || {};
   const wallet = data.wallet || {};
-  const current = wallet.unlimited ? 'ilimitados' : `${Number(wallet.balance || 0)} (${Number(wallet.reserved || 0)} reservados)`;
-  const value = window.prompt(`Timbres actuales: ${current}.\n\nEscribe una cantidad para sumar (ej. 500), una negativa para ajustar, o ILIMITADO:`, '500');
-  if (value === null) return;
-  const unlimited = String(value).trim().toUpperCase() === 'ILIMITADO';
-  const quantity = unlimited ? 0 : Number(value);
-  if (!unlimited && (!Number.isInteger(quantity) || quantity === 0)) throw new Error('Captura una cantidad entera o ILIMITADO');
-  const note = window.prompt('Concepto del movimiento:', unlimited ? 'Plan ilimitado' : 'Recarga de timbres') || '';
-  const result = await api(`/api/superadmin/tenants/${tenantId}/stamps`, {
-    method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ unlimited, quantity, note }),
+  const active = Boolean(tenant.enabled);
+  const pendingTrial = !tenant.trialGrantedAt;
+  $('#saStampBusiness').textContent = tenant.businessName || 'Control de timbres';
+  $('#saStampSlug').textContent = tenant.slug ? `${tenant.slug} · ${active ? 'Licencia activa' : 'Licencia inactiva'}` : '';
+  $('#saStampAvailable').textContent = String(wallet.available ?? wallet.balance ?? 0);
+  $('#saStampBalance').textContent = String(wallet.balance || 0);
+  $('#saStampReserved').textContent = String(wallet.reserved || 0);
+  $('#saStampConsumed').textContent = String(data.totals?.consumed || 0);
+  const license = document.querySelector('.sa-stamp-license');
+  license?.classList.toggle('is-active', active);
+  $('#saStampLicenseTitle').textContent = active ? 'Facturación activa' : 'Facturación desactivada';
+  $('#saStampLicenseHelp').textContent = active
+    ? (pendingTrial ? 'Confirma la activación para convertir el saldo en consumible y otorgar los 10 timbres iniciales.' : `Bono inicial aplicado${tenant.activatedBy ? ` por ${tenant.activatedBy}` : ''}.`)
+    : (pendingTrial ? 'Al activar se otorgarán 10 timbres gratis una sola vez.' : 'El saldo se conserva y volverá a estar disponible al reactivar.');
+  const activationBtn = $('#saStampActivationBtn');
+  if (activationBtn) {
+    activationBtn.dataset.nextEnabled = (!active || pendingTrial) ? '1' : '0';
+    activationBtn.className = `btn ${active && !pendingTrial ? 'btn-danger' : 'btn-primary'}`;
+    activationBtn.innerHTML = active && !pendingTrial
+      ? '<i class="ph-bold ph-pause-circle"></i> Desactivar facturación'
+      : `<i class="ph-bold ph-power"></i> ${active ? 'Aplicar bono de 10' : 'Activar y otorgar 10'}`;
+  }
+  const submit = $('#saStampSubmit');
+  if (submit) submit.disabled = !active || pendingTrial;
+  $('#saStampEmitters').innerHTML = (data.emitters || []).length
+    ? data.emitters.map((emitter) => `<div class="sa-stamp-emitter"><div><b>${esc(emitter.label || 'Emisor')}</b><span>${esc(emitter.legalName || '')}</span></div><em>${emitter.enabled ? 'ACTIVO' : 'INACTIVO'}</em><span>RFC ${esc(emitter.rfc)} · Serie ${esc(emitter.series || '—')}</span><span>${emitter.csdUploaded || emitter.sandboxShared ? 'CSD listo' : 'CSD pendiente'} · ${esc(emitter.environment)}</span></div>`).join('')
+    : '<div class="empty-mini">Este tenant todavía no ha registrado emisores fiscales.</div>';
+  $('#saStampHistory').innerHTML = (data.movements || []).length
+    ? data.movements.map((movement) => {
+      const quantity = Number(movement.quantity || 0);
+      return `<div class="sa-stamp-history-row"><small>${esc(formatDateTime(movement.created_at))}</small><div><b>${esc(SA_STAMP_MOVEMENT_LABELS[movement.movement_type] || movement.movement_type)}</b><small>${esc(movement.detail || '')}${movement.actor ? ` · ${esc(movement.actor)}` : ''}</small></div><strong class="${quantity > 0 ? 'positive' : quantity < 0 ? 'negative' : ''}">${quantity > 0 ? '+' : ''}${quantity}</strong><small>Saldo ${Number(movement.balance_after ?? wallet.balance ?? 0)}</small></div>`;
+    }).join('')
+    : '<div class="empty-mini">Aún no hay movimientos de timbres.</div>';
+}
+
+function closeStampModal() {
+  $('#saStampModal')?.classList.remove('show');
+  SA_STAMP_TENANT_ID = null;
+  SA_STAMP_DATA = null;
+}
+
+async function toggleTenantInvoicing() {
+  if (!SA_STAMP_TENANT_ID) return;
+  const enabled = $('#saStampActivationBtn')?.dataset.nextEnabled === '1';
+  const result = await api(`/api/superadmin/tenants/${SA_STAMP_TENANT_ID}/invoicing`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled }),
   });
-  toast(result.wallet.unlimited ? 'Timbres ilimitados activados' : `Saldo actualizado: ${result.wallet.balance} timbres`);
+  toast(result.trialGrant ? 'Facturación activada: se otorgaron 10 timbres gratis' : (enabled ? 'Facturación activada' : 'Facturación desactivada'));
+  SA_STAMP_DATA = await api(`/api/superadmin/tenants/${SA_STAMP_TENANT_ID}/stamps`);
+  renderStampControl();
+  await Promise.all([loadTenants(), loadClients()]);
+}
+
+async function submitStampRecharge(event) {
+  event.preventDefault();
+  if (!SA_STAMP_TENANT_ID) return;
+  const quantity = Number($('#saStampQuantity')?.value || 0);
+  const note = String($('#saStampNote')?.value || '').trim();
+  if (!Number.isInteger(quantity) || quantity <= 0) throw new Error('Captura una cantidad entera mayor a cero');
+  await api(`/api/superadmin/tenants/${SA_STAMP_TENANT_ID}/stamps`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ quantity, note }),
+  });
+  toast(`Se agregaron ${quantity} timbres al tenant`);
+  SA_STAMP_DATA = await api(`/api/superadmin/tenants/${SA_STAMP_TENANT_ID}/stamps`);
+  renderStampControl();
 }
 
 function getFilteredDemoLeads() {
@@ -998,6 +1066,7 @@ function renderClientsTable() {
         <button type="button" class="btn btn-ghost" data-sa-payments="${client.id}"><i class="ph-bold ph-receipt"></i> Historial</button>
         <button type="button" class="btn btn-ghost" data-sa-licenses="${client.id}"><i class="ph-bold ph-key"></i> Licencias</button>
         <button type="button" class="btn btn-ghost" data-sa-branches="${client.id}"><i class="ph-bold ph-storefront"></i> Sucursales</button>
+        ${(client.phone_country === 'MX' || String(client.phone_calling_code || '').replace('+', '') === '52') ? `<button type="button" class="btn btn-ghost" data-sa-stamps="${client.id}"><i class="ph-bold ph-stamp"></i> ${Number(client.invoicing_enabled) ? 'Facturación activa' : 'Activar facturación'}</button>` : ''}
         ${waUrl ? `<a class="btn btn-ghost" href="${waUrl}" target="_blank" rel="noopener noreferrer"><i class="ph-bold ph-whatsapp-logo" style="color:#22c55e"></i> WhatsApp</a>` : '<button type="button" class="btn btn-ghost" disabled style="opacity:.3"><i class="ph-bold ph-whatsapp-logo"></i> WhatsApp</button>'}
         <button type="button" class="btn ${(client.account_status === 'active' && client.billing_status !== 'suspended') ? 'btn-danger' : 'btn-primary'}" data-sa-suspend="${client.id}">
           <i class="ph-bold ${(client.account_status === 'active' && client.billing_status !== 'suspended') ? 'ph-pause-circle' : 'ph-play-circle'}"></i>
@@ -1014,6 +1083,7 @@ function renderClientsTable() {
   document.querySelectorAll('#saClientsTable [data-sa-payments]').forEach((button) => button.onclick = () => openPaymentsModal(Number(button.dataset.saPayments)).catch((error) => toast(error.message, true)));
   document.querySelectorAll('#saClientsTable [data-sa-licenses]').forEach((button) => button.onclick = () => changeClientLicenses(Number(button.dataset.saLicenses)).catch((error) => toast(error.message, true)));
   document.querySelectorAll('#saClientsTable [data-sa-branches]').forEach((button) => button.onclick = () => changeBranchLimit(Number(button.dataset.saBranches)).catch((error) => toast(error.message, true)));
+  document.querySelectorAll('#saClientsTable [data-sa-stamps]').forEach((button) => button.onclick = () => manageTenantStamps(Number(button.dataset.saStamps)).catch((error) => toast(error.message, true)));
   document.querySelectorAll('#saClientsTable [data-sa-suspend]').forEach((button) => button.onclick = () => toggleTenantSuspend(Number(button.dataset.saSuspend)).catch((error) => toast(error.message, true)));
   document.querySelectorAll('#saClientsTable [data-sa-delete-tenant]').forEach((button) => button.onclick = () => openDeleteModal('tenant', Number(button.dataset.saDeleteTenant)));
   bindModuleUsageButtons();
@@ -1817,6 +1887,11 @@ $('#saPaymentModal')?.addEventListener('click', (e) => {
   if (e.target?.id === 'saPaymentModal') closePaymentModal();
 });
 $('#saPaymentForm')?.addEventListener('submit', (e) => submitPaymentForm(e).catch((err) => toast(err.message, true)));
+$('#saStampClose')?.addEventListener('click', closeStampModal);
+$('#saStampCancel')?.addEventListener('click', closeStampModal);
+$('#saStampModal')?.addEventListener('click', (e) => { if (e.target?.id === 'saStampModal') closeStampModal(); });
+$('#saStampActivationBtn')?.addEventListener('click', () => toggleTenantInvoicing().catch((err) => toast(err.message, true)));
+$('#saStampForm')?.addEventListener('submit', (e) => submitStampRecharge(e).catch((err) => toast(err.message, true)));
 $('#saBranchLimitCancel')?.addEventListener('click', closeBranchLimitModal);
 $('#saBranchLimitModal')?.addEventListener('click', (e) => {
   if (e.target?.id === 'saBranchLimitModal') closeBranchLimitModal();

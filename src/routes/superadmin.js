@@ -611,6 +611,9 @@ router.get('/tenants', requireSuperAdmin, async (req, res, next) => {
         t.billing_status,
         t.plan_name,
         t.branch_limit,
+        t.invoicing_enabled,
+        t.invoicing_activated_at,
+        t.invoicing_trial_granted_at,
         t.billing_due_date,
         CASE
           WHEN t.billing_due_date IS NULL THEN NULL
@@ -812,6 +815,9 @@ router.get('/clients', requireSuperAdmin, async (req, res, next) => {
         t.billing_status,
         t.plan_name,
         t.branch_limit,
+        t.invoicing_enabled,
+        t.invoicing_activated_at,
+        t.invoicing_trial_granted_at,
         t.billing_due_date,
         t.customer_since,
         t.license_count,
@@ -1276,17 +1282,105 @@ router.patch('/tenants/:id', requireSuperAdmin, async (req, res, next) => {
   }
 });
 
+function serializeStampWallet(wallet) {
+  const balance = Number(wallet?.balance || 0);
+  const reserved = Number(wallet?.reserved || 0);
+  const unlimited = Boolean(Number(wallet?.unlimited));
+  return {
+    unlimited,
+    balance,
+    reserved,
+    available: unlimited ? null : Math.max(0, balance - reserved),
+    lowBalanceThreshold: Number(wallet?.low_balance_threshold || 20),
+  };
+}
+
 router.get('/tenants/:id/stamps', requireSuperAdmin, async (req, res, next) => {
   try {
     const tenant = await getTenantById(Number(req.params.id));
     if (!tenant) return res.status(404).json({ error: 'Tenant no encontrado' });
     if (!isMexicoIdentity(tenant) && tenant.slug !== config.DEMO_TENANT_SLUG) return res.status(403).json({ error: 'Los timbres sólo aplican a tenants de México' });
     const tenantDb = tdb(tenant.slug);
-    const [wallet, movements] = await Promise.all([
+    const [wallet, movements, emitters, totals] = await Promise.all([
       tenantDb.get('SELECT * FROM {s}.stamp_wallet WHERE id=1'),
-      tenantDb.all('SELECT * FROM {s}.stamp_ledger ORDER BY id DESC LIMIT 30'),
+      tenantDb.all('SELECT * FROM {s}.stamp_ledger ORDER BY id DESC LIMIT 50'),
+      tenantDb.all(`SELECT id,label,rfc,legal_name,series,enabled,csd_uploaded,sandbox_shared,environment
+                    FROM {s}.fiscal_emitters ORDER BY enabled DESC,id`),
+      tenantDb.get(`SELECT
+        COUNT(*) FILTER (WHERE movement_type='consumed')::int AS consumed,
+        COALESCE(SUM(quantity) FILTER (WHERE movement_type IN ('credit','trial_grant')),0)::int AS granted
+        FROM {s}.stamp_ledger`),
     ]);
-    res.json({ wallet: { unlimited: Boolean(Number(wallet?.unlimited)), balance: Number(wallet?.balance || 0), reserved: Number(wallet?.reserved || 0) }, movements });
+    res.json({
+      tenant: {
+        id: Number(tenant.id), slug: tenant.slug, businessName: tenant.business_name,
+        enabled: Boolean(Number(tenant.invoicing_enabled)),
+        activatedAt: tenant.invoicing_activated_at,
+        trialGrantedAt: tenant.invoicing_trial_granted_at,
+        activatedBy: tenant.invoicing_activated_by || '',
+      },
+      wallet: serializeStampWallet(wallet),
+      totals: { consumed: Number(totals?.consumed || 0), granted: Number(totals?.granted || 0) },
+      emitters: emitters.map((row) => ({
+        id: Number(row.id), label: row.label || '', rfc: row.rfc || '', legalName: row.legal_name || '',
+        series: row.series || '', enabled: Boolean(Number(row.enabled)), csdUploaded: Boolean(Number(row.csd_uploaded)),
+        sandboxShared: Boolean(Number(row.sandbox_shared)), environment: row.environment || 'sandbox',
+      })),
+      movements,
+    });
+  } catch (error) { next(error); }
+});
+
+router.post('/tenants/:id/invoicing', requireSuperAdmin, async (req, res, next) => {
+  try {
+    const tenant = await getTenantById(Number(req.params.id));
+    if (!tenant) return res.status(404).json({ error: 'Tenant no encontrado' });
+    if (!isMexicoIdentity(tenant) && tenant.slug !== config.DEMO_TENANT_SLUG) return res.status(403).json({ error: 'La facturación sólo puede activarse para tenants de México (+52)' });
+    if (typeof req.body?.enabled !== 'boolean') return res.status(400).json({ error: 'Indica si deseas activar o desactivar la facturación' });
+    const enabled = req.body?.enabled === true;
+    const tenantDb = tdb(tenant.slug);
+    const result = await tenantDb.tx(async (tx) => {
+      const lockedTenant = await tx.get('SELECT * FROM public.tenants WHERE id=$1 FOR UPDATE', [tenant.id]);
+      await tx.run(`INSERT INTO {s}.stamp_wallet(id,unlimited,balance,reserved)
+                    VALUES(1,0,0,0) ON CONFLICT(id) DO NOTHING`);
+      const wallet = await tx.get('SELECT * FROM {s}.stamp_wallet WHERE id=1 FOR UPDATE');
+      const trialGrant = enabled && !lockedTenant.invoicing_trial_granted_at ? 10 : 0;
+      const nextBalance = Number(wallet.balance || 0) + trialGrant;
+      const updatedWallet = await tx.get(
+        'UPDATE {s}.stamp_wallet SET unlimited=0,balance=$1,updated_at=now() WHERE id=1 RETURNING *',
+        [nextBalance]
+      );
+      const updatedTenant = await tx.get(
+        `UPDATE public.tenants SET
+          invoicing_enabled=$1,
+          invoicing_activated_at=CASE WHEN $1=1 THEN COALESCE(invoicing_activated_at,now()) ELSE invoicing_activated_at END,
+          invoicing_trial_granted_at=CASE WHEN $2=1 THEN COALESCE(invoicing_trial_granted_at,now()) ELSE invoicing_trial_granted_at END,
+          invoicing_activated_by=$3
+         WHERE id=$4 RETURNING *`,
+        [enabled ? 1 : 0, trialGrant ? 1 : 0, req.superadmin.username, tenant.id]
+      );
+      if (trialGrant) {
+        await tx.run(
+          `INSERT INTO {s}.stamp_ledger(movement_type,quantity,balance_after,detail,actor)
+           VALUES('trial_grant',$1,$2,'Bono inicial único por activación de Facturación MX',$3)`,
+          [trialGrant, nextBalance, req.superadmin.username]
+        );
+      }
+      await tx.run(
+        `INSERT INTO {s}.stamp_ledger(movement_type,quantity,balance_after,detail,actor)
+         VALUES($1,0,$2,$3,$4)`,
+        [enabled ? 'invoicing_enabled' : 'invoicing_disabled', nextBalance,
+          enabled ? 'Facturación habilitada por SuperAdmin' : 'Facturación deshabilitada por SuperAdmin', req.superadmin.username]
+      );
+      return { updatedTenant, updatedWallet, trialGrant };
+    });
+    res.json({
+      ok: true,
+      enabled: Boolean(Number(result.updatedTenant.invoicing_enabled)),
+      trialGrant: result.trialGrant,
+      trialGrantedAt: result.updatedTenant.invoicing_trial_granted_at,
+      wallet: serializeStampWallet(result.updatedWallet),
+    });
   } catch (error) { next(error); }
 });
 
@@ -1295,29 +1389,29 @@ router.post('/tenants/:id/stamps', requireSuperAdmin, async (req, res, next) => 
     const tenant = await getTenantById(Number(req.params.id));
     if (!tenant) return res.status(404).json({ error: 'Tenant no encontrado' });
     if (!isMexicoIdentity(tenant) && tenant.slug !== config.DEMO_TENANT_SLUG) return res.status(403).json({ error: 'Los timbres sólo aplican a tenants de México' });
-    const unlimited = req.body?.unlimited === true;
+    if (!Number(tenant.invoicing_enabled)) return res.status(409).json({ error: 'Activa primero la facturación del tenant' });
     const quantity = Number(req.body?.quantity || 0);
-    if (!unlimited && (!Number.isInteger(quantity) || quantity === 0 || Math.abs(quantity) > 1000000)) {
+    if (!Number.isInteger(quantity) || quantity === 0 || Math.abs(quantity) > 1000000) {
       return res.status(400).json({ error: 'Indica una cantidad entera distinta de cero' });
     }
     const tenantDb = tdb(tenant.slug);
     const result = await tenantDb.tx(async (tx) => {
       const wallet = await tx.get('SELECT * FROM {s}.stamp_wallet WHERE id=1 FOR UPDATE');
-      const nextBalance = unlimited ? Number(wallet.balance || 0) : Number(wallet.balance || 0) + quantity;
+      const nextBalance = Number(wallet.balance || 0) + quantity;
       if (nextBalance < Number(wallet.reserved || 0)) throw Object.assign(new Error('El saldo no puede quedar por debajo de los timbres reservados'), { status: 409 });
       const updated = await tx.get(
-        'UPDATE {s}.stamp_wallet SET unlimited=$1,balance=$2,updated_at=now() WHERE id=1 RETURNING *',
-        [unlimited ? 1 : 0, nextBalance]
+        'UPDATE {s}.stamp_wallet SET unlimited=0,balance=$1,updated_at=now() WHERE id=1 RETURNING *',
+        [nextBalance]
       );
       await tx.run(
         `INSERT INTO {s}.stamp_ledger(movement_type,quantity,balance_after,detail,actor)
          VALUES($1,$2,$3,$4,$5)`,
-        [unlimited ? 'unlimited' : (quantity > 0 ? 'credit' : 'adjustment'), unlimited ? 0 : quantity, nextBalance,
-          String(req.body?.note || (unlimited ? 'Plan de timbres ilimitado' : 'Ajuste por superadministrador')).slice(0,300), req.superadmin.username]
+        [quantity > 0 ? 'credit' : 'adjustment', quantity, nextBalance,
+          String(req.body?.note || (quantity > 0 ? 'Recarga manual de timbres' : 'Ajuste por superadministrador')).slice(0,300), req.superadmin.username]
       );
       return updated;
     });
-    res.json({ ok: true, wallet: { unlimited: Boolean(Number(result.unlimited)), balance: Number(result.balance), reserved: Number(result.reserved) } });
+    res.json({ ok: true, wallet: serializeStampWallet(result) });
   } catch (error) {
     if (error.status) return res.status(error.status).json({ error: error.message });
     next(error);

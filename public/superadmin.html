@@ -306,6 +306,45 @@
     </div>
   </div>
 
+  <div class="modal-bg" id="saStampModal">
+    <div class="modal sa-stamp-modal">
+      <div class="sa-stamp-head">
+        <div><span class="sa-stamp-kicker"><i class="ph-bold ph-stamp"></i> Facturación México</span><h3 id="saStampBusiness">Control de timbres</h3><small id="saStampSlug"></small></div>
+        <button type="button" class="modal-close" id="saStampClose" aria-label="Cerrar"><i class="ph-bold ph-x"></i></button>
+      </div>
+      <div class="sa-stamp-license">
+        <div><b id="saStampLicenseTitle">Facturación desactivada</b><span id="saStampLicenseHelp">Actívala para otorgar el bono inicial único de 10 timbres.</span></div>
+        <button type="button" class="btn btn-primary" id="saStampActivationBtn"><i class="ph-bold ph-power"></i> Activar y otorgar 10</button>
+      </div>
+      <div class="sa-stamp-stats">
+        <article><i class="ph-bold ph-seal-check"></i><span>Disponibles</span><strong id="saStampAvailable">0</strong></article>
+        <article><i class="ph-bold ph-wallet"></i><span>Saldo total</span><strong id="saStampBalance">0</strong></article>
+        <article><i class="ph-bold ph-hourglass"></i><span>Reservados</span><strong id="saStampReserved">0</strong></article>
+        <article><i class="ph-bold ph-receipt"></i><span>Consumidos</span><strong id="saStampConsumed">0</strong></article>
+      </div>
+      <div class="sa-stamp-grid">
+        <section class="sa-stamp-panel">
+          <h4><i class="ph-bold ph-plus-circle"></i> Asignar timbres</h4>
+          <form id="saStampForm">
+            <div class="field"><label>Cantidad</label><input id="saStampQuantity" type="number" min="1" max="1000000" step="1" value="100" required /></div>
+            <div class="field"><label>Concepto</label><input id="saStampNote" maxlength="300" value="Recarga manual de timbres" required /></div>
+            <button class="btn btn-primary" id="saStampSubmit" type="submit"><i class="ph-bold ph-plus"></i> Agregar al saldo</button>
+          </form>
+          <p class="hint">Cada CFDI timbrado correctamente descuenta un timbre. Los intentos fallidos liberan la reserva sin consumir saldo.</p>
+        </section>
+        <section class="sa-stamp-panel">
+          <h4><i class="ph-bold ph-identification-card"></i> RFC del tenant</h4>
+          <div id="saStampEmitters" class="sa-stamp-emitters"></div>
+        </section>
+      </div>
+      <section class="sa-stamp-panel sa-stamp-history-panel">
+        <h4><i class="ph-bold ph-clock-counter-clockwise"></i> Historial de movimientos</h4>
+        <div id="saStampHistory" class="sa-stamp-history"></div>
+      </section>
+      <div class="modal-actions"><button type="button" class="btn btn-ghost" id="saStampCancel">Cerrar</button></div>
+    </div>
+  </div>
+
   <div class="modal-bg" id="saBranchLimitModal">
     <div class="modal" style="max-width:540px">
       <h3><i class="ph-bold ph-storefront"></i> Cupo de sucursales</h3>
@@ -462,6 +501,6 @@
       </form>
     </div>
   </div>
-  <script src="/static/js/superadmin.js?v=20260823stamps"></script>
+  <script src="/static/js/superadmin.js?v=20260823stampwallet"></script>
 </body>
 </html>

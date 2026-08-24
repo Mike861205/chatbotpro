@@ -547,7 +547,8 @@ router.get('/me', requireAuth, async (req, res, next) => {
   try {
     let phoneCountry = req.tenant.phone_country || '';
     let phoneCallingCode = req.tenant.phone_calling_code || '';
-    let invoicingEligible = isMexicoIdentity(req.tenant) || req.tenant.slug === config.DEMO_TENANT_SLUG;
+    const isDemoTenant = req.tenant.slug === config.DEMO_TENANT_SLUG;
+    let invoicingEligible = isDemoTenant || (isMexicoIdentity(req.tenant) && Boolean(Number(req.tenant.invoicing_enabled)));
     const demoLeadId = Number(req.user.demoLeadId || 0);
     if (!invoicingEligible && Number.isInteger(demoLeadId) && demoLeadId > 0) {
       const lead = await q('SELECT phone_country, phone_calling_code FROM demo_leads WHERE id = $1 LIMIT 1', [demoLeadId]);
@@ -576,6 +577,7 @@ router.get('/me', requireAuth, async (req, res, next) => {
       phoneCountry,
       phoneCallingCode,
       invoicingEligible,
+      invoicingActivated: Boolean(Number(req.tenant.invoicing_enabled)),
       invoicingPortalUrl: invoicingPortalUrl(req, config.INVOICING_PORTAL_ORIGIN, req.tenant.slug),
     },
   });

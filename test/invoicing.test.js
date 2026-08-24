@@ -284,11 +284,16 @@ test('la facturación admite varios emisores por sucursal y controla el saldo de
   assert.match(invoicing, /router\.put\('\/emitters\/:id'/);
   assert.match(invoicing, /router\.put\('\/branches\/:id'/);
   assert.match(superadmin, /router\.post\('\/tenants\/:id\/stamps'/);
+  assert.match(superadmin, /router\.post\('\/tenants\/:id\/invoicing'/);
+  assert.match(superadmin, /trialGrant = enabled && !lockedTenant\.invoicing_trial_granted_at \? 10 : 0/);
+  assert.match(database, /invoicing_enabled INTEGER NOT NULL DEFAULT 0/);
+  assert.match(database, /unlimited INTEGER NOT NULL DEFAULT 0/);
   assert.match(app, /id="fiscalEmitterModal"/);
   assert.match(app, /id="invoiceStampBalance"/);
   assert.match(client, /openFiscalEmitterModal/);
   assert.match(client, /data-branch-emitter/);
   assert.match(superadminClient, /data-sa-stamps/);
+  assert.match(superadminClient, /toggleTenantInvoicing/);
 });
 
 test('ChatBotPro administra el expediente Multiemisor con filtros, paginación y cancelaciones persistentes', () => {
