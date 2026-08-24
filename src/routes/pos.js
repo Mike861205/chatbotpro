@@ -599,6 +599,7 @@ function normalizePayment(method, paymentInput, total, cashReceivedInput) {
   };
   let cashReceived = 0;
   let cashChange = 0;
+  const cardType = String(paymentInput?.cardType || paymentInput?.card_type || '').trim().toLowerCase();
 
   if (!PAYMENT_METHODS.has(method)) throw badRequest('Método de pago inválido');
 
@@ -611,7 +612,9 @@ function normalizePayment(method, paymentInput, total, cashReceivedInput) {
   }
 
   if (method === 'card') {
+    if (!['debit', 'credit'].includes(cardType)) throw badRequest('Selecciona si la tarjeta es de débito o crédito');
     breakdown.card = n(total);
+    breakdown.cardType = cardType;
     return { method, breakdown, cashReceived: 0, cashChange: 0 };
   }
 
@@ -623,6 +626,10 @@ function normalizePayment(method, paymentInput, total, cashReceivedInput) {
   breakdown.cash = n(paymentInput?.cash);
   breakdown.card = n(paymentInput?.card);
   breakdown.transfer = n(paymentInput?.transfer);
+  if (breakdown.card > 0) {
+    if (!['debit', 'credit'].includes(cardType)) throw badRequest('Selecciona si la tarjeta es de débito o crédito');
+    breakdown.cardType = cardType;
+  }
   const used = [breakdown.cash, breakdown.card, breakdown.transfer].filter((value) => value > 0).length;
   const paid = n(breakdown.cash + breakdown.card + breakdown.transfer);
   if (used < 2) throw badRequest('El pago mixto debe usar al menos dos medios de pago');

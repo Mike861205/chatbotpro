@@ -134,21 +134,46 @@ function roundSix(value) {
 }
 
 function paymentFormFromSale(sale, defaultCard = '04', requested = '') {
-  if (PAYMENT_FORMS.has(String(requested || ''))) return String(requested);
   const method = String(sale?.payment_method || '').toLowerCase();
-  if (method === 'cash') return '01';
-  if (method === 'transfer') return '03';
-  if (method === 'card') return PAYMENT_FORMS.has(defaultCard) ? defaultCard : '04';
+  if (!method && PAYMENT_FORMS.has(String(requested || ''))) return String(requested);
   const breakdown = typeof sale?.payment_breakdown === 'string'
     ? JSON.parse(sale.payment_breakdown || '{}')
     : (sale?.payment_breakdown || {});
+  const cardPaymentForm = String(breakdown.cardType || breakdown.card_type || '').toLowerCase() === 'debit'
+    ? '28'
+    : String(breakdown.cardType || breakdown.card_type || '').toLowerCase() === 'credit'
+      ? '04'
+      : (PAYMENT_FORMS.has(defaultCard) ? defaultCard : '04');
+  if (method === 'cash') return '01';
+  if (method === 'transfer') return '03';
+  if (method === 'card') return cardPaymentForm;
   const options = [
     ['01', Number(breakdown.cash || 0)],
-    [PAYMENT_FORMS.has(defaultCard) ? defaultCard : '04', Number(breakdown.card || 0)],
+    [cardPaymentForm, Number(breakdown.card || 0)],
     ['03', Number(breakdown.transfer || 0)],
   ];
   options.sort((a, b) => b[1] - a[1]);
   return options[0][1] > 0 ? options[0][0] : '01';
+}
+
+function paymentFormFromSales(sales = [], defaultCard = '04') {
+  const totals = new Map();
+  const add = (form, amount) => totals.set(form, roundMoney((totals.get(form) || 0) + Number(amount || 0)));
+  for (const sale of sales) {
+    const method = String(sale?.payment_method || '').toLowerCase();
+    const breakdown = typeof sale?.payment_breakdown === 'string'
+      ? JSON.parse(sale.payment_breakdown || '{}')
+      : (sale?.payment_breakdown || {});
+    if (method === 'cash') add('01', sale.total);
+    else if (method === 'transfer') add('03', sale.total);
+    else if (method === 'card') add(paymentFormFromSale(sale, defaultCard), sale.total);
+    else {
+      add('01', breakdown.cash);
+      add(paymentFormFromSale({ payment_method: 'card', payment_breakdown: breakdown }, defaultCard), breakdown.card);
+      add('03', breakdown.transfer);
+    }
+  }
+  return [...totals.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] || '01';
 }
 
 function fiscalItem({ description, quantity, grossTotal, productCode, unitCode, unitName, taxObject, ivaRate, isrRate }) {
@@ -286,5 +311,5 @@ function createRequestKey() {
 module.exports = {
   RFC_RE, POSTAL_RE, FISCAL_REGIMES, CFDI_USES, PAYMENT_FORMS,
   isMexicoIdentity, invoicingPortalUrl, validateFiscalProfile, validateReceiver, validateInvoiceEmail, maskInvoiceEmail, globalInformationForReceiver, resolveExpeditionPostalCode, roundMoney,
-  paymentFormFromSale, buildFacturamaItems, buildGlobalFacturamaItems, extractFacturamaIdentity, createRequestKey,
+  paymentFormFromSale, paymentFormFromSales, buildFacturamaItems, buildGlobalFacturamaItems, extractFacturamaIdentity, createRequestKey,
 };

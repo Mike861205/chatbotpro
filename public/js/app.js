@@ -81,7 +81,7 @@ const DASHBOARD_PERIOD_LABELS = {
   month: 'del mes',
   year: 'del año',
 };
-let POS_PAYMENT_FORM = { cashReceived: '', cash: '', card: '', transfer: '', notes: '', deliveryAddress: '', deliveryNeighborhood: '', deliveryReference: '' };
+let POS_PAYMENT_FORM = { cashReceived: '', cash: '', card: '', cardType: '', transfer: '', notes: '', deliveryAddress: '', deliveryNeighborhood: '', deliveryReference: '' };
 let LAST_POS_SALE = null;
 let INVOICING_DATA = null;
 let POS_SALES_PAGE = 1;
@@ -3453,6 +3453,8 @@ function setPosPaymentEditMethod(method) {
   const showCash = method === 'cash';
   const showMixed = method === 'mixed';
   $('#posPaymentEditCashWrap').style.display = showCash ? 'block' : 'none';
+  $('#posPaymentEditCardTypeWrap').style.display = ['card', 'mixed'].includes(method) ? 'block' : 'none';
+  $('#posPaymentEditCardType').required = method === 'card';
   $('#posPaymentEditMixedWrap').style.display = showMixed ? 'block' : 'none';
   updatePosPaymentEditMixedHint();
 }
@@ -3499,6 +3501,7 @@ function openPosPaymentEditModal(id) {
   $('#posPaymentEditMixCash').value = String(Number(breakdown.cash || 0));
   $('#posPaymentEditMixCard').value = String(Number(breakdown.card || 0));
   $('#posPaymentEditMixTransfer').value = String(Number(breakdown.transfer || 0));
+  $('#posPaymentEditCardType').value = breakdown.cardType || breakdown.card_type || '';
   $('#posPaymentEditMixCashReceived').value = String(sale.cash_received || Number(breakdown.cash || 0) || '');
   setPosPaymentEditMethod(method);
   $('#posPaymentEditModal').classList.add('show');
@@ -3593,7 +3596,7 @@ function setPosPaymentDefaults() {
 
 function resetPosPaymentForm() {
   POS_PAYMENT_METHOD = 'cash';
-  POS_PAYMENT_FORM = { cashReceived: '', cash: '', card: '', transfer: '', notes: '', deliveryAddress: '', deliveryNeighborhood: '', deliveryReference: '' };
+  POS_PAYMENT_FORM = { cashReceived: '', cash: '', card: '', cardType: '', transfer: '', notes: '', deliveryAddress: '', deliveryNeighborhood: '', deliveryReference: '' };
   POS_IS_DELIVERY = false;
   POS_DELIVERY_FEE = '';
 }
@@ -4778,6 +4781,17 @@ function renderPosCart() {
         <div class="hint" id="posChangeHint">Cambio estimado: ${fmtMoney(Math.max(moneyNum(POS_PAYMENT_FORM.cashReceived || total) - total, 0))}</div>
       </div>`
     : '';
+  const cardTypeField = ['card', 'mixed'].includes(POS_PAYMENT_METHOD)
+    ? `<div class="field">
+        <label><i class="ph-bold ph-credit-card"></i> Tipo de tarjeta ${POS_PAYMENT_METHOD === 'mixed' ? '(si se usa tarjeta)' : ''}</label>
+        <select id="posCardType" ${POS_PAYMENT_METHOD === 'card' ? 'required' : ''}>
+          <option value="">Selecciona débito o crédito</option>
+          <option value="debit" ${POS_PAYMENT_FORM.cardType === 'debit' ? 'selected' : ''}>Débito · SAT 28</option>
+          <option value="credit" ${POS_PAYMENT_FORM.cardType === 'credit' ? 'selected' : ''}>Crédito · SAT 04</option>
+        </select>
+        <div class="hint">Se utilizará automáticamente como forma de pago al timbrar el CFDI.</div>
+      </div>`
+    : '';
   const mixedFields = POS_PAYMENT_METHOD === 'mixed'
     ? `
       <div class="row-2">
@@ -4826,6 +4840,7 @@ function renderPosCart() {
           <div class="segmented pos-pay-methods">${methodButtons}</div>
         </div>
         ${cashField}
+        ${cardTypeField}
         ${mixedFields}
         ${tableAccount ? '' : `<div class="toggle-row pos-delivery-toggle">
           <div class="t-info"><i class="ph-bold ph-moped"></i><div><b>Entrega a domicilio</b><span>Cobra envío y registra el pedido como domicilio</span></div></div>
@@ -4906,6 +4921,7 @@ function renderPosCart() {
     POS_PAYMENT_FORM.card = e.target.value;
     updatePosMixedHint();
   });
+  $('#posCardType')?.addEventListener('change', (e) => (POS_PAYMENT_FORM.cardType = e.target.value));
   $('#posMixTransfer')?.addEventListener('input', (e) => {
     POS_PAYMENT_FORM.transfer = e.target.value;
     updatePosMixedHint();
@@ -4944,6 +4960,7 @@ function renderPosCart() {
           cash: Number($('#posMixCash')?.value || 0),
           card: Number($('#posMixCard')?.value || 0),
           transfer: Number($('#posMixTransfer')?.value || 0),
+          cardType: $('#posCardType')?.value || '',
         },
         cashReceived: Number($('#posCashReceived')?.value || 0),
         notes: $('#posSaleNotes')?.value || '',
@@ -4994,6 +5011,11 @@ function getLocalIsoDate() {
 function fiscalStatusLabel(status) {
   const labels = { active: 'Timbrada', pending: 'Procesando', unknown: 'Por verificar', failed: 'Fallida', canceled: 'Cancelada', cancel_pending: 'Cancelación pendiente' };
   return labels[status] || status || '—';
+}
+
+function posCardTypeLabel(breakdown = {}) {
+  const type = String(breakdown?.cardType || breakdown?.card_type || '').toLowerCase();
+  return type === 'debit' ? 'Débito' : type === 'credit' ? 'Crédito' : '';
 }
 
 function renderInvoicing() {
@@ -5484,7 +5506,7 @@ async function loadPosSalesHistory(page = 1) {
           const paymentBreakdown = row.payment_breakdown
             ? Object.entries(row.payment_breakdown)
                 .filter(([, amount]) => Number(amount) > 0)
-                .map(([method, amount]) => `${posMethodLabel(method)} ${fmtMoney(amount)}`)
+                .map(([method, amount]) => `${posMethodLabel(method)}${method === 'card' && posCardTypeLabel(row.payment_breakdown) ? ` ${posCardTypeLabel(row.payment_breakdown)}` : ''} ${fmtMoney(amount)}`)
                 .join(' · ')
             : posMethodLabel(row.payment_method);
           const noteText = String(row.notes || '').trim();
@@ -5495,7 +5517,7 @@ async function loadPosSalesHistory(page = 1) {
             <td><input class="pos-global-ticket-check" type="checkbox" data-global-ticket="${row.id}" ${isSelected ? 'checked' : ''} ${invoiceEligible ? '' : 'disabled'} aria-label="Seleccionar ticket ${row.id} para factura global"></td>
             <td><b>#${row.id}</b></td>
             <td>${esc(row.items.map((item) => `${item.qty}x ${item.name}`).join(', '))}</td>
-            <td><div><b>${esc(posMethodLabel(row.payment_method))}</b></div><div style="font-size:12px;color:var(--ink-3)">${esc(paymentBreakdown)}</div></td>
+            <td><div><b>${esc(posMethodLabel(row.payment_method))}${row.payment_method === 'card' && posCardTypeLabel(row.payment_breakdown) ? ` · ${esc(posCardTypeLabel(row.payment_breakdown))}` : ''}</b></div><div style="font-size:12px;color:var(--ink-3)">${esc(paymentBreakdown)}</div></td>
             <td><b>${fmtMoney(row.total)}</b>${row.cash_change ? `<div style="font-size:12px;color:var(--ink-3)">Cambio ${fmtMoney(row.cash_change)}</div>` : ''}</td>
             <td>${posSaleStatusBadge(row.status)}</td>
             <td>${posFiscalStatus(row)}</td>
@@ -6230,6 +6252,7 @@ $('#posPaymentEditForm')?.addEventListener('submit', async (e) => {
       cash: Number($('#posPaymentEditMixCash')?.value || 0),
       card: Number($('#posPaymentEditMixCard')?.value || 0),
       transfer: Number($('#posPaymentEditMixTransfer')?.value || 0),
+      cardType: $('#posPaymentEditCardType')?.value || '',
     },
     cashReceived: POS_PAYMENT_EDIT_METHOD === 'mixed'
       ? Number($('#posPaymentEditMixCashReceived')?.value || 0)

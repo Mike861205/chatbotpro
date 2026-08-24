@@ -15,7 +15,7 @@ const {
   maskInvoiceEmail,
   globalInformationForReceiver,
   resolveExpeditionPostalCode,
-  paymentFormFromSale,
+  paymentFormFromSale, paymentFormFromSales,
   buildFacturamaItems,
   buildGlobalFacturamaItems,
   extractFacturamaIdentity,
@@ -393,8 +393,7 @@ async function issueGlobalInvoice({ tenantDb, orderIds, conceptMode = 'total', a
     if (global) throw Object.assign(new Error(`El ticket #${global.order_id} ya pertenece a una factura global`), { status: 409 });
 
     const items = buildGlobalFacturamaItems(sales, productsById, profile, { conceptMode: normalizedConceptMode });
-    const largestSale = sales.reduce((largest, sale) => Number(sale.total) > Number(largest.total) ? sale : largest, sales[0]);
-    const paymentForm = paymentFormFromSale(largestSale, profile.default_card_payment_form);
+    const paymentForm = paymentFormFromSales(sales, profile.default_card_payment_form);
     const total = Math.round(sales.reduce((sum, sale) => sum + Number(sale.total || 0), 0) * 100) / 100;
     const lockedProfile = await tx.get('SELECT * FROM {s}.fiscal_emitters WHERE id=$1 FOR UPDATE', [profile.id || 1]);
     const folio = String(lockedProfile.next_folio || 1);

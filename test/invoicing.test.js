@@ -12,6 +12,7 @@ const {
   globalInformationForReceiver,
   resolveExpeditionPostalCode,
   paymentFormFromSale,
+  paymentFormFromSales,
   buildFacturamaItems,
   buildGlobalFacturamaItems,
 } = require('../src/utils/invoicing');
@@ -172,8 +173,22 @@ test('el POS muestra errores de timbrado dentro del modal y prepara público gen
 test('mapea el medio de pago POS al catálogo SAT', () => {
   assert.equal(paymentFormFromSale({ payment_method: 'cash' }), '01');
   assert.equal(paymentFormFromSale({ payment_method: 'card' }, '04'), '04');
+  assert.equal(paymentFormFromSale({ payment_method: 'card', payment_breakdown: { cardType: 'debit' } }), '28');
+  assert.equal(paymentFormFromSale({ payment_method: 'card', payment_breakdown: { cardType: 'credit' } }), '04');
   assert.equal(paymentFormFromSale({ payment_method: 'transfer' }), '03');
   assert.equal(paymentFormFromSale({ payment_method: 'mixed', payment_breakdown: { cash: 20, card: 80 } }), '04');
+  assert.equal(paymentFormFromSales([
+    { payment_method: 'cash', total: 100 },
+    { payment_method: 'card', total: 250, payment_breakdown: { card: 250, cardType: 'debit' } },
+    { payment_method: 'transfer', total: 75 },
+  ]), '28');
+  const app = read('public/app.html');
+  const client = read('public/js/app.js');
+  const pos = read('src/routes/pos.js');
+  assert.match(app, /id="fiscalEmitterRegime" required><option/);
+  assert.match(app, /id="posPaymentEditCardType"/);
+  assert.match(client, /id="posCardType"/);
+  assert.match(pos, /Selecciona si la tarjeta es de débito o crédito/);
 });
 
 test('la integración está montada, aislada por México y expone POS y portal público', () => {
