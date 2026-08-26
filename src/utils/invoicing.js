@@ -30,6 +30,24 @@ function invoicingPortalUrl(req, configuredOrigin, slug) {
   return `${String(configuredOrigin || '').replace(/\/+$/, '')}/${safeSlug}`;
 }
 
+function isFiscalEmitterComplete(profile = {}) {
+  return Boolean(
+    profile.rfc
+    && profile.legal_name
+    && profile.fiscal_regime
+    && profile.postal_code
+    && profile.default_product_code
+  );
+}
+
+function isFiscalEmitterReady(profile = {}, providerConfigured = false) {
+  if (!Number(profile.enabled) || !isFiscalEmitterComplete(profile) || !providerConfigured) return false;
+  const environment = String(profile.environment || '').trim().toLowerCase() === 'production' ? 'production' : 'sandbox';
+  if (environment === 'sandbox' && Number(profile.sandbox_shared)) return true;
+  if (String(profile.api_mode || '').trim().toLowerCase() === 'web') return true;
+  return Boolean(Number(profile.csd_uploaded));
+}
+
 function validateFiscalProfile(input = {}) {
   const profile = {
     rfc: cleanUpper(input.rfc, 13),
@@ -310,6 +328,6 @@ function createRequestKey() {
 
 module.exports = {
   RFC_RE, POSTAL_RE, FISCAL_REGIMES, CFDI_USES, PAYMENT_FORMS,
-  isMexicoIdentity, invoicingPortalUrl, validateFiscalProfile, validateReceiver, validateInvoiceEmail, maskInvoiceEmail, globalInformationForReceiver, resolveExpeditionPostalCode, roundMoney,
+  isMexicoIdentity, invoicingPortalUrl, isFiscalEmitterComplete, isFiscalEmitterReady, validateFiscalProfile, validateReceiver, validateInvoiceEmail, maskInvoiceEmail, globalInformationForReceiver, resolveExpeditionPostalCode, roundMoney,
   paymentFormFromSale, paymentFormFromSales, buildFacturamaItems, buildGlobalFacturamaItems, extractFacturamaIdentity, createRequestKey,
 };

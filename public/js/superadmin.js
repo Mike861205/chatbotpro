@@ -362,11 +362,14 @@ function getFilteredTenants() {
   const search = String($('#saTenantSearch')?.value || '').trim().toLowerCase();
   const moduleFilter = String($('#saTenantModuleFilter')?.value || 'all');
   const stage = String($('#saTenantStageFilter')?.value || 'all');
+  const country = String($('#saTenantCountryFilter')?.value || 'all');
   const reseller = String($('#saTenantResellerFilter')?.value || 'all');
   return SA_TENANTS.filter((t) => {
     if (!matchesTenantFilter(t, SA_FILTER)) return false;
     if (!matchesModuleFilter(t, moduleFilter)) return false;
     if (stage !== 'all' && String(t.sales_stage || 'new') !== stage) return false;
+    if (country === 'unknown' && t.phone_country) return false;
+    if (!['all', 'unknown'].includes(country) && String(t.phone_country || '').toUpperCase() !== country) return false;
     if (reseller === 'direct' && t.reseller_id) return false;
     if (!['all', 'direct'].includes(reseller) && String(t.reseller_id || '') !== reseller) return false;
     if (!search) return true;
@@ -638,9 +641,12 @@ function getFilteredDemoLeads() {
   const search = String($('#saDemoLeadSearch')?.value || '').trim().toLowerCase();
   const moduleFilter = String($('#saDemoModuleFilter')?.value || 'all');
   const stage = String($('#saDemoStageFilter')?.value || 'all');
+  const country = String($('#saDemoCountryFilter')?.value || 'all');
   return SA_DEMO_LEADS.filter((lead) => {
     if (!matchesModuleFilter(lead, moduleFilter)) return false;
     if (stage !== 'all' && String(lead.sales_stage || 'new') !== stage) return false;
+    if (country === 'unknown' && lead.phone_country) return false;
+    if (!['all', 'unknown'].includes(country) && String(lead.phone_country || '').toUpperCase() !== country) return false;
     if (!search) return true;
     return [lead.id, lead.contact_name, lead.phone, lead.phone_digits, lead.phone_country,
       lead.phone_country_name, lead.phone_calling_code, lead.business_giro, lead.source_label,
@@ -1251,6 +1257,7 @@ async function confirmDelete() {
 async function loadDemoLeads() {
   const payload = await api('/api/superadmin/demo-leads');
   SA_DEMO_LEADS = Array.isArray(payload?.demoLeads) ? payload.demoLeads : [];
+  renderCountryFilter('#saDemoCountryFilter', SA_DEMO_LEADS);
   renderDemoLeadSummary(payload?.summary || null);
   renderDemoLeadsTable();
 }
@@ -1258,6 +1265,7 @@ async function loadDemoLeads() {
 async function loadTenants() {
   const payload = await api('/api/superadmin/tenants');
   SA_TENANTS = Array.isArray(payload?.tenants) ? payload.tenants : [];
+  renderTenantCountryFilter();
   renderBillingSummary(payload?.summary || null);
   renderTenantTable();
 }
@@ -1705,6 +1713,32 @@ function renderResellerFilter() {
   select.value = [...select.options].some((option) => option.value === current) ? current : 'all';
 }
 
+function renderTenantCountryFilter() {
+  renderCountryFilter('#saTenantCountryFilter', SA_TENANTS);
+}
+
+function renderCountryFilter(selector, entities) {
+  const select = $(selector);
+  if (!select) return;
+  const current = select.value || 'all';
+  const countries = new Map();
+  let hasUnknown = false;
+  entities.forEach((entity) => {
+    const code = String(entity.phone_country || '').trim().toUpperCase();
+    if (!code) {
+      hasUnknown = true;
+      return;
+    }
+    countries.set(code, String(entity.phone_country_name || code).trim());
+  });
+  const options = [...countries.entries()]
+    .sort((a, b) => a[1].localeCompare(b[1], 'es', { sensitivity: 'base' }))
+    .map(([code, name]) => `<option value="${esc(code)}">${countryFlag(code)} ${esc(name)}</option>`);
+  if (hasUnknown) options.push('<option value="unknown">Sin país registrado</option>');
+  select.innerHTML = '<option value="all">Todos los países</option>' + options.join('');
+  select.value = [...select.options].some((option) => option.value === current) ? current : 'all';
+}
+
 function renderResellers() {
   const table = $('#saResellersTable');
   if (!table) return;
@@ -1871,6 +1905,7 @@ $('#saUploadBrandLogo')?.addEventListener('click', () => uploadSuperAdminLogo().
 $('#saTenantSearch')?.addEventListener('input', () => { SA_TENANT_PAGE = 1; renderTenantTable(); });
 $('#saTenantModuleFilter')?.addEventListener('change', () => { SA_TENANT_PAGE = 1; renderTenantTable(); });
 $('#saTenantStageFilter')?.addEventListener('change', () => { SA_TENANT_PAGE = 1; renderTenantTable(); });
+$('#saTenantCountryFilter')?.addEventListener('change', () => { SA_TENANT_PAGE = 1; renderTenantTable(); });
 $('#saTenantResellerFilter')?.addEventListener('change', () => { SA_TENANT_PAGE = 1; renderTenantTable(); });
 $('#saReloadTenants')?.addEventListener('click', () => { SA_TENANT_PAGE = 1; loadTenants().catch((e) => toast(e.message, true)); });
 $('#saClientSearch')?.addEventListener('input', renderClientsTable);
@@ -1878,6 +1913,7 @@ $('#saReloadClients')?.addEventListener('click', () => loadClients().catch((e) =
 $('#saDemoLeadSearch')?.addEventListener('input', () => { SA_DEMO_PAGE = 1; renderDemoLeadsTable(); });
 $('#saDemoModuleFilter')?.addEventListener('change', () => { SA_DEMO_PAGE = 1; renderDemoLeadsTable(); });
 $('#saDemoStageFilter')?.addEventListener('change', () => { SA_DEMO_PAGE = 1; renderDemoLeadsTable(); });
+$('#saDemoCountryFilter')?.addEventListener('change', () => { SA_DEMO_PAGE = 1; renderDemoLeadsTable(); });
 $('#saReloadDemoLeads')?.addEventListener('click', () => { SA_DEMO_PAGE = 1; loadDemoLeads().catch((e) => toast(e.message, true)); });
 $('#saFollowUpSearch')?.addEventListener('input', renderFollowUpTable);
 $('#saFollowUpStageFilter')?.addEventListener('change', renderFollowUpTable);

@@ -28,6 +28,7 @@ test('agrega el plan de Facturación Electrónica SAT con Stripe y 100 timbres',
   assert.match(appHtml, /href="https:\/\/buy\.stripe\.com\/bJe8wO77v6fT5K37M24c80m"/);
   assert.match(appHtml, /data-stripe-product="prod_V863lSz1ZCJG47"/);
   assert.match(appHtml, /data-plan-code="invoicing_sat"/);
+  assert.match(appHtml, /Exclusivo para México/);
   assert.match(appHtml, /100 timbres de bienvenida/);
   assert.match(appHtml, /CFDI 4\.0 y facturación global ante el SAT/);
   assert.match(appHtml, /Multiemisor por RFC y sucursal/);

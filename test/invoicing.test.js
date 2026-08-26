@@ -5,6 +5,7 @@ const path = require('node:path');
 const {
   isMexicoIdentity,
   invoicingPortalUrl,
+  isFiscalEmitterReady,
   validateFiscalProfile,
   validateReceiver,
   validateInvoiceEmail,
@@ -31,7 +32,7 @@ test('separa el acceso al módulo México de la autorización para consumir timb
   const routes = read('src/routes/invoicing.js');
   const superadmin = read('src/routes/superadmin.js');
   assert.match(auth, /invoicingEligible = isDemoTenant \|\| Boolean\(Number\(req\.tenant\.invoicing_enabled\)\) \|\| isMexicoIdentity\(req\.tenant\)/);
-  assert.match(auth, /invoicingActivated: Boolean\(Number\(req\.tenant\.invoicing_enabled\)\)/);
+  assert.match(auth, /const invoicingActivated = Boolean\(Number\(req\.tenant\.invoicing_enabled\)\)/);
   assert.match(routes, /function requireInvoicingActivated/);
   assert.match(routes, /post\('\/sales\/:id\/issue', requireInvoicingActivated/);
   assert.match(routes, /post\('\/global\/issue', requireInvoicingActivated/);
@@ -425,4 +426,28 @@ test('la carga de CSD valida RFC, vigencia y sincroniza el nombre fiscal del cer
   assert.match(route, /El CSD pertenece al RFC/);
   assert.match(route, /SET legal_name=\$1,csd_uploaded=1/);
   assert.match(route, /El certificado CSD está vencido/);
+});
+
+test('el ticket exige activación del tenant y un emisor listo para timbrar', () => {
+  assert.equal(isFiscalEmitterReady({
+    enabled: 1,
+    environment: 'production',
+    api_mode: 'multi',
+    sandbox_shared: 0,
+    rfc: 'EKU9003173C9',
+    legal_name: 'ESCUELA KEMPER URGATE',
+    fiscal_regime: '601',
+    postal_code: '78240',
+    default_product_code: '01010101',
+    csd_uploaded: 1,
+  }, true), true);
+  assert.equal(isFiscalEmitterReady({ enabled: 0 }, true), false);
+  assert.equal(isFiscalEmitterReady({ enabled: 1, rfc: 'EKU9003173C9' }, true), false);
+  assert.equal(isFiscalEmitterReady({
+    enabled: 1, environment: 'production', api_mode: 'multi', csd_uploaded: 0,
+    rfc: 'EKU9003173C9', legal_name: 'ESCUELA KEMPER URGATE', fiscal_regime: '601',
+    postal_code: '78240', default_product_code: '01010101',
+  }, true), false);
+  assert.match(read('src/routes/auth.js'), /invoicingReadyByBranch/);
+  assert.match(read('public/js/app.js'), /ME\?\.tenant\?\.invoicingActivated === true && issuerReady && ticket\.id && rawInvoiceCode/);
 });

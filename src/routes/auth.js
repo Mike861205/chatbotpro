@@ -8,10 +8,12 @@ const { signToken, setAuthCookie, clearAuthCookie, requireAuth, requireOwner } =
 const { createRateLimiter } = require('../middleware/security');
 const { normalizeInternationalPhone, phoneCountries } = require('../utils/phone');
 const { regionalDefaults, isSupportedTimeZone } = require('../utils/regional');
-const { isMexicoIdentity, invoicingPortalUrl } = require('../utils/invoicing');
+const { isMexicoIdentity, invoicingPortalUrl, isFiscalEmitterReady } = require('../utils/invoicing');
 const { sendLeadNotification, sendRegistrationNotification } = require('../utils/mailer');
+const { createConfiguredFacturamaClients } = require('../services/facturama');
 
 const router = express.Router();
+const facturamaClients = createConfiguredFacturamaClients();
 
 const SLUG_RE = /^[a-z0-9](?:[a-z0-9-]{1,38}[a-z0-9])?$/;
 const USERNAME_RE = /^[a-z0-9._-]{3,60}$/;
@@ -562,6 +564,33 @@ router.get('/me', requireAuth, async (req, res, next) => {
         phoneCallingCode = lead.rows[0].phone_calling_code || phoneCallingCode;
       }
     }
+    const invoicingActivated = Boolean(Number(req.tenant.invoicing_enabled));
+    let invoicingReady = false;
+    const invoicingReadyByBranch = {};
+    if (invoicingActivated) {
+      const environment = config.NODE_ENV !== 'production' || isDemoTenant
+        ? 'sandbox'
+        : (String(req.tenant.invoicing_environment || '').toLowerCase() === 'production' ? 'production' : 'sandbox');
+      const [emitters, branches] = await Promise.all([
+        req.tdb.all('SELECT * FROM {s}.fiscal_emitters ORDER BY id'),
+        req.tdb.all('SELECT id, fiscal_emitter_id FROM {s}.branches WHERE active=1 ORDER BY id'),
+      ]);
+      const providerConfigured = facturamaClients[environment].isConfigured();
+      const readinessByEmitter = new Map(emitters.map((emitter) => [
+        Number(emitter.id),
+        isFiscalEmitterReady({ ...emitter, environment }, providerConfigured),
+      ]));
+      const primaryReady = readinessByEmitter.get(1) === true;
+      branches.forEach((branch) => {
+        const emitterId = Number(branch.fiscal_emitter_id || 1);
+        invoicingReadyByBranch[String(branch.id)] = readinessByEmitter.has(emitterId)
+          ? readinessByEmitter.get(emitterId) === true
+          : primaryReady;
+      });
+      invoicingReady = req.user.branchId
+        ? invoicingReadyByBranch[String(req.user.branchId)] === true
+        : Array.from(readinessByEmitter.values()).some(Boolean);
+    }
     res.json({
     username: req.user.username,
     role: req.user.role,
@@ -581,7 +610,9 @@ router.get('/me', requireAuth, async (req, res, next) => {
       phoneCountry,
       phoneCallingCode,
       invoicingEligible,
-      invoicingActivated: Boolean(Number(req.tenant.invoicing_enabled)),
+      invoicingActivated,
+      invoicingReady,
+      invoicingReadyByBranch,
       invoicingPortalUrl: invoicingPortalUrl(req, config.INVOICING_PORTAL_ORIGIN, req.tenant.slug),
     },
   });

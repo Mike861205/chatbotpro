@@ -11,7 +11,7 @@
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/fill/style.css" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/duotone/style.css" />
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-  <link rel="stylesheet" href="/static/css/styles.css?v=20260823prodapi" />
+  <link rel="stylesheet" href="/static/css/styles.css?v=20260825posworkspace2" />
   <link rel="icon" type="image/svg+xml" href="/static/favicon.svg" />
   <link rel="icon" type="image/png" href="/static/chatbotpro100.png" />
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
@@ -75,7 +75,7 @@
     <main class="main">
       <div class="topbar">
         <div style="display:flex;align-items:center;gap:14px">
-          <button class="menu-toggle" id="menuToggle"><i class="ph-bold ph-list"></i></button>
+          <button class="menu-toggle" id="menuToggle" type="button" title="Ocultar menú" aria-label="Ocultar menú lateral" aria-expanded="true"><i class="ph-bold ph-sidebar-simple"></i></button>
           <div>
             <h1 id="viewTitle"><i class="ph-bold ph-chart-pie-slice"></i> Dashboard</h1>
             <div class="sub" id="viewSub">Resumen de tu negocio</div>
@@ -221,11 +221,11 @@
         <div class="pos-finance-strip" id="posFinanceStrip"></div>
         <div class="pos-delivery-strip" id="posDeliveryStrip"></div>
         <div class="pos-action-icons" id="posActionIcons"></div>
+        <div class="card pos-session-card" id="posSessionCard"></div>
         <div class="pos-shell">
           <div class="pos-main">
-            <div class="card" id="posSessionCard"></div>
             <div class="card pos-catalog-card">
-              <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap;margin-bottom:16px">
+              <div class="pos-catalog-head" style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap;margin-bottom:16px">
                 <div>
                   <h3 style="margin-bottom:8px"><i class="ph-bold ph-storefront"></i> Catálogo para cobrar</h3>
                   <div class="hint">Aquí aparecen automáticamente los productos activos dados de alta por categoría.</div>
@@ -1378,6 +1378,7 @@
               <div class="plan-label">Plan Facturación Electrónica</div>
               <div class="plan-branch-limit invoicing"><i class="ph-fill ph-storefront"></i><span><strong>Incluye de 1 a 2 sucursales</strong><small>Activas al mismo tiempo</small></span></div>
               <div class="plan-price invoicing-price"><span class="cur">$</span><span class="amt">1,499</span><span class="per">/ mes MXN</span></div>
+              <div class="plan-old invoicing-country"><b>Exclusivo para México</b> por integración con el SAT</div>
               <div class="plan-stamp-bonus"><i class="ph-fill ph-stamp"></i><span><strong>100 timbres de bienvenida</strong><small>Incluidos una sola vez al contratar el plan</small></span></div>
               <ul class="plan-points">
                 <li><i class="ph-bold ph-check-circle"></i> Chatbot y pedidos automatizados 24/7</li>
@@ -2790,6 +2791,6 @@
   </div>
 
 <script src="/socket.io/socket.io.js"></script>
-<script src="/static/js/app.js?v=20260824neon"></script>
+  <script src="/static/js/app.js?v=20260825posworkspace"></script>
 </body>
 </html>

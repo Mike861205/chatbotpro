@@ -963,11 +963,34 @@ function closeSidebar() {
   $('#sidebar').classList.remove('open');
   $('#scrim').classList.remove('show');
 }
+const SIDEBAR_COLLAPSED_KEY = 'cbpSidebarCollapsed';
+function syncSidebarToggle() {
+  const mobile = matchMedia('(max-width: 880px)').matches;
+  const collapsed = document.body.classList.contains('sidebar-collapsed');
+  const open = mobile ? $('#sidebar').classList.contains('open') : !collapsed;
+  const button = $('#menuToggle');
+  button.setAttribute('aria-expanded', String(open));
+  button.setAttribute('aria-label', open ? 'Ocultar menú lateral' : 'Mostrar menú lateral');
+  button.title = open ? 'Ocultar menú' : 'Mostrar menú';
+  button.querySelector('i').className = `ph-bold ${open ? 'ph-sidebar-simple' : 'ph-list'}`;
+}
+try {
+  if (localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === '1' && !matchMedia('(max-width: 880px)').matches) {
+    document.body.classList.add('sidebar-collapsed');
+  }
+} catch {}
+syncSidebarToggle();
 $('#menuToggle').addEventListener('click', () => {
-  $('#sidebar').classList.toggle('open');
-  $('#scrim').classList.toggle('show');
+  if (matchMedia('(max-width: 880px)').matches) {
+    $('#sidebar').classList.toggle('open');
+    $('#scrim').classList.toggle('show');
+  } else {
+    const collapsed = document.body.classList.toggle('sidebar-collapsed');
+    try { localStorage.setItem(SIDEBAR_COLLAPSED_KEY, collapsed ? '1' : '0'); } catch {}
+  }
+  syncSidebarToggle();
 });
-$('#scrim').addEventListener('click', closeSidebar);
+$('#scrim').addEventListener('click', () => { closeSidebar(); syncSidebarToggle(); });
 $('#logoutBtn').addEventListener('click', async () => {
   await api('/api/auth/logout', { method: 'POST' });
   setAuthScope('');
@@ -3822,7 +3845,18 @@ function openThermalPrintWindow(ticket) {
   const friendlyInvoiceCode = compactInvoiceCode.length === 8
     ? `${compactInvoiceCode.slice(0, 4)}-${compactInvoiceCode.slice(4)}`
     : rawInvoiceCode;
-  const invoiceUrl = ME?.tenant?.invoicingEligible && ticket.id && rawInvoiceCode
+  const ticketBranchId = Number(
+    ticket.serviceBranchId
+    || ticket.service_branch_id
+    || POS_OVERVIEW?.activeSession?.branch_id
+    || ME?.branchId
+    || 0
+  );
+  const readinessByBranch = ME?.tenant?.invoicingReadyByBranch || {};
+  const issuerReady = ticketBranchId > 0 && Object.prototype.hasOwnProperty.call(readinessByBranch, String(ticketBranchId))
+    ? readinessByBranch[String(ticketBranchId)] === true
+    : ME?.tenant?.invoicingReady === true;
+  const invoiceUrl = ME?.tenant?.invoicingActivated === true && issuerReady && ticket.id && rawInvoiceCode
     ? `${ME.tenant.invoicingPortalUrl}?ticket=${encodeURIComponent(ticket.id)}&code=${encodeURIComponent(friendlyInvoiceCode)}`
     : '';
   const invoiceQrUrl = invoiceUrl
