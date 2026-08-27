@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no" />
+  <meta name="theme-color" content="#ff6b35" />
+  <title>Autoservicio</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@500;600;700;800;900&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/regular/style.css" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/fill/style.css" />
+  <link rel="stylesheet" href="/static/css/self-service.css" />
+</head>
+<body>
+  <div class="kiosk-loading" id="kioskLoading"><div class="kiosk-spinner"></div><b>Preparando menú…</b></div>
+  <main class="kiosk-app" id="kioskApp" hidden>
+    <header class="kiosk-header">
+      <div class="kiosk-brand"><div class="kiosk-logo" id="kioskLogo"><i class="ph ph-storefront"></i></div><div><span id="kioskBranch">Autoservicio</span><h1 id="kioskBusiness">Mi pedido</h1></div></div>
+      <button class="kiosk-reset" id="kioskReset" type="button"><i class="ph ph-arrow-counter-clockwise"></i><span>Empezar de nuevo</span></button>
+    </header>
+    <div class="kiosk-layout">
+      <section class="kiosk-menu">
+        <div class="kiosk-welcome"><div><span>Pide a tu gusto</span><h2>¿Qué se te antoja hoy?</h2><p id="kioskWelcome">Toca un producto para agregarlo.</p></div><i class="ph-fill ph-hand-tap"></i></div>
+        <nav class="kiosk-categories" id="kioskCategories" aria-label="Categorías"></nav>
+        <div class="kiosk-products" id="kioskProducts"></div>
+      </section>
+      <aside class="kiosk-cart">
+        <div class="kiosk-cart-head"><div><span>Tu selección</span><h2>Mi pedido</h2></div><strong id="kioskCartCount">0</strong></div>
+        <div class="kiosk-cart-items" id="kioskCartItems"></div>
+        <div class="kiosk-note"><label for="kioskNotes"><i class="ph ph-note-pencil"></i> Indicaciones</label><textarea id="kioskNotes" maxlength="180" rows="2" placeholder="Ej. Sin cebolla, salsa aparte…"></textarea></div>
+        <div class="kiosk-total"><span>Total</span><strong id="kioskTotal">$0.00</strong></div>
+        <button class="kiosk-checkout" id="kioskCheckout" type="button" disabled><span>Confirmar pedido</span><i class="ph-fill ph-arrow-right"></i></button>
+        <p class="kiosk-payment-note"><i class="ph ph-credit-card"></i> Con tarjeta paga directamente aquí; efectivo y transferencia se confirman en caja.</p>
+      </aside>
+    </div>
+  </main>
+
+  <div class="kiosk-modal" id="kioskProductModal" hidden>
+    <div class="kiosk-modal-card">
+      <button class="kiosk-modal-close" id="kioskProductClose" type="button" aria-label="Cerrar"><i class="ph ph-x"></i></button>
+      <div class="kiosk-modal-product"><div class="kiosk-modal-image" id="kioskModalImage"></div><div><span id="kioskModalCategory"></span><h2 id="kioskModalName"></h2><p id="kioskModalDescription"></p></div></div>
+      <div id="kioskProductOptions"></div>
+      <div class="kiosk-modal-footer"><div class="kiosk-qty"><button type="button" id="kioskQtyDown"><i class="ph ph-minus"></i></button><strong id="kioskQty">1</strong><button type="button" id="kioskQtyUp"><i class="ph ph-plus"></i></button></div><button class="kiosk-add" id="kioskAddProduct" type="button">Agregar <strong id="kioskAddPrice"></strong></button></div>
+    </div>
+  </div>
+
+  <div class="kiosk-modal" id="kioskCustomerModal" hidden>
+    <form class="kiosk-modal-card kiosk-customer-card" id="kioskCustomerForm">
+      <button class="kiosk-modal-close" id="kioskCustomerClose" type="button" aria-label="Cerrar"><i class="ph ph-x"></i></button>
+      <div class="kiosk-customer-head"><div class="kiosk-customer-icon"><i class="ph ph-user-circle"></i></div><div><span>Ya casi terminamos</span><h2>¿A nombre de quién es el pedido?</h2><p>Usaremos tu nombre para llamarte cuando tu pedido esté listo.</p></div></div>
+      <div class="kiosk-customer-fields">
+        <label for="kioskCustomerName"><span>Nombre <b>Obligatorio</b></span><input id="kioskCustomerName" name="customerName" type="text" autocomplete="name" maxlength="80" minlength="2" required placeholder="Escribe tu nombre" /></label>
+        <label for="kioskCustomerPhone"><span>Teléfono <em>Opcional</em></span><input id="kioskCustomerPhone" name="customerPhone" type="tel" autocomplete="tel" inputmode="tel" maxlength="20" placeholder="Ej. 614 123 4567" /><small>Sólo si deseas compartirlo.</small></label>
+      </div>
+      <fieldset class="kiosk-payment-fieldset"><legend>¿Cómo pagarás?</legend><div class="kiosk-payment-options" id="kioskPaymentOptions"></div></fieldset>
+      <button class="kiosk-customer-submit" id="kioskCustomerSubmit" type="submit"><span>Enviar mi pedido</span><i class="ph-fill ph-arrow-right"></i></button>
+    </form>
+  </div>
+
+  <div class="kiosk-success" id="kioskSuccess" hidden>
+    <div class="kiosk-success-card"><div class="kiosk-success-check"><i class="ph-fill ph-check"></i></div><span>Pedido recibido</span><h2>Tu folio es</h2><strong id="kioskFolio">A-0000</strong><p id="kioskSuccessMessage">Pasa a caja para realizar tu pago.</p><div class="kiosk-waiting" id="kioskWaiting"><i class="ph ph-spinner-gap"></i> Esperando confirmación de caja</div><div class="kiosk-success-actions"><button id="kioskRetryPayment" type="button" hidden>Reintentar pago</button><button id="kioskPrintSale" type="button" hidden>Imprimir ticket</button><button id="kioskNewOrder" type="button">Hacer otro pedido</button></div></div>
+  </div>
+  <section class="kiosk-print-ticket" id="kioskPrintTicket" aria-hidden="true"></section>
+  <div class="kiosk-toast" id="kioskToast"></div>
+  <script src="/static/js/self-service.js" defer></script>
+</body>
+</html>

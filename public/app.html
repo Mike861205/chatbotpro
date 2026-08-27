@@ -220,6 +220,7 @@
       <section class="section" id="view-pos">
         <div class="pos-finance-strip" id="posFinanceStrip"></div>
         <div class="pos-delivery-strip" id="posDeliveryStrip"></div>
+        <div id="posSelfServiceQueue"></div>
         <div class="pos-action-icons" id="posActionIcons"></div>
         <div class="card pos-session-card" id="posSessionCard"></div>
         <div class="pos-shell">
@@ -1250,6 +1251,32 @@
               <button class="btn btn-primary" type="submit"><i class="ph-bold ph-floppy-disk"></i> Guardar ticket</button>
             </form>
           </div>
+        </div>
+        <div class="card self-service-config-card" style="margin-top:16px">
+          <div class="operations-report-head">
+            <div><h3><i class="ph-bold ph-device-tablet-camera"></i> Autoservicio en tabletas</h3><p>El cliente arma su pedido. Tarjeta se autocobra con Mercado Pago Point; efectivo y transferencia continúan en caja.</p></div>
+            <label class="switch"><input type="checkbox" id="cfgSelfServiceEnabled" /><span class="track"></span></label>
+          </div>
+          <div class="self-service-config-actions">
+            <div class="field"><label>Sucursal de la tableta</label><select id="selfServiceBranch"></select></div>
+            <div class="field"><label>Nombre del dispositivo</label><input id="selfServiceDeviceName" maxlength="80" placeholder="Ej. Tableta entrada" /></div>
+            <button class="btn btn-primary" type="button" id="selfServiceAddDevice"><i class="ph-bold ph-plus-circle"></i> Crear acceso</button>
+          </div>
+          <div class="self-service-payment-config">
+            <div><b><i class="ph-bold ph-wallet"></i> Formas de pago visibles en autoservicio</b><span>Débito y crédito usan la terminal Point. Efectivo y transferencia mantienen la confirmación actual en el POS.</span></div>
+            <div class="pay-method-grid">
+              <label class="pay-method-chip"><input type="checkbox" id="cfgSelfServicePayCash" /> <span><i class="ph-bold ph-money"></i> Efectivo</span></label>
+              <label class="pay-method-chip"><input type="checkbox" id="cfgSelfServicePayDebit" /> <span><i class="ph-bold ph-credit-card"></i> Débito</span></label>
+              <label class="pay-method-chip"><input type="checkbox" id="cfgSelfServicePayCredit" /> <span><i class="ph-bold ph-credit-card"></i> Crédito</span></label>
+              <label class="pay-method-chip"><input type="checkbox" id="cfgSelfServicePayTransfer" /> <span><i class="ph-bold ph-bank"></i> Transferencia</span></label>
+            </div>
+          </div>
+          <div class="toggle-row self-service-auto-print-row">
+            <div class="t-info"><i class="ph-bold ph-printer"></i><div><b>Imprimir ticket desde la tableta</b><span>Los pagos Point aprobados siempre imprimen el ticket final; para los demás medios controla el comprobante previo.</span></div></div>
+            <label class="switch"><input type="checkbox" id="cfgSelfServiceAutoPrint" /><span class="track"></span></label>
+          </div>
+          <div id="selfServiceDevices" class="table-wrap"></div>
+          <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:14px"><button class="btn btn-primary" type="button" id="selfServiceSave"><i class="ph-bold ph-floppy-disk"></i> Guardar autoservicio</button><span class="hint">Desactivar autoservicio invalida temporalmente todas las ligas.</span></div>
         </div>
         <div class="card operation-policy-card" style="margin-top:16px">
           <div class="operations-report-head">
@@ -2391,6 +2418,45 @@
   </div>
 
   <!-- ════════ Modal pedidos chatbot para POS ════════ -->
+  <div class="modal-bg" id="selfServiceCheckoutModal">
+    <div class="modal self-service-checkout-modal">
+      <header class="self-service-checkout-head">
+        <div class="self-service-checkout-mark"><i class="ph-bold ph-hand-coins"></i></div>
+        <div><span>Pedido de autoservicio</span><h3>Cobrar pedido</h3><p><b id="selfServiceCheckoutFolio">A-0000</b><i></i><strong id="selfServiceCheckoutName">Cliente</strong></p></div>
+        <button type="button" class="self-service-checkout-close" id="selfServiceCheckoutClose" aria-label="Cerrar cobro"><i class="ph-bold ph-x"></i></button>
+      </header>
+      <form id="selfServiceCheckoutForm">
+        <input type="hidden" id="selfServiceCheckoutId" />
+        <section class="self-service-checkout-summary">
+          <div><span>Total a cobrar</span><strong id="selfServiceCheckoutTotal">$0.00</strong></div>
+          <div><span>Resumen</span><b id="selfServiceCheckoutItems">0 productos</b><small>Cliente indicó: <strong id="selfServiceCheckoutPreferred">Efectivo</strong></small></div>
+        </section>
+        <section class="self-service-payment-section">
+          <div class="self-service-section-title"><div><span>1</span><div><b>Confirma la forma de pago</b><small>Puedes corregir la opción indicada por el cliente.</small></div></div></div>
+          <div class="self-service-payment-methods">
+            <label><input type="radio" name="selfServicePayment" value="cash" checked /><span class="self-service-method-icon cash"><i class="ph-bold ph-money"></i></span><span><b>Efectivo</b><small>Calcula el cambio</small></span><i class="ph-bold ph-check-circle method-check"></i></label>
+            <label><input type="radio" name="selfServicePayment" value="card" /><span class="self-service-method-icon card"><i class="ph-bold ph-credit-card"></i></span><span><b>Tarjeta</b><small>Débito o crédito</small></span><i class="ph-bold ph-check-circle method-check"></i></label>
+            <label><input type="radio" name="selfServicePayment" value="transfer" /><span class="self-service-method-icon transfer"><i class="ph-bold ph-bank"></i></span><span><b>Transferencia</b><small>Confirma el depósito</small></span><i class="ph-bold ph-check-circle method-check"></i></label>
+          </div>
+        </section>
+        <section class="self-service-payment-detail">
+          <div id="selfServiceCashRow">
+            <div class="self-service-section-title"><div><span>2</span><div><b>Captura el efectivo recibido</b><small>El cambio se calcula automáticamente.</small></div></div></div>
+            <label class="self-service-money-input" for="selfServiceCashReceived"><span>$</span><input type="number" id="selfServiceCashReceived" min="0" step="0.01" inputmode="decimal" /><small>MXN</small></label>
+            <div class="self-service-cash-shortcuts" id="selfServiceCashShortcuts"></div>
+            <div class="self-service-change-card" id="selfServiceChangeCard"><span>Cambio a entregar</span><strong id="selfServiceChangeHint">$0.00</strong><small id="selfServiceChangeStatus">Pago exacto</small></div>
+          </div>
+          <div id="selfServiceCardRow" hidden>
+            <div class="self-service-section-title"><div><span>2</span><div><b>Selecciona el tipo de tarjeta</b><small>Se imprimirá correctamente en el ticket final.</small></div></div></div>
+            <label class="self-service-select"><i class="ph-bold ph-credit-card"></i><select id="selfServiceCardType"><option value="">Selecciona débito o crédito</option><option value="debit">Tarjeta de débito</option><option value="credit">Tarjeta de crédito</option></select><i class="ph-bold ph-caret-down"></i></label>
+          </div>
+          <div class="self-service-transfer-row" id="selfServiceTransferRow" hidden><i class="ph-bold ph-shield-check"></i><div><b>Confirma la transferencia</b><span>Verifica el depósito antes de finalizar. El POS registrará la venta como transferencia.</span></div></div>
+        </section>
+        <div class="modal-actions self-service-checkout-actions"><button class="btn btn-ghost" type="button" id="selfServiceCheckoutCancel"><i class="ph-bold ph-arrow-left"></i> Volver</button><button class="btn btn-primary" type="submit" id="selfServiceCheckoutSubmit"><i class="ph-bold ph-check-circle"></i><span>Confirmar pago</span><small>Imprimir ticket y enviar a cocina</small></button></div>
+      </form>
+    </div>
+  </div>
+
   <div class="modal-bg" id="posInvoiceModal">
     <div class="modal pos-invoice-modal" style="max-width:660px">
       <div class="pos-invoice-heading"><div><h3><i class="ph-bold ph-file-text"></i> Facturar ticket <span id="posInvoiceTicketLabel"></span></h3><p class="hint">Captura los datos exactamente como aparecen en la Constancia de Situación Fiscal.</p></div><div class="pos-invoice-heading-actions"><span class="pos-invoice-environment" id="posInvoiceEnvironment"><i class="ph-bold ph-flask"></i> Sandbox</span><button type="button" class="modal-close" id="posInvoiceClose" aria-label="Cerrar facturación"><i class="ph-bold ph-x"></i></button></div></div>

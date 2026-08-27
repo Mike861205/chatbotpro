@@ -86,6 +86,14 @@ module.exports = {
   FACTURAMA_SANDBOX_REGIME: String(process.env.FACTURAMA_SANDBOX_REGIME || '601').trim(),
   FACTURAMA_SANDBOX_POSTAL_CODE: String(process.env.FACTURAMA_SANDBOX_POSTAL_CODE || '78240').trim(),
   INVOICING_PORTAL_ORIGIN: String(process.env.INVOICING_PORTAL_ORIGIN || 'https://facturacion.chatbotpro.systemdem.online').trim().replace(/\/+$/, ''),
+  MERCADO_PAGO_ACCESS_TOKEN: String(process.env.MERCADO_PAGO_ACCESS_TOKEN || '').trim(),
+  MERCADO_PAGO_PUBLIC_KEY: String(process.env.MERCADO_PAGO_PUBLIC_KEY || '').trim(),
+  MERCADO_PAGO_WEBHOOK_SECRET: String(process.env.MERCADO_PAGO_WEBHOOK_SECRET || '').trim(),
+  MERCADO_PAGO_POINT_MODE: String(process.env.MERCADO_PAGO_POINT_MODE || 'sandbox').trim().toLowerCase() === 'production' ? 'production' : 'sandbox',
+  MERCADO_PAGO_POINT_TERMINAL_ID: String(process.env.MERCADO_PAGO_POINT_TERMINAL_ID || '').trim(),
+  MERCADO_PAGO_POINT_AUTO_SIMULATE: envEnabled('MERCADO_PAGO_POINT_AUTO_SIMULATE', false),
+  MERCADO_PAGO_POINT_MOCK: envEnabled('MERCADO_PAGO_POINT_MOCK', false),
+  MERCADO_PAGO_TIMEOUT_MS: Math.min(30000, Math.max(3000, Number(process.env.MERCADO_PAGO_TIMEOUT_MS) || 12000)),
   DATABASE_URL: (() => {
     const url = (process.env.DATABASE_URL || '').trim();
     if (!url) { console.error('\n[config] Falta DATABASE_URL en .env (cadena de conexión de Neon).'); process.exit(1); }

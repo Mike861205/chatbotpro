@@ -101,6 +101,7 @@ async function buildKdsPayload(tenant, tenantDb, area) {
        FROM {s}.orders o
        LEFT JOIN {s}.kds_ticket_states s ON s.order_id = o.id AND s.area_id = $1
        WHERE o.status <> 'cancelado'
+         AND NOT (o.channel = 'kiosk' AND o.status = 'pendiente_cobro')
          AND o.table_account_id IS NULL
          AND (o.created_at AT TIME ZONE '${tenant.timezone}')::date = (now() AT TIME ZONE '${tenant.timezone}')::date
          AND ($2::int IS NULL OR o.service_branch_id = $2 OR o.pickup_branch_id = $2)

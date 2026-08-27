@@ -70,6 +70,7 @@ app.use('/api/inventory', require('./src/routes/inventory'));
 app.use('/api/employees', require('./src/routes/employees'));
 app.use('/api/kds', require('./src/routes/kds'));
 app.use('/api/invoicing', require('./src/routes/invoicing'));
+app.use('/api/self-service', require('./src/routes/selfService'));
 
 // Páginas
 const page = (name) => (req, res) => res.sendFile(path.join(__dirname, 'public', name));
@@ -88,6 +89,7 @@ app.get('/resellers/panel', page('reseller.html'));
 app.get('/resellers/:slug', validSlug, page('reseller-login.html'));
 app.get('/c/:slug', validSlug, page('chat.html'));
 app.get('/facturacion/:slug', validSlug, page('invoice.html'));
+app.get('/autoservicio/:slug/:token', validSlug, validKdsToken, page('self-service.html'));
 app.get('/:slug', validSlug, async (req, res, next) => {
   try {
     const hostname = String(req.hostname || '').toLowerCase();

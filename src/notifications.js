@@ -129,4 +129,12 @@ async function emitNewOrder(slug, order) {
   }, { ttl: 300, urgency: 'high' });
 }
 
-module.exports = { emitter, setIo, emitNewOrder, emitSessionUpdate, sendTenantPush };
+function emitSelfServiceOrder(slug, order) {
+  if (_io) _io.to(`tenant:${slug}`).emit('self_service_order', order);
+}
+
+function emitSelfServiceStatus(slug, update) {
+  if (_io) _io.to(`tenant:${slug}`).emit('self_service_status', update);
+}
+
+module.exports = { emitter, setIo, emitNewOrder, emitSessionUpdate, emitSelfServiceOrder, emitSelfServiceStatus, sendTenantPush };

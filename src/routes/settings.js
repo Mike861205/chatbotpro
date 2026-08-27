@@ -44,6 +44,12 @@ const SETTING_KEYS = [
   'chatbot_extra_options_json',
   'chatbot_pos_integration_enabled',
   'chatbot_pos_global_orders_enabled',
+  'self_service_enabled',
+  'self_service_auto_print',
+  'self_service_payment_cash',
+  'self_service_payment_debit',
+  'self_service_payment_credit',
+  'self_service_payment_transfer',
   'business_type',
   'delivery_zones_geojson',
   'delivery_fee_rules',
@@ -163,6 +169,15 @@ router.put('/', upload.single('logo'), async (req, res, next) => {
         return res.status(400).json({ error: 'El NIP debe contener de 4 a 8 dígitos' });
       }
       await setSetting(req.tdb, 'pos_authorization_pin_hash', pin ? await bcrypt.hash(pin, 12) : '');
+    }
+    const selfServicePaymentKeys = ['self_service_payment_cash', 'self_service_payment_debit', 'self_service_payment_credit', 'self_service_payment_transfer'];
+    if (selfServicePaymentKeys.some((key) => body[key] !== undefined)) {
+      const currentRows = await req.tdb.all('SELECT key,value FROM {s}.settings WHERE key=ANY($1::text[])', [selfServicePaymentKeys]);
+      const current = Object.fromEntries(currentRows.map((row) => [row.key, row.value]));
+      const hasEnabledPayment = selfServicePaymentKeys.some((key, index) => String(
+        body[key] !== undefined ? body[key] : (current[key] ?? (index === 0 ? '1' : '0'))
+      ) === '1');
+      if (!hasEnabledPayment) return res.status(400).json({ error: 'Activa al menos una forma de pago para autoservicio' });
     }
     for (const k of SETTING_KEYS) {
       if (body[k] !== undefined) await setSetting(req.tdb, k, body[k]);

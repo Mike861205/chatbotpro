@@ -407,6 +407,7 @@ async function createTenantSchema(slug) {
       total NUMERIC(12,2) DEFAULT 0,
       status TEXT DEFAULT 'pendiente',
       channel TEXT DEFAULT 'chatbot',
+      source_channel TEXT DEFAULT '',
       delivery TEXT DEFAULT '',
       receiving_mode_label TEXT DEFAULT '',
       receiving_mode_behavior TEXT DEFAULT '',
@@ -567,6 +568,43 @@ async function createTenantSchema(slug) {
     );
     CREATE INDEX IF NOT EXISTS idx_${s}_kds_areas_token ON "${s}".kds_areas(access_token);
     CREATE INDEX IF NOT EXISTS idx_${s}_kds_ticket_status ON "${s}".kds_ticket_states(area_id, status, updated_at DESC);
+    CREATE TABLE IF NOT EXISTS "${s}".self_service_devices (
+      id SERIAL PRIMARY KEY,
+      name TEXT NOT NULL DEFAULT 'Tableta de autoservicio',
+      branch_id INTEGER NOT NULL,
+      access_token TEXT UNIQUE NOT NULL,
+      active INTEGER NOT NULL DEFAULT 1,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS idx_${s}_self_service_devices_branch
+      ON "${s}".self_service_devices(branch_id, active);
+    ALTER TABLE "${s}".self_service_devices ADD COLUMN IF NOT EXISTS mercado_pago_terminal_id TEXT DEFAULT '';
+    CREATE TABLE IF NOT EXISTS "${s}".self_service_payments (
+      id SERIAL PRIMARY KEY,
+      order_id INTEGER NOT NULL,
+      pos_session_id INTEGER,
+      provider TEXT NOT NULL DEFAULT 'mercado_pago_point',
+      provider_order_id TEXT UNIQUE,
+      external_reference TEXT NOT NULL,
+      idempotency_key TEXT NOT NULL UNIQUE,
+      amount NUMERIC(12,2) NOT NULL,
+      status TEXT NOT NULL DEFAULT 'creating',
+      status_detail TEXT NOT NULL DEFAULT '',
+      payment_method_type TEXT NOT NULL DEFAULT '',
+      payment_method_id TEXT NOT NULL DEFAULT '',
+      payment_reference TEXT NOT NULL DEFAULT '',
+      terminal_id TEXT NOT NULL DEFAULT '',
+      raw_response TEXT NOT NULL DEFAULT '{}',
+      created_at TIMESTAMPTZ DEFAULT now(),
+      updated_at TIMESTAMPTZ DEFAULT now()
+    );
+    ALTER TABLE "${s}".self_service_payments ADD COLUMN IF NOT EXISTS pos_session_id INTEGER;
+    CREATE INDEX IF NOT EXISTS idx_${s}_self_service_payments_order
+      ON "${s}".self_service_payments(order_id, created_at DESC);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_${s}_self_service_payments_one_active
+      ON "${s}".self_service_payments(order_id)
+      WHERE status IN ('creating','created','at_terminal','action_required');
     CREATE TABLE IF NOT EXISTS "${s}".chat_sessions (
       id TEXT PRIMARY KEY,
       state TEXT,
@@ -599,6 +637,19 @@ async function createTenantSchema(slug) {
     ALTER TABLE "${s}".orders ADD COLUMN IF NOT EXISTS table_number INTEGER;
     ALTER TABLE "${s}".orders ADD COLUMN IF NOT EXISTS waiter_name TEXT;
     ALTER TABLE "${s}".orders ADD COLUMN IF NOT EXISTS cogs_total NUMERIC(14,4);
+    ALTER TABLE "${s}".orders ADD COLUMN IF NOT EXISTS self_service_device_id INTEGER;
+    ALTER TABLE "${s}".orders ADD COLUMN IF NOT EXISTS self_service_folio TEXT;
+    ALTER TABLE "${s}".orders ADD COLUMN IF NOT EXISTS payment_provider TEXT DEFAULT '';
+    ALTER TABLE "${s}".orders ADD COLUMN IF NOT EXISTS payment_reference TEXT DEFAULT '';
+    ALTER TABLE "${s}".orders ADD COLUMN IF NOT EXISTS source_channel TEXT DEFAULT '';
+    UPDATE "${s}".orders
+       SET source_channel = CASE
+         WHEN self_service_device_id IS NOT NULL OR COALESCE(self_service_folio, '') <> '' THEN 'kiosk'
+         WHEN channel = 'chatbot' THEN 'chatbot'
+         WHEN channel = 'pos' AND COALESCE(notes, '') ILIKE '%Pedido chatbot #%' THEN 'chatbot'
+         ELSE channel
+       END
+     WHERE COALESCE(source_channel, '') = '';
     ALTER TABLE "${s}".pos_sessions ADD COLUMN IF NOT EXISTS branch_id INTEGER;
     ALTER TABLE "${s}".pos_sessions ADD COLUMN IF NOT EXISTS branch_name TEXT;
     CREATE TABLE IF NOT EXISTS "${s}".product_variants (
@@ -1124,6 +1175,12 @@ async function ensureTenantDefaults(slug, businessName = slug, regional = {}) {
     chatbot_extra_options_json: '[]',
     chatbot_pos_integration_enabled: '0',
     chatbot_pos_global_orders_enabled: '0',
+    self_service_enabled: '0',
+    self_service_auto_print: '0',
+    self_service_payment_cash: '1',
+    self_service_payment_debit: '0',
+    self_service_payment_credit: '0',
+    self_service_payment_transfer: '0',
     delivery_zones_geojson: '[]',
     delivery_fee_rules: '',
     pos_enabled: '1',

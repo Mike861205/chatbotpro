@@ -10,6 +10,7 @@ const { operationalOrderNote } = require('../utils/orderNotes');
 const { ensureCostingSchema, itemsCost, preciseCost } = require('../utils/costing');
 const { ensurePurchasingSchema } = require('../utils/purchasing');
 const { ensureBranchStockSchema, initializeBranchStock, applyBranchSaleStock, restoreBranchSaleStock } = require('../utils/branchStock');
+const { emitNewOrder, emitSelfServiceStatus } = require('../notifications');
 
 const router = express.Router();
 router.use(requireAuth);
@@ -102,6 +103,15 @@ function parseJsonArray(value) {
     return Array.isArray(parsed) ? parsed : [];
   } catch {
     return [];
+  }
+}
+
+function parseJsonObject(value) {
+  try {
+    const parsed = typeof value === 'string' ? JSON.parse(value || '{}') : value;
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
   }
 }
 
@@ -453,6 +463,30 @@ async function listRecentSales(t, sessionId = null) {
     items: JSON.parse(row.items || '[]'),
     payment_breakdown: row.payment_breakdown ? JSON.parse(row.payment_breakdown) : null,
     rounds: rounds.filter((round) => Number(round.accountId) === Number(row.table_account_id)),
+  }));
+}
+
+async function listPendingSelfServiceOrders(t, branchId) {
+  const normalizedBranchId = Number(branchId || 0);
+  if (!Number.isInteger(normalizedBranchId) || normalizedBranchId <= 0) return [];
+  const rows = await t.all(
+    `SELECT o.id,o.self_service_folio,o.self_service_device_id,o.items,o.total::float AS total,o.notes,o.service_branch_id,o.service_branch_name,
+            o.payment_method,o.payment_breakdown,
+            c.name_enc,c.phone_enc,to_char(o.created_at AT TIME ZONE '${tenantTimeZone(t)}','DD Mon YYYY, HH24:MI') AS created_at
+     FROM {s}.orders o
+     LEFT JOIN {s}.customers c ON c.id=o.customer_id
+     WHERE o.channel='kiosk' AND o.status='pendiente_cobro' AND o.service_branch_id=$1
+     ORDER BY o.created_at ASC LIMIT 100`,
+    [normalizedBranchId]
+  );
+  return rows.map((row) => ({
+    ...row,
+    items: parseJsonArray(row.items),
+    customerName: decrypt(row.name_enc) || 'Cliente',
+    customerPhone: decrypt(row.phone_enc) || '',
+    payment_breakdown: parseJsonObject(row.payment_breakdown),
+    name_enc: undefined,
+    phone_enc: undefined,
   }));
 }
 
@@ -868,8 +902,8 @@ router.post('/tables/:id/open', async (req, res, next) => {
     if (!waiterName) return res.status(400).json({ error: 'Escribe el nombre del mesero' });
     const row = await req.tdb.get(
       `INSERT INTO {s}.table_accounts
-       (table_id, table_number, table_label, branch_id, waiter_name, items, opened_session_id, opened_by)
-       VALUES ($1, $2, $3, $4, $5, '[]', $6, $7)
+       (table_id, table_number, table_label, branch_id, waiter_name, source_channel, items, opened_session_id, opened_by)
+       VALUES ($1, $2, $3, $4, $5, 'pos', '[]', $6, $7)
        RETURNING *`,
       [table.id, table.table_number, table.label || '', sessionBranchId, waiterName, session.id, req.user.username]
     );
@@ -1056,10 +1090,10 @@ router.post('/table-accounts/:id/checkout', async (req, res, next) => {
       } else {
         saleRow = await tx.get(
           `INSERT INTO {s}.orders
-           (customer_id, items, subtotal, total, status, channel, delivery, notes, payment_method, payment_breakdown,
+           (customer_id, items, subtotal, total, status, channel, source_channel, delivery, notes, payment_method, payment_breakdown,
             cash_received, cash_change, pos_session_id, delivery_fee, service_branch_id, service_branch_name,
             table_account_id, table_number, waiter_name, cogs_total, order_notes)
-           VALUES (NULL, $1, $2, $2, 'entregado', 'pos', 'mesa', $3, $4, $5, $6, $7, $8, 0, $9, $10, $11, $12, $13, $14, $15)
+           VALUES (NULL, $1, $2, $2, 'entregado', 'pos', 'pos', 'mesa', $3, $4, $5, $6, $7, $8, 0, $9, $10, $11, $12, $13, $14, $15)
            RETURNING id, invoice_code, invoice_token`,
           [JSON.stringify(items), subtotal, notes, payment.method, JSON.stringify(payment.breakdown), payment.cashReceived || null,
             payment.cashChange || null, session.id, session.branch_id || null, session.branch_name || null,
@@ -1172,6 +1206,7 @@ router.get('/overview', async (req, res, next) => {
       openSessions: allOpenSessions,
       tables: await listRestaurantTables(req.tdb, activeSession, false),
       blockedBranchIds,
+      selfServiceOrders: await listPendingSelfServiceOrders(req.tdb, activeSession?.branch_id),
       recentSales: await listRecentSales(req.tdb, activeSession?.id || null),
       recentMovements: await listRecentMovements(req.tdb, activeSession?.id || null),
     });
@@ -1355,7 +1390,7 @@ router.post('/chatbot-orders/:id/import', async (req, res, next) => {
         );
         const moved = await tx.run(
           `UPDATE {s}.orders
-           SET channel = 'table_account', status = 'preparando', service_branch_id = $1, service_branch_name = $2,
+           SET channel = 'table_account', source_channel = 'chatbot', status = 'preparando', service_branch_id = $1, service_branch_name = $2,
                items = $3, cogs_total = $4, table_account_id = $5, table_number = $6, waiter_name = $7
            WHERE id = $8 AND channel = 'chatbot' AND status = ANY($9::text[])
            RETURNING id`,
@@ -1393,6 +1428,7 @@ router.post('/chatbot-orders/:id/import', async (req, res, next) => {
       const claimed = await tx.run(
         `UPDATE {s}.orders
          SET channel = 'pos',
+             source_channel = 'chatbot',
              status = 'entregado',
              pos_session_id = $1,
              payment_method = $2,
@@ -1530,6 +1566,18 @@ router.post('/session/close', async (req, res, next) => {
   try {
     const session = await getOpenSession(req.tdb, userSessionContext(req.user, req));
     if (!session) return res.status(400).json({ error: 'No hay una caja abierta' });
+    const pendingPointPayment = await req.tdb.get(
+      `SELECT p.id,o.self_service_folio
+       FROM {s}.self_service_payments p JOIN {s}.orders o ON o.id=p.order_id
+       WHERE p.pos_session_id=$1 AND p.status IN ('creating','created','at_terminal','action_required')
+       ORDER BY p.id DESC LIMIT 1`,
+      [session.id]
+    );
+    if (pendingPointPayment) {
+      return res.status(409).json({
+        error: `Hay un autocobro Mercado Pago en proceso (${pendingPointPayment.self_service_folio || pendingPointPayment.id}). Espera a que termine antes de cerrar caja.`,
+      });
+    }
     const totals = await getSessionTotals(req.tdb, session.id);
     const expectedAmount = expectedCashForSession(session, totals);
     const closingAmount = n(req.body?.closingAmount);
@@ -1601,8 +1649,8 @@ async function createPosSale(req, res, next) {
       const cogsTotal = itemsCost(saleItems);
       const row = await tx.get(
         `INSERT INTO {s}.orders
-         (customer_id, items, subtotal, total, status, channel, delivery, notes, payment_method, payment_breakdown, cash_received, cash_change, pos_session_id, delivery_fee, service_branch_id, service_branch_name, cogs_total, order_notes, delivery_address, delivery_neighborhood, delivery_reference)
-         VALUES (NULL, $1, $2, $3, 'confirmado', 'pos', $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
+         (customer_id, items, subtotal, total, status, channel, source_channel, delivery, notes, payment_method, payment_breakdown, cash_received, cash_change, pos_session_id, delivery_fee, service_branch_id, service_branch_name, cogs_total, order_notes, delivery_address, delivery_neighborhood, delivery_reference)
+         VALUES (NULL, $1, $2, $3, 'confirmado', 'pos', 'pos', $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
          RETURNING id, invoice_code, invoice_token`,
         [
           JSON.stringify(saleItems),
@@ -1670,6 +1718,96 @@ async function createPosSale(req, res, next) {
     next(e);
   }
 }
+
+router.post('/self-service/:id/checkout', async (req, res, next) => {
+  try {
+    const orderId = Number(req.params.id);
+    if (!Number.isInteger(orderId) || orderId <= 0) return res.status(400).json({ error: 'Pedido de autoservicio inválido' });
+    const session = await getOpenSession(req.tdb, userSessionContext(req.user, req));
+    if (!session) return res.status(400).json({ error: 'Abre la caja de esta sucursal antes de cobrar el pedido' });
+
+    const result = await req.tdb.tx(async (tx) => {
+      const order = await tx.get(
+        `SELECT o.id,o.self_service_folio,o.items,o.total::float AS total,o.notes,o.status,o.channel,o.service_branch_id,o.service_branch_name,
+                c.name_enc,c.phone_enc
+         FROM {s}.orders o LEFT JOIN {s}.customers c ON c.id=o.customer_id WHERE o.id=$1 FOR UPDATE OF o`,
+        [orderId]
+      );
+      if (!order || order.channel !== 'kiosk') throw Object.assign(new Error('Pedido de autoservicio no encontrado'), { statusCode: 404 });
+      if (order.status !== 'pendiente_cobro') throw Object.assign(new Error('Este pedido ya fue cobrado o cancelado'), { statusCode: 409 });
+      if (Number(order.service_branch_id || 0) !== Number(session.branch_id || 0)) {
+        throw Object.assign(new Error('El pedido pertenece a otra sucursal'), { statusCode: 403 });
+      }
+      const payment = normalizePayment(
+        String(req.body?.paymentMethod || '').trim(),
+        req.body?.payments || {},
+        Number(order.total || 0),
+        req.body?.cashReceived
+      );
+      const items = await attachCostsToExistingItems(tx, order.items);
+      const cogsTotal = itemsCost(items);
+      const updated = await tx.get(
+        `UPDATE {s}.orders
+         SET channel='pos',status='confirmado',items=$1,payment_method=$2,payment_breakdown=$3,
+             cash_received=$4,cash_change=$5,pos_session_id=$6,cogs_total=$7
+         WHERE id=$8
+         RETURNING id,invoice_code,invoice_token,self_service_folio,total::float AS total`,
+        [JSON.stringify(items), payment.method, JSON.stringify(payment.breakdown), payment.cashReceived || null,
+          payment.cashChange || null, session.id, cogsTotal, orderId]
+      );
+      const stockApplied = await decrementBranchStockForSale(tx, session.branch_id, items);
+      if (stockApplied) await tx.run('UPDATE {s}.orders SET branch_stock_applied=1 WHERE id=$1', [orderId]);
+      await insertSalesAudit(tx, req, {
+        eventType: 'self_service_paid', orderId, sessionId: session.id, branchId: session.branch_id,
+        amount: order.total, reason: `Cobro de autoservicio ${order.self_service_folio || orderId}`,
+        before: { status: 'pendiente_cobro', channel: 'kiosk' },
+        after: { status: 'confirmado', channel: 'pos', paymentMethod: payment.method },
+      });
+      return { order, updated, items, payment };
+    });
+
+    const sale = {
+      id: result.updated.id,
+      folio: result.updated.self_service_folio,
+      subtotal: Number(result.updated.total), total: Number(result.updated.total), deliveryFee: 0,
+      items: result.items, notes: result.order.notes || '', delivery: 'mostrador',
+      paymentMethod: result.payment.method, paymentBreakdown: result.payment.breakdown,
+      cashReceived: result.payment.cashReceived, cashChange: result.payment.cashChange,
+      serviceBranchId: Number(result.order.service_branch_id), serviceBranchName: result.order.service_branch_name,
+      invoiceCode: result.updated.invoice_code, invoiceToken: result.updated.invoice_token,
+      customerName: decrypt(result.order.name_enc) || 'Cliente',
+      customerPhone: decrypt(result.order.phone_enc) || '',
+    };
+    emitSelfServiceStatus(req.tenant.slug, { id: orderId, folio: sale.folio, status: 'confirmado' });
+    emitNewOrder(req.tenant.slug, {
+      id: orderId, businessName: req.tenant.business_name, total: sale.total,
+      summary: `Autoservicio ${sale.folio} · ${result.items.length} producto(s) · Total ${sale.total}`,
+    }).catch(error => console.error('[pos][self-service][notify] error:', error?.message || error));
+    const totals = await getSessionTotals(req.tdb, session.id);
+    res.json({ ok: true, sale, totals, expectedCash: expectedCashForSession(session, totals) });
+  } catch (error) {
+    if ([400, 403, 404, 409].includes(error.statusCode)) return res.status(error.statusCode).json({ error: error.message });
+    next(error);
+  }
+});
+
+router.post('/self-service/:id/cancel', async (req, res, next) => {
+  try {
+    const orderId = Number(req.params.id);
+    if (!Number.isInteger(orderId) || orderId <= 0) return res.status(400).json({ error: 'Pedido inválido' });
+    const session = await getOpenSession(req.tdb, userSessionContext(req.user, req));
+    if (!session) return res.status(400).json({ error: 'Abre la caja de esta sucursal antes de cancelar el pedido' });
+    const row = await req.tdb.get(
+      `UPDATE {s}.orders SET status='cancelado',cancel_note=$1
+       WHERE id=$2 AND channel='kiosk' AND status='pendiente_cobro' AND service_branch_id=$3
+       RETURNING id,self_service_folio,service_branch_id`,
+      [String(req.body?.reason || 'Cancelado en caja').trim().slice(0, 180), orderId, session.branch_id]
+    );
+    if (!row) return res.status(409).json({ error: 'El pedido ya fue cobrado, cancelado, no existe o pertenece a otra sucursal' });
+    emitSelfServiceStatus(req.tenant.slug, { id: orderId, folio: row.self_service_folio, status: 'cancelado' });
+    res.json({ ok: true });
+  } catch (error) { next(error); }
+});
 
 router.post('/sales/:id/cancel', async (req, res, next) => {
   try {

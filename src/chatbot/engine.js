@@ -2646,8 +2646,8 @@ async function handleMessage(t, slug, sessionId, rawInput) {
         : (state.customer.branchName || null);
       const orderRow = await t.get(
         `INSERT INTO {s}.orders
-         (customer_id, items, subtotal, total, status, channel, delivery, receiving_mode_label, receiving_mode_behavior, notes, order_notes, pickup_branch_id, pickup_branch_name, customer_location_lat, customer_location_lng, customer_location_text, customer_location_resolved, delivery_fee, delivery_zone_name, service_branch_id, service_branch_name, delivery_address, delivery_neighborhood, delivery_reference)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24) RETURNING id`,
+         (customer_id, items, subtotal, total, status, channel, source_channel, delivery, receiving_mode_label, receiving_mode_behavior, notes, order_notes, pickup_branch_id, pickup_branch_name, customer_location_lat, customer_location_lng, customer_location_text, customer_location_resolved, delivery_fee, delivery_zone_name, service_branch_id, service_branch_name, delivery_address, delivery_neighborhood, delivery_reference)
+         VALUES ($1,$2,$3,$4,$5,$6,'chatbot',$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24) RETURNING id`,
         [
           customer.id,
           JSON.stringify(state.cart),

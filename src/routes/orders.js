@@ -57,13 +57,13 @@ router.get('/', async (req, res, next) => {
   try {
     const { status, limit, todayOnly, startDate, endDate } = req.query;
     let sql = `SELECT id, customer_id, items, subtotal::float AS subtotal, total::float AS total,
-      delivery_fee::float AS delivery_fee, delivery_zone_name, receiving_mode_label, receiving_mode_behavior, delivery_address, delivery_neighborhood, delivery_reference, cancel_note, status, channel, delivery, notes, order_notes, payment_method, payment_breakdown,
+      delivery_fee::float AS delivery_fee, delivery_zone_name, receiving_mode_label, receiving_mode_behavior, delivery_address, delivery_neighborhood, delivery_reference, cancel_note, status, channel, source_channel, self_service_device_id, self_service_folio, delivery, notes, order_notes, payment_method, payment_breakdown,
         pickup_branch_name, service_branch_name, customer_location_lat, customer_location_lng, customer_location_text,
         customer_location_resolved,
                       to_char(created_at AT TIME ZONE '${req.timezone}', 'DD Mon YYYY, HH24:MI') AS created_at
                FROM {s}.orders`;
     const params = [];
-    const where = ["channel <> 'table_account'"];
+    const where = ["channel <> 'table_account'", "NOT (channel = 'kiosk' AND status = 'pendiente_cobro')"];
 
     if (req.user?.role === 'cashier') {
       if (req.user.branchId) {

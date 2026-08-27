@@ -84,6 +84,8 @@ const DASHBOARD_PERIOD_LABELS = {
 let POS_PAYMENT_FORM = { cashReceived: '', cash: '', card: '', cardType: '', transfer: '', notes: '', deliveryAddress: '', deliveryNeighborhood: '', deliveryReference: '' };
 let LAST_POS_SALE = null;
 let INVOICING_DATA = null;
+let SELF_SERVICE_DEVICES = [];
+let SELF_SERVICE_CHECKOUT_ORDER = null;
 let POS_SALES_PAGE = 1;
 const POS_SALES_PAGE_SIZE = 10;
 let POS_SALES_TOTAL_PAGES = 1;
@@ -538,6 +540,17 @@ function startOrdersRealtimeMonitor() {
     });
     ORDER_ALERT_SOCKET.on('new_order', () => {
       if (!document.hidden) refreshPendingOrdersMonitor({ allowSound: true });
+    });
+    ORDER_ALERT_SOCKET.on('self_service_order', (order) => {
+      if (document.hidden) return;
+      const activeBranchId = Number(POS_OVERVIEW?.activeSession?.branch_id || ME?.branchId || 0);
+      if (activeBranchId && Number(order?.branchId || 0) !== activeBranchId) return;
+      playIncomingOrderSound(3000);
+      toast(`Nuevo autoservicio ${order?.folio || ''} · pendiente de cobro`);
+      if (CURRENT_VIEW === 'pos') loadPos().catch(() => {});
+    });
+    ORDER_ALERT_SOCKET.on('self_service_status', () => {
+      if (!document.hidden && CURRENT_VIEW === 'pos') loadPos().catch(() => {});
     });
     ORDER_ALERT_SOCKET.on('connect', () => {
       if (!document.hidden) refreshPendingOrdersMonitor({ allowSound: false });
@@ -2813,6 +2826,23 @@ function orderBranchLabel(order) {
   return isAddressDelivery ? (serviceBranch || pickupBranch || '—') : (pickupBranch || serviceBranch || '—');
 }
 
+function orderSourceChannel(order) {
+  const stored = String(order?.source_channel || '').trim().toLowerCase();
+  if (['chatbot', 'kiosk', 'pos'].includes(stored)) return stored;
+  if (order?.self_service_device_id || order?.self_service_folio) return 'kiosk';
+  if (order?.channel === 'chatbot') return 'chatbot';
+  if (order?.channel === 'pos' && /Pedido chatbot #/i.test(String(order?.notes || ''))) return 'chatbot';
+  return order?.channel === 'kiosk' ? 'kiosk' : 'pos';
+}
+
+function orderOriginMeta(order) {
+  const source = orderSourceChannel(order);
+  if (source === 'kiosk') return { source, label: 'Autoservicio', icon: 'ph-device-tablet-camera', tone: 'kiosk' };
+  if (source === 'chatbot' && order?.channel === 'pos') return { source, label: 'Chatbot → Punto de venta', icon: 'ph-chats-circle', tone: 'chatbot-pos' };
+  if (source === 'chatbot') return { source, label: 'Chatbot', icon: 'ph-chats-circle', tone: 'chatbot' };
+  return { source: 'pos', label: 'Punto de venta', icon: 'ph-cash-register', tone: 'pos' };
+}
+
 function buildOrderDeliveryLabel(order) {
   const configuredLabel = String(order?.receiving_mode_label || '').trim();
   const isAddressDelivery = order?.receiving_mode_behavior === 'delivery' || order?.delivery === 'domicilio';
@@ -3021,18 +3051,22 @@ function ordersTableHTML(orders, editable = true) {
           </select>`
         : `<span class="badge b-${o.status}">${o.status}</span>`;
       const isAddressDelivery = o.receiving_mode_behavior === 'delivery' || o.delivery === 'domicilio';
+      const origin = orderOriginMeta(o);
       const deliveryText = `<i class="ph-bold ${isAddressDelivery ? 'ph-moped' : (o.delivery === 'comer_sucursal' ? 'ph-fork-knife' : 'ph-storefront')}" style="color:${isAddressDelivery ? 'var(--blue)' : 'var(--violet)'}"></i> ${esc(buildOrderDeliveryLabel(o))}`;
       const deliveryFeeText =
         isAddressDelivery && Number(o.delivery_fee || 0) > 0
           ? `<div style="font-size:12px;color:var(--ink-3);margin-top:3px"><i class="ph-bold ph-coins"></i> Envío: ${fmtMoney(Number(o.delivery_fee || 0))}${o.delivery_zone_name ? ` · ${esc(o.delivery_zone_name)}` : ''}</div>`
           : '';
-      const resolvedLocationText = o.customer_location_resolved
+      const canShowChatbotLocation = origin.source === 'chatbot';
+      const hasLatitude = o.customer_location_lat !== null && o.customer_location_lat !== undefined && String(o.customer_location_lat).trim() !== '' && Number.isFinite(Number(o.customer_location_lat));
+      const hasLongitude = o.customer_location_lng !== null && o.customer_location_lng !== undefined && String(o.customer_location_lng).trim() !== '' && Number.isFinite(Number(o.customer_location_lng));
+      const resolvedLocationText = canShowChatbotLocation && o.customer_location_resolved
         ? `<div style="font-size:12px;color:var(--ink-3);margin-top:3px"><i class="ph-bold ph-map-trifold"></i> ${esc(o.customer_location_resolved)}</div>`
         : '';
-      const mapLink = Number.isFinite(Number(o.customer_location_lat)) && Number.isFinite(Number(o.customer_location_lng))
+      const mapLink = canShowChatbotLocation && hasLatitude && hasLongitude
         ? `<a href="https://www.google.com/maps?q=${Number(o.customer_location_lat)},${Number(o.customer_location_lng)}" target="_blank" rel="noopener noreferrer" style="font-size:12px;color:var(--primary);margin-top:3px;display:inline-flex;gap:6px;align-items:center;text-decoration:none"><i class="ph-bold ph-map-pin"></i> Abrir ubicación</a>`
         : '';
-      const locationText = o.customer_location_text
+      const locationText = canShowChatbotLocation && o.customer_location_text
         ? `<div style="font-size:12px;color:var(--ink-3);margin-top:3px"><i class="ph-bold ph-map-pin"></i> ${esc(o.customer_location_text)}</div>${resolvedLocationText}${mapLink}`
         : `${resolvedLocationText}${mapLink}`;
       const cancelNoteText =
@@ -3048,7 +3082,7 @@ function ordersTableHTML(orders, editable = true) {
         <td><div class="cust">${custAvatar(o.customer?.name)}<div class="cmeta"><b>${esc(o.customer?.name || '—')}</b><span>${esc(o.customer?.phone || '')}</span></div></div></td>
         <td style="max-width:280px">${esc(items)}${noteCallout}</td>
         <td style="white-space:nowrap">${deliveryText}${deliveryFeeText}${locationText}${cancelNoteText}</td>
-        <td style="white-space:nowrap;font-size:13px"><b>${esc(orderBranchLabel(o))}</b></td>
+        <td><div class="order-origin-cell"><span class="order-origin-chip ${origin.tone}"><i class="ph-bold ${origin.icon}"></i>${esc(origin.label)}</span><b>${esc(orderBranchLabel(o))}</b></div></td>
         <td><b>${fmtMoney(o.total)}</b></td>
         <td>${paymentText}</td>
         <td>${statusCell}</td>
@@ -3809,9 +3843,9 @@ function openThermalPrintWindow(ticket) {
     ? `${location.origin}${ME.tenant.logo.startsWith('/') ? ME.tenant.logo : `/${ME.tenant.logo}`}`
     : '';
   const isRoundTicket = Boolean(ticket.isTableRound);
-  const ticketId = isRoundTicket
+  const ticketId = ticket.ticketLabel || (isRoundTicket
     ? `Mesa ${ticket.tableNumber} · Ronda ${ticket.roundNumber}`
-    : ticket.id ? `#${ticket.id}` : 'Pre-ticket';
+    : ticket.id ? `#${ticket.id}` : 'Pre-ticket');
   const itemRows = (ticket.items || [])
     .map(
       (it) => `<tr>
@@ -3828,10 +3862,13 @@ function openThermalPrintWindow(ticket) {
     : '';
 
   const breakdownObj = ticket.paymentBreakdown || {};
+  const ticketPaymentLabel = (method) => method === 'card'
+    ? (breakdownObj.cardType === 'debit' ? 'Tarjeta de débito' : breakdownObj.cardType === 'credit' ? 'Tarjeta de crédito' : 'Tarjeta')
+    : posMethodLabel(method);
   const isMixed = ticket.paymentMethod === 'mixed';
   const breakdownLines = ['cash', 'card', 'transfer']
     .filter((method) => Number(breakdownObj[method]) > 0)
-    .map((method) => `<tr><td>${esc(posMethodLabel(method))}</td><td class="r">${esc(fmtMoney(breakdownObj[method], currency))}</td></tr>`)
+    .map((method) => `<tr><td>${esc(ticketPaymentLabel(method))}</td><td class="r">${esc(fmtMoney(breakdownObj[method], currency))}</td></tr>`)
     .join('');
 
   const subtotal = Number(ticket.subtotal || ticket.total || 0);
@@ -3856,7 +3893,7 @@ function openThermalPrintWindow(ticket) {
   const issuerReady = ticketBranchId > 0 && Object.prototype.hasOwnProperty.call(readinessByBranch, String(ticketBranchId))
     ? readinessByBranch[String(ticketBranchId)] === true
     : ME?.tenant?.invoicingReady === true;
-  const invoiceUrl = ME?.tenant?.invoicingActivated === true && issuerReady && ticket.id && rawInvoiceCode
+  const invoiceUrl = !ticket.suppressInvoice && ME?.tenant?.invoicingActivated === true && issuerReady && ticket.id && rawInvoiceCode
     ? `${ME.tenant.invoicingPortalUrl}?ticket=${encodeURIComponent(ticket.id)}&code=${encodeURIComponent(friendlyInvoiceCode)}`
     : '';
   const invoiceQrUrl = invoiceUrl
@@ -3908,6 +3945,7 @@ function openThermalPrintWindow(ticket) {
   <div class="center meta">Cajero: ${seller}</div>
   ${isRoundTicket ? `<div class="center meta"><b>Mesero: ${esc(ticket.waiterName || '—')}</b></div><div class="center meta"><b>COMANDA DE RONDA</b></div>` : ''}
   ${!isRoundTicket && ticket.tableNumber ? `<div class="center meta"><b>Mesa ${esc(String(ticket.tableNumber))} · Mesero: ${esc(ticket.waiterName || '—')}</b></div>` : ''}
+  ${ticket.customerName ? `<div class="center meta"><b>A nombre de ${esc(ticket.customerName)}</b>${ticket.customerPhone ? `<br><span>${esc(ticket.customerPhone)}</span>` : ''}</div>` : ''}
   ${hasDeliveryData ? `<div class="delivery-block"><div class="center"><b>ENTREGA A DOMICILIO</b></div>
     ${deliveryAddress ? `<div><b>DOMICILIO:</b> ${deliveryAddress}</div>` : ''}
     ${deliveryNeighborhood ? `<div><b>COLONIA / BARRIO:</b> ${deliveryNeighborhood}</div>` : ''}
@@ -3920,7 +3958,7 @@ function openThermalPrintWindow(ticket) {
     ${isRoundTicket
       ? `<tr><td>Total ronda ${esc(String(ticket.roundNumber))}</td><td class="r">${esc(fmtMoney(subtotal, currency))}</td></tr>
          <tr><td class="tot">ACUMULADO MESA</td><td class="tot r">${esc(fmtMoney(total, currency))}</td></tr>`
-      : `<tr><td>Método</td><td class="r">${esc(posMethodLabel(ticket.paymentMethod || 'cash'))}</td></tr>
+      : `${ticket.paymentPending ? `<tr><td><b>ESTADO</b></td><td class="r"><b>PENDIENTE DE COBRO</b></td></tr><tr><td>Pago indicado</td><td class="r">${esc(ticketPaymentLabel(ticket.paymentMethod || 'cash'))}</td></tr>` : `<tr><td>Método</td><td class="r">${esc(ticketPaymentLabel(ticket.paymentMethod || 'cash'))}</td></tr>`}
     ${breakdownLines}
     ${Number(ticket.deliveryFee || 0) > 0
       ? `<tr><td>Subtotal</td><td class="r">${esc(fmtMoney(subtotal, currency))}</td></tr><tr><td>&#x1F6F5; Envío domicilio</td><td class="r">+ ${esc(fmtMoney(Number(ticket.deliveryFee), currency))}</td></tr>`
@@ -3932,7 +3970,7 @@ function openThermalPrintWindow(ticket) {
   ${ticket.notes ? `<div class="sep"></div><div class="order-note"><span>⚠ NOTA DEL PEDIDO</span>${esc(ticket.notes)}</div>` : ''}
   <div class="sep"></div>
   ${invoiceUrl ? `<div class="invoice-box"><b>FACTURA TU COMPRA</b><img class="invoice-qr" src="${esc(invoiceQrUrl)}" alt="QR de facturacion" /><div class="invoice-code-label">TICKET #${esc(String(ticket.id))} &middot; C&Oacute;DIGO DE FACTURACI&Oacute;N</div><div class="invoice-code">${esc(friendlyInvoiceCode)}</div><div class="invoice-link">${esc(ME.tenant.invoicingPortalUrl)}</div></div><div class="sep"></div>` : ''}
-  <div class="center meta">${isRoundTicket ? 'Ronda enviada a preparación' : 'Gracias por tu compra'}</div>
+  <div class="center meta">${esc(ticket.footerMessage || (isRoundTicket ? 'Ronda enviada a preparación' : 'Gracias por tu compra'))}</div>
   </div>
   <script>
     window.onload = () => {
@@ -3978,6 +4016,35 @@ function printPosTicket() {
   const ticket = buildPosTicketData();
   if (!ticket) return toast('No hay ticket para imprimir', true);
   openThermalPrintWindow(ticket);
+}
+
+function printSelfServiceOrder(order, pending = true) {
+  if (!order) return;
+  const items = Array.isArray(order.items) ? order.items : [];
+  openThermalPrintWindow({
+    id: order.id,
+    ticketLabel: `Autoservicio ${order.folio || order.self_service_folio || `#${order.id}`}`,
+    createdAt: order.createdAt || order.created_at || fmtBusinessDateTime(),
+    items: items.map((item) => ({
+      qty: Number(item.qty || 0), name: String(item.name || 'Producto'), price: Number(item.price || 0),
+      total: moneyNum(Number(item.qty || 0) * Number(item.price || 0)),
+    })),
+    subtotal: Number(order.subtotal || order.total || 0),
+    total: Number(order.total || 0),
+    notes: order.notes || '',
+    paymentMethod: order.paymentMethod || order.payment_method || 'cash',
+    paymentBreakdown: order.paymentBreakdown || order.payment_breakdown || null,
+    cashReceived: Number(order.cashReceived || order.cash_received || 0),
+    cashChange: Number(order.cashChange || order.cash_change || 0),
+    serviceBranchId: Number(order.branchId || order.serviceBranchId || order.service_branch_id || 0),
+    paymentPending: pending,
+    suppressInvoice: pending,
+    footerMessage: pending ? 'Pasa a caja para realizar tu pago' : 'Pago confirmado · pedido enviado a cocina',
+    invoiceCode: order.invoiceCode || order.invoice_code || '',
+    invoiceToken: order.invoiceToken || order.invoice_token || '',
+    customerName: order.customerName || order.customer_name || '',
+    customerPhone: order.customerPhone || order.customer_phone || '',
+  });
 }
 
 function printPosSaleById(id) {
@@ -4563,11 +4630,139 @@ function openPosTablesModal({ chatbotOrderId = null } = {}) {
 function renderPos() {
   renderPosFinanceStrip();
   renderPosDeliveryStrip();
+  renderPosSelfServiceQueue();
   renderPosActions();
   renderPosSession();
   renderPosCatalog();
   renderPosCart();
 }
+
+function renderPosSelfServiceQueue() {
+  const host = $('#posSelfServiceQueue');
+  if (!host) return;
+  const rows = Array.isArray(POS_OVERVIEW?.selfServiceOrders) ? POS_OVERVIEW.selfServiceOrders : [];
+  if (!POS_OVERVIEW?.activeSession || !rows.length) { host.innerHTML = ''; return; }
+  host.innerHTML = `<section class="card pos-self-service-queue">
+    <div class="pos-self-service-head"><div><h3><i class="ph-bold ph-device-tablet-camera"></i> Autoservicio pendiente de cobro</h3><div class="hint">Confirma el pago para descontar inventario y enviar el pedido a cocina.</div></div><span>${rows.length}</span></div>
+    <div class="pos-self-service-grid">${rows.map((order) => `<article class="pos-self-service-order">
+      <header><div><strong>${esc(order.self_service_folio || `A-${order.id}`)}</strong><span>${esc(order.created_at || '')}</span></div><b>${fmtMoney(order.total)}</b></header>
+      <div class="pos-self-service-customer"><i class="ph-bold ph-user"></i><b>${esc(order.customerName || 'Cliente')}</b>${order.customerPhone ? `<span>${esc(order.customerPhone)}</span>` : ''}</div>
+      <div class="pos-self-service-payment"><i class="ph-bold ph-wallet"></i> Cliente indicó: <b>${esc(order.payment_method === 'card' ? (order.payment_breakdown?.cardType === 'credit' ? 'Tarjeta de crédito' : 'Tarjeta de débito') : posMethodLabel(order.payment_method || 'cash'))}</b></div>
+      <div class="pos-self-service-order-items">${(order.items || []).map((item) => `<span>${Number(item.qty || 0)}× ${esc(item.name || 'Producto')}</span>`).join('')}${order.notes ? `<small><i class="ph-bold ph-note"></i> ${esc(order.notes)}</small>` : ''}</div>
+      <footer><b>${(order.items || []).reduce((sum, item) => sum + Number(item.qty || 0), 0)} producto(s)</b><button class="btn btn-ghost" type="button" data-self-print="${order.id}"><i class="ph-bold ph-printer"></i> Imprimir</button><button class="btn btn-danger btn-icon" type="button" data-self-cancel="${order.id}" title="Cancelar"><i class="ph-bold ph-x"></i></button><button class="btn btn-primary" type="button" data-self-charge="${order.id}"><i class="ph-bold ph-hand-coins"></i> Cobrar</button></footer>
+    </article>`).join('')}</div>
+  </section>`;
+  document.querySelectorAll('[data-self-print]').forEach((button) => button.addEventListener('click', () => {
+    const order = rows.find((item) => Number(item.id) === Number(button.dataset.selfPrint));
+    printSelfServiceOrder(order, true);
+  }));
+  document.querySelectorAll('[data-self-charge]').forEach((button) => button.addEventListener('click', () => {
+    const order = rows.find((item) => Number(item.id) === Number(button.dataset.selfCharge));
+    openSelfServiceCheckout(order);
+  }));
+  document.querySelectorAll('[data-self-cancel]').forEach((button) => button.addEventListener('click', async () => {
+    const order = rows.find((item) => Number(item.id) === Number(button.dataset.selfCancel));
+    if (!order || !await askConfirm('¿Cancelar pedido de autoservicio?', `${order.self_service_folio || order.id} dejará de estar disponible para cobro.`)) return;
+    try {
+      await api(`/api/pos/self-service/${order.id}/cancel`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ reason: 'Cancelado por el cajero' }) });
+      toast('Pedido de autoservicio cancelado'); await loadPos();
+    } catch (error) { toast(error.message, true); }
+  }));
+}
+
+function openSelfServiceCheckout(order) {
+  if (!order) return;
+  SELF_SERVICE_CHECKOUT_ORDER = order;
+  $('#selfServiceCheckoutId').value = String(order.id);
+  $('#selfServiceCheckoutFolio').textContent = order.self_service_folio || `#${order.id}`;
+  $('#selfServiceCheckoutName').textContent = order.customerName || 'Cliente';
+  $('#selfServiceCheckoutTotal').textContent = fmtMoney(order.total);
+  const itemCount = (order.items || []).reduce((sum, item) => sum + Number(item.qty || 0), 0);
+  $('#selfServiceCheckoutItems').textContent = `${itemCount} ${itemCount === 1 ? 'producto' : 'productos'}`;
+  const preferredLabel = order.payment_method === 'card'
+    ? (order.payment_breakdown?.cardType === 'credit' ? 'Tarjeta de crédito' : 'Tarjeta de débito')
+    : posMethodLabel(order.payment_method || 'cash');
+  $('#selfServiceCheckoutPreferred').textContent = preferredLabel;
+  $('#selfServiceCashReceived').value = String(Number(order.total || 0));
+  $('#selfServiceCardType').value = order.payment_breakdown?.cardType || '';
+  const preferredMethod = ['cash', 'card', 'transfer'].includes(order.payment_method) ? order.payment_method : 'cash';
+  const preferred = document.querySelector(`input[name="selfServicePayment"][value="${preferredMethod}"]`);
+  if (preferred) preferred.checked = true;
+  renderSelfServiceCashShortcuts(order.total);
+  syncSelfServicePaymentFields();
+  $('#selfServiceCheckoutModal').classList.add('show');
+}
+
+function renderSelfServiceCashShortcuts(totalValue) {
+  const total = Math.max(0, Number(totalValue || 0));
+  const amounts = [...new Set([
+    total,
+    Math.ceil(total / 50) * 50,
+    Math.ceil(total / 100) * 100,
+    Math.ceil(total / 500) * 500,
+  ].map(moneyNum).filter((amount) => amount >= total))].slice(0, 4);
+  $('#selfServiceCashShortcuts').innerHTML = amounts.map((amount, index) => `<button type="button" data-self-cash-amount="${amount}">${index === 0 ? 'Exacto ' : ''}${fmtMoney(amount)}</button>`).join('');
+  document.querySelectorAll('[data-self-cash-amount]').forEach((button) => button.addEventListener('click', () => {
+    $('#selfServiceCashReceived').value = button.dataset.selfCashAmount;
+    syncSelfServicePaymentFields();
+  }));
+}
+
+function selfServicePaymentMethod() {
+  return document.querySelector('input[name="selfServicePayment"]:checked')?.value || 'cash';
+}
+
+function syncSelfServicePaymentFields() {
+  const method = selfServicePaymentMethod();
+  $('#selfServiceCashRow').hidden = method !== 'cash';
+  $('#selfServiceCardRow').hidden = method !== 'card';
+  $('#selfServiceTransferRow').hidden = method !== 'transfer';
+  const total = Number(SELF_SERVICE_CHECKOUT_ORDER?.total || 0);
+  const received = Number($('#selfServiceCashReceived')?.value || 0);
+  const difference = moneyNum(received - total);
+  const changeCard = $('#selfServiceChangeCard');
+  $('#selfServiceChangeHint').textContent = fmtMoney(Math.max(difference, 0));
+  $('#selfServiceChangeStatus').textContent = difference < 0 ? `Faltan ${fmtMoney(Math.abs(difference))}` : difference > 0 ? 'Listo para entregar' : 'Pago exacto';
+  changeCard?.classList.toggle('insufficient', difference < 0);
+}
+
+document.querySelectorAll('input[name="selfServicePayment"]').forEach((input) => input.addEventListener('change', syncSelfServicePaymentFields));
+$('#selfServiceCashReceived')?.addEventListener('input', syncSelfServicePaymentFields);
+const closeSelfServiceCheckout = () => $('#selfServiceCheckoutModal').classList.remove('show');
+$('#selfServiceCheckoutCancel')?.addEventListener('click', closeSelfServiceCheckout);
+$('#selfServiceCheckoutClose')?.addEventListener('click', closeSelfServiceCheckout);
+$('#selfServiceCheckoutForm')?.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const order = SELF_SERVICE_CHECKOUT_ORDER;
+  if (!order) return;
+  const method = selfServicePaymentMethod();
+  if (method === 'card' && !$('#selfServiceCardType').value) return toast('Selecciona débito o crédito', true);
+  const total = Number(order.total || 0);
+  const cashReceived = method === 'cash' ? Number($('#selfServiceCashReceived').value || 0) : 0;
+  if (method === 'cash' && cashReceived < total) return toast('El efectivo recibido no cubre el total', true);
+  const submitButton = $('#selfServiceCheckoutSubmit');
+  try {
+    submitButton.disabled = true;
+    submitButton.innerHTML = '<i class="ph-bold ph-spinner-gap"></i><span>Procesando pago…</span><small>Espera un momento</small>';
+    const result = await api(`/api/pos/self-service/${order.id}/checkout`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        paymentMethod: method,
+        cashReceived,
+        payments: { cash: method === 'cash' ? total : 0, card: method === 'card' ? total : 0, transfer: method === 'transfer' ? total : 0, cardType: $('#selfServiceCardType').value },
+      }),
+    });
+    $('#selfServiceCheckoutModal').classList.remove('show');
+    SELF_SERVICE_CHECKOUT_ORDER = null;
+    toast(`Pago confirmado · ${result.sale.folio || `pedido #${result.sale.id}`} enviado a cocina`);
+    printSelfServiceOrder(result.sale, false);
+    await loadPos();
+  } catch (error) { toast(error.message, true); }
+  finally {
+    submitButton.disabled = false;
+    submitButton.innerHTML = '<i class="ph-bold ph-check-circle"></i><span>Confirmar pago</span><small>Imprimir ticket y enviar a cocina</small>';
+  }
+});
 
 function renderPosDeliveryStrip() {
   const el = $('#posDeliveryStrip');
@@ -9112,6 +9307,46 @@ $('#cashierForm')?.addEventListener('submit', async (e) => {
 const PALETTE = ['#ff6b35', '#e11d48', '#d97706', '#16a34a', '#0891b2', '#2563eb', '#7c3aed', '#db2777', '#171c2e'];
 let BANK_ACCOUNTS = [];
 
+function selfServiceFullUrl(path) {
+  return `${location.origin}${String(path || '').startsWith('/') ? path : `/${path || ''}`}`;
+}
+
+function renderSelfServiceDevices() {
+  const host = $('#selfServiceDevices');
+  if (!host) return;
+  $('#selfServiceBranch').innerHTML = BRANCHES.filter((branch) => branch.active).map((branch) => `<option value="${branch.id}">${esc(branch.name)}</option>`).join('');
+  host.innerHTML = SELF_SERVICE_DEVICES.length ? `<table><thead><tr><th>Dispositivo</th><th>Sucursal</th><th>Terminal Mercado Pago</th><th>Liga privada</th><th>Estado</th><th></th></tr></thead><tbody>${SELF_SERVICE_DEVICES.map((device) => `<tr><td><b>${esc(device.name)}</b></td><td>${esc(device.branchName || '—')}</td><td><div class="self-service-terminal-field"><input type="text" data-self-terminal-input="${device.id}" value="${esc(device.terminalId || '')}" placeholder="${device.point?.mode === 'sandbox' ? 'Terminal virtual de sandbox' : 'MODELO__SERIE'}" maxlength="100" /><button class="btn btn-ghost btn-icon" type="button" data-self-terminal-save="${device.id}" title="Guardar terminal"><i class="ph-bold ph-floppy-disk"></i></button></div><small>${device.point?.configured ? (device.point.mock ? 'Simulador local listo' : (device.point.mode === 'sandbox' ? 'Sandbox Mercado Pago listo' : 'Point listo')) : 'Falta configurar credencial o terminal'}</small></td><td><a class="self-service-device-link" href="${esc(device.url)}" target="_blank">${esc(selfServiceFullUrl(device.url))}</a></td><td>${device.active ? '<span class="badge b-entregado">Activo</span>' : '<span class="badge b-pendiente">Inactivo</span>'}</td><td><div class="self-service-device-actions"><button class="btn btn-ghost btn-icon" type="button" data-self-device-copy="${device.id}" title="Copiar liga"><i class="ph-bold ph-copy"></i></button><a class="btn btn-ghost btn-icon" href="${esc(device.url)}" target="_blank" title="Abrir"><i class="ph-bold ph-arrow-square-out"></i></a><button class="btn btn-ghost" type="button" data-self-device-toggle="${device.id}">${device.active ? 'Desactivar' : 'Activar'}</button><button class="btn btn-danger btn-icon" type="button" data-self-device-rotate="${device.id}" title="Invalidar liga y crear otra"><i class="ph-bold ph-arrows-clockwise"></i></button></div></td></tr>`).join('')}</tbody></table>` : emptyHTML('ph-device-tablet-camera', 'Sin tabletas configuradas', 'Selecciona una sucursal y crea el primer acceso privado de autoservicio.');
+  document.querySelectorAll('[data-self-terminal-save]').forEach((button) => button.addEventListener('click', async () => {
+    const device = SELF_SERVICE_DEVICES.find((item) => Number(item.id) === Number(button.dataset.selfTerminalSave));
+    const input = document.querySelector(`[data-self-terminal-input="${button.dataset.selfTerminalSave}"]`);
+    if (!device || !input) return;
+    try {
+      await api(`/api/self-service/devices/${device.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ active: device.active, terminalId: input.value.trim() }) });
+      await loadSelfServiceDevices(); toast('Terminal Mercado Pago guardada');
+    } catch (error) { toast(error.message, true); }
+  }));
+  document.querySelectorAll('[data-self-device-copy]').forEach((button) => button.addEventListener('click', async () => {
+    const device = SELF_SERVICE_DEVICES.find((item) => Number(item.id) === Number(button.dataset.selfDeviceCopy));
+    if (!device) return; await navigator.clipboard.writeText(selfServiceFullUrl(device.url)); toast('Liga de autoservicio copiada');
+  }));
+  document.querySelectorAll('[data-self-device-toggle]').forEach((button) => button.addEventListener('click', async () => {
+    const device = SELF_SERVICE_DEVICES.find((item) => Number(item.id) === Number(button.dataset.selfDeviceToggle));
+    if (!device) return;
+    try { await api(`/api/self-service/devices/${device.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ active: !device.active }) }); await loadSelfServiceDevices(); toast(device.active ? 'Tableta desactivada' : 'Tableta activada'); } catch (error) { toast(error.message, true); }
+  }));
+  document.querySelectorAll('[data-self-device-rotate]').forEach((button) => button.addEventListener('click', async () => {
+    const device = SELF_SERVICE_DEVICES.find((item) => Number(item.id) === Number(button.dataset.selfDeviceRotate));
+    if (!device || !await askConfirm('¿Generar una liga nueva?', 'La liga anterior dejará de funcionar inmediatamente.')) return;
+    try { await api(`/api/self-service/devices/${device.id}/rotate-token`, { method: 'POST' }); await loadSelfServiceDevices(); toast('Liga privada renovada'); } catch (error) { toast(error.message, true); }
+  }));
+}
+
+async function loadSelfServiceDevices() {
+  if (isCashierUser()) return;
+  SELF_SERVICE_DEVICES = await api('/api/self-service/devices');
+  renderSelfServiceDevices();
+}
+
 function readBankAccountInputs() {
   return [...document.querySelectorAll('.bank-account-card')].map((card) => ({
     bankName: card.querySelector('[data-bank-field="bankName"]').value.trim(),
@@ -9238,6 +9473,12 @@ async function fillConfigForm() {
   renderBankAccounts();
   syncBankAccountsVisibility();
   $('#cfgPosChatIntegration').checked = (SETTINGS.chatbot_pos_integration_enabled || '0') === '1';
+  $('#cfgSelfServiceEnabled').checked = (SETTINGS.self_service_enabled || '0') === '1';
+  $('#cfgSelfServiceAutoPrint').checked = (SETTINGS.self_service_auto_print || '0') === '1';
+  $('#cfgSelfServicePayCash').checked = (SETTINGS.self_service_payment_cash || '1') === '1';
+  $('#cfgSelfServicePayDebit').checked = (SETTINGS.self_service_payment_debit || '0') === '1';
+  $('#cfgSelfServicePayCredit').checked = (SETTINGS.self_service_payment_credit || '0') === '1';
+  $('#cfgSelfServicePayTransfer').checked = (SETTINGS.self_service_payment_transfer || '0') === '1';
   $('#cfgRoundEditEnabled').checked = (SETTINGS.pos_round_edit_enabled || '0') === '1';
   $('#cfgRoundEditRequirePin').checked = (SETTINGS.pos_round_edit_require_pin || '0') === '1';
   $('#cfgSameDayCancelEnabled').checked = (SETTINGS.pos_same_day_cancel_enabled || '1') === '1';
@@ -9256,6 +9497,7 @@ async function fillConfigForm() {
   if (!isCashierUser()) {
     await loadBranches();
     await loadCashiers();
+    await loadSelfServiceDevices();
   }
 }
 $('#cfgLogo').addEventListener('change', () => {
@@ -9630,6 +9872,57 @@ $('#ticketForm').addEventListener('submit', async (e) => {
   await api('/api/settings', { method: 'PUT', body: fd });
   toast('Configuración de ticket guardada');
   SETTINGS = await api('/api/settings');
+});
+
+async function saveSelfServiceSettings(showToast = true) {
+  const hasPaymentMethod = ['#cfgSelfServicePayCash', '#cfgSelfServicePayDebit', '#cfgSelfServicePayCredit', '#cfgSelfServicePayTransfer']
+    .some((selector) => $(selector)?.checked);
+  if (!hasPaymentMethod) throw new Error('Activa al menos una forma de pago para autoservicio');
+  await api('/api/settings', {
+    method: 'PUT', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      self_service_enabled: $('#cfgSelfServiceEnabled').checked ? '1' : '0',
+      self_service_auto_print: $('#cfgSelfServiceAutoPrint').checked ? '1' : '0',
+      self_service_payment_cash: $('#cfgSelfServicePayCash').checked ? '1' : '0',
+      self_service_payment_debit: $('#cfgSelfServicePayDebit').checked ? '1' : '0',
+      self_service_payment_credit: $('#cfgSelfServicePayCredit').checked ? '1' : '0',
+      self_service_payment_transfer: $('#cfgSelfServicePayTransfer').checked ? '1' : '0',
+    }),
+  });
+  SETTINGS = await api('/api/settings');
+  if (showToast) toast($('#cfgSelfServiceEnabled').checked ? 'Autoservicio activado y guardado' : 'Autoservicio desactivado y guardado');
+}
+
+$('#selfServiceSave')?.addEventListener('click', async () => {
+  try { await saveSelfServiceSettings(); } catch (error) { toast(error.message, true); }
+});
+
+['#cfgSelfServiceEnabled', '#cfgSelfServiceAutoPrint', '#cfgSelfServicePayCash', '#cfgSelfServicePayDebit', '#cfgSelfServicePayCredit', '#cfgSelfServicePayTransfer'].forEach((selector) => {
+  $(selector)?.addEventListener('change', async (event) => {
+    const changed = event.currentTarget;
+    const nextValue = changed.checked;
+    changed.disabled = true;
+    try { await saveSelfServiceSettings(); }
+    catch (error) { changed.checked = !nextValue; toast(error.message, true); }
+    finally { changed.disabled = false; }
+  });
+});
+
+$('#selfServiceAddDevice')?.addEventListener('click', async () => {
+  const branchId = Number($('#selfServiceBranch').value || 0);
+  if (!branchId) return toast('Crea o selecciona una sucursal activa', true);
+  try {
+    if ($('#cfgSelfServiceEnabled').checked && SETTINGS.self_service_enabled !== '1') {
+      await saveSelfServiceSettings(false);
+    }
+    await api('/api/self-service/devices', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ branchId, name: $('#selfServiceDeviceName').value }),
+    });
+    $('#selfServiceDeviceName').value = '';
+    await loadSelfServiceDevices();
+    toast('Acceso de tableta creado');
+  } catch (error) { toast(error.message, true); }
 });
 
 /* ===== Modelo de negocio ===== */
