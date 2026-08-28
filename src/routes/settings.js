@@ -7,6 +7,7 @@ const { decrypt } = require('../utils/crypto');
 const { requireAuth, requireOwner } = require('../middleware/auth');
 const { createImageUpload, deleteManagedUpload, optimizeUploadedImage, safeUnlink } = require('../utils/uploads');
 const { CURRENCIES, TIME_ZONES, regionalDefaults, isSupportedCurrency, isSupportedTimeZone } = require('../utils/regional');
+const { normalizeCustomPaymentMethods } = require('../utils/paymentMethods');
 
 const router = express.Router();
 router.use(requireAuth);
@@ -36,6 +37,7 @@ const SETTING_KEYS = [
   'chatbot_payment_pickup_cash',
   'chatbot_payment_pickup_transfer',
   'chatbot_payment_pickup_card',
+  'custom_payment_methods_json',
   'chatbot_bank_accounts_json',
   'chatbot_upsell_enabled',
   'chatbot_upsell_question',
@@ -169,6 +171,13 @@ router.put('/', upload.single('logo'), async (req, res, next) => {
         return res.status(400).json({ error: 'El NIP debe contener de 4 a 8 dígitos' });
       }
       await setSetting(req.tdb, 'pos_authorization_pin_hash', pin ? await bcrypt.hash(pin, 12) : '');
+    }
+    if (body.custom_payment_methods_json !== undefined) {
+      try {
+        body.custom_payment_methods_json = JSON.stringify(normalizeCustomPaymentMethods(body.custom_payment_methods_json));
+      } catch (error) {
+        return res.status(400).json({ error: error.message });
+      }
     }
     const selfServicePaymentKeys = ['self_service_payment_cash', 'self_service_payment_debit', 'self_service_payment_credit', 'self_service_payment_transfer'];
     if (selfServicePaymentKeys.some((key) => body[key] !== undefined)) {

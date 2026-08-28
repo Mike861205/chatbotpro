@@ -75,6 +75,9 @@ let POS_CART = [];
 let POS_CATEGORY_FILTER = 'all';
 let POS_PRODUCT_SORT = 'top_sold';
 let POS_PAYMENT_METHOD = 'cash';
+let POS_CHECKOUT_IN_FLIGHT = false;
+let POS_CHECKOUT_IDEMPOTENCY_KEY = '';
+let POS_CHECKOUT_FINGERPRINT = '';
 const DASHBOARD_PERIOD_LABELS = {
   day: 'de hoy',
   week: 'de la semana',
@@ -112,6 +115,7 @@ let CHATBOT_UPSELL_SELECTED = new Set();
 let CHATBOT_UPSELL_OFFERS = [];
 let CHATBOT_INFO_OPTIONS = [];
 let CHATBOT_RECEIVING_MODES = [];
+let CUSTOM_PAYMENT_METHODS = [];
 let DELIVERY_ZONES = [];
 let DELIVERY_ZONE_MAP = null;
 let DELIVERY_ZONE_LAYER = null;
@@ -1193,6 +1197,7 @@ function renderSalesReportStats() {
   const cashCollected = payments?.cash ?? (dailyMode ? summary.selectedMonthCash : summary.yearCash) ?? 0;
   const cardCollected = payments?.card ?? (dailyMode ? summary.selectedMonthCard : summary.yearCard) ?? 0;
   const transferCollected = payments?.transfer ?? (dailyMode ? summary.selectedMonthTransfer : summary.yearTransfer) ?? 0;
+  const customPayments = payments?.custom || [];
 
   const totalSales = Number(sales || 0);
   const pct = (val) => totalSales > 0 ? ` (${((Number(val || 0) / totalSales) * 100).toFixed(0)}%)` : '';
@@ -1230,6 +1235,15 @@ function renderSalesReportStats() {
       <strong>${fmtMoney(transferCollected)}</strong>
       <span>${pct(transferCollected)} transferencias bancarias</span>
     </div>
+    ${customPayments.map((method) => `
+    <div class="card sales-report-stat">
+      <div class="sales-stat-top">
+        <small>${esc(method.label)}</small>
+        <i class="sales-stat-icon-free ph-duotone ph-device-mobile icon-cyan"></i>
+      </div>
+      <strong>${fmtMoney(method.total || 0)}</strong>
+      <span>${pct(method.total)} · ${Number(method.tickets || 0)} ticket${Number(method.tickets || 0) === 1 ? '' : 's'}</span>
+    </div>`).join('')}
     <div class="card sales-report-stat">
       <div class="sales-stat-top">
         <small>Costo de ventas</small>
@@ -1300,7 +1314,12 @@ function renderSalesCalendar() {
     if (cash > 0) paymentBadges.push(`<span class="sales-pay-chip sales-pay-cash" title="Efectivo: ${fmtMoney(cash)}"><i class="ph-bold ph-money"></i> Efec ${fmtMoney(cash)}</span>`);
     if (card > 0) paymentBadges.push(`<span class="sales-pay-chip sales-pay-card" title="Tarjeta: ${fmtMoney(card)}"><i class="ph-bold ph-credit-card"></i> Tarj ${fmtMoney(card)}</span>`);
     if (transfer > 0) paymentBadges.push(`<span class="sales-pay-chip sales-pay-transfer" title="Transferencia: ${fmtMoney(transfer)}"><i class="ph-bold ph-bank"></i> Transf ${fmtMoney(transfer)}</span>`);
-    if (Number(row.other || 0) > 0) paymentBadges.push(`<span class="sales-pay-chip sales-pay-other" title="Otros: ${fmtMoney(row.other)}"><i class="ph-bold ph-dots-three-circle"></i> Otro ${fmtMoney(row.other)}</span>`);
+    const customTotal = (row.customPayments || []).reduce((sum, method) => sum + Number(method.total || 0), 0);
+    for (const method of (row.customPayments || []).filter((item) => Number(item.total || 0) > 0)) {
+      paymentBadges.push(`<span class="sales-pay-chip sales-pay-other" title="${esc(method.label)}: ${fmtMoney(method.total)}"><i class="ph-bold ph-device-mobile"></i> ${esc(method.label)} ${fmtMoney(method.total)}</span>`);
+    }
+    const uncategorizedTotal = Math.max(0, Number(row.other || 0) - customTotal);
+    if (uncategorizedTotal > 0) paymentBadges.push(`<span class="sales-pay-chip sales-pay-other" title="Otros: ${fmtMoney(uncategorizedTotal)}"><i class="ph-bold ph-dots-three-circle"></i> Otro ${fmtMoney(uncategorizedTotal)}</span>`);
 
     const paymentsHtml = paymentBadges.length
       ? `<div class="sales-calendar-payments">${paymentBadges.join('')}</div>`
@@ -1416,7 +1435,12 @@ function renderSalesMonthly() {
     if (cash > 0) paymentBadges.push(`<span class="sales-pay-chip sales-pay-cash" title="Efectivo: ${fmtMoney(cash)}"><i class="ph-bold ph-money"></i> Efec ${fmtMoney(cash)}</span>`);
     if (card > 0) paymentBadges.push(`<span class="sales-pay-chip sales-pay-card" title="Tarjeta: ${fmtMoney(card)}"><i class="ph-bold ph-credit-card"></i> Tarj ${fmtMoney(card)}</span>`);
     if (transfer > 0) paymentBadges.push(`<span class="sales-pay-chip sales-pay-transfer" title="Transferencia: ${fmtMoney(transfer)}"><i class="ph-bold ph-bank"></i> Transf ${fmtMoney(transfer)}</span>`);
-    if (Number(row.other || 0) > 0) paymentBadges.push(`<span class="sales-pay-chip sales-pay-other" title="Otros: ${fmtMoney(row.other)}"><i class="ph-bold ph-dots-three-circle"></i> Otro ${fmtMoney(row.other)}</span>`);
+    const customTotal = (row.customPayments || []).reduce((sum, method) => sum + Number(method.total || 0), 0);
+    for (const method of (row.customPayments || []).filter((item) => Number(item.total || 0) > 0)) {
+      paymentBadges.push(`<span class="sales-pay-chip sales-pay-other" title="${esc(method.label)}: ${fmtMoney(method.total)}"><i class="ph-bold ph-device-mobile"></i> ${esc(method.label)} ${fmtMoney(method.total)}</span>`);
+    }
+    const uncategorizedTotal = Math.max(0, Number(row.other || 0) - customTotal);
+    if (uncategorizedTotal > 0) paymentBadges.push(`<span class="sales-pay-chip sales-pay-other" title="Otros: ${fmtMoney(uncategorizedTotal)}"><i class="ph-bold ph-dots-three-circle"></i> Otro ${fmtMoney(uncategorizedTotal)}</span>`);
 
     const paymentsHtml = paymentBadges.length
       ? `<div class="sales-calendar-payments">${paymentBadges.join('')}</div>`
@@ -1611,7 +1635,7 @@ function salesDetailRangeTitle(startDate, endDate) {
 
 function salesDetailPaymentLabel(sale) {
   const labels = { cash: 'Efectivo', card: 'Tarjeta', transfer: 'Transferencia', mixed: 'Mixto', other: 'Otro' };
-  const label = labels[sale.paymentMethod] || 'Otro';
+  const label = labels[sale.paymentMethod] || sale.paymentBreakdown?.customLabel || posMethodLabel(sale.paymentMethod, sale.paymentBreakdown) || 'Otro';
   if (sale.paymentMethod !== 'mixed') return label;
   const parts = [];
   if (Number(sale.paymentBreakdown?.cash) > 0) parts.push(`Efectivo ${fmtMoney(sale.paymentBreakdown.cash)}`);
@@ -1647,7 +1671,8 @@ function renderSalesDetail(data) {
       <div><i class="ph-bold ph-money"></i><span>Efectivo</span><b>${fmtMoney(data.payments.cash)}</b></div>
       <div><i class="ph-bold ph-credit-card"></i><span>Tarjeta</span><b>${fmtMoney(data.payments.card)}</b></div>
       <div><i class="ph-bold ph-bank"></i><span>Transferencia</span><b>${fmtMoney(data.payments.transfer)}</b></div>
-      <div><i class="ph-bold ph-dots-three-circle"></i><span>Otros</span><b>${fmtMoney(data.payments.other)}</b></div>
+      ${(data.payments.custom || []).map((method) => `<div><i class="ph-bold ph-device-mobile"></i><span>${esc(method.label)}</span><b>${fmtMoney(method.total || 0)}</b></div>`).join('')}
+      ${Number(data.payments.other || 0) > 0 ? `<div><i class="ph-bold ph-dots-three-circle"></i><span>Otros</span><b>${fmtMoney(data.payments.other)}</b></div>` : ''}
     </div>
     <div class="sales-detail-section"><h4><i class="ph-bold ph-receipt"></i> Ventas y formas de pago</h4><div class="table-wrap">${salesRows}</div></div>
     <div class="sales-detail-section"><h4><i class="ph-bold ph-shopping-cart-simple"></i> Compras recibidas <small>Se muestran aparte: aumentan inventario y sólo se vuelven costo cuando el producto se vende.</small></h4><div class="table-wrap">${purchaseRows}</div></div>
@@ -1691,7 +1716,9 @@ function salesDetailFileBase(data = SALES_DETAIL_DATA) {
 function salesDetailPrintHtml(data) {
   const s = data.summary;
   const paymentRows = [
-    ['Efectivo', data.payments.cash], ['Tarjeta', data.payments.card], ['Transferencia', data.payments.transfer], ['Otros', data.payments.other],
+    ['Efectivo', data.payments.cash], ['Tarjeta', data.payments.card], ['Transferencia', data.payments.transfer],
+    ...(data.payments.custom || []).map((method) => [method.label, method.total]),
+    ...(Number(data.payments.other || 0) > 0 ? [['Otros', data.payments.other]] : []),
   ].map(([name, amount]) => `<tr><td>${name}</td><td class="num">${esc(fmtMoney(amount))}</td></tr>`).join('');
   const salesRows = data.sales.map((sale) => `<tr><td>#${sale.id}</td><td>${esc(sale.createdAt)}</td><td>${esc(sale.branchName)}</td><td>${esc(salesDetailPaymentLabel(sale))}</td><td class="num">${esc(fmtMoney(sale.total))}</td><td class="num">${esc(fmtMoney(sale.cogs))}</td><td class="num">${esc(fmtMoney(sale.grossProfit))}</td></tr>`).join('');
   const purchaseRows = (data.purchases || []).map((row) => `<tr><td>${esc(row.orderNumber)}</td><td>${esc(row.receivedAt)}</td><td>${esc(row.supplierName)}</td><td>${esc(row.branchName)}</td><td class="num">${esc(fmtMoney(row.total))}</td></tr>`).join('');
@@ -1721,7 +1748,9 @@ function exportSalesDetailExcel(data = SALES_DETAIL_DATA) {
   XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet([['Concepto', 'Valor'], ...summaryRows]), 'Resumen');
   XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet([
     { Forma: 'Efectivo', Total: data.payments.cash }, { Forma: 'Tarjeta', Total: data.payments.card },
-    { Forma: 'Transferencia', Total: data.payments.transfer }, { Forma: 'Otros', Total: data.payments.other },
+    { Forma: 'Transferencia', Total: data.payments.transfer },
+    ...(data.payments.custom || []).map((method) => ({ Forma: method.label, Total: method.total })),
+    ...(Number(data.payments.other || 0) > 0 ? [{ Forma: 'Otros', Total: data.payments.other }] : []),
   ]), 'Formas de pago');
   XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(data.sales.map((row) => ({ Ticket: row.id, Fecha: row.createdAt, Sucursal: row.branchName, Origen: row.channel, Pago: salesDetailPaymentLabel(row), Venta: row.total, Costo: row.cogs, Utilidad: row.grossProfit }))), 'Ventas');
   XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet((data.purchases || []).map((row) => ({ Orden: row.orderNumber, Recepción: row.receivedAt, Proveedor: row.supplierName, Sucursal: row.branchName, Total: row.total, Productos: row.items.map((item) => `${item.name} x ${item.quantity}`).join('; ') }))), 'Compras');
@@ -1737,7 +1766,7 @@ function exportSalesDetailPdf(data = SALES_DETAIL_DATA) {
   doc.setFontSize(16); doc.text(ME?.tenant?.businessName || SETTINGS?.business_name || 'Reporte de ventas', 14, 14);
   doc.setFontSize(9); doc.setTextColor(90); doc.text(`${SALES_DETAIL_TITLE} · ${salesScopeLabel()}`, 14, 20); doc.setTextColor(0);
   doc.autoTable({ startY: 25, theme: 'grid', head: [['Ventas', 'Costo vendido', 'Compras', 'Gastos', 'Utilidad neta', 'Resultado efectivo', 'Margen']], body: [[fmtMoney(s.sales), fmtMoney(s.cogs), fmtMoney(s.purchases), fmtMoney(s.expenses), fmtMoney(s.netProfit), fmtMoney(s.cashResult), `${Number(s.marginPercent || 0).toFixed(1)}%`]], styles: { fontSize: 8 }, headStyles: { fillColor: [30, 136, 76] } });
-  doc.autoTable({ startY: doc.lastAutoTable.finalY + 5, theme: 'striped', head: [['Forma de pago', 'Total']], body: [['Efectivo', fmtMoney(data.payments.cash)], ['Tarjeta', fmtMoney(data.payments.card)], ['Transferencia', fmtMoney(data.payments.transfer)], ['Otros', fmtMoney(data.payments.other)]], styles: { fontSize: 8 }, tableWidth: 90 });
+  doc.autoTable({ startY: doc.lastAutoTable.finalY + 5, theme: 'striped', head: [['Forma de pago', 'Total']], body: [['Efectivo', fmtMoney(data.payments.cash)], ['Tarjeta', fmtMoney(data.payments.card)], ['Transferencia', fmtMoney(data.payments.transfer)], ...(data.payments.custom || []).map((method) => [method.label, fmtMoney(method.total || 0)]), ...(Number(data.payments.other || 0) > 0 ? [['Otros', fmtMoney(data.payments.other)]] : [])], styles: { fontSize: 8 }, tableWidth: 90 });
   doc.autoTable({ startY: doc.lastAutoTable.finalY + 6, theme: 'striped', head: [['Ticket', 'Fecha', 'Sucursal', 'Origen', 'Pago', 'Venta', 'Costo', 'Utilidad']], body: data.sales.map((row) => [`#${row.id}`, row.createdAt, row.branchName, row.channel === 'pos' ? 'POS' : 'Chatbot', salesDetailPaymentLabel(row), fmtMoney(row.total), fmtMoney(row.cogs), fmtMoney(row.grossProfit)]), styles: { fontSize: 7 }, headStyles: { fillColor: [37, 99, 235] } });
   doc.autoTable({ startY: doc.lastAutoTable.finalY + 6, theme: 'striped', head: [['Orden', 'Recepción', 'Proveedor', 'Sucursal', 'Total']], body: (data.purchases || []).map((row) => [row.orderNumber, row.receivedAt, row.supplierName, row.branchName, fmtMoney(row.total)]), styles: { fontSize: 7 }, headStyles: { fillColor: [234, 88, 12] } });
   doc.autoTable({ startY: doc.lastAutoTable.finalY + 6, theme: 'striped', head: [['Producto', 'Cantidad', 'Ventas', 'Costo', 'Utilidad']], body: data.products.map((row) => [row.name, row.quantity, fmtMoney(row.sales), fmtMoney(row.cogs), fmtMoney(row.profit)]), styles: { fontSize: 7 }, headStyles: { fillColor: [124, 58, 237] } });
@@ -2815,7 +2844,7 @@ function orderPaymentLabel(method, breakdown = null) {
   return {
     cash: 'Efectivo',
     transfer: 'Transferencia',
-  }[normalizedMethod] || '—';
+  }[normalizedMethod] || breakdown?.customLabel || CUSTOM_PAYMENT_METHODS.find((item) => item.id === normalizedMethod)?.label || '—';
 }
 
 function orderBranchLabel(order) {
@@ -3495,13 +3524,14 @@ function posGrandTotal() {
   return moneyNum(posCartTotal() + fee);
 }
 
-function posMethodLabel(method) {
-  return {
+function posMethodLabel(method, breakdown = null) {
+  const coreLabel = {
     cash: 'Efectivo',
     card: 'Tarjeta',
     transfer: 'Transferencia',
     mixed: 'Múltiple',
-  }[method] || method;
+  }[method];
+  return coreLabel || breakdown?.customLabel || CUSTOM_PAYMENT_METHODS.find((item) => item.id === method)?.label || method;
 }
 
 function posMovementLabel(kind) {
@@ -3708,6 +3738,19 @@ function resetPosPaymentForm() {
   POS_PAYMENT_FORM = { cashReceived: '', cash: '', card: '', cardType: '', transfer: '', notes: '', deliveryAddress: '', deliveryNeighborhood: '', deliveryReference: '' };
   POS_IS_DELIVERY = false;
   POS_DELIVERY_FEE = '';
+  POS_CHECKOUT_IDEMPOTENCY_KEY = '';
+  POS_CHECKOUT_FINGERPRINT = '';
+}
+
+function newPosCheckoutKey() {
+  if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
+  return `pos_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 14)}`;
+}
+
+function setPosSaleProcessing(visible) {
+  const modal = $('#posSaleProcessingModal');
+  if (modal) modal.hidden = !visible;
+  document.body.classList.toggle('pos-sale-is-processing', visible);
 }
 
 function updatePosChangeHint() {
@@ -3864,7 +3907,7 @@ function openThermalPrintWindow(ticket) {
   const breakdownObj = ticket.paymentBreakdown || {};
   const ticketPaymentLabel = (method) => method === 'card'
     ? (breakdownObj.cardType === 'debit' ? 'Tarjeta de débito' : breakdownObj.cardType === 'credit' ? 'Tarjeta de crédito' : 'Tarjeta')
-    : posMethodLabel(method);
+    : posMethodLabel(method, breakdownObj);
   const isMixed = ticket.paymentMethod === 'mixed';
   const breakdownLines = ['cash', 'card', 'transfer']
     .filter((method) => Number(breakdownObj[method]) > 0)
@@ -4091,6 +4134,7 @@ function exportPosClosePdf(closeResult) {
   const totals = closeResult.totals || {};
   const collected = totals.collected || {};
   const salesByMethod = totals.salesByMethod || {};
+  const customPayments = totals.customPayments || [];
   const movements = totals.movements || {};
   const cancellations = totals.cancellations || {};
   const delivery = totals.delivery || {};
@@ -4132,6 +4176,7 @@ function exportPosClosePdf(closeResult) {
       ['Efectivo', fmtMoney(salesByMethod.cash || 0)],
       ['Tarjeta', fmtMoney(salesByMethod.card || 0)],
       ['Transferencia', fmtMoney(salesByMethod.transfer || 0)],
+      ...customPayments.map((method) => [method.label, fmtMoney(method.total || 0)]),
       ['Mixto', fmtMoney(salesByMethod.mixed || 0)],
     ],
     styles: { fontSize: 9 },
@@ -4185,6 +4230,7 @@ function printPosCloseReport(closeResult) {
   const totals = closeResult.totals || {};
   const collected = totals.collected || {};
   const salesByMethod = totals.salesByMethod || {};
+  const customPayments = totals.customPayments || [];
   const movements = totals.movements || {};
   const cancellations = totals.cancellations || {};
   const delivery = totals.delivery || {};
@@ -4230,6 +4276,7 @@ function printPosCloseReport(closeResult) {
     <tr><td>Efectivo</td><td>${esc(fmtMoney(salesByMethod.cash || 0))}</td></tr>
     <tr><td>Tarjeta</td><td>${esc(fmtMoney(salesByMethod.card || 0))}</td></tr>
     <tr><td>Transferencia</td><td>${esc(fmtMoney(salesByMethod.transfer || 0))}</td></tr>
+    ${customPayments.map((method) => `<tr><td>${esc(method.label)}</td><td>${esc(fmtMoney(method.total || 0))}</td></tr>`).join('')}
     <tr><td>Mixto</td><td>${esc(fmtMoney(salesByMethod.mixed || 0))}</td></tr>
   </table>
   <table>
@@ -4852,6 +4899,9 @@ function renderPosFinanceStrip() {
     { icon: 'ph-money', title: 'Efectivo en ventas', value: totals.collected.cash, tone: 'green' },
     { icon: 'ph-credit-card', title: 'Tarjeta', value: totals.collected.card, tone: 'violet' },
     { icon: 'ph-bank', title: 'Transferencia', value: totals.collected.transfer, tone: 'cyan' },
+    ...(totals.customPayments || []).map((method) => ({
+      icon: 'ph-device-mobile', title: method.label, value: method.total, tone: 'cyan', tickets: method.tickets,
+    })),
     { icon: 'ph-arrows-down-up', title: 'Movimientos netos', value: movementNet, tone: movementNet < 0 ? 'red' : 'amber' },
     { icon: 'ph-x-circle', title: 'Cancelaciones', value: totals.cancellations.total, tone: 'red' },
     { icon: 'ph-calculator', title: 'Efectivo esperado', value: expectedCash, tone: 'ink' },
@@ -4863,7 +4913,7 @@ function renderPosFinanceStrip() {
         <div class="pos-fin-copy">
           <span>${card.title}</span>
           <b>${fmtMoney(card.value)}</b>
-          <small>${session ? `Tickets: ${totals.tickets}` : 'Caja cerrada'}</small>
+          <small>${session ? `Tickets: ${card.tickets ?? totals.tickets}` : 'Caja cerrada'}</small>
         </div>
       </div>`
     )
@@ -5051,7 +5101,9 @@ function renderPosCart() {
         </div>`).join('')}
     </div>` : (tableAccount ? '<div class="hint" style="margin-bottom:10px">Aún no se ha enviado ninguna ronda.</div>' : '');
   setPosPaymentDefaults();
-  const methodButtons = ['cash', 'card', 'transfer', 'mixed']
+  const activeCustomMethods = CUSTOM_PAYMENT_METHODS.filter((item) => item.active).map((item) => item.id);
+  if (!['cash', 'card', 'transfer', 'mixed', ...activeCustomMethods].includes(POS_PAYMENT_METHOD)) POS_PAYMENT_METHOD = 'cash';
+  const methodButtons = ['cash', 'card', 'transfer', ...activeCustomMethods, 'mixed']
     .map((method) => `<button type="button" class="${POS_PAYMENT_METHOD === method ? 'on' : ''}" data-pos-method="${method}">${posMethodLabel(method)}</button>`)
     .join('');
   const cashField = POS_PAYMENT_METHOD === 'cash'
@@ -5234,6 +5286,15 @@ function renderPosCart() {
   updatePosMixedHint();
   $('#posCheckoutForm')?.addEventListener('submit', async (e) => {
     e.preventDefault();
+    if (POS_CHECKOUT_IN_FLIGHT) return;
+    POS_CHECKOUT_IN_FLIGHT = true;
+    const submitButton = e.submitter || e.currentTarget.querySelector('button[type="submit"]');
+    const originalButtonHtml = submitButton?.innerHTML || '';
+    if (submitButton) {
+      submitButton.disabled = true;
+      submitButton.innerHTML = '<i class="ph-bold ph-spinner-gap"></i> Procesando venta…';
+    }
+    setPosSaleProcessing(true);
     try {
       const payload = {
         paymentMethod: POS_PAYMENT_METHOD,
@@ -5252,6 +5313,12 @@ function renderPosCart() {
         deliveryReference: POS_IS_DELIVERY ? ($('#posDeliveryReference')?.value || '') : '',
       };
       if (!tableAccount) payload.items = posCartPayload();
+      const checkoutFingerprint = JSON.stringify({ accountId: tableAccount?.id || null, payload });
+      if (!POS_CHECKOUT_IDEMPOTENCY_KEY || POS_CHECKOUT_FINGERPRINT !== checkoutFingerprint) {
+        POS_CHECKOUT_IDEMPOTENCY_KEY = newPosCheckoutKey();
+        POS_CHECKOUT_FINGERPRINT = checkoutFingerprint;
+      }
+      payload.idempotencyKey = POS_CHECKOUT_IDEMPOTENCY_KEY;
       let checkoutAccount = tableAccount;
       if (tableAccount && POS_CART.length) {
         const roundResult = await sendActiveTableRound({ silent: true });
@@ -5264,6 +5331,9 @@ function renderPosCart() {
         body: JSON.stringify(payload),
       });
       LAST_POS_SALE = result?.sale || null;
+      POS_CHECKOUT_IDEMPOTENCY_KEY = '';
+      POS_CHECKOUT_FINGERPRINT = '';
+      setPosSaleProcessing(false);
       toast(checkoutAccount ? `Cuenta de mesa ${tableNumber} cerrada` : 'Venta registrada en punto de venta');
       POS_TABLE_ACCOUNT = null;
       clearPosCart();
@@ -5273,6 +5343,13 @@ function renderPosCart() {
       await loadPos();
     } catch (err) {
       toast(err.message, true);
+    } finally {
+      POS_CHECKOUT_IN_FLIGHT = false;
+      setPosSaleProcessing(false);
+      if (submitButton?.isConnected) {
+        submitButton.disabled = false;
+        submitButton.innerHTML = originalButtonHtml;
+      }
     }
   });
 }
@@ -5896,7 +5973,7 @@ async function loadPosSalesHistory(page = 1) {
                 .filter(([, amount]) => Number(amount) > 0)
                 .map(([method, amount]) => `${posMethodLabel(method)}${method === 'card' && posCardTypeLabel(row.payment_breakdown) ? ` ${posCardTypeLabel(row.payment_breakdown)}` : ''} ${fmtMoney(amount)}`)
                 .join(' · ')
-            : posMethodLabel(row.payment_method);
+            : posMethodLabel(row.payment_method, row.payment_breakdown);
           const noteText = String(row.notes || '').trim();
           const isCanceled = row.status === 'cancelado';
           const invoiceEligible = posSaleIsInvoiceEligible(row);
@@ -5905,7 +5982,7 @@ async function loadPosSalesHistory(page = 1) {
             <td><input class="pos-global-ticket-check" type="checkbox" data-global-ticket="${row.id}" ${isSelected ? 'checked' : ''} ${invoiceEligible ? '' : 'disabled'} aria-label="Seleccionar ticket ${row.id} para factura global"></td>
             <td><b>#${row.id}</b></td>
             <td>${esc(row.items.map((item) => `${item.qty}x ${item.name}`).join(', '))}</td>
-            <td><div><b>${esc(posMethodLabel(row.payment_method))}${row.payment_method === 'card' && posCardTypeLabel(row.payment_breakdown) ? ` · ${esc(posCardTypeLabel(row.payment_breakdown))}` : ''}</b></div><div style="font-size:12px;color:var(--ink-3)">${esc(paymentBreakdown)}</div></td>
+            <td><div><b>${esc(posMethodLabel(row.payment_method, row.payment_breakdown))}${row.payment_method === 'card' && posCardTypeLabel(row.payment_breakdown) ? ` · ${esc(posCardTypeLabel(row.payment_breakdown))}` : ''}</b></div><div style="font-size:12px;color:var(--ink-3)">${esc(paymentBreakdown)}</div></td>
             <td><b>${fmtMoney(row.total)}</b>${row.cash_change ? `<div style="font-size:12px;color:var(--ink-3)">Cambio ${fmtMoney(row.cash_change)}</div>` : ''}</td>
             <td>${posSaleStatusBadge(row.status)}</td>
             <td>${posFiscalStatus(row)}</td>
@@ -6029,7 +6106,7 @@ async function loadPosChatbotQueue(page = 1) {
             <div class="pos-chatbot-kv"><span>Cliente</span><div><b>${esc(order.customer_name || 'Cliente')}</b><br>${esc(order.customer_phone || '—')}</div></div>
             <div class="pos-chatbot-kv"><span>Total</span><b>${fmtMoney(order.total)}</b></div>
             <div class="pos-chatbot-kv"><span>Entrega</span><div>${esc(chatbotDeliveryLabel(order))}<br><small style="color:var(--ink-3)">${esc(locationText)}</small></div></div>
-            <div class="pos-chatbot-kv"><span>Pago</span><b>${esc(posMethodLabel(order.payment_method || 'cash'))}</b></div>
+            <div class="pos-chatbot-kv"><span>Pago</span><b>${esc(posMethodLabel(order.payment_method || 'cash', order.payment_breakdown))}</b></div>
             <div class="pos-chatbot-kv"><span>Productos</span><div>${esc(items || '—')}</div></div>
             <div class="pos-chatbot-kv"><span>Estado</span><div>${chatbotOrderStatusBadge(order.status)}</div></div>
             <div class="pos-chatbot-kv"><span>Fecha</span><div>${esc(order.created_at || '')}</div></div>
@@ -6056,7 +6133,7 @@ async function loadPosChatbotQueue(page = 1) {
           <td class="td-cliente"><b>${esc(order.customer_name || 'Cliente')}</b><div style="font-size:12px;color:var(--ink-3)">${esc(order.customer_phone || '—')}</div></td>
           <td class="td-productos">${esc(items || '—')}</td>
           <td class="td-entrega">${esc(chatbotDeliveryLabel(order))}${locationLine}${noteLine}</td>
-          <td class="td-pago">${esc(posMethodLabel(order.payment_method || 'cash'))}</td>
+          <td class="td-pago">${esc(posMethodLabel(order.payment_method || 'cash', order.payment_breakdown))}</td>
           <td class="td-total"><b>${fmtMoney(order.total)}</b></td>
           <td class="td-estado">${chatbotOrderStatusBadge(order.status)}</td>
           <td class="td-fecha">${esc(order.created_at || '')}</td>
@@ -6345,6 +6422,7 @@ function openPosCloseModal() {
           <div class="pos-mini-stat tone-green"><span>Efectivo</span><b>${fmtMoney(totals.salesByMethod?.cash || 0)}</b></div>
           <div class="pos-mini-stat tone-violet"><span>Tarjeta</span><b>${fmtMoney(totals.salesByMethod?.card || 0)}</b></div>
           <div class="pos-mini-stat tone-cyan"><span>Transferencia</span><b>${fmtMoney(totals.salesByMethod?.transfer || 0)}</b></div>
+          ${(totals.customPayments || []).map((method) => `<div class="pos-mini-stat tone-cyan"><span>${esc(method.label)}</span><b>${fmtMoney(method.total || 0)}</b></div>`).join('')}
           <div class="pos-mini-stat tone-amber"><span>Mixto</span><b>${fmtMoney(totals.salesByMethod?.mixed || 0)}</b></div>
         </div>
       </div>
@@ -9347,6 +9425,54 @@ async function loadSelfServiceDevices() {
   renderSelfServiceDevices();
 }
 
+function readCustomPaymentMethodInputs() {
+  return [...document.querySelectorAll('[data-custom-payment-row]')].map((row) => ({
+    id: row.dataset.customPaymentRow,
+    label: row.querySelector('[data-custom-payment-label]').value.trim(),
+    active: row.querySelector('[data-custom-payment-active]').checked,
+  }));
+}
+
+function renderCustomPaymentMethods() {
+  const list = $('#customPaymentMethodsList');
+  if (!list) return;
+  if (!CUSTOM_PAYMENT_METHODS.length) {
+    list.innerHTML = '<div class="bank-account-empty"><i class="ph-bold ph-wallet"></i> Conservas los medios globales. Agrega aquí opciones como Pago Móvil, Pix o Bizum.</div>';
+    return;
+  }
+  list.innerHTML = CUSTOM_PAYMENT_METHODS.map((method, index) => `
+    <div class="custom-payment-row" data-custom-payment-row="${esc(method.id)}">
+      <div class="field"><label>Nombre visible</label><input data-custom-payment-label maxlength="42" value="${esc(method.label || '')}" placeholder="Ej. Pago Móvil" /></div>
+      <label class="custom-payment-active"><input type="checkbox" data-custom-payment-active ${method.active !== false ? 'checked' : ''} /><span><b>Activo</b><small>Chatbot y POS</small></span></label>
+      <button class="btn btn-danger btn-icon" type="button" data-remove-custom-payment="${index}" title="Quitar medio"><i class="ph-bold ph-trash"></i></button>
+    </div>`).join('');
+}
+
+function loadCustomPaymentMethodsFromSettings() {
+  try {
+    const parsed = JSON.parse(SETTINGS?.custom_payment_methods_json || '[]');
+    CUSTOM_PAYMENT_METHODS = Array.isArray(parsed) ? parsed : [];
+  } catch {
+    CUSTOM_PAYMENT_METHODS = [];
+  }
+}
+
+function syncPosCustomPaymentMethods() {
+  const host = $('#posPaymentEditMethods');
+  if (!host) return;
+  host.querySelectorAll('[data-custom-method]').forEach((button) => button.remove());
+  const mixed = host.querySelector('[data-method="mixed"]');
+  for (const method of CUSTOM_PAYMENT_METHODS.filter((item) => item.active)) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.dataset.method = method.id;
+    button.dataset.customMethod = '1';
+    button.textContent = method.label;
+    button.addEventListener('click', () => setPosPaymentEditMethod(method.id));
+    host.insertBefore(button, mixed);
+  }
+}
+
 function readBankAccountInputs() {
   return [...document.querySelectorAll('.bank-account-card')].map((card) => ({
     bankName: card.querySelector('[data-bank-field="bankName"]').value.trim(),
@@ -9464,6 +9590,9 @@ async function fillConfigForm() {
   $('#cfgChatPayPickupCash').checked = (SETTINGS.chatbot_payment_pickup_cash || '1') === '1';
   $('#cfgChatPayPickupTransfer').checked = (SETTINGS.chatbot_payment_pickup_transfer || '0') === '1';
   $('#cfgChatPayPickupCard').checked = (SETTINGS.chatbot_payment_pickup_card || '0') === '1';
+  loadCustomPaymentMethodsFromSettings();
+  renderCustomPaymentMethods();
+  syncPosCustomPaymentMethods();
   try {
     const parsedAccounts = JSON.parse(SETTINGS.chatbot_bank_accounts_json || '[]');
     BANK_ACCOUNTS = Array.isArray(parsedAccounts) ? parsedAccounts : [];
@@ -9503,6 +9632,20 @@ async function fillConfigForm() {
 $('#cfgLogo').addEventListener('change', () => {
   const f = $('#cfgLogo').files[0];
   if (f) $('#logoPreview').innerHTML = `<img src="${URL.createObjectURL(f)}" alt="" />`;
+});
+$('#addCustomPaymentMethodBtn')?.addEventListener('click', () => {
+  CUSTOM_PAYMENT_METHODS = readCustomPaymentMethodInputs();
+  if (CUSTOM_PAYMENT_METHODS.length >= 15) return toast('Puedes configurar hasta 15 medios de pago personalizados', true);
+  CUSTOM_PAYMENT_METHODS.push({ id: `custom_${Date.now().toString(36)}`, label: '', active: true });
+  renderCustomPaymentMethods();
+  document.querySelector('[data-custom-payment-row]:last-child [data-custom-payment-label]')?.focus();
+});
+$('#customPaymentMethodsList')?.addEventListener('click', (event) => {
+  const button = event.target.closest('[data-remove-custom-payment]');
+  if (!button) return;
+  CUSTOM_PAYMENT_METHODS = readCustomPaymentMethodInputs();
+  CUSTOM_PAYMENT_METHODS.splice(Number(button.dataset.removeCustomPayment), 1);
+  renderCustomPaymentMethods();
 });
 $('#addBankAccountBtn')?.addEventListener('click', () => {
   BANK_ACCOUNTS = readBankAccountInputs();
@@ -9778,13 +9921,14 @@ function openCutDetail(id) {
   CUTS_SELECTED = row;
   const totals = row.totals || {};
   const methods = totals.salesByMethod || {};
+  const customPayments = totals.customPayments || [];
   const movements = totals.movements || {};
   const difference = Number(row.difference_amount || 0);
   $('#cutsDetailTitle').innerHTML = `<i class="ph-bold ph-receipt"></i> Corte #${row.id} · ${esc(row.branch_name || 'General')}`;
   $('#cutsDetailContent').innerHTML = `
     <div class="cut-detail-meta"><span><i class="ph-bold ph-user"></i><b>Abrió</b>${esc(row.opened_by || '—')}</span><span><i class="ph-bold ph-door-open"></i><b>Apertura</b>${esc(row.opened_at || '—')}</span><span><i class="ph-bold ph-lock-key"></i><b>Cierre</b>${esc(row.closed_at || 'Pendiente')}</span></div>
     <div class="cut-detail-kpis"><article class="opening"><i class="ph-bold ph-wallet"></i><span>Fondo inicial</span><b>${fmtMoney(row.opening_amount || 0)}</b></article><article class="sales"><i class="ph-bold ph-chart-line-up"></i><span>Ventas</span><b>${fmtMoney(totals.totalSales || 0)}</b><small>${Number(totals.tickets || 0)} tickets</small></article><article class="expected"><i class="ph-bold ph-calculator"></i><span>Esperado</span><b>${fmtMoney(row.expected_cash || 0)}</b></article><article class="counted"><i class="ph-bold ph-money"></i><span>Contado</span><b>${row.closing_amount == null ? 'Pendiente' : fmtMoney(row.closing_amount)}</b></article><article class="difference ${difference < 0 ? 'negative' : difference > 0 ? 'positive' : ''}"><i class="ph-bold ph-scales"></i><span>Diferencia</span><b>${row.status === 'open' ? 'Pendiente' : fmtMoney(difference)}</b></article></div>
-    <div class="cut-detail-groups"><section><h4><i class="ph-bold ph-credit-card"></i> Ventas por medio</h4><div><span>Efectivo <b>${fmtMoney(methods.cash || 0)}</b></span><span>Tarjeta <b>${fmtMoney(methods.card || 0)}</b></span><span>Transferencia <b>${fmtMoney(methods.transfer || 0)}</b></span><span>Mixto <b>${fmtMoney(methods.mixed || 0)}</b></span></div></section><section><h4><i class="ph-bold ph-arrows-left-right"></i> Movimientos de caja</h4><div><span>Ingresos <b>${fmtMoney(movements.income || 0)}</b></span><span>Retiros <b>${fmtMoney(movements.withdrawal || 0)}</b></span><span>Gastos <b>${fmtMoney(movements.expense || 0)}</b></span><span>Cancelaciones <b>${fmtMoney(totals.cancellations?.total || 0)}</b></span></div></section></div>
+    <div class="cut-detail-groups"><section><h4><i class="ph-bold ph-credit-card"></i> Ventas por medio</h4><div><span>Efectivo <b>${fmtMoney(methods.cash || 0)}</b></span><span>Tarjeta <b>${fmtMoney(methods.card || 0)}</b></span><span>Transferencia <b>${fmtMoney(methods.transfer || 0)}</b></span>${customPayments.map((method) => `<span>${esc(method.label)} <b>${fmtMoney(method.total || 0)}</b></span>`).join('')}<span>Mixto <b>${fmtMoney(methods.mixed || 0)}</b></span></div></section><section><h4><i class="ph-bold ph-arrows-left-right"></i> Movimientos de caja</h4><div><span>Ingresos <b>${fmtMoney(movements.income || 0)}</b></span><span>Retiros <b>${fmtMoney(movements.withdrawal || 0)}</b></span><span>Gastos <b>${fmtMoney(movements.expense || 0)}</b></span><span>Cancelaciones <b>${fmtMoney(totals.cancellations?.total || 0)}</b></span></div></section></div>
     ${row.notes ? `<div class="cut-detail-notes"><i class="ph-bold ph-note"></i><div><b>Notas del corte</b><p>${esc(row.notes)}</p></div></div>` : ''}`;
   $('#cutsDetailModal').classList.add('show');
 }
@@ -9823,10 +9967,15 @@ $('#cutsDetailPrint')?.addEventListener('click', () => CUTS_SELECTED && printPos
 $('#cutsDetailPdf')?.addEventListener('click', () => CUTS_SELECTED && exportPosClosePdf(historicalCutResult(CUTS_SELECTED)));
 $('#contactForm').addEventListener('submit', async (e) => {
   e.preventDefault();
+  CUSTOM_PAYMENT_METHODS = readCustomPaymentMethodInputs();
+  if (CUSTOM_PAYMENT_METHODS.some((method) => !method.label)) {
+    return toast('Escribe el nombre de cada medio de pago personalizado', true);
+  }
+  const hasActiveCustomPayment = CUSTOM_PAYMENT_METHODS.some((method) => method.active);
   const deliveryEnabled = $('#botDelivery') ? $('#botDelivery').checked : true;
   const pickupEnabled = $('#botPickup') ? $('#botPickup').checked : true;
-  const hasDeliveryPayment = $('#cfgChatPayDeliveryCash').checked || $('#cfgChatPayDeliveryTransfer').checked || $('#cfgChatPayDeliveryCard').checked;
-  const hasPickupPayment = $('#cfgChatPayPickupCash').checked || $('#cfgChatPayPickupTransfer').checked || $('#cfgChatPayPickupCard').checked;
+  const hasDeliveryPayment = $('#cfgChatPayDeliveryCash').checked || $('#cfgChatPayDeliveryTransfer').checked || $('#cfgChatPayDeliveryCard').checked || hasActiveCustomPayment;
+  const hasPickupPayment = $('#cfgChatPayPickupCash').checked || $('#cfgChatPayPickupTransfer').checked || $('#cfgChatPayPickupCard').checked || hasActiveCustomPayment;
   if (deliveryEnabled && !hasDeliveryPayment) {
     return toast('Activa al menos un medio de pago para domicilio', true);
   }
@@ -9852,6 +10001,7 @@ $('#contactForm').addEventListener('submit', async (e) => {
   fd.append('chatbot_payment_pickup_cash', $('#cfgChatPayPickupCash').checked ? '1' : '0');
   fd.append('chatbot_payment_pickup_transfer', $('#cfgChatPayPickupTransfer').checked ? '1' : '0');
   fd.append('chatbot_payment_pickup_card', $('#cfgChatPayPickupCard').checked ? '1' : '0');
+  fd.append('custom_payment_methods_json', JSON.stringify(CUSTOM_PAYMENT_METHODS));
   fd.append('chatbot_bank_accounts_json', JSON.stringify(BANK_ACCOUNTS));
   fd.append('chatbot_pos_integration_enabled', $('#cfgPosChatIntegration').checked ? '1' : '0');
   await api('/api/settings', { method: 'PUT', body: fd });
@@ -10323,6 +10473,8 @@ async function boot(navigateToHash = true) {
     api('/api/auth/me'),
     api('/api/settings'),
   ]);
+  loadCustomPaymentMethodsFromSettings();
+  syncPosCustomPaymentMethods();
   if (ME?.role === 'cashier') setAuthScope('cashier');
   if (ME?.role === 'owner') setAuthScope('owner');
   POS_PRODUCT_SORT = normalizePosSortMode(SETTINGS?.pos_catalog_sort_mode || readStoredPosSortMode());

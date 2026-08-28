@@ -22,6 +22,15 @@
 </head>
 <body>
   <div class="boot-loader" id="bootLoader"><div class="spinner"></div></div>
+  <div class="pos-sale-processing" id="posSaleProcessingModal" role="alertdialog" aria-modal="true" aria-labelledby="posSaleProcessingTitle" hidden>
+    <div class="pos-sale-processing-card">
+      <div class="pos-sale-processing-spinner"><i class="ph-bold ph-spinner-gap"></i></div>
+      <span>COBRO EN PROCESO</span>
+      <h3 id="posSaleProcessingTitle">Procesando venta…</h3>
+      <p>Estamos registrando el pago y actualizando la caja. No vuelvas a presionar el botón.</p>
+      <div class="pos-sale-processing-status"><i class="ph-bold ph-shield-check"></i> La venta está protegida contra cobros duplicados</div>
+    </div>
+  </div>
   <div class="scrim" id="scrim"></div>
 
   <div class="app">
@@ -1180,6 +1189,18 @@
                     <label class="pay-method-chip"><input type="checkbox" id="cfgChatPayPickupCard" /> <span><i class="ph-bold ph-credit-card"></i> Tarjeta</span></label>
                   </div>
                 </div>
+                <section class="custom-payment-panel">
+                  <div class="bank-accounts-head">
+                    <div>
+                      <b><i class="ph-bold ph-globe-hemisphere-west"></i> Medios de pago locales</b>
+                      <span>Agrega conceptos propios de tu país. Al activarlos aparecerán en el chatbot y en el punto de venta.</span>
+                    </div>
+                    <button class="btn btn-ghost" type="button" id="addCustomPaymentMethodBtn">
+                      <i class="ph-bold ph-plus"></i> Agregar medio
+                    </button>
+                  </div>
+                  <div class="custom-payment-list" id="customPaymentMethodsList"></div>
+                </section>
                 <section class="bank-accounts-panel" id="cfgBankAccountsPanel" hidden>
                   <div class="bank-accounts-head">
                     <div>

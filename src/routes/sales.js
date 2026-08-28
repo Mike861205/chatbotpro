@@ -2,6 +2,8 @@ const express = require('express');
 const { requireAuth, requireOwner } = require('../middleware/auth');
 const { ensureCostingSchema, money } = require('../utils/costing');
 const { ensurePurchasingSchema } = require('../utils/purchasing');
+const { getSetting } = require('../db');
+const { parseCustomPaymentMethods, isCustomPaymentMethod } = require('../utils/paymentMethods');
 
 const router = express.Router();
 router.use(requireAuth);
@@ -95,7 +97,7 @@ router.get('/report', async (req, res, next) => {
                ELSE 0::numeric
              END AS payment_transfer,
              CASE
-               WHEN o.payment_method NOT IN ('cash', 'card', 'transfer', 'mixed', 'multiple') AND (o.payment_breakdown IS NULL OR NOT (o.payment_breakdown ~ '^\\s*\\{.*\\}\\s*$')) THEN
+               WHEN o.payment_method NOT IN ('cash', 'card', 'transfer', 'mixed', 'multiple') THEN
                  o.total::numeric
                ELSE 0::numeric
              END AS payment_other
@@ -252,7 +254,25 @@ router.get('/report', async (req, res, next) => {
     const monthlyPurchasesSql = `WITH input AS (SELECT $1::int report_year,$2::int report_month),months AS (SELECT generate_series(make_date(report_year,1,1),make_date(report_year,12,1),interval '1 month')::date purchase_month FROM input) SELECT EXTRACT(MONTH FROM m.purchase_month)::int AS month,COALESCE(SUM(po.total),0)::float AS purchases FROM months m LEFT JOIN {s}.purchase_orders po ON date_trunc('month',po.received_at AT TIME ZONE '${TZ}')::date=m.purchase_month AND po.status='received' ${purchaseBranchClause} GROUP BY m.purchase_month ORDER BY m.purchase_month`;
     const branchPurchasesSql = `WITH input AS (SELECT $1::int report_year,$2::int report_month) SELECT COALESCE(po.branch_id::text,'general') AS key,COALESCE(b.name,NULLIF(po.branch_name,''),'Sin sucursal') AS name,COALESCE(SUM(po.total),0)::float AS purchases FROM {s}.purchase_orders po CROSS JOIN input i LEFT JOIN {s}.branches b ON b.id=po.branch_id WHERE po.status='received' AND EXTRACT(YEAR FROM po.received_at AT TIME ZONE '${TZ}')::int=i.report_year AND EXTRACT(MONTH FROM po.received_at AT TIME ZONE '${TZ}')::int=i.report_month ${purchaseBranchClause} GROUP BY po.branch_id,COALESCE(b.name,NULLIF(po.branch_name,''),'Sin sucursal')`;
 
-    const [dailyRows, monthlyRows, branchRows, dailyExpenseRows, monthlyExpenseRows, branchExpenseRows, dailyPurchaseRows, monthlyPurchaseRows, branchPurchaseRows, branches] = await Promise.all([
+    const customPaymentsSql = `
+      WITH input AS (SELECT $1::int AS report_year, $2::int AS report_month)
+      SELECT o.payment_method AS id,
+             to_char(o.created_at AT TIME ZONE '${TZ}', 'YYYY-MM-DD') AS date,
+             EXTRACT(MONTH FROM o.created_at AT TIME ZONE '${TZ}')::int AS month,
+             COUNT(*)::int AS tickets,
+             COALESCE(SUM(o.total), 0)::float AS total,
+             MAX(CASE WHEN o.payment_breakdown ~ '^\\s*\\{.*\\}\\s*$'
+               THEN NULLIF(o.payment_breakdown::jsonb ->> 'customLabel', '') ELSE NULL END) AS stored_label
+      FROM {s}.orders o CROSS JOIN input i
+      WHERE EXTRACT(YEAR FROM o.created_at AT TIME ZONE '${TZ}')::int = i.report_year
+        AND o.status != 'cancelado'
+        AND o.payment_method LIKE 'custom\\_%' ESCAPE '\\'
+        ${branchFilter.orderClause}
+      GROUP BY o.payment_method, to_char(o.created_at AT TIME ZONE '${TZ}', 'YYYY-MM-DD'),
+               EXTRACT(MONTH FROM o.created_at AT TIME ZONE '${TZ}')
+      ORDER BY o.payment_method, date`;
+
+    const [dailyRows, monthlyRows, branchRows, dailyExpenseRows, monthlyExpenseRows, branchExpenseRows, dailyPurchaseRows, monthlyPurchaseRows, branchPurchaseRows, customPaymentRows, branches, customMethodsRaw] = await Promise.all([
       req.tdb.all(dailySql, params),
       req.tdb.all(monthlySql, params),
       req.tdb.all(branchBreakdownSql, params),
@@ -262,8 +282,27 @@ router.get('/report', async (req, res, next) => {
       req.tdb.all(dailyPurchasesSql, params),
       req.tdb.all(monthlyPurchasesSql, params),
       req.tdb.all(branchPurchasesSql, params),
+      req.tdb.all(customPaymentsSql, params),
       req.tdb.all('SELECT id, name, active FROM {s}.branches ORDER BY active DESC, name ASC'),
+      getSetting(req.tdb, 'custom_payment_methods_json', '[]'),
     ]);
+    const configuredCustomMethods = parseCustomPaymentMethods(customMethodsRaw);
+    const customPaymentIds = [...new Set([
+      ...configuredCustomMethods.filter((method) => method.active).map((method) => method.id),
+      ...customPaymentRows.map((row) => row.id),
+    ])];
+    const customPaymentSummary = (monthFilter = null, dateFilter = '') => customPaymentIds.map((id) => {
+      const rows = customPaymentRows.filter((row) => row.id === id
+        && (monthFilter == null || Number(row.month) === Number(monthFilter))
+        && (!dateFilter || row.date === dateFilter));
+      const configured = configuredCustomMethods.find((method) => method.id === id);
+      return {
+        id,
+        label: configured?.label || rows.find((row) => row.stored_label)?.stored_label || 'Medio personalizado',
+        total: money(rows.reduce((sum, row) => sum + Number(row.total || 0), 0)),
+        tickets: rows.reduce((sum, row) => sum + Number(row.tickets || 0), 0),
+      };
+    });
 
     const dailyExpenseMap = new Map(dailyExpenseRows.map((row) => [row.date, Number(row.expenses || 0)]));
     const monthlyExpenseMap = new Map(monthlyExpenseRows.map((row) => [Number(row.month), Number(row.expenses || 0)]));
@@ -292,6 +331,7 @@ router.get('/report', async (req, res, next) => {
         card,
         transfer,
         other,
+        customPayments: customPaymentSummary(null, row.date),
         expenses,
         purchases,
         cashResult: money(sales - expenses - purchases),
@@ -318,6 +358,7 @@ router.get('/report', async (req, res, next) => {
         card,
         transfer,
         other,
+        customPayments: customPaymentSummary(monthNumber),
         expenses,
         purchases,
         cashResult: money(sales - expenses - purchases),
@@ -374,6 +415,7 @@ router.get('/report', async (req, res, next) => {
           card: selectedMonthCard,
           transfer: selectedMonthTransfer,
           other: selectedMonthOther,
+          custom: customPaymentSummary(month),
         },
         yearSales,
         yearTickets,
@@ -394,6 +436,7 @@ router.get('/report', async (req, res, next) => {
           card: yearCard,
           transfer: yearTransfer,
           other: yearOther,
+          custom: customPaymentSummary(),
         },
         bestDay,
         bestMonth,
@@ -535,6 +578,11 @@ router.get('/detail', async (req, res, next) => {
       req.tdb.all('SELECT id, COALESCE(unit_cost, 0)::float AS unit_cost FROM {s}.products'),
     ]);
     const costMap = new Map(productCosts.map((row) => [Number(row.id), Number(row.unit_cost || 0)]));
+    const configuredCustomMethods = parseCustomPaymentMethods(await getSetting(req.tdb, 'custom_payment_methods_json', '[]'));
+    const customPaymentTotals = new Map(configuredCustomMethods.filter((method) => method.active).map((method) => [
+      method.id,
+      { id: method.id, label: method.label, total: 0, tickets: 0 },
+    ]));
     const paymentTotals = { cash: 0, card: 0, transfer: 0, other: 0 };
     const productMap = new Map();
 
@@ -548,6 +596,16 @@ router.get('/detail', async (req, res, next) => {
         paymentTotals.cash += Number(breakdown.cash || 0);
         paymentTotals.card += Number(breakdown.card || 0);
         paymentTotals.transfer += Number(breakdown.transfer || 0);
+      } else if (isCustomPaymentMethod(row.payment_method)) {
+        const current = customPaymentTotals.get(row.payment_method) || {
+          id: row.payment_method,
+          label: breakdown.customLabel || 'Medio personalizado',
+          total: 0,
+          tickets: 0,
+        };
+        current.total += total;
+        current.tickets += 1;
+        customPaymentTotals.set(row.payment_method, current);
       } else if (Object.hasOwn(paymentTotals, row.payment_method)) {
         paymentTotals[row.payment_method] += total;
       } else {
@@ -625,6 +683,10 @@ router.get('/detail', async (req, res, next) => {
       payments: {
         cash: money(paymentTotals.cash), card: money(paymentTotals.card),
         transfer: money(paymentTotals.transfer), other: money(paymentTotals.other),
+        custom: [...customPaymentTotals.values()].map((method) => ({
+          ...method,
+          total: money(method.total),
+        })),
       },
       sales,
       expenses,

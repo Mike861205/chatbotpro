@@ -11,6 +11,7 @@ const { ensureCostingSchema, itemsCost, preciseCost } = require('../utils/costin
 const { ensurePurchasingSchema } = require('../utils/purchasing');
 const { ensureBranchStockSchema, initializeBranchStock, applyBranchSaleStock, restoreBranchSaleStock } = require('../utils/branchStock');
 const { emitNewOrder, emitSelfServiceStatus } = require('../notifications');
+const { parseCustomPaymentMethods, isCustomPaymentMethod } = require('../utils/paymentMethods');
 
 const router = express.Router();
 router.use(requireAuth);
@@ -266,6 +267,7 @@ async function getSessionTotals(t, sessionId) {
             COALESCE(SUM(CASE WHEN payment_method = 'cash' THEN total ELSE 0 END), 0)::float AS sales_cash_only,
             COALESCE(SUM(CASE WHEN payment_method = 'card' THEN total ELSE 0 END), 0)::float AS sales_card_only,
             COALESCE(SUM(CASE WHEN payment_method = 'transfer' THEN total ELSE 0 END), 0)::float AS sales_transfer_only,
+            COALESCE(SUM(CASE WHEN payment_method NOT IN ('cash','card','transfer','mixed','multiple') THEN total ELSE 0 END), 0)::float AS sales_other_only,
             COALESCE(SUM(CASE WHEN payment_method = 'mixed' THEN total ELSE 0 END), 0)::float AS sales_mixed,
             COALESCE(SUM(CASE WHEN payment_method = 'cash' THEN total WHEN payment_method = 'mixed' THEN COALESCE((payment_breakdown::jsonb ->> 'cash')::numeric, 0) ELSE 0 END), 0)::float AS collected_cash,
             COALESCE(SUM(CASE WHEN payment_method = 'card' THEN total WHEN payment_method = 'mixed' THEN COALESCE((payment_breakdown::jsonb ->> 'card')::numeric, 0) ELSE 0 END), 0)::float AS collected_card,
@@ -292,6 +294,34 @@ async function getSessionTotals(t, sessionId) {
      WHERE session_id = $1`,
     [sessionId]
   );
+  const configuredCustomMethods = parseCustomPaymentMethods(await getSetting(t, 'custom_payment_methods_json', '[]'));
+  const customRows = await t.all(
+    `SELECT payment_method AS id, COUNT(*)::int AS tickets, COALESCE(SUM(total), 0)::float AS total,
+            MAX(CASE WHEN payment_breakdown ~ '^\\s*\\{.*\\}\\s*$'
+              THEN NULLIF(payment_breakdown::jsonb ->> 'customLabel', '') ELSE NULL END) AS stored_label
+     FROM {s}.orders
+     WHERE channel = 'pos' AND pos_session_id = $1 AND status != 'cancelado'
+       AND payment_method LIKE 'custom\\_%' ESCAPE '\\'
+     GROUP BY payment_method
+     ORDER BY payment_method`,
+    [sessionId]
+  );
+  const customRowsById = new Map(customRows.map((row) => [row.id, row]));
+  const customIds = [...new Set([
+    ...configuredCustomMethods.filter((method) => method.active).map((method) => method.id),
+    ...customRows.map((row) => row.id),
+  ])];
+  const customPayments = customIds.map((id) => {
+    const configured = configuredCustomMethods.find((method) => method.id === id);
+    const row = customRowsById.get(id);
+    return {
+      id,
+      label: configured?.label || row?.stored_label || 'Medio personalizado',
+      total: n(row?.total),
+      tickets: Number(row?.tickets || 0),
+      active: configured?.active !== false,
+    };
+  });
   const tables = await getSessionTableSummary(t, sessionId);
   return {
     tickets: Number(sales?.tickets || 0),
@@ -301,7 +331,9 @@ async function getSessionTotals(t, sessionId) {
       card: n(sales?.sales_card_only),
       transfer: n(sales?.sales_transfer_only),
       mixed: n(sales?.sales_mixed),
+      other: n(sales?.sales_other_only),
     },
+    customPayments,
     collected: {
       cash: n(sales?.collected_cash),
       card: n(sales?.collected_card),
@@ -396,13 +428,14 @@ function paymentBreakdownForMethod(method, total) {
   const amount = n(total);
   if (method === 'card') return { cash: 0, card: amount, transfer: 0 };
   if (method === 'transfer') return { cash: 0, card: 0, transfer: amount };
+  if (isCustomPaymentMethod(method)) return { cash: 0, card: 0, transfer: 0, [method]: amount };
   return { cash: amount, card: 0, transfer: 0 };
 }
 
 async function loadChatbotOrderForImport(t, orderId) {
   return t.get(
     `SELECT o.id, o.customer_id, o.items, o.subtotal::float AS subtotal, o.total::float AS total, o.status, o.channel, o.delivery, o.notes, o.order_notes,
-            o.payment_method, o.pickup_branch_id, o.pickup_branch_name, o.customer_location_text, o.customer_location_resolved,
+            o.payment_method, o.pickup_branch_id, o.pickup_branch_name, o.payment_breakdown, o.customer_location_text, o.customer_location_resolved,
             o.receiving_mode_label, o.receiving_mode_behavior, o.delivery_address, o.delivery_neighborhood, o.delivery_reference,
             o.delivery_fee::float AS delivery_fee, o.delivery_zone_name, o.service_branch_id, o.service_branch_name,o.branch_stock_applied,
             to_char(o.created_at AT TIME ZONE '${tenantTimeZone(t)}', 'DD Mon YYYY, HH24:MI') AS created_at,
@@ -625,7 +658,7 @@ async function listSoldQtyByProduct(t) {
   return new Map(rows.map((row) => [Number(row.product_id), Number(row.sold_qty || 0)]));
 }
 
-function normalizePayment(method, paymentInput, total, cashReceivedInput) {
+function normalizePayment(method, paymentInput, total, cashReceivedInput, customMethods = []) {
   const breakdown = {
     cash: 0,
     card: 0,
@@ -635,7 +668,14 @@ function normalizePayment(method, paymentInput, total, cashReceivedInput) {
   let cashChange = 0;
   const cardType = String(paymentInput?.cardType || paymentInput?.card_type || '').trim().toLowerCase();
 
-  if (!PAYMENT_METHODS.has(method)) throw badRequest('Método de pago inválido');
+  const customMethod = customMethods.find((item) => item.id === method);
+  if (!PAYMENT_METHODS.has(method) && !customMethod) throw badRequest('Método de pago inválido');
+
+  if (isCustomPaymentMethod(method)) {
+    breakdown[method] = n(total);
+    breakdown.customLabel = customMethod.label;
+    return { method, breakdown, cashReceived: 0, cashChange: 0 };
+  }
 
   if (method === 'cash') {
     breakdown.cash = n(total);
@@ -674,6 +714,11 @@ function normalizePayment(method, paymentInput, total, cashReceivedInput) {
     cashChange = n(cashReceived - breakdown.cash);
   }
   return { method, breakdown, cashReceived, cashChange };
+}
+
+async function normalizeTenantPayment(t, method, paymentInput, total, cashReceivedInput) {
+  const customMethods = parseCustomPaymentMethods(await getSetting(t, 'custom_payment_methods_json', '[]'));
+  return normalizePayment(method, paymentInput, total, cashReceivedInput, customMethods);
 }
 
 async function normalizePosItems(t, inputItems) {
@@ -1065,7 +1110,7 @@ router.post('/table-accounts/:id/checkout', async (req, res, next) => {
       if (!items.length) throw badRequest('La mesa no tiene productos para cobrar');
       const subtotal = n(items.reduce((sum, item) => sum + n(item.price) * Number(item.qty), 0));
       const paymentMethod = String(req.body?.paymentMethod || '').trim();
-      const payment = normalizePayment(paymentMethod, req.body?.payments || {}, subtotal, req.body?.cashReceived);
+      const payment = await normalizeTenantPayment(tx, paymentMethod, req.body?.payments || {}, subtotal, req.body?.cashReceived);
       const waiterName = String(account.waiter_name || '').trim();
       const userNote = String(req.body?.notes || '').trim().slice(0, 180);
       const notes = [`Mesa ${account.table_number}`, `Mesero: ${waiterName}`, userNote].filter(Boolean).join(' · ');
@@ -1415,10 +1460,15 @@ router.post('/chatbot-orders/:id/import', async (req, res, next) => {
       });
     }
 
-    const paymentMethod = PAYMENT_METHODS.has(sourceOrder.payment_method)
+    const customPaymentMethods = parseCustomPaymentMethods(await getSetting(req.tdb, 'custom_payment_methods_json', '[]'));
+    const customPaymentMethod = customPaymentMethods.find((item) => item.id === sourceOrder.payment_method);
+    const paymentMethod = PAYMENT_METHODS.has(sourceOrder.payment_method) || isCustomPaymentMethod(sourceOrder.payment_method)
       ? sourceOrder.payment_method
       : 'cash';
     const paymentBreakdown = paymentBreakdownForMethod(paymentMethod, sourceOrder.total);
+    if (isCustomPaymentMethod(paymentMethod)) {
+      paymentBreakdown.customLabel = customPaymentMethod?.label || parseJsonObject(sourceOrder.payment_breakdown).customLabel || 'Medio personalizado';
+    }
     const mergedNote = chatbotSummaryNote(sourceOrder);
     const deliveryAddress = String(sourceOrder.delivery_address || decrypt(sourceOrder.address_enc) || '').trim().slice(0, 300);
     const deliveryNeighborhood = String(sourceOrder.delivery_neighborhood || '').trim().slice(0, 160);
@@ -1625,8 +1675,48 @@ router.post('/movements', async (req, res, next) => {
   }
 });
 
+async function findPosSaleByIdempotency(t, key) {
+  if (!key) return null;
+  return t.get(
+    `SELECT id, items, subtotal::float AS subtotal, total::float AS total, delivery_fee::float AS delivery_fee,
+            payment_method, payment_breakdown, cash_received::float AS cash_received, cash_change::float AS cash_change,
+            notes, delivery, delivery_address, delivery_neighborhood, delivery_reference, invoice_code, invoice_token
+     FROM {s}.orders
+     WHERE channel = 'pos' AND pos_idempotency_key = $1
+     LIMIT 1`,
+    [key]
+  );
+}
+
+function posSaleResponse(row) {
+  return {
+    id: Number(row.id),
+    subtotal: n(row.subtotal),
+    deliveryFee: n(row.delivery_fee),
+    total: n(row.total),
+    items: parseJsonArray(row.items),
+    paymentMethod: row.payment_method,
+    paymentBreakdown: parseJsonObject(row.payment_breakdown),
+    cashReceived: n(row.cash_received),
+    cashChange: n(row.cash_change),
+    notes: row.notes || '',
+    delivery: row.delivery || 'mostrador',
+    deliveryAddress: row.delivery_address || '',
+    deliveryNeighborhood: row.delivery_neighborhood || '',
+    deliveryReference: row.delivery_reference || '',
+    invoiceCode: row.invoice_code,
+    invoiceToken: row.invoice_token,
+  };
+}
+
 async function createPosSale(req, res, next) {
+  const idempotencyKey = String(req.body?.idempotencyKey || req.get('x-idempotency-key') || '').trim();
   try {
+    if (idempotencyKey && !/^[a-zA-Z0-9_-]{12,80}$/.test(idempotencyKey)) {
+      throw badRequest('La clave de seguridad de la venta no es válida');
+    }
+    const existingSale = await findPosSaleByIdempotency(req.tdb, idempotencyKey);
+    if (existingSale) return res.json({ ok: true, duplicate: true, sale: posSaleResponse(existingSale) });
     const isDelivery = Boolean(req.body?.isDelivery);
     const deliveryFee = isDelivery ? Math.max(0, n(req.body?.deliveryFee)) : 0;
     const deliveryType = isDelivery ? 'domicilio' : 'mostrador';
@@ -1645,12 +1735,12 @@ async function createPosSale(req, res, next) {
       const subtotal = n(saleItems.reduce((sum, item) => sum + item.price * item.qty, 0));
       const total = n(subtotal + deliveryFee);
       const paymentMethod = String(req.body?.paymentMethod || '').trim();
-      const payment = normalizePayment(paymentMethod, req.body?.payments || {}, total, req.body?.cashReceived);
+      const payment = await normalizeTenantPayment(tx, paymentMethod, req.body?.payments || {}, total, req.body?.cashReceived);
       const cogsTotal = itemsCost(saleItems);
       const row = await tx.get(
         `INSERT INTO {s}.orders
-         (customer_id, items, subtotal, total, status, channel, source_channel, delivery, notes, payment_method, payment_breakdown, cash_received, cash_change, pos_session_id, delivery_fee, service_branch_id, service_branch_name, cogs_total, order_notes, delivery_address, delivery_neighborhood, delivery_reference)
-         VALUES (NULL, $1, $2, $3, 'confirmado', 'pos', 'pos', $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
+         (customer_id, items, subtotal, total, status, channel, source_channel, delivery, notes, payment_method, payment_breakdown, cash_received, cash_change, pos_session_id, delivery_fee, service_branch_id, service_branch_name, cogs_total, order_notes, delivery_address, delivery_neighborhood, delivery_reference, pos_idempotency_key)
+         VALUES (NULL, $1, $2, $3, 'confirmado', 'pos', 'pos', $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
          RETURNING id, invoice_code, invoice_token`,
         [
           JSON.stringify(saleItems),
@@ -1671,6 +1761,7 @@ async function createPosSale(req, res, next) {
           deliveryAddress,
           deliveryNeighborhood,
           deliveryReference,
+          idempotencyKey,
         ]
       );
       if (await decrementBranchStockForSale(tx, session.branch_id, saleItems)) {
@@ -1683,8 +1774,6 @@ async function createPosSale(req, res, next) {
         subtotal,
         total,
         payment,
-        totals: await getSessionTotals(tx, session.id),
-        recentSales: await listRecentSales(tx, session.id),
       };
     });
 
@@ -1708,11 +1797,12 @@ async function createPosSale(req, res, next) {
         invoiceCode: result.row.invoice_code,
         invoiceToken: result.row.invoice_token,
       },
-      totals: result.totals,
-      expectedCash: expectedCashForSession(result.session, result.totals),
-      recentSales: result.recentSales,
     });
   } catch (e) {
+    if (e.code === '23505' && idempotencyKey) {
+      const existingSale = await findPosSaleByIdempotency(req.tdb, idempotencyKey);
+      if (existingSale) return res.json({ ok: true, duplicate: true, sale: posSaleResponse(existingSale) });
+    }
     if (e.statusCode === 400) return res.status(400).json({ error: e.message });
     console.error('[pos][sale] error:', e?.message || e);
     next(e);
@@ -1738,7 +1828,8 @@ router.post('/self-service/:id/checkout', async (req, res, next) => {
       if (Number(order.service_branch_id || 0) !== Number(session.branch_id || 0)) {
         throw Object.assign(new Error('El pedido pertenece a otra sucursal'), { statusCode: 403 });
       }
-      const payment = normalizePayment(
+      const payment = await normalizeTenantPayment(
+        tx,
         String(req.body?.paymentMethod || '').trim(),
         req.body?.payments || {},
         Number(order.total || 0),
@@ -1895,7 +1986,7 @@ router.put('/sales/:id/payment', async (req, res, next) => {
     if (globalInvoice) return res.status(409).json({ error: 'No puedes cambiar el pago de una venta incluida en una factura global' });
 
     const paymentMethod = String(req.body?.paymentMethod || '').trim();
-    const payment = normalizePayment(paymentMethod, req.body?.payments || {}, n(sale.total), req.body?.cashReceived);
+    const payment = await normalizeTenantPayment(req.tdb, paymentMethod, req.body?.payments || {}, n(sale.total), req.body?.cashReceived);
     await req.tdb.run(
       `UPDATE {s}.orders
        SET payment_method = $1,

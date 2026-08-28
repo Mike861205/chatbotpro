@@ -11,6 +11,7 @@ test('Mercado Pago Point usa Orders, idempotencia y terminal virtual de sandbox'
   assert.match(point, /\/v1\/orders/);
   assert.match(point, /X-Idempotency-Key/);
   assert.match(point, /NEWLAND_N950__SBX0000001/);
+  assert.match(point, /config\.MERCADO_PAGO_POINT_MODE === 'sandbox'\s*\? sandboxTerminal/);
   assert.match(point, /config\.NODE_ENV !== 'production'/);
   assert.match(point, /print_on_terminal: 'no_ticket'/);
   assert.match(point, /status: 'processed'/);

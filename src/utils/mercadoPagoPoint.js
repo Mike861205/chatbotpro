@@ -7,9 +7,10 @@ const SAFE_TERMINAL_ID = /^[A-Z0-9_-]{4,100}$/i;
 const mockOrders = new Map();
 
 function pointConfiguration(terminalId = '') {
-  const resolvedTerminal = String(terminalId || config.MERCADO_PAGO_POINT_TERMINAL_ID || (
-    config.MERCADO_PAGO_POINT_MODE === 'sandbox' ? 'NEWLAND_N950__SBX0000001' : ''
-  )).trim();
+  const sandboxTerminal = config.MERCADO_PAGO_POINT_TERMINAL_ID || 'NEWLAND_N950__SBX0000001';
+  const resolvedTerminal = String(config.MERCADO_PAGO_POINT_MODE === 'sandbox'
+    ? sandboxTerminal
+    : terminalId || config.MERCADO_PAGO_POINT_TERMINAL_ID).trim();
   const testRuntime = config.NODE_ENV !== 'production';
   const mock = testRuntime && config.MERCADO_PAGO_POINT_MODE === 'sandbox' && config.MERCADO_PAGO_POINT_MOCK;
   return {
@@ -37,7 +38,8 @@ function providerErrorMessage(payload, status) {
   if (status === 401) return 'Las credenciales de Mercado Pago no son validas para Point';
   if (status === 403) return 'La terminal Point no esta vinculada a esta cuenta de Mercado Pago';
   if (status === 409 && String(detail).includes('already_queued')) return 'La terminal tiene otro cobro pendiente';
-  return `Mercado Pago no pudo procesar la solicitud${detail ? `: ${String(detail).slice(0, 140)}` : ''}`;
+  const detailSuffix = detail ? `: ${String(detail).slice(0, 140)}` : '';
+  return `Mercado Pago no pudo procesar la solicitud${detailSuffix}`;
 }
 
 async function request(path, { method = 'GET', body, idempotencyKey, extraHeaders = {} } = {}) {

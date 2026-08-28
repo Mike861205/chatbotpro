@@ -642,6 +642,9 @@ async function createTenantSchema(slug) {
     ALTER TABLE "${s}".orders ADD COLUMN IF NOT EXISTS payment_provider TEXT DEFAULT '';
     ALTER TABLE "${s}".orders ADD COLUMN IF NOT EXISTS payment_reference TEXT DEFAULT '';
     ALTER TABLE "${s}".orders ADD COLUMN IF NOT EXISTS source_channel TEXT DEFAULT '';
+    ALTER TABLE "${s}".orders ADD COLUMN IF NOT EXISTS pos_idempotency_key TEXT DEFAULT '';
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_${s}_orders_pos_idempotency
+      ON "${s}".orders(pos_idempotency_key) WHERE COALESCE(pos_idempotency_key, '') <> '';
     UPDATE "${s}".orders
        SET source_channel = CASE
          WHEN self_service_device_id IS NOT NULL OR COALESCE(self_service_folio, '') <> '' THEN 'kiosk'
@@ -1168,6 +1171,7 @@ async function ensureTenantDefaults(slug, businessName = slug, regional = {}) {
     chatbot_payment_pickup_cash: '1',
     chatbot_payment_pickup_transfer: '0',
     chatbot_payment_pickup_card: '0',
+    custom_payment_methods_json: '[]',
     chatbot_upsell_enabled: '0',
     chatbot_upsell_question: '¿Deseas agregar alguno de estos productos a tu pedido?',
     chatbot_upsell_product_ids: '[]',

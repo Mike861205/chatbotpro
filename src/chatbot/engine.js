@@ -8,6 +8,7 @@ const { encrypt, decrypt, lookupHash } = require('../utils/crypto');
 const { emitNewOrder, emitSessionUpdate } = require('../notifications');
 const { ensurePurchasingSchema } = require('../utils/purchasing');
 const { ensureBranchStockSchema, initializeBranchStock, applyBranchSaleStock } = require('../utils/branchStock');
+const { parseCustomPaymentMethods } = require('../utils/paymentMethods');
 
 let aiConfigCache = { expiresAt: 0, value: null };
 const aiClientCache = new Map();
@@ -354,11 +355,14 @@ function paymentMethodLabel(method) {
   }[String(method || '')] || 'Sin definir';
 }
 
-function enabledPaymentOptions(settings) {
+function enabledPaymentOptions(settings, customMethods = []) {
   const options = [];
   if (settings.cash) options.push({ label: '💵 Efectivo', value: 'pay_cash', method: 'cash' });
   if (settings.transfer) options.push({ label: '🏦 Transferencia', value: 'pay_transfer', method: 'transfer' });
   if (settings.card) options.push({ label: '💳 Tarjeta', value: 'pay_card', method: 'card' });
+  for (const method of customMethods.filter((item) => item.active)) {
+    options.push({ label: `📲 ${method.label}`, value: `pay_${method.id}`, method: method.id, plainLabel: method.label });
+  }
   return options;
 }
 
@@ -1049,7 +1053,7 @@ function buildOrderText(businessName, cart, customer, delivery, currency, labels
     '',
     `👤 ${customer.name}`,
     `📞 ${customer.phone}`,
-    `💳 Pago: ${paymentMethodLabel(customer.paymentMethod)}`,
+    `💳 Pago: ${customer.paymentMethodLabel || paymentMethodLabel(customer.paymentMethod)}`,
     isAddressDelivery
       ? `${addressLbl}: ${customer.address}`
       : `${receivingLabel}${customer.branchName ? `: ${customer.branchName}` : ''}`,
@@ -1413,6 +1417,7 @@ async function handleMessage(t, slug, sessionId, rawInput) {
     transfer: (await getSetting(t, 'chatbot_payment_pickup_transfer', '0')) === '1',
     card: (await getSetting(t, 'chatbot_payment_pickup_card', '0')) === '1',
   };
+  const customPaymentMethods = parseCustomPaymentMethods(await getSetting(t, 'custom_payment_methods_json', '[]'));
   const bankAccounts = parseBankAccounts(await getSetting(t, 'chatbot_bank_accounts_json', '[]'));
   const upsellEnabled = (await getSetting(t, 'chatbot_upsell_enabled', '0')) === '1';
   const legacyUpsellQuestion = String(
@@ -1490,8 +1495,8 @@ async function handleMessage(t, slug, sessionId, rawInput) {
 
   const goToPaymentOrConfirm = () => {
     const chatPaymentOptions = isAddressDelivery()
-      ? enabledPaymentOptions(chatPaymentDeliverySettings)
-      : enabledPaymentOptions(chatPaymentPickupSettings);
+      ? enabledPaymentOptions(chatPaymentDeliverySettings, customPaymentMethods)
+      : enabledPaymentOptions(chatPaymentPickupSettings, customPaymentMethods);
     if (!chatPaymentOptions.length) {
       state.customer.paymentMethod = 'cash';
       state.step = 'confirm';
@@ -2591,19 +2596,20 @@ async function handleMessage(t, slug, sessionId, rawInput) {
 
   if (state.step === 'ask_payment_method') {
     const chatPaymentOptions = isAddressDelivery()
-      ? enabledPaymentOptions(chatPaymentDeliverySettings)
-      : enabledPaymentOptions(chatPaymentPickupSettings);
+      ? enabledPaymentOptions(chatPaymentDeliverySettings, customPaymentMethods)
+      : enabledPaymentOptions(chatPaymentPickupSettings, customPaymentMethods);
     const selected = {
       pay_cash: 'cash',
       pay_transfer: 'transfer',
       pay_card: 'card',
-    }[lower];
+    }[lower] || (lower.startsWith('pay_custom_') ? lower.slice(4) : '');
     if (!selected || !chatPaymentOptions.some((opt) => opt.method === selected)) {
       reply.messages = ['Elige una opción de pago válida para continuar:'];
       reply.options = chatPaymentOptions.map((opt) => ({ label: opt.label, value: opt.value }));
       return finish();
     }
     state.customer.paymentMethod = selected;
+    state.customer.paymentMethodLabel = chatPaymentOptions.find((opt) => opt.method === selected)?.plainLabel || paymentMethodLabel(selected);
     state.step = 'confirm';
     if (selected === 'transfer' && bankAccounts.length) {
       attachBankAccounts();
@@ -2675,7 +2681,14 @@ async function handleMessage(t, slug, sessionId, rawInput) {
           isAddressDelivery() ? (state.customer.reference || '') : '',
         ]
       );
-      await t.run('UPDATE {s}.orders SET payment_method = $1 WHERE id = $2', [state.customer.paymentMethod || '', orderRow.id]);
+      const paymentBreakdown = String(state.customer.paymentMethod || '').startsWith('custom_')
+        ? { customLabel: state.customer.paymentMethodLabel || 'Medio personalizado' }
+        : {};
+      await t.run('UPDATE {s}.orders SET payment_method = $1, payment_breakdown = $2 WHERE id = $3', [
+        state.customer.paymentMethod || '',
+        JSON.stringify(paymentBreakdown),
+        orderRow.id,
+      ]);
       if (await applyBranchSaleStock(t, serviceBranchId, state.cart)) {
         await t.run('UPDATE {s}.orders SET branch_stock_applied=1 WHERE id=$1', [orderRow.id]);
       }
@@ -2783,7 +2796,7 @@ function confirmText(state, businessName, currency, labels = RESTAURANT_LABELS) 
   return (
     `${pricingSummary(state, currency, labels)}\n\n` +
     `👤 ${c.name}\n📞 ${c.phone}\n` +
-    `💳 Pago: ${paymentMethodLabel(c.paymentMethod)}\n` +
+    `💳 Pago: ${c.paymentMethodLabel || paymentMethodLabel(c.paymentMethod)}\n` +
     (isAddressDelivery
       ? `📍 ${c.address}`
       : `${receivingLabel}${c.branchName ? `: ${c.branchName}` : ''}`) +
