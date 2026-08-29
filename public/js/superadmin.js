@@ -475,7 +475,7 @@ function renderTenantTable() {
       <td>${salesStageChip(t.sales_stage)}${t.next_follow_up_at ? `<div class="meta">Próximo: ${fmtDateTime(t.next_follow_up_at)}</div>` : ''}</td>
       <td>${fmtDate(t.created_at)}</td>
       <td>${t.module_last_seen ? fmtDate(t.module_last_seen) : '<span class="meta">—</span>'}</td>
-      <td>${statusChip('account', t.account_status)}</td>
+      <td>${statusChip('account', t.account_status)}${t.trial_status === 'expired' ? '<div class="meta"><span class="tag err">Prueba vencida</span></div>' : (t.trial_status === 'active' ? `<div class="meta">Prueba: ${Math.max(0, Number(t.trial_ends_on ? Math.ceil((new Date(t.trial_ends_on) - new Date()) / 86400000) : 0))} días</div>` : '')}</td>
       <td>${esc(t.plan_name || 'starter')}<div class="meta">Hasta ${Number(t.branch_limit || 2)} sucursales activas</div></td>
       <td>${moduleUsageButton(t, 'tenant')}</td>
       <td>

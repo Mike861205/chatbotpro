@@ -109,6 +109,9 @@ async function initMaster() {
       invoicing_plan_bonus_granted_at TIMESTAMPTZ,
       invoicing_activated_by TEXT DEFAULT '',
       notes TEXT DEFAULT '',
+      trial_started_on DATE,
+      trial_ends_on DATE,
+      trial_status TEXT NOT NULL DEFAULT 'not_applicable',
       created_at TIMESTAMPTZ DEFAULT now()
     );
     CREATE TABLE IF NOT EXISTS demo_leads (
@@ -138,6 +141,8 @@ async function initMaster() {
       cashier_slug TEXT,
       active INTEGER DEFAULT 1,
       onboarding_completed INTEGER NOT NULL DEFAULT 1,
+      job_title TEXT DEFAULT '',
+      permissions_json TEXT NOT NULL DEFAULT '[]',
       created_at TIMESTAMPTZ DEFAULT now()
     );
     CREATE TABLE IF NOT EXISTS superadmin_users (
@@ -226,10 +231,16 @@ async function initMaster() {
   await q(`ALTER TABLE tenants ALTER COLUMN invoicing_enabled SET DEFAULT 0`);
   await q(`ALTER TABLE tenants ALTER COLUMN invoicing_enabled SET NOT NULL`);
   await q(`ALTER TABLE tenants ADD COLUMN IF NOT EXISTS notes TEXT DEFAULT ''`);
+  await q(`ALTER TABLE tenants ADD COLUMN IF NOT EXISTS trial_started_on DATE`);
+  await q(`ALTER TABLE tenants ADD COLUMN IF NOT EXISTS trial_ends_on DATE`);
+  await q(`ALTER TABLE tenants ADD COLUMN IF NOT EXISTS trial_status TEXT NOT NULL DEFAULT 'not_applicable'`);
+  await q(`ALTER TABLE tenants ADD COLUMN IF NOT EXISTS hidden_modules_json TEXT NOT NULL DEFAULT '[]'`);
   await q(`ALTER TABLE tenants ADD COLUMN IF NOT EXISTS reseller_id INTEGER REFERENCES resellers(id) ON DELETE SET NULL`);
   await q(`ALTER TABLE tenants ADD COLUMN IF NOT EXISTS phone_country TEXT DEFAULT ''`);
   await q(`ALTER TABLE tenants ADD COLUMN IF NOT EXISTS phone_calling_code TEXT DEFAULT ''`);
   await q(`ALTER TABLE tenants ADD COLUMN IF NOT EXISTS timezone TEXT`);
+  await q(`ALTER TABLE users ADD COLUMN IF NOT EXISTS job_title TEXT DEFAULT ''`);
+  await q(`ALTER TABLE users ADD COLUMN IF NOT EXISTS permissions_json TEXT NOT NULL DEFAULT '[]'`);
   await q(`
     UPDATE tenants SET timezone = CASE phone_country
       WHEN 'GT' THEN 'America/Guatemala' WHEN 'BZ' THEN 'America/Belize'
@@ -1322,6 +1333,14 @@ async function setSuperAdminSetting(key, value) {
 }
 
 async function refreshTenantBillingStatuses() {
+  const trialExpired = await q(
+    `UPDATE tenants
+     SET trial_status = 'expired', account_status = 'inactive'
+     WHERE trial_status = 'active'
+       AND customer_since IS NULL
+       AND trial_ends_on IS NOT NULL
+       AND trial_ends_on <= (now() AT TIME ZONE timezone)::date`
+  );
   const dueUpdated = await q(
     `UPDATE tenants
      SET billing_status = 'due'
@@ -1339,6 +1358,7 @@ async function refreshTenantBillingStatuses() {
   );
 
   return {
+    trialsExpired: Number(trialExpired.rowCount || 0),
     movedToDue: Number(dueUpdated.rowCount || 0),
     movedToSuspended: Number(suspendedUpdated.rowCount || 0),
   };

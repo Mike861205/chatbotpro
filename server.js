@@ -61,6 +61,7 @@ app.use('/api/branch-stock', require('./src/routes/branchStock'));
 app.use('/api/settings', require('./src/routes/settings'));
 app.use('/api/branches', require('./src/routes/branches'));
 app.use('/api/cashiers', require('./src/routes/cashiers'));
+app.use('/api/users', require('./src/routes/users'));
 app.use('/api/pos', require('./src/routes/pos'));
 app.use('/api/chat', chatLimiter, require('./src/routes/chatbot'));
 app.use('/api/superadmin', require('./src/routes/superadmin'));
@@ -166,6 +167,8 @@ initMaster()
           const tenantResult = await q(
             `SELECT slug FROM tenants
              WHERE slug = $1 AND account_status = 'active' AND billing_status <> 'suspended'
+               AND NOT (trial_status IN ('active', 'expired') AND customer_since IS NULL
+                 AND trial_ends_on IS NOT NULL AND trial_ends_on <= (now() AT TIME ZONE timezone)::date)
              LIMIT 1`,
             [kdsSlug]
           );
@@ -200,11 +203,21 @@ initMaster()
         const tenantSlug = decoded?.slug;
         if (!tenantSlug || decoded.typ !== scope) return next(new Error('auth'));
         const [{ rows: tRows }, { rows: uRows }] = await Promise.all([
-          q('SELECT slug FROM tenants WHERE slug = $1 AND account_status = $2', [tenantSlug, 'active']),
-          q('SELECT role FROM users WHERE id = $1 AND active = 1', [decoded.uid]),
+          q(`SELECT slug FROM tenants
+             WHERE slug = $1 AND account_status = $2 AND billing_status <> 'suspended'
+               AND NOT (trial_status IN ('active', 'expired') AND customer_since IS NULL
+                 AND trial_ends_on IS NOT NULL AND trial_ends_on <= (now() AT TIME ZONE timezone)::date)`, [tenantSlug, 'active']),
+          q('SELECT role, permissions_json FROM users WHERE id = $1 AND active = 1', [decoded.uid]),
         ]);
         if (!tRows[0]) return next(new Error('auth'));
-        if (uRows[0]?.role !== scope) return next(new Error('auth'));
+        const sessionRole = uRows[0]?.role;
+        const roleMatchesScope = scope === 'owner' ? ['owner', 'staff'].includes(sessionRole) : sessionRole === 'cashier';
+        if (!roleMatchesScope) return next(new Error('auth'));
+        if (sessionRole === 'staff') {
+          let permissions = [];
+          try { permissions = JSON.parse(uRows[0]?.permissions_json || '[]'); } catch {}
+          if (!permissions.some((key) => ['pedidos', 'pos', 'cortes', 'cancelaciones'].includes(key))) return next(new Error('auth'));
+        }
         socket.tenantSlug = tenantSlug;
         socket.clientType = scope;
         next();

@@ -446,7 +446,7 @@
       <button id="cartCheckout">Sería todo, gracias. <i class="ph-bold ph-arrow-right"></i></button>
     </div>
     <div class="chat-stage">
-      <div class="floating-bg">
+      <div class="floating-bg" id="floatingBg" aria-hidden="true">
         <div class="floating-icon">🍕</div>
         <div class="floating-icon">💵</div>
         <div class="floating-icon">🛵</div>
@@ -508,6 +508,18 @@
     }
     function scrollDown() { messagesEl.scrollTop = messagesEl.scrollHeight; }
 
+    function renderFloatingBackground(icons) {
+      const host = document.getElementById('floatingBg');
+      if (!host) return;
+      host.replaceChildren();
+      (Array.isArray(icons) ? icons : []).slice(0, 8).forEach((icon) => {
+        const item = document.createElement('div');
+        item.className = 'floating-icon';
+        item.textContent = String(icon || '');
+        host.appendChild(item);
+      });
+    }
+
     function addMsg(text, who) {
       const div = document.createElement('div');
       div.className = 'msg ' + who;
@@ -543,14 +555,15 @@
       }
     }
 
-    function renderBankAccounts(accounts) {
+    function renderBankAccounts(accounts, title = 'Datos para Transferencia') {
       if (!Array.isArray(accounts) || !accounts.length) return false;
-      const typeLabels = { account: 'Cuenta', clabe: 'CLABE', card: 'Tarjeta' };
+      title = String(title || 'Datos para Transferencia');
+      const typeLabels = { account: 'Cuenta', clabe: 'CLABE', card: 'Tarjeta', phone: 'Teléfono', document: 'Documento', email: 'Correo', other: 'Dato de pago' };
       const card = document.createElement('section');
       card.className = 'bank-transfer-card';
       card.innerHTML = `
         <div class="bank-transfer-head">
-          <div><b><i class="ph-bold ph-bank"></i> Datos para transferir</b><small>Elige qué información copiar</small></div>
+          <div><b><i class="ph-bold ph-bank"></i> ${esc(title)}</b><small>Elige qué información copiar</small></div>
           <button class="bank-copy-all" type="button"><i class="ph-bold ph-copy"></i> Copiar todo</button>
         </div>
         <div class="bank-transfer-list"></div>
@@ -742,10 +755,10 @@
 
     function renderReply(data) {
       hideTyping();
-      const bankAccountsRendered = renderBankAccounts(data.bankAccounts);
+      const bankAccountsRendered = renderBankAccounts(data.bankAccounts, data.bankAccountTitle);
       const messages = Array.isArray(data.messages) ? data.messages : [];
       messages
-        .filter((message) => !bankAccountsRendered || !String(message).startsWith('Datos para realizar tu transferencia:'))
+        .filter((message) => !bankAccountsRendered || !String(message).startsWith('Datos para realizar tu pago con '))
         .forEach((message) => addMsg(message, 'bot'));
 
       if (data.products && data.products.length) {
@@ -939,6 +952,7 @@
         document.getElementById('bizName').textContent = info.businessName;
         if (info.primaryColor) document.documentElement.style.setProperty('--primary', info.primaryColor);
         if (info.logo) document.getElementById('bizLogo').innerHTML = `<img src="${esc(info.logo)}" alt="">`;
+        renderFloatingBackground(info.floatingIcons);
         send('start', null);
       } catch {
         document.getElementById('bizName').textContent = 'Negocio no encontrado';

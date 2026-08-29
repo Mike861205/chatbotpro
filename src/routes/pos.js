@@ -3,7 +3,7 @@ const bcrypt = require('bcryptjs');
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const config = require('../config');
-const { requireAuth, requireOwner } = require('../middleware/auth');
+const { requireAuth, requireOwner, requireModules } = require('../middleware/auth');
 const { getSetting } = require('../db');
 const { decrypt } = require('../utils/crypto');
 const { operationalOrderNote } = require('../utils/orderNotes');
@@ -15,6 +15,7 @@ const { parseCustomPaymentMethods, isCustomPaymentMethod } = require('../utils/p
 
 const router = express.Router();
 router.use(requireAuth);
+router.use(requireModules('pos', 'cortes', 'cancelaciones'));
 router.use(async (req, res, next) => {
   try {
     await ensureCostingSchema(req.tdb);

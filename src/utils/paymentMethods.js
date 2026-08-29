@@ -1,4 +1,33 @@
 const CORE_PAYMENT_METHOD_IDS = new Set(['cash', 'card', 'transfer', 'mixed', 'multiple']);
+const ACCOUNT_IDENTIFIER_TYPES = new Set(['account', 'clabe', 'card', 'phone', 'document', 'email', 'other']);
+
+function normalizePaymentAccounts(raw, options = {}) {
+  const { context = 'cuentas', required = false } = options;
+  let accounts;
+  try {
+    accounts = Array.isArray(raw) ? raw : JSON.parse(String(raw || '[]'));
+  } catch {
+    throw new Error(`La configuración de ${context} no es válida`);
+  }
+  if (!Array.isArray(accounts) || accounts.length > 10) {
+    throw new Error(`Puedes configurar hasta 10 cuentas en ${context}`);
+  }
+  if (required && !accounts.length) {
+    throw new Error(`Agrega al menos una cuenta en ${context}`);
+  }
+  return accounts.map((account) => {
+    const bankName = String(account?.bankName || '').trim().slice(0, 80);
+    const holderName = String(account?.holderName || '').trim().slice(0, 100);
+    const identifier = String(account?.identifier || '').trim().slice(0, 80);
+    const identifierType = ACCOUNT_IDENTIFIER_TYPES.has(account?.identifierType)
+      ? account.identifierType
+      : '';
+    if (!bankName || !holderName || !identifier || !identifierType) {
+      throw new Error(`Completa institución, titular, tipo y dato en cada cuenta de ${context}`);
+    }
+    return { bankName, holderName, identifierType, identifier };
+  });
+}
 
 function paymentMethodId(value, fallbackIndex = 1) {
   const base = String(value || '')
@@ -34,7 +63,12 @@ function normalizeCustomPaymentMethods(raw) {
       id = `${baseId}_${suffix++}`.slice(0, 37);
     }
     used.add(id);
-    return { id, label, active: method?.active !== false };
+    const accountDetailsEnabled = method?.accountDetailsEnabled === true;
+    const accounts = normalizePaymentAccounts(method?.accounts || [], {
+      context: label,
+      required: accountDetailsEnabled,
+    });
+    return { id, label, active: method?.active !== false, accountDetailsEnabled, accounts };
   });
 }
 
@@ -51,8 +85,10 @@ function isCustomPaymentMethod(value) {
 }
 
 module.exports = {
+  ACCOUNT_IDENTIFIER_TYPES,
   CORE_PAYMENT_METHOD_IDS,
   isCustomPaymentMethod,
   normalizeCustomPaymentMethods,
+  normalizePaymentAccounts,
   parseCustomPaymentMethods,
 };

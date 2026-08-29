@@ -3,6 +3,8 @@ const express = require('express');
 const { q, tdb, getSetting } = require('../db');
 const { decrypt } = require('../utils/crypto');
 const { handleMessage, newSessionId } = require('../chatbot/engine');
+const { parseFloatingIcons } = require('../utils/chatbotAppearance');
+const { trialState } = require('../utils/trialAccess');
 
 const router = express.Router();
 
@@ -20,6 +22,7 @@ async function findTenant(req, res, next) {
   try {
     const { rows } = await q('SELECT * FROM tenants WHERE slug = $1', [req.params.slug]);
     if (!rows[0]) return res.status(404).json({ error: 'Negocio no encontrado' });
+    if (trialState(rows[0]).isExpired) return res.status(403).json({ error: 'La prueba de este negocio terminó temporalmente' });
     if (rows[0].account_status !== 'active') {
       return res.status(403).json({ error: 'Este negocio no está activo actualmente' });
     }
@@ -45,6 +48,7 @@ router.get('/:slug/info', findTenant, async (req, res, next) => {
       address: await getSetting(req.tdb, 'address'),
       hours: await getSetting(req.tdb, 'hours'),
       whatsapp: normalizeWhatsappNumber(configuredWhatsapp) || normalizeWhatsappNumber(fallbackWhatsapp),
+      floatingIcons: parseFloatingIcons(await getSetting(req.tdb, 'chatbot_floating_icons_json')),
     });
   } catch (e) { next(e); }
 });

@@ -4,10 +4,11 @@
  * Alcance: multi-tenant, solo owner autenticado.
  */
 const express = require('express');
-const { requireAuth, requireOwner } = require('../middleware/auth');
+const { requireAuth, requireOwner, requireModules } = require('../middleware/auth');
 
 const router = express.Router();
 router.use(requireAuth);
+router.use(requireModules('empleados'));
 router.use(requireOwner);
 
 function requireNumericId(req, res, next) {

@@ -67,6 +67,8 @@ let customersPage = 1;
 const CUSTOMERS_PAGE_SIZE = 10;
 let BRANCHES = [];
 let CASHIERS = [];
+let INTERNAL_USERS = [];
+let MODULE_CATALOG = [];
 let LAST_ORDERS = [];
 let POS_OVERVIEW = null;
 let KDS_CONFIG = { areas: [], categories: [], products: [], branches: [] };
@@ -115,6 +117,20 @@ let CHATBOT_UPSELL_SELECTED = new Set();
 let CHATBOT_UPSELL_OFFERS = [];
 let CHATBOT_INFO_OPTIONS = [];
 let CHATBOT_RECEIVING_MODES = [];
+let CHATBOT_FLOATING_ICONS = [];
+const CHATBOT_FLOATING_ICON_CATALOG = [
+  { key: 'fast_food', label: 'Comida rápida', icons: ['🍕', '🍔', '🍟', '🌭', '🥤', '🌮', '🥪', '🍗'] },
+  { key: 'grill', label: 'Pollo y parrilla', icons: ['🍗', '🍖', '🔥', '🥩', '🍽️', '🌽', '🥔', '🥤'] },
+  { key: 'asian', label: 'China y asiática', icons: ['🥡', '🥢', '🍜', '🍣', '🍱', '🥟', '🍚', '🍵'] },
+  { key: 'seafood', label: 'Mariscos', icons: ['🦐', '🦞', '🦀', '🐟', '🐙', '🦪', '🍋', '🌊'] },
+  { key: 'cafe', label: 'Café y postres', icons: ['☕', '🧁', '🍰', '🍩', '🍪', '🍫', '🥐', '🍦'] },
+  { key: 'healthy', label: 'Saludable y frutas', icons: ['🥗', '🥑', '🍎', '🍓', '🍍', '🥕', '🥦', '🧃'] },
+  { key: 'technology', label: 'Tecnología', icons: ['💻', '📱', '🖥️', '⌨️', '🖱️', '🎧', '🔌', '🤖'] },
+  { key: 'finance', label: 'Dinero y finanzas', icons: ['💵', '💰', '🪙', '💳', '📈', '🧾', '🏦', '💸'] },
+  { key: 'services', label: 'Comercio y servicios', icons: ['🛍️', '📦', '🎁', '✂️', '🔧', '🧰', '🚚', '⭐'] },
+  { key: 'delivery', label: 'Entregas', icons: ['🛵', '🚚', '📦', '📍', '🗺️', '🏠', '⏱️', '✅'] },
+];
+const DEFAULT_CHATBOT_FLOATING_ICONS = ['🍕', '💵', '🛵', '💻', '🍔', '📱', '🥤', '🍟'];
 let CUSTOM_PAYMENT_METHODS = [];
 let DELIVERY_ZONES = [];
 let DELIVERY_ZONE_MAP = null;
@@ -574,6 +590,15 @@ function showSuspensionModal(message, whatsappUrl) {
   modal.classList.add('show');
 }
 
+function showTrialExpiredModal(data = {}) {
+  const modal = $('#trialExpiredModal');
+  if (!modal) return;
+  document.body.classList.add('trial-expired');
+  if (data.error) $('#trialExpiredText').textContent = data.error;
+  if (data.whatsappUrl) $('#trialExpiredWhatsapp').href = data.whatsappUrl;
+  modal.classList.add('show');
+}
+
 async function api(path, opts = {}) {
   const headers = new Headers(opts.headers || {});
   const scope = getAuthScope();
@@ -589,6 +614,13 @@ async function api(path, opts = {}) {
   if (res.status === 403 && data?.errorCode === 'BILLING_SUSPENDED') {
     showSuspensionModal(data.error, data.whatsappUrl);
     throw new Error(data.error || 'Servicio suspendido por falta de pago');
+  }
+  if (res.status === 403 && data?.errorCode === 'TRIAL_EXPIRED') {
+    showTrialExpiredModal(data);
+    const err = new Error(data.error || 'El periodo de prueba terminó');
+    err.status = res.status;
+    err.data = data;
+    throw err;
   }
   if (!res.ok) {
     const err = new Error(data.error || 'Error de servidor');
@@ -757,6 +789,50 @@ function openOnboardingIntro() {
   document.body.classList.add('onboarding-open');
 }
 
+function acknowledgeTrialDay() {
+  const days = Number(ME?.trial?.daysRemaining || 0);
+  try {
+    localStorage.setItem(`cbp_trial_notice_${ME?.tenant?.slug}`, `${ME?.trial?.endsOn || 'trial'}:${days}`);
+  } catch {}
+}
+
+function continueAfterTrialNotice() {
+  acknowledgeTrialDay();
+  $('#trialWelcomeModal')?.classList.remove('show');
+  if (ME?.onboardingRequired) setTimeout(openOnboardingIntro, 100);
+}
+
+function presentStartupJourney() {
+  if (ME?.demoSession) {
+    $('#demoJourneyModal')?.classList.add('show');
+    return;
+  }
+  if (ME?.trial?.isExpired) {
+    showTrialExpiredModal({
+      error: 'Tu prueba real de 5 días terminó. Tus productos, ventas y configuraciones siguen guardados.',
+      whatsappUrl: 'https://wa.me/526241370820?text=' + encodeURIComponent('Terminó mi prueba de ChatBotPro y quiero activar mi suscripción'),
+    });
+    return;
+  }
+  if (ME?.trial?.isActive) {
+    const days = Math.max(1, Number(ME.trial.daysRemaining || 1));
+    const todayKey = `${ME?.trial?.endsOn || 'trial'}:${days}`;
+    let alreadyShown = false;
+    try { alreadyShown = localStorage.getItem(`cbp_trial_notice_${ME.tenant.slug}`) === todayKey; } catch {}
+    if (!alreadyShown) {
+      $('#trialDaysNumber').textContent = String(days);
+      $('#trialDaysLabel').textContent = days === 1 ? 'día disponible' : 'días disponibles';
+      $('#trialWelcomeTitle').textContent = days === 5 ? 'Tu negocio ya está listo para probar' : `Te ${days === 1 ? 'queda' : 'quedan'} ${days} ${days === 1 ? 'día' : 'días'} de prueba`;
+      $('#trialWelcomeText').textContent = days === 1
+        ? 'Aprovecha hoy para terminar tus pruebas. Mañana el sistema se bloqueará hasta activar una suscripción.'
+        : `Usa estos ${days} días para cargar tus productos, registrar ventas y comprobar pedidos desde tu chatbot.`;
+      $('#trialWelcomeModal')?.classList.add('show');
+      return;
+    }
+  }
+  if (ME?.onboardingRequired) setTimeout(openOnboardingIntro, 180);
+}
+
 async function closeOnboardingIntro() {
   await completeOnboarding();
   $('#onboardingIntro')?.classList.remove('show');
@@ -828,6 +904,12 @@ function normalizeView(view) {
   if (isCashierUser()) {
     return CASHIER_ALLOWED_VIEWS.has(view) ? view : 'pos';
   }
+  const permissions = new Set(Array.isArray(ME?.permissions) ? ME.permissions : []);
+  if (ME?.role === 'staff' && !permissions.has(view)) {
+    return [...permissions].find((key) => VIEW_META[key]) || 'dashboard';
+  }
+  const hidden = new Set(Array.isArray(ME?.tenant?.hiddenModules) ? ME.tenant.hiddenModules : []);
+  if (ME?.role === 'owner' && hidden.has(view)) return permissions.has('dashboard') && !hidden.has('dashboard') ? 'dashboard' : 'config';
   if (['facturacion', 'cfdi'].includes(view) && !ME?.tenant?.invoicingEligible) return 'dashboard';
   return VIEW_META[view] ? view : 'dashboard';
 }
@@ -853,15 +935,23 @@ function trackModuleUsage(moduleKey) {
 
 function applyUserScopeUI() {
   const cashierMode = isCashierUser();
+  const staffMode = ME?.role === 'staff';
+  const permissions = new Set(Array.isArray(ME?.permissions) ? ME.permissions : []);
+  const hiddenModules = new Set(Array.isArray(ME?.tenant?.hiddenModules) ? ME.tenant.hiddenModules : []);
   const mexicoEligible = Boolean(ME?.tenant?.invoicingEligible);
   document.body.classList.toggle('cashier-mode', cashierMode);
   document.querySelectorAll('.sidebar nav a').forEach((a) => {
     if (!a.dataset.view) {
-      a.hidden = cashierMode;
+      const liveOrdersAllowed = ME?.role === 'owner'
+        ? !hiddenModules.has('pedidos')
+        : (staffMode && permissions.has('pedidos'));
+      a.hidden = cashierMode || !liveOrdersAllowed;
       return;
     }
     const mexicoAllowed = a.dataset.mexicoOnly !== 'true' || mexicoEligible;
-    const allowed = mexicoAllowed && (!cashierMode || CASHIER_ALLOWED_VIEWS.has(a.dataset.view));
+    const roleAllowed = cashierMode ? CASHIER_ALLOWED_VIEWS.has(a.dataset.view) : (!staffMode || permissions.has(a.dataset.view));
+    const ownerVisible = ME?.role !== 'owner' || !hiddenModules.has(a.dataset.view);
+    const allowed = mexicoAllowed && roleAllowed && ownerVisible;
     a.hidden = !allowed;
   });
   document.querySelectorAll('[data-mexico-only="true"]:not(.sidebar nav a)').forEach((element) => {
@@ -871,9 +961,16 @@ function applyUserScopeUI() {
     if (cashierMode) {
       lbl.hidden = !lbl.classList.contains('nav-label-principal');
     } else {
-      lbl.hidden = false;
+      let sibling = lbl.nextElementSibling;
+      let hasVisibleModule = false;
+      while (sibling && !sibling.classList.contains('nav-label')) {
+        if (sibling.matches('a') && !sibling.hidden) hasVisibleModule = true;
+        sibling = sibling.nextElementSibling;
+      }
+      lbl.hidden = !hasVisibleModule;
     }
   });
+  document.querySelectorAll('[data-owner-only]').forEach((element) => { element.hidden = ME?.role !== 'owner'; });
   const chatLink = $('#openChatLink');
   if (chatLink) chatLink.hidden = cashierMode;
   const banner = $('#cashierBranchBanner');
@@ -967,6 +1064,30 @@ $('#reopenOnboarding')?.addEventListener('click', openOnboardingIntro);
 $('#onboardingIntroClose')?.addEventListener('click', () => closeOnboardingIntro().catch((error) => toast(error.message, true)));
 $('#onboardingEnterDashboard')?.addEventListener('click', () => closeOnboardingIntro().catch((error) => toast(error.message, true)));
 $('#onboardingStart')?.addEventListener('click', () => runOnboardingAction('config', true).catch((error) => toast(error.message, true)));
+$('#demoJourneyStay')?.addEventListener('click', () => $('#demoJourneyModal')?.classList.remove('show'));
+$('#demoJourneyConvert')?.addEventListener('click', async (event) => {
+  const button = event.currentTarget;
+  button.disabled = true;
+  button.innerHTML = '<i class="ph-bold ph-spinner-gap" style="animation:spin .8s linear infinite"></i> Preparando registro…';
+  try {
+    const result = await api('/api/auth/demo-interest', { method: 'POST' });
+    location.href = result.redirectTo || '/register?source=demo';
+  } catch (error) {
+    button.disabled = false;
+    button.innerHTML = '<i class="ph-bold ph-arrow-right"></i> Sí, probar con mis datos';
+    toast(error.message, true);
+  }
+});
+$('#trialStartTesting')?.addEventListener('click', continueAfterTrialNotice);
+$('#trialViewPlans')?.addEventListener('click', async () => {
+  acknowledgeTrialDay();
+  $('#trialWelcomeModal')?.classList.remove('show');
+  await navigate('suscripciones');
+});
+$('#trialExpiredPlans')?.addEventListener('click', async () => {
+  $('#trialExpiredModal')?.classList.remove('show');
+  await navigate('suscripciones');
+});
 $('#onboardingIntro')?.addEventListener('click', (event) => {
   if (event.target?.id === 'onboardingIntro') closeOnboardingIntro().catch((error) => toast(error.message, true));
 });
@@ -8215,6 +8336,59 @@ function parseChatbotReceivingModes(raw) {
   }
 }
 
+function parseChatbotFloatingIcons(raw) {
+  const allowed = new Set(CHATBOT_FLOATING_ICON_CATALOG.flatMap((group) => group.icons));
+  let parsed;
+  try { parsed = JSON.parse(String(raw || '')); } catch { parsed = DEFAULT_CHATBOT_FLOATING_ICONS; }
+  if (!Array.isArray(parsed)) parsed = DEFAULT_CHATBOT_FLOATING_ICONS;
+  return [...new Set(parsed.map((icon) => String(icon || '').trim()).filter((icon) => allowed.has(icon)))].slice(0, 8);
+}
+
+function renderChatbotFloatingIcons() {
+  const catalog = $('#botFloatingIconCatalog');
+  const preview = $('#botFloatingPreviewIcons');
+  if (!catalog || !preview) return;
+  const selected = new Set(CHATBOT_FLOATING_ICONS);
+  catalog.innerHTML = CHATBOT_FLOATING_ICON_CATALOG.map((group) => `
+    <section class="chatbot-icon-group">
+      <div><b>${esc(group.label)}</b><button class="btn btn-ghost btn-sm" type="button" data-floating-preset="${esc(group.key)}">Usar colección</button></div>
+      <div>${group.icons.map((icon) => `<button type="button" class="chatbot-icon-choice ${selected.has(icon) ? 'selected' : ''}" data-floating-icon="${esc(icon)}" aria-pressed="${selected.has(icon)}" title="${selected.has(icon) ? 'Quitar' : 'Agregar'} ${esc(icon)}"><span>${esc(icon)}</span><i class="ph-bold ${selected.has(icon) ? 'ph-check-circle' : 'ph-plus-circle'}"></i></button>`).join('')}</div>
+    </section>`).join('');
+  preview.innerHTML = CHATBOT_FLOATING_ICONS.length
+    ? CHATBOT_FLOATING_ICONS.map((icon, index) => `<i style="--floating-index:${index}">${esc(icon)}</i>`).join('')
+    : '<em>El fondo se mostrará limpio, sin iconos.</em>';
+  $('#botFloatingIconCount').textContent = `${CHATBOT_FLOATING_ICONS.length} de 8 seleccionados`;
+  catalog.querySelectorAll('[data-floating-icon]').forEach((button) => button.addEventListener('click', () => {
+    const icon = button.dataset.floatingIcon;
+    if (selected.has(icon)) CHATBOT_FLOATING_ICONS = CHATBOT_FLOATING_ICONS.filter((item) => item !== icon);
+    else {
+      if (CHATBOT_FLOATING_ICONS.length >= 8) return toast('Puedes seleccionar hasta 8 iconos flotantes', true);
+      CHATBOT_FLOATING_ICONS.push(icon);
+    }
+    renderChatbotFloatingIcons();
+  }));
+  catalog.querySelectorAll('[data-floating-preset]').forEach((button) => button.addEventListener('click', () => {
+    const group = CHATBOT_FLOATING_ICON_CATALOG.find((item) => item.key === button.dataset.floatingPreset);
+    if (!group) return;
+    CHATBOT_FLOATING_ICONS = [...group.icons];
+    renderChatbotFloatingIcons();
+  }));
+}
+
+function fillChatbotFloatingIconsFromSettings() {
+  CHATBOT_FLOATING_ICONS = parseChatbotFloatingIcons(SETTINGS?.chatbot_floating_icons_json);
+  renderChatbotFloatingIcons();
+}
+
+$('#botFloatingIconsClear')?.addEventListener('click', () => {
+  CHATBOT_FLOATING_ICONS = [];
+  renderChatbotFloatingIcons();
+});
+$('#botFloatingIconsDefault')?.addEventListener('click', () => {
+  CHATBOT_FLOATING_ICONS = [...DEFAULT_CHATBOT_FLOATING_ICONS];
+  renderChatbotFloatingIcons();
+});
+
 function receivingModeBehaviorLabel(behavior) {
   if (behavior === 'delivery') return 'Solicita domicilio';
   if (behavior === 'branch') return 'Solicita sucursal';
@@ -8949,6 +9123,7 @@ async function fillBotForm() {
   syncGlobalChatbotOrdersHint();
   fillChatbotInfoOptionsFromSettings();
   fillReceivingModesFromSettings();
+  fillChatbotFloatingIconsFromSettings();
   DELIVERY_ZONES = parseDeliveryZones(SETTINGS.delivery_zones_geojson || '[]');
   DELIVERY_ZONES_PAGE = 1;
   DELIVERY_ZONE_FILTER_BRANCH = 'all';
@@ -9160,6 +9335,7 @@ $('#botForm').addEventListener('submit', async (e) => {
   fd.append('chatbot_receiving_modes_json', JSON.stringify(CHATBOT_RECEIVING_MODES));
   fd.append('location_enabled', $('#botLocation').checked ? '1' : '0');
   fd.append('chatbot_extra_options_json', JSON.stringify(CHATBOT_INFO_OPTIONS));
+  fd.append('chatbot_floating_icons_json', JSON.stringify(CHATBOT_FLOATING_ICONS));
   await api('/api/settings', { method: 'PUT', body: fd });
   toast('Flujo del chatbot guardado');
   SETTINGS = await api('/api/settings');
@@ -9381,6 +9557,85 @@ $('#cashierForm')?.addEventListener('submit', async (e) => {
   await loadCashiers();
 });
 
+function moduleLabel(key) {
+  return MODULE_CATALOG.find((item) => item.key === key)?.label || VIEW_META[key]?.[0] || key;
+}
+
+function renderPermissionPicker(selected = []) {
+  const selectedSet = new Set(selected);
+  const host = $('#internalUserPermissions');
+  if (!host) return;
+  host.innerHTML = MODULE_CATALOG.map((item) => `<label class="module-permission-item"><input type="checkbox" value="${esc(item.key)}" ${selectedSet.has(item.key) ? 'checked' : ''}/><span>${esc(item.label)}</span></label>`).join('');
+}
+
+function internalUsersTableHTML(rows) {
+  if (!rows.length) return emptyHTML('ph-user-gear', 'Aún no hay usuarios internos', 'Crea un acceso y asigna sólo los módulos que necesita.');
+  return `<table><thead><tr><th>Usuario</th><th>Modalidad</th><th>Módulos permitidos</th><th>Estado</th><th></th></tr></thead><tbody>${rows.map((user) => `<tr><td><b>${esc(user.displayName)}</b><div class="hint">@${esc(user.username)}</div></td><td><span class="badge b-pendiente">${esc(user.jobTitle)}</span></td><td><div class="user-permission-chips">${user.permissions.map((key) => `<span>${esc(moduleLabel(key))}</span>`).join('')}</div></td><td><span class="badge ${user.active ? 'b-entregado' : 'b-cancelado'}">${user.active ? 'Activo' : 'Inactivo'}</span></td><td><div style="display:flex;gap:6px;justify-content:flex-end"><button class="btn btn-ghost" type="button" data-edit-internal-user="${user.id}"><i class="ph-bold ph-pencil-simple"></i> Editar</button><button class="btn btn-danger btn-icon" type="button" data-delete-internal-user="${user.id}" title="Eliminar"><i class="ph-bold ph-trash"></i></button></div></td></tr>`).join('')}</tbody></table>`;
+}
+
+async function loadInternalUsers() {
+  if (ME?.role !== 'owner') return;
+  [INTERNAL_USERS, MODULE_CATALOG] = await Promise.all([api('/api/users'), api('/api/users/modules')]);
+  const host = $('#internalUsersTable');
+  if (host) host.innerHTML = internalUsersTableHTML(INTERNAL_USERS);
+  host?.querySelectorAll('[data-edit-internal-user]').forEach((button) => button.addEventListener('click', () => openInternalUserModal(INTERNAL_USERS.find((user) => Number(user.id) === Number(button.dataset.editInternalUser)))));
+  host?.querySelectorAll('[data-delete-internal-user]').forEach((button) => button.addEventListener('click', async () => {
+    const user = INTERNAL_USERS.find((item) => Number(item.id) === Number(button.dataset.deleteInternalUser));
+    if (!(await askConfirm('¿Eliminar usuario?', `Se revocará definitivamente el acceso de ${user?.displayName || 'este usuario'}.`))) return;
+    await api(`/api/users/${button.dataset.deleteInternalUser}`, { method: 'DELETE' });
+    toast('Usuario eliminado');
+    await loadInternalUsers();
+  }));
+}
+
+function openInternalUserModal(user = null) {
+  $('#internalUserModalTitle').innerHTML = user ? '<i class="ph-bold ph-pencil-simple"></i> Editar usuario' : '<i class="ph-bold ph-user-plus"></i> Nuevo usuario';
+  $('#internalUserId').value = user?.id || '';
+  $('#internalUserDisplayName').value = user?.displayName || '';
+  $('#internalUserJobTitle').value = user?.jobTitle || 'Auxiliar';
+  $('#internalUserUsername').value = user?.username || '';
+  $('#internalUserPassword').value = '';
+  $('#internalUserActive').checked = user ? Boolean(user.active) : true;
+  renderPermissionPicker(user?.permissions || []);
+  $('#internalUserModal').classList.add('show');
+}
+
+function renderModuleVisibility() {
+  const host = $('#moduleVisibilityGrid');
+  if (!host || ME?.role !== 'owner') return;
+  const hidden = new Set(ME?.tenant?.hiddenModules || []);
+  host.innerHTML = MODULE_CATALOG.filter((item) => item.key !== 'config').map((item) => `<label class="module-permission-item"><input type="checkbox" value="${esc(item.key)}" ${hidden.has(item.key) ? '' : 'checked'}/><span>${esc(item.label)}</span></label>`).join('');
+}
+
+$('#addInternalUserBtn')?.addEventListener('click', () => openInternalUserModal());
+$('#internalUserClose')?.addEventListener('click', () => $('#internalUserModal').classList.remove('show'));
+$('#internalUserCancel')?.addEventListener('click', () => $('#internalUserModal').classList.remove('show'));
+$('#selectAllUserModules')?.addEventListener('click', () => {
+  const boxes = [...document.querySelectorAll('#internalUserPermissions input[type="checkbox"]')];
+  const next = boxes.some((box) => !box.checked);
+  boxes.forEach((box) => { box.checked = next; });
+});
+$('#internalUserForm')?.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const id = Number($('#internalUserId').value || 0);
+  const payload = { displayName: $('#internalUserDisplayName').value, jobTitle: $('#internalUserJobTitle').value, username: $('#internalUserUsername').value, password: $('#internalUserPassword').value, active: $('#internalUserActive').checked, permissions: [...document.querySelectorAll('#internalUserPermissions input:checked')].map((box) => box.value) };
+  if (!id && payload.password.length < 8) return toast('La contraseña debe tener al menos 8 caracteres', true);
+  if (!payload.permissions.length) return toast('Asigna al menos un módulo', true);
+  await api(id ? `/api/users/${id}` : '/api/users', { method: id ? 'PUT' : 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+  $('#internalUserModal').classList.remove('show');
+  toast(id ? 'Usuario actualizado' : 'Usuario creado');
+  await loadInternalUsers();
+});
+$('#moduleVisibilityForm')?.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const visible = new Set([...document.querySelectorAll('#moduleVisibilityGrid input:checked')].map((box) => box.value));
+  const hiddenModules = MODULE_CATALOG.map((item) => item.key).filter((key) => key !== 'config' && !visible.has(key));
+  const result = await api('/api/users/preferences/modules', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ hiddenModules }) });
+  ME.tenant.hiddenModules = result.hiddenModules;
+  applyUserScopeUI();
+  toast('Módulos visibles actualizados');
+});
+
 /* ===== Mi negocio ===== */
 const PALETTE = ['#ff6b35', '#e11d48', '#d97706', '#16a34a', '#0891b2', '#2563eb', '#7c3aed', '#db2777', '#171c2e'];
 let BANK_ACCOUNTS = [];
@@ -9430,7 +9685,32 @@ function readCustomPaymentMethodInputs() {
     id: row.dataset.customPaymentRow,
     label: row.querySelector('[data-custom-payment-label]').value.trim(),
     active: row.querySelector('[data-custom-payment-active]').checked,
+    accountDetailsEnabled: row.querySelector('[data-custom-payment-accounts-enabled]').checked,
+    accounts: [...row.querySelectorAll('[data-custom-payment-account]')].map((card) => ({
+      bankName: card.querySelector('[data-custom-account-field="bankName"]').value.trim(),
+      holderName: card.querySelector('[data-custom-account-field="holderName"]').value.trim(),
+      identifierType: card.querySelector('[data-custom-account-field="identifierType"]').value,
+      identifier: card.querySelector('[data-custom-account-field="identifier"]').value.trim(),
+    })),
   }));
+}
+
+function paymentAccountFields(account, fieldAttribute) {
+  return `
+    <div class="bank-account-fields">
+      <div class="field"><label>Banco o institución</label><input type="text" ${fieldAttribute}="bankName" maxlength="80" value="${esc(account.bankName || '')}" placeholder="Ej. Banco de Venezuela" /></div>
+      <div class="field"><label>Nombre del titular</label><input type="text" ${fieldAttribute}="holderName" maxlength="100" value="${esc(account.holderName || '')}" placeholder="Persona o razón social" /></div>
+      <div class="field"><label>Tipo de dato</label><select ${fieldAttribute}="identifierType">
+        <option value="account" ${account.identifierType === 'account' ? 'selected' : ''}>Número de cuenta</option>
+        <option value="clabe" ${account.identifierType === 'clabe' ? 'selected' : ''}>CLABE interbancaria</option>
+        <option value="card" ${account.identifierType === 'card' ? 'selected' : ''}>Número de tarjeta</option>
+        <option value="phone" ${account.identifierType === 'phone' ? 'selected' : ''}>Teléfono</option>
+        <option value="document" ${account.identifierType === 'document' ? 'selected' : ''}>Documento / identificación</option>
+        <option value="email" ${account.identifierType === 'email' ? 'selected' : ''}>Correo electrónico</option>
+        <option value="other" ${account.identifierType === 'other' ? 'selected' : ''}>Otro dato</option>
+      </select></div>
+      <div class="field"><label>Dato para el pago</label><input type="text" ${fieldAttribute}="identifier" maxlength="80" value="${esc(account.identifier || '')}" placeholder="Número, teléfono, correo, etc." /></div>
+    </div>`;
 }
 
 function renderCustomPaymentMethods() {
@@ -9440,12 +9720,32 @@ function renderCustomPaymentMethods() {
     list.innerHTML = '<div class="bank-account-empty"><i class="ph-bold ph-wallet"></i> Conservas los medios globales. Agrega aquí opciones como Pago Móvil, Pix o Bizum.</div>';
     return;
   }
-  list.innerHTML = CUSTOM_PAYMENT_METHODS.map((method, index) => `
-    <div class="custom-payment-row" data-custom-payment-row="${esc(method.id)}">
-      <div class="field"><label>Nombre visible</label><input data-custom-payment-label maxlength="42" value="${esc(method.label || '')}" placeholder="Ej. Pago Móvil" /></div>
-      <label class="custom-payment-active"><input type="checkbox" data-custom-payment-active ${method.active !== false ? 'checked' : ''} /><span><b>Activo</b><small>Chatbot y POS</small></span></label>
-      <button class="btn btn-danger btn-icon" type="button" data-remove-custom-payment="${index}" title="Quitar medio"><i class="ph-bold ph-trash"></i></button>
-    </div>`).join('');
+  list.innerHTML = CUSTOM_PAYMENT_METHODS.map((method, index) => {
+    const accounts = Array.isArray(method.accounts) ? method.accounts : [];
+    const accountDetailsEnabled = method.accountDetailsEnabled === true;
+    return `
+      <div class="custom-payment-row" data-custom-payment-row="${esc(method.id)}">
+        <div class="custom-payment-main">
+          <div class="field"><label>Nombre visible</label><input data-custom-payment-label maxlength="42" value="${esc(method.label || '')}" placeholder="Ej. Pago Móvil" /></div>
+          <label class="custom-payment-active"><input type="checkbox" data-custom-payment-active ${method.active !== false ? 'checked' : ''} /><span><b>Activo</b><small>Chatbot y POS</small></span></label>
+          <button class="btn btn-danger btn-icon" type="button" data-remove-custom-payment="${index}" title="Quitar medio"><i class="ph-bold ph-trash"></i></button>
+        </div>
+        <label class="custom-payment-account-toggle">
+          <input type="checkbox" data-custom-payment-accounts-enabled ${accountDetailsEnabled ? 'checked' : ''} />
+          <span><b>Mostrar datos de cuenta al elegir este medio</b><small>Actívalo si requiere banco, titular, teléfono, documento u otro dato para pagar.</small></span>
+        </label>
+        <section class="custom-payment-accounts" ${accountDetailsEnabled ? '' : 'hidden'}>
+          <div class="custom-payment-accounts-head"><div><b>Cuentas de ${esc(method.label || 'este medio')}</b><small>Solo se mostrarán al cliente cuando elija este medio de pago.</small></div><button class="btn btn-ghost" type="button" data-add-custom-payment-account="${index}"><i class="ph-bold ph-plus"></i> Agregar cuenta</button></div>
+          <div class="custom-payment-account-list">
+            ${accounts.length ? accounts.map((account, accountIndex) => `
+              <article class="bank-account-card" data-custom-payment-account="${accountIndex}">
+                <div class="bank-account-card-head"><b>Cuenta ${accountIndex + 1}</b><button class="btn btn-danger btn-icon bank-account-remove" type="button" data-remove-custom-payment-account="${accountIndex}" title="Eliminar cuenta"><i class="ph-bold ph-trash"></i></button></div>
+                ${paymentAccountFields(account, 'data-custom-account-field')}
+              </article>`).join('') : '<div class="bank-account-empty"><i class="ph-bold ph-bank"></i> Activa esta opción y agrega los datos que verá el cliente.</div>'}
+          </div>
+        </section>
+      </div>`;
+  }).join('');
 }
 
 function loadCustomPaymentMethodsFromSettings() {
@@ -9474,7 +9774,7 @@ function syncPosCustomPaymentMethods() {
 }
 
 function readBankAccountInputs() {
-  return [...document.querySelectorAll('.bank-account-card')].map((card) => ({
+  return [...document.querySelectorAll('#bankAccountsList .bank-account-card')].map((card) => ({
     bankName: card.querySelector('[data-bank-field="bankName"]').value.trim(),
     holderName: card.querySelector('[data-bank-field="holderName"]').value.trim(),
     identifierType: card.querySelector('[data-bank-field="identifierType"]').value,
@@ -9497,28 +9797,7 @@ function renderBankAccounts() {
           <i class="ph-bold ph-trash"></i>
         </button>
       </div>
-      <div class="bank-account-fields">
-        <div class="field">
-          <label>Nombre del banco</label>
-          <input type="text" data-bank-field="bankName" maxlength="80" value="${esc(account.bankName || '')}" placeholder="Ej. BBVA" />
-        </div>
-        <div class="field">
-          <label>Nombre del titular</label>
-          <input type="text" data-bank-field="holderName" maxlength="100" value="${esc(account.holderName || '')}" placeholder="Persona o razón social" />
-        </div>
-        <div class="field">
-          <label>Tipo de dato</label>
-          <select data-bank-field="identifierType">
-            <option value="account" ${account.identifierType === 'account' ? 'selected' : ''}>Número de cuenta</option>
-            <option value="clabe" ${account.identifierType === 'clabe' ? 'selected' : ''}>CLABE interbancaria</option>
-            <option value="card" ${account.identifierType === 'card' ? 'selected' : ''}>Número de tarjeta</option>
-          </select>
-        </div>
-        <div class="field">
-          <label>Número</label>
-          <input type="text" inputmode="numeric" data-bank-field="identifier" maxlength="50" value="${esc(account.identifier || '')}" placeholder="Ingresa el número completo" />
-        </div>
-      </div>
+      ${paymentAccountFields(account, 'data-bank-field')}
     </article>`).join('');
 }
 
@@ -9623,9 +9902,14 @@ async function fillConfigForm() {
   $('#logoPreview').innerHTML = SETTINGS.logo ? `<img src="${esc(SETTINGS.logo)}" alt="" />` : '<i class="ph ph-image"></i>';
   renderSwatches();
   renderBusinessModelPicker();
-  if (!isCashierUser()) {
+  if (ME?.role === 'owner') {
     await loadBranches();
     await loadCashiers();
+    await loadInternalUsers();
+    renderModuleVisibility();
+    await loadSelfServiceDevices();
+  } else if (ME?.role === 'staff' && ME.permissions?.includes('config')) {
+    await loadBranches();
     await loadSelfServiceDevices();
   }
 }
@@ -9636,16 +9920,39 @@ $('#cfgLogo').addEventListener('change', () => {
 $('#addCustomPaymentMethodBtn')?.addEventListener('click', () => {
   CUSTOM_PAYMENT_METHODS = readCustomPaymentMethodInputs();
   if (CUSTOM_PAYMENT_METHODS.length >= 15) return toast('Puedes configurar hasta 15 medios de pago personalizados', true);
-  CUSTOM_PAYMENT_METHODS.push({ id: `custom_${Date.now().toString(36)}`, label: '', active: true });
+  CUSTOM_PAYMENT_METHODS.push({ id: `custom_${Date.now().toString(36)}`, label: '', active: true, accountDetailsEnabled: false, accounts: [] });
   renderCustomPaymentMethods();
   document.querySelector('[data-custom-payment-row]:last-child [data-custom-payment-label]')?.focus();
 });
 $('#customPaymentMethodsList')?.addEventListener('click', (event) => {
-  const button = event.target.closest('[data-remove-custom-payment]');
-  if (!button) return;
+  const removeMethodButton = event.target.closest('[data-remove-custom-payment]');
+  const addAccountButton = event.target.closest('[data-add-custom-payment-account]');
+  const removeAccountButton = event.target.closest('[data-remove-custom-payment-account]');
+  if (!removeMethodButton && !addAccountButton && !removeAccountButton) return;
   CUSTOM_PAYMENT_METHODS = readCustomPaymentMethodInputs();
-  CUSTOM_PAYMENT_METHODS.splice(Number(button.dataset.removeCustomPayment), 1);
+  if (removeMethodButton) {
+    CUSTOM_PAYMENT_METHODS.splice(Number(removeMethodButton.dataset.removeCustomPayment), 1);
+  } else {
+    const methodIndex = Number(event.target.closest('[data-custom-payment-row]')?.dataset.customPaymentRow
+      ? [...document.querySelectorAll('[data-custom-payment-row]')].indexOf(event.target.closest('[data-custom-payment-row]'))
+      : -1);
+    if (methodIndex < 0 || !CUSTOM_PAYMENT_METHODS[methodIndex]) return;
+    if (addAccountButton) {
+      if (CUSTOM_PAYMENT_METHODS[methodIndex].accounts.length >= 10) return toast('Puedes configurar hasta 10 cuentas por medio de pago', true);
+      CUSTOM_PAYMENT_METHODS[methodIndex].accounts.push({ bankName: '', holderName: '', identifierType: 'phone', identifier: '' });
+    } else {
+      CUSTOM_PAYMENT_METHODS[methodIndex].accounts.splice(Number(removeAccountButton.dataset.removeCustomPaymentAccount), 1);
+    }
+  }
   renderCustomPaymentMethods();
+  if (addAccountButton) {
+    const methodIndex = Number(addAccountButton.dataset.addCustomPaymentAccount);
+    document.querySelectorAll('[data-custom-payment-row]')[methodIndex]?.querySelector('[data-custom-payment-account]:last-child input')?.focus();
+  }
+});
+$('#customPaymentMethodsList')?.addEventListener('change', (event) => {
+  if (!event.target.matches('[data-custom-payment-accounts-enabled]')) return;
+  event.target.closest('[data-custom-payment-row]')?.querySelector('.custom-payment-accounts')?.toggleAttribute('hidden', !event.target.checked);
 });
 $('#addBankAccountBtn')?.addEventListener('click', () => {
   BANK_ACCOUNTS = readBankAccountInputs();
@@ -9970,6 +10277,16 @@ $('#contactForm').addEventListener('submit', async (e) => {
   CUSTOM_PAYMENT_METHODS = readCustomPaymentMethodInputs();
   if (CUSTOM_PAYMENT_METHODS.some((method) => !method.label)) {
     return toast('Escribe el nombre de cada medio de pago personalizado', true);
+  }
+  const customMethodWithoutAccounts = CUSTOM_PAYMENT_METHODS.find((method) => method.accountDetailsEnabled && !method.accounts.length);
+  if (customMethodWithoutAccounts) {
+    return toast(`Agrega al menos una cuenta para ${customMethodWithoutAccounts.label}`, true);
+  }
+  const incompleteCustomAccount = CUSTOM_PAYMENT_METHODS.find((method) => method.accounts.some((account) => (
+    !account.bankName || !account.holderName || !account.identifierType || !account.identifier
+  )));
+  if (incompleteCustomAccount) {
+    return toast(`Completa todos los datos de las cuentas de ${incompleteCustomAccount.label}`, true);
   }
   const hasActiveCustomPayment = CUSTOM_PAYMENT_METHODS.some((method) => method.active);
   const deliveryEnabled = $('#botDelivery') ? $('#botDelivery').checked : true;
@@ -10469,14 +10786,15 @@ async function boot(navigateToHash = true) {
     history.replaceState(null, '', cleanUrl);
   }
 
+  ME = await api('/api/auth/me');
   [ME, SETTINGS] = await Promise.all([
-    api('/api/auth/me'),
-    api('/api/settings'),
+    Promise.resolve(ME),
+    ME?.trial?.isExpired ? Promise.resolve({}) : api('/api/settings'),
   ]);
   loadCustomPaymentMethodsFromSettings();
   syncPosCustomPaymentMethods();
   if (ME?.role === 'cashier') setAuthScope('cashier');
-  if (ME?.role === 'owner') setAuthScope('owner');
+  if (ME?.role === 'owner' || ME?.role === 'staff') setAuthScope('owner');
   POS_PRODUCT_SORT = normalizePosSortMode(SETTINGS?.pos_catalog_sort_mode || readStoredPosSortMode());
   saveStoredPosSortMode(POS_PRODUCT_SORT);
   applyUserScopeUI();
@@ -10493,27 +10811,38 @@ async function boot(navigateToHash = true) {
   $('#avatar').innerHTML = `<img src="${safeTenantLogo || defaultBrandLogo}" alt="" onerror="this.onerror=null;this.src='${defaultBrandLogo}'" />`;
   $('#brandName').textContent = cashier ? (ME.branchName || ME.tenant.businessName) : ME.tenant.businessName;
   $('#userBizName').textContent = cashier ? (ME.branchName || ME.tenant.businessName) : ME.tenant.businessName;
-  $('#userName').textContent = cashier ? `@${ME.username} · cajero` : `@${ME.username}`;
+  $('#userName').textContent = cashier ? `@${ME.username} · cajero` : (ME.role === 'staff' ? `@${ME.username} · ${ME.jobTitle || 'Equipo'}` : `@${ME.username}`);
   $('#openChatLink').href = `/${ME.tenant.slug}`;
   startTenantClock();
   renderInstructions();
   loadOrderSoundPreference();
   syncOrdersSoundToggleUI();
-  startOrdersRealtimeMonitor();
+  if (!ME?.trial?.isExpired && (ME.role !== 'staff' || ME.permissions?.some((key) => ['pedidos', 'pos', 'cortes', 'cancelaciones'].includes(key)))) startOrdersRealtimeMonitor();
 
   if (navigateToHash) {
-    const fallbackView = cashier ? 'pos' : 'dashboard';
+    const fallbackView = ME?.trial?.isExpired ? 'suscripciones' : (cashier ? 'pos' : 'dashboard');
     const hashView = (location.hash || '').slice(1);
-    const view = normalizeView(hashView || fallbackView);
+    const view = ME?.trial?.isExpired ? 'suscripciones' : normalizeView(hashView || fallbackView);
     document.body.setAttribute('data-current-view', view);
     navigate(view);
   }
-  if (!cashier && ME.onboardingRequired) setTimeout(openOnboardingIntro, 180);
+  if (!cashier) presentStartupJourney();
 }
 $('#cfgTimezone')?.addEventListener('change', updateTimezonePreview);
 
 boot()
-  .catch(() => (location.href = '/login'))
+  .catch((error) => {
+    // api() ya redirige únicamente cuando el servidor confirma un 401.
+    // Un error de interfaz o de otro endpoint debe permanecer visible para
+    // poder diagnosticarlo, no simular que la sesión se perdió.
+    console.error('[boot] No se pudo iniciar el panel:', error);
+    if (error?.status !== 401) {
+      const loader = $('#bootLoader');
+      const message = loader?.querySelector('p, span');
+      if (message) message.textContent = error?.message || 'No se pudo cargar el panel. Recarga la página.';
+      toast(error?.message || 'No se pudo cargar el panel', true);
+    }
+  })
   .finally(() => {
     const l = $('#bootLoader');
     l.classList.add('hide');

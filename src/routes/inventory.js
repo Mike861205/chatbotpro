@@ -1,11 +1,12 @@
 const express = require('express');
-const { requireAuth, requireOwner } = require('../middleware/auth');
+const { requireAuth, requireOwner, requireModules } = require('../middleware/auth');
 const { ensureCostingSchema, preciseCost } = require('../utils/costing');
 const { ensurePurchasingSchema } = require('../utils/purchasing');
 const { ensureBranchStockSchema, initializeBranchStock } = require('../utils/branchStock');
 
 const router = express.Router();
 router.use(requireAuth);
+router.use(requireModules('inventarios'));
 router.use(requireOwner);
 router.use(async (req, res, next) => {
   try {

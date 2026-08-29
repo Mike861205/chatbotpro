@@ -4,10 +4,11 @@ const OpenAI = require('openai');
 const config = require('../config');
 const { q, setSetting, getSuperAdminSetting } = require('../db');
 const { decrypt } = require('../utils/crypto');
-const { requireAuth, requireOwner } = require('../middleware/auth');
+const { requireAuth, requireOwner, requireModules } = require('../middleware/auth');
 const { createImageUpload, deleteManagedUpload, optimizeUploadedImage, safeUnlink } = require('../utils/uploads');
 const { CURRENCIES, TIME_ZONES, regionalDefaults, isSupportedCurrency, isSupportedTimeZone } = require('../utils/regional');
-const { normalizeCustomPaymentMethods } = require('../utils/paymentMethods');
+const { normalizeCustomPaymentMethods, normalizePaymentAccounts } = require('../utils/paymentMethods');
+const { validateFloatingIcons } = require('../utils/chatbotAppearance');
 
 const router = express.Router();
 router.use(requireAuth);
@@ -44,6 +45,7 @@ const SETTING_KEYS = [
   'chatbot_upsell_product_ids',
   'chatbot_upsell_offers_json',
   'chatbot_extra_options_json',
+  'chatbot_floating_icons_json',
   'chatbot_pos_integration_enabled',
   'chatbot_pos_global_orders_enabled',
   'self_service_enabled',
@@ -91,30 +93,6 @@ function normalizeReceivingModes(raw) {
   });
 }
 
-function normalizeBankAccounts(raw) {
-  let accounts;
-  try {
-    accounts = JSON.parse(String(raw || '[]'));
-  } catch {
-    throw new Error('La configuración de cuentas bancarias no es válida');
-  }
-  if (!Array.isArray(accounts) || accounts.length > 10) {
-    throw new Error('Puedes configurar hasta 10 cuentas bancarias');
-  }
-  return accounts.map((account) => {
-    const bankName = String(account?.bankName || '').trim().slice(0, 80);
-    const holderName = String(account?.holderName || '').trim().slice(0, 100);
-    const identifier = String(account?.identifier || '').trim().slice(0, 50);
-    const identifierType = ['account', 'clabe', 'card'].includes(account?.identifierType)
-      ? account.identifierType
-      : '';
-    if (!bankName || !holderName || !identifier || !identifierType) {
-      throw new Error('Completa banco, titular, tipo y número en cada cuenta bancaria');
-    }
-    return { bankName, holderName, identifierType, identifier };
-  });
-}
-
 router.get('/', async (req, res, next) => {
   try {
     const out = Object.fromEntries(SETTING_KEYS.map((key) => [key, '']));
@@ -141,7 +119,7 @@ router.get('/', async (req, res, next) => {
 router.put('/', upload.single('logo'), async (req, res, next) => {
   let nextLogoPath = null;
   try {
-    if (req.user.role !== 'owner') return res.status(403).json({ error: 'No tienes permiso para modificar la configuración' });
+    if (req.user.role !== 'owner' && !(req.user.role === 'staff' && req.user.permissions.some((key) => ['config', 'chatbot'].includes(key)))) return res.status(403).json({ error: 'No tienes permiso para modificar la configuración' });
     const body = req.body || {};
     if (body.currency !== undefined) {
       body.currency = String(body.currency || '').trim().toUpperCase();
@@ -153,7 +131,7 @@ router.put('/', upload.single('logo'), async (req, res, next) => {
     }
     if (body.chatbot_bank_accounts_json !== undefined) {
       try {
-        body.chatbot_bank_accounts_json = JSON.stringify(normalizeBankAccounts(body.chatbot_bank_accounts_json));
+        body.chatbot_bank_accounts_json = JSON.stringify(normalizePaymentAccounts(body.chatbot_bank_accounts_json, { context: 'transferencias' }));
       } catch (error) {
         return res.status(400).json({ error: error.message });
       }
@@ -171,6 +149,13 @@ router.put('/', upload.single('logo'), async (req, res, next) => {
         return res.status(400).json({ error: 'El NIP debe contener de 4 a 8 dígitos' });
       }
       await setSetting(req.tdb, 'pos_authorization_pin_hash', pin ? await bcrypt.hash(pin, 12) : '');
+    }
+    if (body.chatbot_floating_icons_json !== undefined) {
+      try {
+        body.chatbot_floating_icons_json = JSON.stringify(validateFloatingIcons(body.chatbot_floating_icons_json));
+      } catch (error) {
+        return res.status(400).json({ error: error.message });
+      }
     }
     if (body.custom_payment_methods_json !== undefined) {
       try {
@@ -250,7 +235,7 @@ function buildFallbackPromoTexts({ businessName, link, productNames = [], catego
   ];
 }
 
-router.post('/ai-promo-texts', async (req, res, next) => {
+router.post('/ai-promo-texts', requireModules('chatbot'), async (req, res, next) => {
   try {
     const { goal = 'general', details = '', tone = 'friendly', link: clientLink = '' } = req.body || {};
     const businessName = req.tenant.business_name || 'Mi Negocio';

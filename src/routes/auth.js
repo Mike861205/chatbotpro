@@ -11,6 +11,8 @@ const { regionalDefaults, isSupportedTimeZone } = require('../utils/regional');
 const { isMexicoIdentity, invoicingPortalUrl, isFiscalEmitterReady } = require('../utils/invoicing');
 const { sendLeadNotification, sendRegistrationNotification } = require('../utils/mailer');
 const { createConfiguredFacturamaClients } = require('../services/facturama');
+const { MODULES, normalizeModules } = require('../utils/modules');
+const { TRIAL_DAYS, trialState } = require('../utils/trialAccess');
 
 const router = express.Router();
 const facturamaClients = createConfiguredFacturamaClients();
@@ -223,8 +225,8 @@ router.post('/register', authAttemptLimiter, async (req, res, next) => {
     // Tenant y propietario se crean de forma atómica y en un solo viaje a Neon.
     const created = await q(
       `WITH new_tenant AS (
-         INSERT INTO tenants (slug, business_name, owner_name, phone_enc, phone_country, phone_calling_code, timezone, reseller_id, invoicing_environment)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $10, $11)
+         INSERT INTO tenants (slug, business_name, owner_name, phone_enc, phone_country, phone_calling_code, timezone, reseller_id, invoicing_environment, trial_started_on, trial_ends_on, trial_status, sales_stage)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $10, $11, (now() AT TIME ZONE $7)::date, (now() AT TIME ZONE $7)::date + $12::int, 'active', 'potential')
          RETURNING *
        ), new_user AS (
          INSERT INTO users (tenant_id, username, password_hash, onboarding_completed)
@@ -245,10 +247,26 @@ router.post('/register', authAttemptLimiter, async (req, res, next) => {
         passwordHash,
         resellerId,
         normalizedPhone.country === 'MX' || String(normalizedPhone.callingCode || '').replace(/\D/g, '') === '52' ? 'production' : 'sandbox',
+        TRIAL_DAYS,
       ]
     );
     const tenant = created.rows[0].tenant;
     const owner = created.rows[0].owner;
+
+    const sourceLead = await q(
+      `UPDATE demo_leads
+       SET sales_stage = 'potential', sales_updated_at = now(), last_seen_at = now()
+       WHERE phone_hash = $1
+       RETURNING id`,
+      [lookupHash(normalizedPhone.digits)]
+    );
+    if (sourceLead.rows[0]) {
+      await q(
+        `INSERT INTO sales_followup_activities (demo_lead_id, activity_type, note, stage_from, stage_to, created_by)
+         VALUES ($1, 'stage_change', 'El lead creó su entorno propio de prueba real por 5 días.', 'interested', 'potential', 'system:trial-registration')`,
+        [sourceLead.rows[0].id]
+      );
+    }
 
     // Crea el SCHEMA AISLADO del tenant en Neon con valores por defecto
     await initTenantDefaults(cleanSlug, cleanBusinessName, regional, tenant.id);
@@ -292,6 +310,17 @@ router.post('/login', authAttemptLimiter, async (req, res, next) => {
     const t = await q('SELECT * FROM tenants WHERE id = $1', [user.tenant_id]);
     const tenant = t.rows[0];
     if (!tenant) return res.status(401).json({ error: 'Tenant no encontrado' });
+    const loginTrial = trialState(tenant);
+    if (loginTrial.isExpired) {
+      await q("UPDATE tenants SET trial_status = 'expired', account_status = 'inactive' WHERE id = $1 AND trial_status = 'active'", [tenant.id]);
+      return res.status(403).json({
+        error: 'Tu prueba real de 5 días terminó. Tus datos siguen guardados; contrata una suscripción o contacta al administrador para reactivar tu cuenta.',
+        errorCode: 'TRIAL_EXPIRED',
+        supportPhone: SUPPORT_WHATSAPP,
+        whatsappUrl: supportWhatsappUrl(),
+        subscriptionUrl: '/app#suscripciones',
+      });
+    }
     if (tenant.account_status !== 'active') {
       return res.status(403).json({ error: 'La cuenta del negocio está inactiva. Contacta al administrador.' });
     }
@@ -462,6 +491,47 @@ router.post('/module-usage', requireAuth, async (req, res, next) => {
   }
 });
 
+router.get('/demo-registration-profile', requireAuth, async (req, res, next) => {
+  try {
+    const demoLeadId = Number(req.user.demoLeadId || 0);
+    if (!demoLeadId) return res.status(404).json({ error: 'No hay un lead demo asociado a esta sesión' });
+    const found = await q('SELECT * FROM demo_leads WHERE id = $1 LIMIT 1', [demoLeadId]);
+    const lead = found.rows[0];
+    if (!lead) return res.status(404).json({ error: 'Lead demo no encontrado' });
+    res.json({
+      contactName: lead.contact_name || '',
+      phone: decrypt(lead.phone_enc) || '',
+      phoneCountry: lead.phone_country || '',
+      businessGiro: lead.business_giro || '',
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post('/demo-interest', requireAuth, async (req, res, next) => {
+  try {
+    const demoLeadId = Number(req.user.demoLeadId || 0);
+    if (!demoLeadId) return res.status(403).json({ error: 'Esta sesión no corresponde a un lead demo' });
+    const updated = await q(
+      `UPDATE demo_leads
+       SET sales_stage = 'interested', sales_updated_at = now(), last_seen_at = now()
+       WHERE id = $1
+       RETURNING id`,
+      [demoLeadId]
+    );
+    if (!updated.rows[0]) return res.status(404).json({ error: 'Lead demo no encontrado' });
+    await q(
+      `INSERT INTO sales_followup_activities (demo_lead_id, activity_type, note, stage_from, stage_to, created_by)
+       VALUES ($1, 'stage_change', 'Solicitó probar el sistema con sus propios productos, ventas y pedidos.', 'new', 'interested', 'lead:self-service')`,
+      [demoLeadId]
+    );
+    res.json({ ok: true, redirectTo: '/register?source=demo' });
+  } catch (error) {
+    next(error);
+  }
+});
+
 router.get('/cashier-info/:slug', async (req, res, next) => {
   try {
     const cashierSlug = String(req.params.slug || '').trim().toLowerCase();
@@ -594,12 +664,16 @@ router.get('/me', requireAuth, async (req, res, next) => {
     res.json({
     username: req.user.username,
     role: req.user.role,
+    jobTitle: req.user.jobTitle,
+    permissions: req.user.role === 'owner' ? MODULES.map(([key]) => key) : req.user.permissions,
     displayName: req.user.displayName,
     branchId: req.user.branchId,
     branchName: req.user.branchName,
     cashierSlug: req.user.cashierSlug,
     onboardingCompleted: req.user.onboardingCompleted,
     onboardingRequired: req.user.role === 'owner' && !req.user.onboardingCompleted && !req.user.impersonated,
+    demoSession: Boolean(req.user.demoLeadId),
+    trial: trialState(req.tenant),
     tenant: {
       slug: req.tenant.slug,
       businessName: req.tenant.business_name,
@@ -614,6 +688,7 @@ router.get('/me', requireAuth, async (req, res, next) => {
       invoicingReady,
       invoicingReadyByBranch,
       invoicingPortalUrl: invoicingPortalUrl(req, config.INVOICING_PORTAL_ORIGIN, req.tenant.slug),
+      hiddenModules: req.user.role === 'owner' ? normalizeModules(req.tenant.hidden_modules_json).filter((key) => key !== 'config') : [],
     },
   });
   } catch (error) {

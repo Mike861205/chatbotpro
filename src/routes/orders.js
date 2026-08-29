@@ -1,5 +1,5 @@
 const express = require('express');
-const { requireAuth } = require('../middleware/auth');
+const { requireAuth, requireModules } = require('../middleware/auth');
 const { decrypt } = require('../utils/crypto');
 const { ensurePurchasingSchema } = require('../utils/purchasing');
 const { ensureBranchStockSchema, initializeBranchStock, applyBranchSaleStock, restoreBranchSaleStock } = require('../utils/branchStock');
@@ -7,6 +7,7 @@ const { operationalOrderNote } = require('../utils/orderNotes');
 
 const router = express.Router();
 router.use(requireAuth);
+router.use(requireModules('pedidos', 'pos'));
 router.use(async (req, res, next) => {
   try {
     await ensurePurchasingSchema(req.tdb);

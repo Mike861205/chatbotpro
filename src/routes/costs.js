@@ -1,9 +1,10 @@
 const express = require('express');
-const { requireAuth, requireOwner } = require('../middleware/auth');
+const { requireAuth, requireOwner, requireModules } = require('../middleware/auth');
 const { ensureCostingSchema, money, preciseCost } = require('../utils/costing');
 
 const router = express.Router();
 router.use(requireAuth);
+router.use(requireModules('costos'));
 router.use(requireOwner);
 router.use(async (req, res, next) => {
   try {

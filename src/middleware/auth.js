@@ -2,6 +2,8 @@ const jwt = require('jsonwebtoken');
 const config = require('../config');
 const { q, tdb } = require('../db');
 const { normalizeTimeZone } = require('../utils/regional');
+const { normalizeModules } = require('../utils/modules');
+const { trialState } = require('../utils/trialAccess');
 
 const COOKIE_NAME = 'cbp_token';
 const OWNER_COOKIE_NAME = 'cbp_owner_token';
@@ -9,6 +11,7 @@ const CASHIER_COOKIE_NAME = 'cbp_cashier_token';
 const AUTH_SCOPE_HEADER = 'x-cbp-auth-scope';
 const SUPPORT_WHATSAPP = '526241370820';
 const SUPPORT_MESSAGE = 'tengo suspendiedo mi servicio y quiero realizar mi pago para activarlo';
+const SUBSCRIPTION_URL = '/app#suscripciones';
 
 function supportWhatsappUrl() {
   return `https://wa.me/${SUPPORT_WHATSAPP}?text=${encodeURIComponent(SUPPORT_MESSAGE)}`;
@@ -110,7 +113,27 @@ async function requireAuth(req, res, next) {
       return res.status(401).json({ error: 'Usuario inactivo o no encontrado' });
     }
     if (!tenant) return res.status(401).json({ error: 'Tenant no encontrado' });
-    if (tenant.account_status !== 'active') {
+    const trial = trialState(tenant);
+    let allowExpiredProfile = false;
+    if (trial.isExpired && !payload.imp) {
+      if (tenant.trial_status !== 'expired') {
+        await q("UPDATE tenants SET trial_status = 'expired', account_status = 'inactive' WHERE id = $1 AND trial_status = 'active'", [tenant.id]);
+        tenant.trial_status = 'expired';
+        tenant.account_status = 'inactive';
+      }
+      const isOwnProfile = req.baseUrl === '/api/auth' && req.path === '/me';
+      allowExpiredProfile = isOwnProfile;
+      if (!isOwnProfile) {
+        return res.status(403).json({
+          error: 'Tu prueba real de 5 días terminó. Tus datos siguen guardados; elige una suscripción o contacta al administrador para reactivar tu cuenta.',
+          errorCode: 'TRIAL_EXPIRED',
+          supportPhone: SUPPORT_WHATSAPP,
+          whatsappUrl: supportWhatsappUrl(),
+          subscriptionUrl: SUBSCRIPTION_URL,
+        });
+      }
+    }
+    if (tenant.account_status !== 'active' && !allowExpiredProfile) {
       return res.status(403).json({ error: 'La cuenta del negocio está inactiva. Contacta al administrador.' });
     }
     if (tenant.billing_status === 'suspended') {
@@ -137,6 +160,8 @@ async function requireAuth(req, res, next) {
       slug: tenant.slug,
       username: authUser.username,
       role: authUser.role || 'owner',
+      jobTitle: authUser.job_title || '',
+      permissions: normalizeModules(authUser.permissions_json),
       displayName: authUser.display_name || authUser.username,
       branchId,
       branchName,
@@ -157,10 +182,19 @@ async function requireAuth(req, res, next) {
 
 function requireOwner(req, res, next) {
   if (!req.user) return res.status(401).json({ error: 'No autenticado' });
-  if (req.user.role !== 'owner') {
+  if (req.user.role !== 'owner' && req.user.role !== 'staff') {
     return res.status(403).json({ error: 'No tienes permiso para acceder a este módulo' });
   }
   next();
 }
 
-module.exports = { signToken, setAuthCookie, clearAuthCookie, requireAuth, requireOwner, COOKIE_NAME };
+function requireModules(...moduleKeys) {
+  return (req, res, next) => {
+    if (!req.user) return res.status(401).json({ error: 'No autenticado' });
+    if (req.user.role === 'cashier' && moduleKeys.some((key) => ['pos', 'pedidos', 'cortes', 'cancelaciones'].includes(key))) return next();
+    if (req.user.role === 'owner' || (req.user.role === 'staff' && moduleKeys.some((key) => req.user.permissions.includes(key)))) return next();
+    return res.status(403).json({ error: 'No tienes permiso para acceder a este modulo' });
+  };
+}
+
+module.exports = { signToken, setAuthCookie, clearAuthCookie, requireAuth, requireOwner, requireModules, COOKIE_NAME };

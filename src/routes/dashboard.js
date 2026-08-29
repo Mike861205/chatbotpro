@@ -1,9 +1,10 @@
 const express = require('express');
-const { requireAuth, requireOwner } = require('../middleware/auth');
+const { requireAuth, requireOwner, requireModules } = require('../middleware/auth');
 const { branchCapacity } = require('../utils/branchLimit');
 
 const router = express.Router();
 router.use(requireAuth);
+router.use(requireModules('dashboard'));
 router.use(requireOwner);
 
 const TZ = 'America/Mexico_City';

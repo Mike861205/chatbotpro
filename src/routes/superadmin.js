@@ -623,6 +623,9 @@ router.get('/tenants', requireSuperAdmin, async (req, res, next) => {
         t.invoicing_enabled,
         t.invoicing_activated_at,
         t.invoicing_trial_granted_at,
+        t.trial_started_on,
+        t.trial_ends_on,
+        t.trial_status,
         t.billing_due_date,
         CASE
           WHEN t.billing_due_date IS NULL THEN NULL
@@ -1565,8 +1568,14 @@ router.post('/tenants/:id/suspend', requireSuperAdmin, async (req, res, next) =>
     }
 
     const nextStatus = suspend ? 'inactive' : 'active';
-    await q('UPDATE tenants SET account_status = $1 WHERE id = $2', [nextStatus, tenantId]);
-    res.json({ ok: true, mode, account_status: nextStatus });
+    await q(
+      `UPDATE tenants
+       SET account_status = $1,
+           trial_status = CASE WHEN $1 = 'active' AND trial_status = 'expired' THEN 'unlocked' ELSE trial_status END
+       WHERE id = $2`,
+      [nextStatus, tenantId]
+    );
+    res.json({ ok: true, mode, account_status: nextStatus, trialUnlocked: !suspend });
   } catch (e) {
     next(e);
   }
@@ -1615,6 +1624,7 @@ router.post('/tenants/:id/payment', requireSuperAdmin, async (req, res, next) =>
       `UPDATE tenants
        SET billing_status = 'active',
            account_status = 'active',
+           trial_status = 'converted',
            billing_due_date = $1::date,
            plan_name = $5,
            customer_since = COALESCE(customer_since, $2::date),

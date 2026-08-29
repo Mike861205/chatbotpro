@@ -1,5 +1,5 @@
 const express = require('express');
-const { requireAuth, requireOwner } = require('../middleware/auth');
+const { requireAuth, requireOwner, requireModules } = require('../middleware/auth');
 const { ensureCostingSchema, money } = require('../utils/costing');
 const { ensurePurchasingSchema } = require('../utils/purchasing');
 const { getSetting } = require('../db');
@@ -7,6 +7,7 @@ const { parseCustomPaymentMethods, isCustomPaymentMethod } = require('../utils/p
 
 const router = express.Router();
 router.use(requireAuth);
+router.use(requireModules('ventas', 'cortes', 'cancelaciones', 'pos'));
 router.use(requireOwner);
 router.use(async (req, res, next) => {
   try {

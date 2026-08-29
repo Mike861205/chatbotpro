@@ -1,7 +1,7 @@
 const express = require('express');
 const crypto = require('node:crypto');
 const { q, tdb, getSetting } = require('../db');
-const { requireAuth, requireOwner } = require('../middleware/auth');
+const { requireAuth, requireOwner, requireModules } = require('../middleware/auth');
 const { createRateLimiter } = require('../middleware/security');
 const { normalizeTimeZone } = require('../utils/regional');
 const { encrypt, lookupHash } = require('../utils/crypto');
@@ -17,6 +17,7 @@ const {
   validateWebhookSignature,
 } = require('../utils/mercadoPagoPoint');
 const { finalizeSelfServiceOrder, getOpenBranchSession } = require('../utils/selfServiceCheckout');
+const { trialState } = require('../utils/trialAccess');
 
 const router = express.Router();
 const publicLimiter = createRateLimiter({
@@ -72,12 +73,13 @@ function deviceUrl(slug, token) {
 
 async function resolveDevice(slug, token) {
   const found = await q(
-    `SELECT id, slug, business_name, logo, primary_color, account_status, billing_status, timezone
+    `SELECT id, slug, business_name, logo, primary_color, account_status, billing_status, timezone,
+            customer_since, trial_status, trial_started_on, trial_ends_on
      FROM tenants WHERE slug=$1 LIMIT 1`,
     [cleanSlug(slug)]
   );
   const tenant = found.rows[0];
-  if (!tenant || tenant.account_status !== 'active' || tenant.billing_status === 'suspended') return null;
+  if (!tenant || tenant.account_status !== 'active' || tenant.billing_status === 'suspended' || trialState(tenant).isExpired) return null;
   const tenantDb = tdb(tenant.slug);
   tenant.timezone = normalizeTimeZone(tenant.timezone);
   tenantDb.timezone = tenant.timezone;
@@ -568,6 +570,7 @@ router.get('/public/:slug/:token/orders/:id', publicLimiter, async (req, res, ne
 });
 
 router.use(requireAuth);
+router.use(requireModules('config', 'pos'));
 router.use(requireOwner);
 
 router.get('/devices', async (req, res, next) => {

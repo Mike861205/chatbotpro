@@ -1,9 +1,10 @@
 const express = require('express');
-const { requireAuth, requireOwner } = require('../middleware/auth');
+const { requireAuth, requireOwner, requireModules } = require('../middleware/auth');
 const { decrypt } = require('../utils/crypto');
 
 const router = express.Router();
 router.use(requireAuth);
+router.use(requireModules('clientes'));
 router.use(requireOwner);
 
 function decodeCustomerField(value, fallback = '') {

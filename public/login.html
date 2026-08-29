@@ -94,6 +94,9 @@
         <a class="btn btn-primary btn-block" id="suspendedWaBtn" href="https://wa.me/526241370820?text=tengo%20suspendiedo%20mi%20servicio%20y%20quiero%20realizar%20mi%20pago%20para%20activarlo" target="_blank" rel="noopener noreferrer" style="display:none;margin-bottom:12px">
           <i class="ph-bold ph-whatsapp-logo"></i> Contactar por WhatsApp
         </a>
+        <a class="btn btn-ghost btn-block" id="trialSubscriptionBtn" href="https://buy.stripe.com/00wcN44Zn33H3BV5DU4c80i" target="_blank" rel="noopener noreferrer" style="display:none;margin-bottom:12px">
+          <i class="ph-bold ph-seal-check"></i> Activar suscripción
+        </a>
         <form id="loginForm">
           <div class="field">
             <label for="username"><i class="ph-bold ph-user"></i> Usuario</label>
@@ -180,8 +183,10 @@
     async function doLogin(endpoint, body) {
       const errBox = document.getElementById('error');
       const waBtn = document.getElementById('suspendedWaBtn');
+      const subscriptionBtn = document.getElementById('trialSubscriptionBtn');
       errBox.classList.remove('show');
       waBtn.style.display = 'none';
+      subscriptionBtn.style.display = 'none';
       loginBtn.disabled = true;
       demoBtn.disabled = true;
       try {
@@ -195,6 +200,11 @@
           if (res.status === 403 && data && data.errorCode === 'BILLING_SUSPENDED' && data.whatsappUrl) {
             waBtn.href = data.whatsappUrl;
             waBtn.style.display = 'inline-flex';
+          }
+          if (res.status === 403 && data && data.errorCode === 'TRIAL_EXPIRED') {
+            if (data.whatsappUrl) waBtn.href = data.whatsappUrl;
+            waBtn.style.display = 'inline-flex';
+            subscriptionBtn.style.display = 'inline-flex';
           }
           throw new Error(data.error || 'Error');
         }

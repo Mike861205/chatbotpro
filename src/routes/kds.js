@@ -1,10 +1,11 @@
 const express = require('express');
 const crypto = require('node:crypto');
 const { q, tdb } = require('../db');
-const { requireAuth, requireOwner } = require('../middleware/auth');
+const { requireAuth, requireOwner, requireModules } = require('../middleware/auth');
 const { decrypt } = require('../utils/crypto');
 const { operationalOrderNote } = require('../utils/orderNotes');
 const { normalizeTimeZone } = require('../utils/regional');
+const { trialState } = require('../utils/trialAccess');
 
 const router = express.Router();
 const KDS_STATUSES = new Set(['pending', 'preparing', 'ready', 'completed']);
@@ -51,12 +52,13 @@ function publicAreaPath(slug, token) {
 
 async function resolvePublicArea(slug, token) {
   const tenantResult = await q(
-    `SELECT id, slug, business_name, logo, primary_color, account_status, billing_status, timezone
+    `SELECT id, slug, business_name, logo, primary_color, account_status, billing_status, timezone,
+            customer_since, trial_status, trial_started_on, trial_ends_on
      FROM tenants WHERE slug = $1 LIMIT 1`,
     [cleanSlug(slug)]
   );
   const tenant = tenantResult.rows[0];
-  if (!tenant || tenant.account_status !== 'active' || tenant.billing_status === 'suspended') return null;
+  if (!tenant || tenant.account_status !== 'active' || tenant.billing_status === 'suspended' || trialState(tenant).isExpired) return null;
   const tenantDb = tdb(tenant.slug);
   tenant.timezone = normalizeTimeZone(tenant.timezone);
   tenantDb.timezone = tenant.timezone;
@@ -276,6 +278,7 @@ router.patch('/public/:slug/:token/orders/:orderId', async (req, res, next) => {
 });
 
 router.use(requireAuth);
+router.use(requireModules('kds'));
 router.use(requireOwner);
 
 async function listAreas(req) {

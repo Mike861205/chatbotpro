@@ -2,7 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const { normalizeCustomPaymentMethods, parseCustomPaymentMethods } = require('../src/utils/paymentMethods');
+const { normalizeCustomPaymentMethods, normalizePaymentAccounts, parseCustomPaymentMethods } = require('../src/utils/paymentMethods');
 
 const root = path.join(__dirname, '..');
 
@@ -12,10 +12,32 @@ test('normaliza medios locales con identificadores estables y activación', () =
     { label: 'Pix', active: false },
   ]));
   assert.deepEqual(methods, [
-    { id: 'custom_pago_movil', label: 'Pago Móvil', active: true },
-    { id: 'custom_pix', label: 'Pix', active: false },
+    { id: 'custom_pago_movil', label: 'Pago Móvil', active: true, accountDetailsEnabled: false, accounts: [] },
+    { id: 'custom_pix', label: 'Pix', active: false, accountDetailsEnabled: false, accounts: [] },
   ]);
   assert.deepEqual(parseCustomPaymentMethods('contenido inválido'), []);
+});
+
+test('permite cuentas configurables por cada medio de pago local', () => {
+  const [method] = normalizeCustomPaymentMethods([{
+    label: 'Pago Móvil',
+    accountDetailsEnabled: true,
+    accounts: [{
+      bankName: 'Banco de Venezuela',
+      holderName: 'Comercial Ejemplo',
+      identifierType: 'phone',
+      identifier: '+58 412-1234567',
+    }],
+  }]);
+  assert.equal(method.accountDetailsEnabled, true);
+  assert.equal(method.accounts[0].identifierType, 'phone');
+  assert.throws(
+    () => normalizeCustomPaymentMethods([{ label: 'Pago Móvil', accountDetailsEnabled: true, accounts: [] }]),
+    /al menos una cuenta/
+  );
+  assert.equal(normalizePaymentAccounts([{
+    bankName: 'Banco', holderName: 'Titular', identifierType: 'document', identifier: 'V-12345678',
+  }])[0].identifierType, 'document');
 });
 
 test('limita y valida el catálogo personalizado del tenant', () => {
@@ -39,6 +61,8 @@ test('el catálogo local se conecta con configuración, chatbot y POS', () => {
   assert.match(pos, /GROUP BY payment_method/);
   assert.match(app, /activeCustomMethods/);
   assert.match(app, /Chatbot y POS/);
+  assert.match(app, /data-custom-payment-accounts-enabled/);
+  assert.match(chatbot, /attachAccountsForPayment/);
   assert.match(app, /totals\.customPayments/);
   assert.match(app, /payments\?\.custom/);
   assert.match(app, /method\.tickets/);

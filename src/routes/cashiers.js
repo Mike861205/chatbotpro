@@ -6,6 +6,7 @@ const { requireAuth, requireOwner } = require('../middleware/auth');
 const router = express.Router();
 router.use(requireAuth);
 router.use(requireOwner);
+router.use((req, res, next) => req.user.role === 'owner' ? next() : res.status(403).json({ error: 'Solo el administrador puede gestionar cajeros' }));
 
 const SLUG_RE = /^[a-z0-9](?:[a-z0-9-]{1,38}[a-z0-9])?$/;
 

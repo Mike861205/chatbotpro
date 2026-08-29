@@ -4,7 +4,7 @@ const { X509Certificate } = require('node:crypto');
 const config = require('../config');
 const { q, tdb, ensureTenantCourtesyStamps } = require('../db');
 const { encrypt, decrypt, lookupHash } = require('../utils/crypto');
-const { requireAuth, requireOwner } = require('../middleware/auth');
+const { requireAuth, requireOwner, requireModules } = require('../middleware/auth');
 const { createRateLimiter } = require('../middleware/security');
 const { FacturamaError, createConfiguredFacturamaClients } = require('../services/facturama');
 const {
@@ -22,6 +22,7 @@ const {
   extractFacturamaIdentity,
   createRequestKey,
 } = require('../utils/invoicing');
+const { trialState } = require('../utils/trialAccess');
 
 const router = express.Router();
 const facturamaClients = createConfiguredFacturamaClients();
@@ -223,12 +224,13 @@ async function requireMexico(req, res, next) {
 
 async function findPublicTenant(slug) {
   const found = await q(
-    `SELECT id, slug, business_name, phone_country, phone_calling_code, logo, primary_color, account_status, billing_status, invoicing_enabled, invoicing_environment
+    `SELECT id, slug, business_name, phone_country, phone_calling_code, logo, primary_color, account_status, billing_status, invoicing_enabled, invoicing_environment,
+            timezone, customer_since, trial_status, trial_started_on, trial_ends_on
      FROM tenants WHERE slug = $1 LIMIT 1`,
     [String(slug || '').trim().toLowerCase()]
   );
   const tenant = found.rows[0];
-  if (!tenant || tenant.account_status !== 'active' || tenant.billing_status === 'suspended') return null;
+  if (!tenant || tenant.account_status !== 'active' || tenant.billing_status === 'suspended' || trialState(tenant).isExpired) return null;
   const isDemoTenant = tenant.slug === config.DEMO_TENANT_SLUG;
   if (!isMexicoIdentity(tenant) && !isDemoTenant && !Number(tenant.invoicing_enabled)) return null;
   if (!isDemoTenant && !Number(tenant.invoicing_enabled)) return null;
@@ -859,6 +861,7 @@ router.get('/public/:slug/invoices/:id/:format', publicLimiter, async (req, res,
 
 // Panel autenticado
 router.use(requireAuth);
+router.use(requireModules('facturacion', 'cfdi', 'pos'));
 router.use(requireMexico);
 
 router.get('/bootstrap', async (req, res, next) => {

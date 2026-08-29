@@ -374,7 +374,7 @@ function parseBankAccounts(raw) {
       account
       && account.bankName
       && account.holderName
-      && ['account', 'clabe', 'card'].includes(account.identifierType)
+      && ['account', 'clabe', 'card', 'phone', 'document', 'email', 'other'].includes(account.identifierType)
       && account.identifier
     )).slice(0, 10);
   } catch {
@@ -382,14 +382,14 @@ function parseBankAccounts(raw) {
   }
 }
 
-function bankAccountsFallbackMessage(accounts) {
-  const typeLabels = { account: 'Cuenta', clabe: 'CLABE', card: 'Tarjeta' };
+function bankAccountsFallbackMessage(accounts, paymentLabel = 'Transferencia') {
+  const typeLabels = { account: 'Cuenta', clabe: 'CLABE', card: 'Tarjeta', phone: 'Teléfono', document: 'Documento', email: 'Correo', other: 'Dato de pago' };
   const details = accounts.map((account, index) => [
     `🏦 ${accounts.length > 1 ? `Cuenta ${index + 1} · ` : ''}${account.bankName}`,
     `Titular: ${account.holderName}`,
     `${typeLabels[account.identifierType] || 'Cuenta'}: ${account.identifier}`,
   ].join('\n'));
-  return `Datos para realizar tu transferencia:\n\n${details.join('\n\n')}\n\nConserva tu comprobante de pago.`;
+  return `Datos para realizar tu pago con ${paymentLabel}:\n\n${details.join('\n\n')}\n\nConserva tu comprobante de pago.`;
 }
 
 async function getState(t, sessionId) {
@@ -1451,7 +1451,7 @@ async function handleMessage(t, slug, sessionId, rawInput) {
   if (!Array.isArray(state.aiHistory)) state.aiHistory = [];
   state.currency = currency;
 
-  const reply = { messages: [], options: [], products: null, cart: null, order: null, bankAccounts: null, modifierGroup: null };
+  const reply = { messages: [], options: [], products: null, cart: null, order: null, bankAccounts: null, bankAccountTitle: null, modifierGroup: null };
   const lower = input.toLowerCase();
   const finishIntents = new Set([
     'seria todo',
@@ -1463,10 +1463,17 @@ async function handleMessage(t, slug, sessionId, rawInput) {
   ]);
   const checkoutRequested = lower === 'checkout' || finishIntents.has(normalizeSearchText(input));
 
-  const attachBankAccounts = () => {
-    if (!bankAccounts.length) return;
-    reply.bankAccounts = bankAccounts;
-    reply.messages.push(bankAccountsFallbackMessage(bankAccounts));
+  const attachBankAccounts = (accounts = bankAccounts, paymentLabel = 'Transferencia') => {
+    if (!accounts.length) return;
+    reply.bankAccounts = accounts;
+    reply.bankAccountTitle = `Datos para ${paymentLabel}`;
+    reply.messages.push(bankAccountsFallbackMessage(accounts, paymentLabel));
+  };
+
+  const attachAccountsForPayment = (paymentMethod) => {
+    if (paymentMethod === 'transfer') return attachBankAccounts();
+    const customMethod = customPaymentMethods.find((method) => method.id === paymentMethod);
+    if (customMethod?.accountDetailsEnabled) attachBankAccounts(customMethod.accounts, customMethod.label);
   };
 
   const finish = async () => {
@@ -1539,7 +1546,7 @@ async function handleMessage(t, slug, sessionId, rawInput) {
     }
     if (mode.behavior === 'delivery') {
       state.step = 'ask_address';
-      reply.messages = ['¿Cuál es tu *domicilio* de entrega? Incluye calle y número exterior/interior 📍'];
+      reply.messages = ['¿Cuál es tu *domicilio* de entrega? Incluye calle/edificio 📍'];
       if (locationEnabled) reply.options = [{ label: '📍 Compartir ubicación', value: 'share_location' }];
       return;
     }
@@ -1819,7 +1826,7 @@ async function handleMessage(t, slug, sessionId, rawInput) {
   if (state.step === 'ask_order_note_after_send_choice') {
     if (lower === 'order_note_yes') {
       state.step = 'ask_order_note_after_send_text';
-      reply.messages = ['Perfecto, escribe tus instrucciones para tu pedido (ej: hamburguesa sin cebolla).'];
+      reply.messages = ['Perfecto, escribe tus instrucciones para tu pedido (Ej. salsa de soya, salsa agridulce...).'];
       reply.options = [{ label: 'Omitir nota', value: 'order_note_skip' }];
       return finish();
     }
@@ -2058,7 +2065,7 @@ async function handleMessage(t, slug, sessionId, rawInput) {
       `${returningAddressText(profile)}\n\n¿Esta es tu dirección para este nuevo pedido?`,
     ];
     reply.options = [
-      { label: '✅ Sí, usar esta dirección', value: 'returning_address_yes' },
+      { label: '✅ Sí, usar este domicilio', value: 'returning_address_yes' },
       { label: '✏️ No, capturar nueva', value: 'returning_address_no' },
       { label: '🏪 Usar para recoger en sucursal', value: 'returning_address_pickup' },
     ];
@@ -2109,7 +2116,7 @@ async function handleMessage(t, slug, sessionId, rawInput) {
       if (!pickupEnabled) {
         reply.messages = ['En este momento solo está activa la entrega a domicilio. ¿Deseas usar la dirección guardada?'];
         reply.options = [
-          { label: '✅ Sí, usar esta dirección', value: 'returning_address_yes' },
+          { label: '✅ Sí, usar este domicilio', value: 'returning_address_yes' },
           { label: '✏️ No, capturar nueva', value: 'returning_address_no' },
         ];
         return finish();
@@ -2158,7 +2165,7 @@ async function handleMessage(t, slug, sessionId, rawInput) {
 
     reply.messages = ['Confírmame si usarás la misma dirección del último pedido:'];
     reply.options = [
-      { label: '✅ Sí, usar esta dirección', value: 'returning_address_yes' },
+      { label: '✅ Sí, usar este domicilio', value: 'returning_address_yes' },
       { label: '✏️ No, capturar nueva', value: 'returning_address_no' },
       { label: '🏪 Usar para recoger en sucursal', value: 'returning_address_pickup' },
     ];
@@ -2202,7 +2209,7 @@ async function handleMessage(t, slug, sessionId, rawInput) {
     }
 
     state.step = 'ask_order_note_choice';
-    reply.messages = ['¿Deseas agregar una nota a tu pedido? (Ej: hamburguesa sin cebolla)'];
+    reply.messages = ['¿Deseas agregar una nota a tu pedido? (Ej. salsa de soya, salsa agridulce...)'];
     reply.options = [
       { label: '✅ Sí, agregar nota', value: 'order_note_yes' },
       { label: '❌ No, continuar', value: 'order_note_no' },
@@ -2458,7 +2465,7 @@ async function handleMessage(t, slug, sessionId, rawInput) {
       state.step = 'ask_address_after_location';
       reply.messages = [
         `🗺️ Ubicación recibida. Abrir en Maps: ${mapsUrl(geo.lat, geo.lng)}${Number(state.customer.deliveryFee || 0) > 0 ? `\n🛵 Envío detectado: ${money(state.customer.deliveryFee, currency)}${state.customer.deliveryZoneName ? ` (${state.customer.deliveryZoneName})` : ''}` : ''}`,
-        'Ahora escribe el *domicilio*: calle y número exterior/interior.',
+        'Ahora escribe el *domicilio*: calle/edificio.',
       ];
       return finish();
     }
@@ -2477,7 +2484,7 @@ async function handleMessage(t, slug, sessionId, rawInput) {
   if (state.step === 'ask_address_after_location') {
     const address = String(input || '').trim();
     if (address.length < 5) {
-      reply.messages = ['Escribe un domicilio más completo: calle y número exterior/interior.'];
+      reply.messages = ['Escribe un domicilio más completo: calle/edificio.'];
       return finish();
     }
     state.customer.address = address.slice(0, 200);
@@ -2611,8 +2618,12 @@ async function handleMessage(t, slug, sessionId, rawInput) {
     state.customer.paymentMethod = selected;
     state.customer.paymentMethodLabel = chatPaymentOptions.find((opt) => opt.method === selected)?.plainLabel || paymentMethodLabel(selected);
     state.step = 'confirm';
-    if (selected === 'transfer' && bankAccounts.length) {
-      attachBankAccounts();
+    const selectedCustomMethod = customPaymentMethods.find((method) => method.id === selected);
+    const hasAccountDetails = selected === 'transfer'
+      ? bankAccounts.length > 0
+      : Boolean(selectedCustomMethod?.accountDetailsEnabled && selectedCustomMethod.accounts.length);
+    if (hasAccountDetails) {
+      attachAccountsForPayment(selected);
       reply.messages.push(confirmText(state, businessName, currency, labels));
     } else {
       reply.messages = [confirmText(state, businessName, currency, labels)];
@@ -2713,7 +2724,7 @@ async function handleMessage(t, slug, sessionId, rawInput) {
       reply.messages = [
         `🎉 *¡Pedido #${orderRow.id} recibido!*\n\nEn breve lo confirmamos. ¡Gracias por tu preferencia! 🙏`,
       ];
-      if (state.customer.paymentMethod === 'transfer') attachBankAccounts();
+      attachAccountsForPayment(state.customer.paymentMethod);
       reply.order = { id: orderRow.id, total, totalLabel: money(total, currency), whatsappLink: waLink, summary: orderText };
       if (waLink) reply.messages.push('👇 Toca el botón para enviar el resumen de tu pedido por WhatsApp y agilizar la atención.');
       if (!waLink) reply.messages.push('⚠️ El negocio aún no tiene un WhatsApp válido para envío automático. Tu pedido ya quedó registrado.');
@@ -2723,7 +2734,7 @@ async function handleMessage(t, slug, sessionId, rawInput) {
     }
     if (lower === 'confirm_edit_note') {
       state.step = 'confirm_edit_note_text';
-      reply.messages = ['Escribe la nota de tu pedido. Ejemplo: hamburguesa sin cebolla.'];
+      reply.messages = ['Escribe la nota de tu pedido. Ej. salsa de soya, salsa agridulce...'];
       reply.options = [{ label: '🗑️ Quitar nota', value: 'confirm_remove_note' }];
       return finish();
     }

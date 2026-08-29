@@ -1,5 +1,5 @@
 const express = require('express');
-const { requireAuth, requireOwner } = require('../middleware/auth');
+const { requireAuth, requireOwner, requireModules } = require('../middleware/auth');
 const { ensureCostingSchema, money } = require('../utils/costing');
 const { ensurePurchasingSchema, writePurchaseAudit } = require('../utils/purchasing');
 const { ensureBranchStockSchema, initializeBranchStock, n } = require('../utils/branchStock');
@@ -7,6 +7,7 @@ const { stockValuation } = require('../utils/stockValuation');
 
 const router = express.Router();
 router.use(requireAuth);
+router.use(requireModules('stock-sucursales', 'compras', 'inventarios'));
 router.use(requireOwner);
 router.use(async (req, res, next) => {
   try {

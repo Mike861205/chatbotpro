@@ -1,12 +1,13 @@
 // Rutas para gestión de Push Subscriptions (Web Push API)
 const express = require('express');
-const { requireAuth, requireOwner } = require('../middleware/auth');
+const { requireAuth, requireOwner, requireModules } = require('../middleware/auth');
 const config = require('../config');
 const { tdb } = require('../db');
 const { sendTenantPush } = require('../notifications');
 
 const router = express.Router();
 router.use(requireAuth);
+router.use(requireModules('pedidos', 'pos'));
 router.use(requireOwner);
 
 // Devuelve la clave pública VAPID para que el frontend pueda suscribirse

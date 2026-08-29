@@ -26,6 +26,15 @@ test('el chatbot solicita la colonia antes de completar un domicilio', () => {
   assert.match(chatbot, /colonia, barrio o sector/i);
 });
 
+test('el asistente usa el vocabulario solicitado para notas y domicilio', () => {
+  assert.match(chatbot, /Ej\. salsa de soya, salsa agridulce\.\.\./);
+  assert.match(chatbot, /Sí, usar este domicilio/);
+  assert.match(chatbot, /Incluye calle\/edificio/);
+  assert.doesNotMatch(chatbot, /hamburguesa sin cebolla/i);
+  assert.doesNotMatch(chatbot, /usar esta dirección/i);
+  assert.doesNotMatch(chatbot, /número exterior\/interior/i);
+});
+
 test('compartir ubicación no sustituye la calle y número del domicilio', () => {
   assert.match(chatbot, /state\.step = 'ask_address_after_location'/);
   assert.match(chatbot, /if \(state\.step === 'ask_address_after_location'\)/);

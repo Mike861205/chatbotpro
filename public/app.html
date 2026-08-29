@@ -11,7 +11,7 @@
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/fill/style.css" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/duotone/style.css" />
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-  <link rel="stylesheet" href="/static/css/styles.css?v=20260825posworkspace2" />
+  <link rel="stylesheet" href="/static/css/styles.css?v=20260829trialflow2" />
   <link rel="icon" type="image/svg+xml" href="/static/favicon.svg" />
   <link rel="icon" type="image/png" href="/static/chatbotpro100.png" />
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
@@ -773,6 +773,15 @@
                 <textarea id="botWelcome" rows="3"></textarea>
                 <div class="hint">Es lo primero que ve tu cliente al abrir el chat.</div>
               </div>
+              <div class="field chatbot-floating-config">
+                <div class="chatbot-floating-heading">
+                  <div><label><i class="ph-bold ph-sparkle"></i> Fondo con iconos flotantes</label><div class="hint">Personaliza el ambiente del asistente según el giro de tu negocio. Puedes elegir hasta 8 iconos.</div></div>
+                  <button class="btn btn-ghost btn-sm" type="button" id="botFloatingIconsClear"><i class="ph-bold ph-eye-slash"></i> Sin iconos</button>
+                </div>
+                <div class="chatbot-floating-preview" id="botFloatingIconsPreview"><span>Vista previa</span><div id="botFloatingPreviewIcons"></div></div>
+                <div class="chatbot-icon-catalog" id="botFloatingIconCatalog"></div>
+                <div class="chatbot-floating-status"><span id="botFloatingIconCount">0 de 8 seleccionados</span><button class="btn btn-ghost btn-sm" type="button" id="botFloatingIconsDefault"><i class="ph-bold ph-arrow-counter-clockwise"></i> Restaurar predeterminado</button></div>
+              </div>
               <div class="field">
                 <label><i class="ph-bold ph-whatsapp-logo"></i> WhatsApp del negocio</label>
                 <input type="tel" id="botWhatsapp" placeholder="5213312345678 (con lada del país)" />
@@ -1120,12 +1129,28 @@
             <div class="hint" style="margin-top:8px">Crea las sucursales que usarás para asignar cajeros, administrar cajas y recibir pedidos.</div>
             <div class="table-wrap" id="branchTable" style="margin-top:14px"></div>
             <hr style="margin:18px 0;border:none;border-top:1px solid var(--line)" />
-            <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
+            <div data-owner-only style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
               <h3><i class="ph-bold ph-users-three"></i> Cajeros y cajas</h3>
               <button class="btn btn-primary" id="addCashierBtn"><i class="ph-bold ph-plus-circle"></i> Nuevo cajero</button>
             </div>
-            <div class="hint" style="margin-top:8px">Crea un cajero por sucursal y comparte su liga directa de caja para abrir el POS en esa sucursal.</div>
-            <div class="table-wrap" id="cashiersTable" style="margin-top:14px"></div>
+            <div class="hint" data-owner-only style="margin-top:8px">Crea un cajero por sucursal y comparte su liga directa de caja para abrir el POS en esa sucursal.</div>
+            <div class="table-wrap" data-owner-only id="cashiersTable" style="margin-top:14px"></div>
+            <hr style="margin:18px 0;border:none;border-top:1px solid var(--line)" />
+            <section class="access-config" data-owner-only>
+              <div class="access-config-head">
+                <div><h3><i class="ph-bold ph-user-gear"></i> Usuarios y permisos</h3><p class="hint">Crea accesos para gerencia, auxiliares o personal administrativo y elige exactamente qué módulos puede usar cada persona.</p></div>
+                <button class="btn btn-primary" type="button" id="addInternalUserBtn"><i class="ph-bold ph-user-plus"></i> Nuevo usuario</button>
+              </div>
+              <div class="table-wrap" id="internalUsersTable"></div>
+            </section>
+            <hr data-owner-only style="margin:18px 0;border:none;border-top:1px solid var(--line)" />
+            <section class="access-config" data-owner-only>
+              <div class="access-config-head"><div><h3><i class="ph-bold ph-layout"></i> Módulos visibles en mi panel</h3><p class="hint">Oculta accesos que no utilizas. Esto sólo ordena tu menú de administrador y no cambia los permisos del equipo.</p></div></div>
+              <form id="moduleVisibilityForm">
+                <div class="module-permission-grid compact" id="moduleVisibilityGrid"></div>
+                <button class="btn btn-primary" type="submit"><i class="ph-bold ph-floppy-disk"></i> Guardar módulos visibles</button>
+              </form>
+            </section>
             <hr style="margin:18px 0;border:none;border-top:1px solid var(--line)" />
             <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
               <h3><i class="ph-bold ph-storefront"></i> Modelo de negocio</h3>
@@ -1193,7 +1218,7 @@
                   <div class="bank-accounts-head">
                     <div>
                       <b><i class="ph-bold ph-globe-hemisphere-west"></i> Medios de pago locales</b>
-                      <span>Agrega conceptos propios de tu país. Al activarlos aparecerán en el chatbot y en el punto de venta.</span>
+                      <span>Agrega conceptos propios de tu país y, si lo requieren, configura sus cuentas o datos para pagar. Al activarlos aparecerán en el chatbot y en el punto de venta.</span>
                     </div>
                     <button class="btn btn-ghost" type="button" id="addCustomPaymentMethodBtn">
                       <i class="ph-bold ph-plus"></i> Agregar medio
@@ -1586,6 +1611,69 @@
   </div>
 
   <!-- Introducción mostrada una sola vez a propietarios recién registrados -->
+  <!-- Conversión del visitante del demo a un entorno propio -->
+  <div class="modal-bg journey-modal-bg" id="demoJourneyModal" role="dialog" aria-modal="true" aria-labelledby="demoJourneyTitle">
+    <div class="journey-modal demo-journey-modal">
+      <div class="journey-visual demo"><i class="ph-fill ph-rocket-launch"></i><span>Demo guiado</span></div>
+      <div class="journey-copy">
+        <span class="journey-eyebrow">Estás explorando una demostración</span>
+        <h2 id="demoJourneyTitle">¿Quieres probar ChatBotPro con tu propio negocio?</h2>
+        <p>Esta cuenta contiene información de ejemplo. Puedes seguir recorriéndola o crear un espacio privado para hacer pruebas reales durante 5 días.</p>
+        <div class="journey-features">
+          <span><i class="ph-bold ph-cooking-pot"></i> Da de alta tus productos</span>
+          <span><i class="ph-bold ph-cash-register"></i> Registra ventas en el POS</span>
+          <span><i class="ph-bold ph-chat-circle-dots"></i> Recibe pedidos por chatbot</span>
+          <span><i class="ph-bold ph-chart-line-up"></i> Revisa reportes e inventario</span>
+        </div>
+        <div class="journey-note"><i class="ph-fill ph-shield-check"></i><span>Tu prueba real será privada; no modifica la información de esta demo.</span></div>
+        <div class="journey-actions">
+          <button type="button" class="btn btn-ghost" id="demoJourneyStay">No, seguir en el demo</button>
+          <button type="button" class="btn btn-primary" id="demoJourneyConvert"><i class="ph-bold ph-arrow-right"></i> Sí, probar con mis datos</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Aviso diario de prueba real -->
+  <div class="modal-bg journey-modal-bg" id="trialWelcomeModal" role="dialog" aria-modal="true" aria-labelledby="trialWelcomeTitle">
+    <div class="journey-modal trial-journey-modal">
+      <div class="journey-visual trial"><strong id="trialDaysNumber">5</strong><span id="trialDaysLabel">días disponibles</span></div>
+      <div class="journey-copy">
+        <span class="journey-eyebrow">Prueba real de ChatBotPro</span>
+        <h2 id="trialWelcomeTitle">Tu negocio ya está listo para probar</h2>
+        <p id="trialWelcomeText">Tienes 5 días para configurar tus datos y comprobar cómo ChatBotPro puede ayudarte a vender más.</p>
+        <div class="journey-features">
+          <span><i class="ph-bold ph-cooking-pot"></i> Carga productos y precios</span>
+          <span><i class="ph-bold ph-receipt"></i> Haz ventas y tickets reales</span>
+          <span><i class="ph-bold ph-robot"></i> Prueba pedidos por chatbot</span>
+          <span><i class="ph-bold ph-squares-four"></i> Explora todas las funciones</span>
+        </div>
+        <div class="journey-note"><i class="ph-fill ph-database"></i><span>Lo que captures durante la prueba permanecerá guardado si activas tu suscripción.</span></div>
+        <div class="journey-actions">
+          <button type="button" class="btn btn-ghost" id="trialViewPlans"><i class="ph-bold ph-seal-check"></i> Ver suscripciones</button>
+          <button type="button" class="btn btn-primary" id="trialStartTesting"><i class="ph-bold ph-play"></i> Comenzar mis pruebas</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Bloqueo al terminar la prueba; no se cierra para impedir operar -->
+  <div class="modal-bg journey-modal-bg trial-expired-bg" id="trialExpiredModal" role="dialog" aria-modal="true" aria-labelledby="trialExpiredTitle">
+    <div class="journey-modal trial-expired-modal">
+      <div class="journey-visual expired"><i class="ph-fill ph-lock-key"></i><span>Prueba finalizada</span></div>
+      <div class="journey-copy">
+        <span class="journey-eyebrow">Tu información está segura</span>
+        <h2 id="trialExpiredTitle">Terminó tu periodo de prueba</h2>
+        <p id="trialExpiredText">El sistema quedó bloqueado, pero tus productos, ventas y configuraciones siguen guardados.</p>
+        <div class="journey-note success"><i class="ph-fill ph-check-circle"></i><span>Activa una suscripción o pide al super administrador que habilite tu cuenta para continuar donde te quedaste.</span></div>
+        <div class="journey-actions">
+          <a class="btn btn-ghost" id="trialExpiredWhatsapp" href="https://wa.me/526241370820" target="_blank" rel="noopener noreferrer"><i class="ph-bold ph-whatsapp-logo"></i> Hablar con el administrador</a>
+          <button type="button" class="btn btn-primary" id="trialExpiredPlans"><i class="ph-bold ph-seal-check"></i> Ver suscripciones</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <div class="modal-bg onboarding-intro-bg" id="onboardingIntro" role="dialog" aria-modal="true" aria-labelledby="onboardingIntroTitle">
     <div class="onboarding-intro-panel">
       <div class="onboarding-intro-head">
@@ -2478,6 +2566,27 @@
     </div>
   </div>
 
+  <div class="modal-bg" id="internalUserModal">
+    <div class="modal internal-user-modal">
+      <div class="access-modal-head"><h3 id="internalUserModalTitle"><i class="ph-bold ph-user-plus"></i> Nuevo usuario</h3><button type="button" class="modal-close" id="internalUserClose"><i class="ph-bold ph-x"></i></button></div>
+      <form id="internalUserForm">
+        <input type="hidden" id="internalUserId" />
+        <div class="row-2">
+          <div class="field"><label>Nombre visible *</label><input id="internalUserDisplayName" maxlength="100" required placeholder="Ej. Ana López" /></div>
+          <div class="field"><label>Modalidad / puesto *</label><input id="internalUserJobTitle" maxlength="60" required list="jobTitleOptions" placeholder="Ej. Gerente" /><datalist id="jobTitleOptions"><option value="Gerente"><option value="Auxiliar"><option value="Administrativo"><option value="Supervisor"><option value="Encargado"></datalist></div>
+        </div>
+        <div class="row-2">
+          <div class="field"><label>Usuario *</label><input id="internalUserUsername" minlength="3" maxlength="60" required autocomplete="off" placeholder="ana.gerencia" /></div>
+          <div class="field"><label>Contraseña</label><input id="internalUserPassword" type="password" minlength="8" maxlength="128" autocomplete="new-password" placeholder="Mínimo 8 caracteres" /><div class="hint">Obligatoria al crear; al editar, déjala vacía para conservarla.</div></div>
+        </div>
+        <div class="permission-heading"><div><b>Módulos permitidos *</b><span>El usuario conservará todas las funciones actuales dentro de cada módulo seleccionado.</span></div><button class="btn btn-ghost btn-sm" type="button" id="selectAllUserModules">Seleccionar todos</button></div>
+        <div class="module-permission-grid" id="internalUserPermissions"></div>
+        <div class="toggle-row"><div class="t-info"><i class="ph-bold ph-user-check"></i><div><b>Usuario activo</b><span>Puede iniciar sesión con su usuario y contraseña</span></div></div><label class="switch"><input type="checkbox" id="internalUserActive" checked /><span class="track"></span></label></div>
+        <div class="modal-actions"><button type="button" class="btn btn-ghost" id="internalUserCancel">Cancelar</button><button type="submit" class="btn btn-primary"><i class="ph-bold ph-floppy-disk"></i> Guardar usuario</button></div>
+      </form>
+    </div>
+  </div>
+
   <div class="modal-bg" id="posInvoiceModal">
     <div class="modal pos-invoice-modal" style="max-width:660px">
       <div class="pos-invoice-heading"><div><h3><i class="ph-bold ph-file-text"></i> Facturar ticket <span id="posInvoiceTicketLabel"></span></h3><p class="hint">Captura los datos exactamente como aparecen en la Constancia de Situación Fiscal.</p></div><div class="pos-invoice-heading-actions"><span class="pos-invoice-environment" id="posInvoiceEnvironment"><i class="ph-bold ph-flask"></i> Sandbox</span><button type="button" class="modal-close" id="posInvoiceClose" aria-label="Cerrar facturación"><i class="ph-bold ph-x"></i></button></div></div>
@@ -2878,6 +2987,6 @@
   </div>
 
 <script src="/socket.io/socket.io.js"></script>
-  <script src="/static/js/app.js?v=20260825posworkspace"></script>
+  <script src="/static/js/app.js?v=20260829trialflow2"></script>
 </body>
 </html>

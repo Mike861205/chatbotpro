@@ -123,7 +123,7 @@
   <script src="/static/js/phone-input.js?v=20260811-3"></script>
   <script>
     const resellerRef = new URLSearchParams(location.search).get('reseller') || '';
-    CBPPhoneInput.setup({ countryId: 'phoneCountry', callingCodeId: 'phoneCallingCode', phoneId: 'phone' })
+    const phoneSetupPromise = CBPPhoneInput.setup({ countryId: 'phoneCountry', callingCodeId: 'phoneCallingCode', phoneId: 'phone' })
       .catch(() => { document.getElementById('errorMsg').textContent = 'No se pudo cargar la lista de países. Recarga la página.'; document.getElementById('error').classList.add('show'); });
     fetch('/api/auth/register-ready', { cache: 'no-store' }).catch(() => {});
     const slugInput = document.getElementById('slug');
@@ -139,6 +139,27 @@
     }
     slugInput.value = slugify(bizInput.value);
     updatePreview();
+
+    if (new URLSearchParams(location.search).get('source') === 'demo') {
+      Promise.all([
+        phoneSetupPromise,
+        fetch('/api/auth/demo-registration-profile', { headers: { 'x-cbp-auth-scope': 'owner' } }).then((res) => res.ok ? res.json() : null),
+      ]).then(([, profile]) => {
+        if (!profile) return;
+        document.getElementById('ownerName').value = profile.contactName || '';
+        document.getElementById('phone').value = profile.phone || '';
+        const country = document.getElementById('phoneCountry');
+        if (profile.phoneCountry && country?._phoneCountries) {
+          const selected = country._phoneCountries.find((item) => item.code === profile.phoneCountry);
+          if (selected) {
+            country.value = selected.code;
+            if (country._phoneCountrySearch) country._phoneCountrySearch.value = `${selected.name} (+${selected.callingCode})`;
+            document.getElementById('phoneCallingCode').value = `+${selected.callingCode}`;
+          }
+        }
+        document.getElementById('businessName').focus();
+      }).catch(() => {});
+    }
 
     document.getElementById('regForm').addEventListener('submit', async (e) => {
       e.preventDefault();

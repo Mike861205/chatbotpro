@@ -1,9 +1,10 @@
 const express = require('express');
-const { requireAuth, requireOwner } = require('../middleware/auth');
+const { requireAuth, requireOwner, requireModules } = require('../middleware/auth');
 const { branchCapacity } = require('../utils/branchLimit');
 
 const router = express.Router();
 router.use(requireAuth);
+router.use(requireModules('config', 'pos', 'compras'));
 router.use(requireOwner);
 
 router.get('/', async (req, res, next) => {

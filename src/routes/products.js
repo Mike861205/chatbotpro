@@ -3,7 +3,7 @@ const fs = require('node:fs/promises');
 const path = require('node:path');
 const OpenAI = require('openai');
 const sharp = require('sharp');
-const { requireAuth, requireOwner } = require('../middleware/auth');
+const { requireAuth, requireOwner, requireModules } = require('../middleware/auth');
 const config = require('../config');
 const { getSuperAdminSetting } = require('../db');
 const { decrypt } = require('../utils/crypto');
@@ -11,6 +11,7 @@ const { createImageUpload, deleteManagedUpload, optimizeUploadedImage, safeUnlin
 
 const router = express.Router();
 router.use(requireAuth);
+router.use(requireModules('productos', 'pos', 'costos', 'inventarios', 'compras', 'chatbot'));
 router.use(requireOwner);
 
 const upload = createImageUpload({
