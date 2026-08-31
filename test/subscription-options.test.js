@@ -17,8 +17,15 @@ test('muestra la tercera opción anual con el enlace y producto de Stripe correc
 
 test('informa que los pagos internacionales se convierten a pesos mexicanos', () => {
   assert.match(appHtml, /Pagos desde otros países/);
-  assert.match(appHtml, /EL COBRO ES EN PESOS MEXICANOS \(MXN\)/);
-  assert.match(appHtml, /conversión desde tu moneda local/);
+  assert.match(appHtml, /COBRO FINAL EN PESOS MEXICANOS \(MXN\)/);
+  assert.match(appHtml, /tipo de cambio vigente/);
+});
+
+test('muestra equivalentes aproximados en dólares para los planes internacionalmente disponibles', () => {
+  assert.match(appHtml, /Aprox\. USD \$45 \/ mes/);
+  assert.match(appHtml, /Aprox\. USD \$500 \/ año/);
+  assert.match(appHtml, /Los equivalentes de USD \$45 al mes y USD \$500 al año son aproximados/);
+  assert.equal(appHtml.split('class="plan-usd-equivalent').length - 1, 2);
 });
 
 test('agrega el plan de Facturación Electrónica SAT con Stripe y 100 timbres', () => {

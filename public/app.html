@@ -11,7 +11,7 @@
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/fill/style.css" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/duotone/style.css" />
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-  <link rel="stylesheet" href="/static/css/styles.css?v=20260831paymentfields" />
+  <link rel="stylesheet" href="/static/css/styles.css?v=20260831usdplans" />
   <link rel="icon" type="image/svg+xml" href="/static/favicon.svg" />
   <link rel="icon" type="image/png" href="/static/chatbotpro100.png" />
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
@@ -1394,7 +1394,7 @@
               <div class="subs-hero-meta">
                 <span class="meta-chip"><i class="ph-fill ph-check-circle"></i> Modalidad mensual o anual</span>
                 <span class="meta-chip"><i class="ph-fill ph-credit-card"></i> Débito o crédito</span>
-                <span class="meta-chip"><i class="ph-fill ph-globe-hemisphere-west"></i> Pagos internacionales en MXN</span>
+                <span class="meta-chip"><i class="ph-fill ph-globe-hemisphere-west"></i> Equivalente internacional en USD</span>
               </div>
             </div>
             <div class="subs-hero-badge">
@@ -1430,6 +1430,10 @@
               <div class="plan-price big">
                 <span class="cur">$</span><span class="amt">699</span><span class="per">/ mes MXN</span>
               </div>
+              <div class="plan-usd-equivalent promo">
+                <i class="ph-fill ph-globe-hemisphere-west"></i>
+                <span><strong>Aprox. USD $45 / mes</strong><small>Referencia para cualquier país · conversión al tipo de cambio</small></span>
+              </div>
               <div class="plan-old">Antes <s>$999</s> · Ahorras <b>$3,600</b> al año</div>
               <ul class="plan-points">
                 <li><i class="ph-bold ph-check-circle"></i> Chatbot y pedidos automatizados 24/7</li>
@@ -1459,6 +1463,10 @@
                 <span>12 meses sin intereses de</span>
                 <div><small>$</small><strong>625</strong><em>/ mes MXN</em></div>
                 <b>Total anual $7,500 MXN · un solo pago en Stripe</b>
+              </div>
+              <div class="plan-usd-equivalent annual">
+                <i class="ph-fill ph-globe-hemisphere-west"></i>
+                <span><strong>Aprox. USD $500 / año</strong><small>Referencia internacional · pago anual equivalente</small></span>
               </div>
               <div class="plan-old annual-saving"><b>Ahorras 12%</b> al elegir la cobertura anual</div>
               <ul class="plan-points">
@@ -1524,7 +1532,7 @@
 
           <div class="subs-currency-notice">
             <i class="ph-fill ph-globe-hemisphere-west"></i>
-            <div><b>Pagos desde otros países</b><strong>EL COBRO ES EN PESOS MEXICANOS (MXN)</strong><span>Stripe y/o el banco emisor mostrarán la conversión desde tu moneda local y el tipo de cambio aplicable antes de confirmar el pago.</span></div>
+            <div><b>Pagos desde otros países</b><strong>REFERENCIA EN USD · COBRO FINAL EN PESOS MEXICANOS (MXN)</strong><span>Los equivalentes de USD $45 al mes y USD $500 al año son aproximados. Stripe y/o el banco emisor aplicarán el tipo de cambio vigente y mostrarán la conversión final antes de confirmar el pago.</span></div>
           </div>
 
           <div class="subs-benefits-card">
@@ -1653,18 +1661,43 @@
       <div class="journey-copy">
         <span class="journey-eyebrow">Estás explorando una demostración</span>
         <h2 id="demoJourneyTitle">¿Quieres probar ChatBotPro con tu propio negocio?</h2>
-        <p>Esta cuenta contiene información de ejemplo. Puedes seguir recorriéndola o crear un espacio privado para hacer pruebas reales durante 5 días.</p>
-        <div class="journey-features">
-          <span><i class="ph-bold ph-cooking-pot"></i> Da de alta tus productos</span>
-          <span><i class="ph-bold ph-cash-register"></i> Registra ventas en el POS</span>
-          <span><i class="ph-bold ph-chat-circle-dots"></i> Recibe pedidos por chatbot</span>
-          <span><i class="ph-bold ph-chart-line-up"></i> Revisa reportes e inventario</span>
+        <div id="demoJourneyIntro">
+          <p>Esta cuenta contiene información de ejemplo. Puedes seguir recorriéndola o crear un espacio privado para hacer pruebas reales durante 5 días.</p>
+          <div class="journey-features">
+            <span><i class="ph-bold ph-cooking-pot"></i> Da de alta tus productos</span>
+            <span><i class="ph-bold ph-cash-register"></i> Registra ventas en el POS</span>
+            <span><i class="ph-bold ph-chat-circle-dots"></i> Recibe pedidos por chatbot</span>
+            <span><i class="ph-bold ph-chart-line-up"></i> Revisa reportes e inventario</span>
+          </div>
+          <div class="journey-note"><i class="ph-fill ph-shield-check"></i><span>Usaremos el nombre, teléfono y giro que ya registraste. No tendrás que capturarlos otra vez.</span></div>
+          <div class="journey-actions">
+            <button type="button" class="btn btn-ghost" id="demoJourneyStay">No, seguir en el demo</button>
+            <button type="button" class="btn btn-primary" id="demoJourneyConvert"><i class="ph-bold ph-arrow-right"></i> Sí, crear mi espacio</button>
+          </div>
         </div>
-        <div class="journey-note"><i class="ph-fill ph-shield-check"></i><span>Tu prueba real será privada; no modifica la información de esta demo.</span></div>
-        <div class="journey-actions">
-          <button type="button" class="btn btn-ghost" id="demoJourneyStay">No, seguir en el demo</button>
-          <button type="button" class="btn btn-primary" id="demoJourneyConvert"><i class="ph-bold ph-arrow-right"></i> Sí, probar con mis datos</button>
-        </div>
+        <form id="demoConversionForm" class="demo-conversion-form" hidden>
+          <div class="demo-conversion-summary">
+            <i class="ph-fill ph-storefront"></i>
+            <div><span>Tu espacio se creará para</span><strong id="demoConversionBusiness">Tu negocio</strong><small>Podrás cambiar el nombre desde Mi negocio.</small></div>
+          </div>
+          <div class="demo-conversion-fields">
+            <div class="field">
+              <label for="demoConversionUsername"><i class="ph-bold ph-at"></i> Usuario *</label>
+              <input id="demoConversionUsername" type="text" autocomplete="username" minlength="3" maxlength="60" pattern="[a-zA-Z0-9._-]{3,60}" required />
+            </div>
+            <div class="field">
+              <label for="demoConversionPassword"><i class="ph-bold ph-lock-key"></i> Contraseña *</label>
+              <input id="demoConversionPassword" type="password" autocomplete="new-password" minlength="8" maxlength="128" required />
+              <div class="hint">Mínimo 8 caracteres.</div>
+            </div>
+          </div>
+          <div class="demo-conversion-error" id="demoConversionError" role="alert" hidden></div>
+          <div class="journey-note success"><i class="ph-fill ph-check-circle"></i><span>Al continuar tendrás un espacio privado con 5 días de prueba y este registro pasará de Lead demo a Prospecto.</span></div>
+          <div class="journey-actions">
+            <button type="button" class="btn btn-ghost" id="demoConversionBack"><i class="ph-bold ph-arrow-left"></i> Regresar</button>
+            <button type="submit" class="btn btn-primary" id="demoConversionSubmit"><i class="ph-bold ph-rocket-launch"></i> Crear mi prospecto</button>
+          </div>
+        </form>
       </div>
     </div>
   </div>
@@ -3033,6 +3066,6 @@
   </div>
 
 <script src="/socket.io/socket.io.js"></script>
-  <script src="/static/js/app.js?v=20260831paymentfields"></script>
+  <script src="/static/js/app.js?v=20260831usdplans"></script>
 </body>
 </html>

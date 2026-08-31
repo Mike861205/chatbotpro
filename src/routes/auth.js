@@ -57,6 +57,34 @@ function normalizeLeadText(raw, maxLength = 120) {
   return String(raw || '').trim().replace(/\s+/g, ' ').slice(0, maxLength);
 }
 
+function slugifyBusinessName(raw) {
+  return String(raw || '')
+    .trim()
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+}
+
+async function availableDemoTenantSlug(businessName, leadId) {
+  const base = slugifyBusinessName(businessName).slice(0, 30) || 'negocio';
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    const suffix = attempt ? `-${leadId}-${attempt}` : `-${leadId}`;
+    const candidate = `${base.slice(0, 40 - suffix.length)}${suffix}`;
+    if (RESERVED.has(candidate)) continue;
+    const conflict = await q(
+      `SELECT (
+         EXISTS (SELECT 1 FROM tenants WHERE slug = $1)
+         OR EXISTS (SELECT 1 FROM resellers WHERE slug = $1)
+       ) AS exists`,
+      [candidate]
+    );
+    if (!conflict.rows[0]?.exists) return candidate;
+  }
+  throw Object.assign(new Error('No se pudo generar la liga del negocio. Intenta nuevamente.'), { status: 409 });
+}
+
 async function resolveActiveResellerId(rawSlug) {
   const slug = String(rawSlug || '').trim().toLowerCase();
   if (!SLUG_RE.test(slug)) return null;
@@ -253,12 +281,17 @@ router.post('/register', authAttemptLimiter, async (req, res, next) => {
     const tenant = created.rows[0].tenant;
     const owner = created.rows[0].owner;
 
+    const registrationPhoneHashes = [...new Set([
+      lookupHash(normalizedPhone.digits),
+      lookupHash(normalizedPhone.nationalNumber),
+      lookupHash(String(phone || '').replace(/\D/g, '')),
+    ])];
     const sourceLead = await q(
       `UPDATE demo_leads
-       SET sales_stage = 'potential', sales_updated_at = now(), last_seen_at = now()
-       WHERE phone_hash = $1
+       SET sales_stage = 'potential', sales_updated_at = now(), last_seen_at = now(), converted_tenant_id = $2
+       WHERE phone_hash = ANY($1::text[])
        RETURNING id`,
-      [lookupHash(normalizedPhone.digits)]
+      [registrationPhoneHashes, tenant.id]
     );
     if (sourceLead.rows[0]) {
       await q(
@@ -527,6 +560,110 @@ router.post('/demo-interest', requireAuth, async (req, res, next) => {
       [demoLeadId]
     );
     res.json({ ok: true, redirectTo: '/register?source=demo' });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post('/demo-convert', authAttemptLimiter, requireAuth, async (req, res, next) => {
+  try {
+    const demoLeadId = Number(req.user.demoLeadId || 0);
+    if (!Number.isInteger(demoLeadId) || demoLeadId <= 0) {
+      return res.status(403).json({ error: 'Esta sesión no corresponde a un lead demo' });
+    }
+
+    const username = String(req.body?.username || '').trim().toLowerCase();
+    const password = String(req.body?.password || '');
+    if (!USERNAME_RE.test(username)) {
+      return res.status(400).json({ error: 'El usuario debe tener de 3 a 60 caracteres: letras, números, punto, guion o guion bajo' });
+    }
+    if (password.length < 8 || password.length > 128) {
+      return res.status(400).json({ error: 'La contraseña debe tener entre 8 y 128 caracteres' });
+    }
+
+    const found = await q(
+      `SELECT id, contact_name, phone_enc, phone_country, phone_calling_code,
+              business_giro, reseller_id, sales_stage, converted_tenant_id
+       FROM demo_leads
+       WHERE id = $1
+       LIMIT 1`,
+      [demoLeadId]
+    );
+    const lead = found.rows[0];
+    if (!lead) return res.status(404).json({ error: 'Lead demo no encontrado' });
+    if (lead.converted_tenant_id) {
+      return res.status(409).json({ error: 'Este lead ya fue convertido a prospecto. Inicia sesión con su usuario.' });
+    }
+
+    const phone = decrypt(lead.phone_enc) || '';
+    const normalizedPhone = normalizeInternationalPhone(phone, lead.phone_country);
+    const regional = regionalDefaults(normalizedPhone.country);
+    const ownerName = normalizeLeadText(lead.contact_name, 120);
+    const businessName = normalizeLeadText(lead.business_giro, 160);
+    const slug = await availableDemoTenantSlug(businessName, demoLeadId);
+    const [userConflict, passwordHash] = await Promise.all([
+      q('SELECT id FROM users WHERE lower(username) = $1 LIMIT 1', [username]),
+      bcrypt.hash(password, 12),
+    ]);
+    if (userConflict.rows[0]) return res.status(409).json({ error: 'Ese usuario ya existe. Elige otro.' });
+
+    const created = await q(
+      `WITH new_tenant AS (
+         INSERT INTO tenants (slug, business_name, owner_name, phone_enc, phone_country, phone_calling_code, timezone, reseller_id, invoicing_environment, trial_started_on, trial_ends_on, trial_status, sales_stage)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $10, $11, (now() AT TIME ZONE $7)::date, (now() AT TIME ZONE $7)::date + $12::int, 'active', 'potential')
+         RETURNING *
+       ), new_user AS (
+         INSERT INTO users (tenant_id, username, password_hash, onboarding_completed)
+         SELECT id, $8, $9, 0 FROM new_tenant
+         RETURNING *
+       )
+       SELECT row_to_json(new_tenant) AS tenant, row_to_json(new_user) AS owner
+       FROM new_tenant CROSS JOIN new_user`,
+      [
+        slug,
+        businessName,
+        ownerName,
+        encrypt(normalizedPhone.e164),
+        normalizedPhone.country,
+        normalizedPhone.callingCode,
+        regional.timezone,
+        username,
+        passwordHash,
+        lead.reseller_id || null,
+        normalizedPhone.country === 'MX' || String(normalizedPhone.callingCode || '').replace(/\D/g, '') === '52' ? 'production' : 'sandbox',
+        TRIAL_DAYS,
+      ]
+    );
+    const tenant = created.rows[0]?.tenant;
+    const owner = created.rows[0]?.owner;
+    if (!tenant || !owner) throw new Error('No se pudo crear el espacio del negocio');
+
+    await q(
+      `UPDATE demo_leads
+       SET sales_stage = 'potential', sales_updated_at = now(), last_seen_at = now(), converted_tenant_id = $2
+       WHERE id = $1 AND converted_tenant_id IS NULL`,
+      [demoLeadId, tenant.id]
+    );
+    await q(
+      `INSERT INTO sales_followup_activities (demo_lead_id, activity_type, note, stage_from, stage_to, created_by)
+       VALUES ($1, 'stage_change', 'Convirtió el demo en un entorno propio de prueba real por 5 días.', $2, 'potential', 'lead:self-service')`,
+      [demoLeadId, lead.sales_stage || 'new']
+    );
+
+    await initTenantDefaults(slug, businessName, regional, tenant.id);
+    sendRegistrationNotification({
+      ownerName,
+      phone: normalizedPhone.e164,
+      phoneCountry: normalizedPhone.country,
+      callingCode: normalizedPhone.callingCode,
+      businessName,
+      slug,
+      username,
+      timezone: regional.timezone,
+    }).catch(err => console.error('[mailer] fire-and-forget demo conversion error:', err.message));
+
+    setAuthCookie(res, signToken(owner, tenant), 'owner');
+    res.json({ ok: true, slug, redirectTo: '/app' });
   } catch (error) {
     next(error);
   }

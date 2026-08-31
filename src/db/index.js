@@ -5,6 +5,7 @@ const { Pool } = require('pg');
 const bcrypt = require('bcryptjs');
 const crypto = require('node:crypto');
 const config = require('../config');
+const { decrypt, lookupHash } = require('../utils/crypto');
 
 const pool = new Pool({
   connectionString: config.DATABASE_URL,
@@ -279,7 +280,29 @@ async function initMaster() {
   await q(`ALTER TABLE demo_leads ADD COLUMN IF NOT EXISTS next_follow_up_at TIMESTAMPTZ`);
   await q(`ALTER TABLE demo_leads ADD COLUMN IF NOT EXISTS sales_updated_at TIMESTAMPTZ DEFAULT now()`);
   await q(`ALTER TABLE demo_leads ADD COLUMN IF NOT EXISTS reseller_id INTEGER REFERENCES resellers(id) ON DELETE SET NULL`);
+  await q(`ALTER TABLE demo_leads ADD COLUMN IF NOT EXISTS converted_tenant_id INTEGER REFERENCES tenants(id) ON DELETE CASCADE`);
   await q(`CREATE UNIQUE INDEX IF NOT EXISTS idx_demo_leads_phone_hash_unique ON demo_leads (phone_hash)`);
+  await q(`CREATE INDEX IF NOT EXISTS idx_demo_leads_unconverted ON demo_leads (last_seen_at DESC) WHERE converted_tenant_id IS NULL`);
+
+  // Vincula registros históricos que primero solicitaron la demo y después
+  // crearon su tenant. La marca evita que se muestren en ambos módulos.
+  const pendingDemoLeads = await q(`SELECT id, phone_hash FROM demo_leads WHERE converted_tenant_id IS NULL AND phone_hash IS NOT NULL`);
+  if (pendingDemoLeads.rows.length) {
+    const pendingByPhone = new Map(pendingDemoLeads.rows.map((lead) => [lead.phone_hash, lead.id]));
+    const registeredTenants = await q(`SELECT id, phone_enc, phone_calling_code FROM tenants WHERE phone_enc IS NOT NULL ORDER BY created_at DESC, id DESC`);
+    for (const tenant of registeredTenants.rows) {
+      const digits = String(decrypt(tenant.phone_enc) || '').replace(/\D/g, '');
+      if (!digits) continue;
+      const callingCode = String(tenant.phone_calling_code || '').replace(/\D/g, '');
+      const nationalDigits = callingCode && digits.startsWith(callingCode) ? digits.slice(callingCode.length) : '';
+      const matchingHash = [lookupHash(digits), nationalDigits ? lookupHash(nationalDigits) : '']
+        .find((hash) => hash && pendingByPhone.has(hash));
+      const leadId = matchingHash ? pendingByPhone.get(matchingHash) : null;
+      if (!leadId) continue;
+      await q(`UPDATE demo_leads SET converted_tenant_id = $1 WHERE id = $2 AND converted_tenant_id IS NULL`, [tenant.id, leadId]);
+      pendingByPhone.delete(matchingHash);
+    }
+  }
   await q(`ALTER TABLE tenant_payments ADD COLUMN IF NOT EXISTS amount NUMERIC(12,2) NOT NULL DEFAULT 0`);
   await q(`ALTER TABLE tenant_payments ADD COLUMN IF NOT EXISTS method TEXT DEFAULT 'manual'`);
   await q(`ALTER TABLE tenant_payments ADD COLUMN IF NOT EXISTS note TEXT DEFAULT ''`);

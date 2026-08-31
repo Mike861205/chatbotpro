@@ -134,7 +134,7 @@ router.get('/overview', requireReseller, async (req, res, next) => {
              (ARRAY_AGG(a.note ORDER BY a.created_at DESC) FILTER (WHERE a.note <> ''))[1] AS last_note
            FROM sales_followup_activities a WHERE a.demo_lead_id = dl.id
          ) s ON true
-         WHERE dl.reseller_id = $1
+         WHERE dl.reseller_id = $1 AND dl.converted_tenant_id IS NULL
          ORDER BY dl.last_seen_at DESC, dl.id DESC`, [resellerId]),
     ]);
 

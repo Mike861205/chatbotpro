@@ -1088,18 +1088,61 @@ $('#reopenOnboarding')?.addEventListener('click', openOnboardingIntro);
 $('#onboardingIntroClose')?.addEventListener('click', () => closeOnboardingIntro().catch((error) => toast(error.message, true)));
 $('#onboardingEnterDashboard')?.addEventListener('click', () => closeOnboardingIntro().catch((error) => toast(error.message, true)));
 $('#onboardingStart')?.addEventListener('click', () => runOnboardingAction('config', true).catch((error) => toast(error.message, true)));
-$('#demoJourneyStay')?.addEventListener('click', () => $('#demoJourneyModal')?.classList.remove('show'));
+function resetDemoConversionModal({ close = false } = {}) {
+  $('#demoJourneyIntro').hidden = false;
+  $('#demoConversionForm').hidden = true;
+  $('#demoJourneyTitle').textContent = '¿Quieres probar ChatBotPro con tu propio negocio?';
+  $('#demoConversionError').hidden = true;
+  $('#demoConversionError').textContent = '';
+  if (close) $('#demoJourneyModal')?.classList.remove('show');
+}
+
+$('#demoJourneyStay')?.addEventListener('click', () => resetDemoConversionModal({ close: true }));
 $('#demoJourneyConvert')?.addEventListener('click', async (event) => {
   const button = event.currentTarget;
   button.disabled = true;
-  button.innerHTML = '<i class="ph-bold ph-spinner-gap" style="animation:spin .8s linear infinite"></i> Preparando registro…';
+  button.innerHTML = '<i class="ph-bold ph-spinner-gap" style="animation:spin .8s linear infinite"></i> Preparando…';
   try {
-    const result = await api('/api/auth/demo-interest', { method: 'POST' });
-    location.href = result.redirectTo || '/register?source=demo';
+    const profile = await api('/api/auth/demo-registration-profile');
+    $('#demoConversionBusiness').textContent = profile.businessGiro || 'Tu negocio';
+    $('#demoJourneyIntro').hidden = true;
+    $('#demoConversionForm').hidden = false;
+    $('#demoJourneyTitle').textContent = 'Crea tu acceso y comienza tu prueba';
+    setTimeout(() => $('#demoConversionUsername')?.focus(), 60);
   } catch (error) {
-    button.disabled = false;
-    button.innerHTML = '<i class="ph-bold ph-arrow-right"></i> Sí, probar con mis datos';
     toast(error.message, true);
+  } finally {
+    button.disabled = false;
+    button.innerHTML = '<i class="ph-bold ph-arrow-right"></i> Sí, crear mi espacio';
+  }
+});
+$('#demoConversionBack')?.addEventListener('click', () => resetDemoConversionModal());
+$('#demoConversionForm')?.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const form = event.currentTarget;
+  if (!form.reportValidity()) return;
+  const button = $('#demoConversionSubmit');
+  const errorBox = $('#demoConversionError');
+  const defaultMarkup = button.innerHTML;
+  button.disabled = true;
+  errorBox.hidden = true;
+  button.innerHTML = '<i class="ph-bold ph-spinner-gap" style="animation:spin .8s linear infinite"></i> Creando tu espacio…';
+  try {
+    const result = await api('/api/auth/demo-convert', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        username: $('#demoConversionUsername').value,
+        password: $('#demoConversionPassword').value,
+      }),
+    });
+    try { sessionStorage.setItem('cbp_auth_scope', 'owner'); } catch {}
+    location.replace(result.redirectTo || '/app');
+  } catch (error) {
+    errorBox.textContent = error.message;
+    errorBox.hidden = false;
+    button.disabled = false;
+    button.innerHTML = defaultMarkup;
   }
 });
 $('#trialStartTesting')?.addEventListener('click', continueAfterTrialNotice);

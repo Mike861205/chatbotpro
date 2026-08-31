@@ -426,7 +426,7 @@ router.get('/resellers', requireSuperAdmin, async (req, res, next) => {
              r.active, r.notes, r.created_at, r.updated_at,
              COUNT(DISTINCT t.id) FILTER (WHERE t.customer_since IS NULL)::int AS prospect_count,
              COUNT(DISTINCT t.id) FILTER (WHERE t.customer_since IS NOT NULL)::int AS client_count,
-             COUNT(DISTINCT dl.id)::int AS demo_lead_count
+             COUNT(DISTINCT dl.id) FILTER (WHERE dl.converted_tenant_id IS NULL)::int AS demo_lead_count
       FROM resellers r
       LEFT JOIN tenants t ON t.reseller_id = r.id
       LEFT JOIN demo_leads dl ON dl.reseller_id = r.id
@@ -699,7 +699,7 @@ router.get('/demo-leads', requireSuperAdmin, async (req, res, next) => {
   try {
     const qText = String(req.query.q || '').trim().toLowerCase();
     const values = [];
-    const where = [];
+    const where = ['dl.converted_tenant_id IS NULL'];
 
     if (qText) {
       values.push(`%${qText}%`);
@@ -963,6 +963,7 @@ router.get('/follow-up', requireSuperAdmin, async (req, res, next) => {
              (ARRAY_AGG(a.note ORDER BY a.created_at DESC) FILTER (WHERE a.note <> ''))[1] AS last_note
            FROM sales_followup_activities a WHERE a.demo_lead_id = dl.id
          ) s ON true
+         WHERE dl.converted_tenant_id IS NULL
          ORDER BY COALESCE(dl.next_follow_up_at, dl.sales_updated_at, dl.created_at) DESC`),
     ]);
 
