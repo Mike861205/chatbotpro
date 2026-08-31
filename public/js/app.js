@@ -210,6 +210,30 @@ if (document.body) {
 const fmtMoney = (n, c) =>
   new Intl.NumberFormat('es-MX', { style: 'currency', currency: c || (SETTINGS && SETTINGS.currency) || 'MXN' }).format(n || 0);
 
+function currencyConversionFor(scope) {
+  if (!SETTINGS || SETTINGS.currency_conversion_enabled !== '1') return null;
+  if (SETTINGS[`currency_conversion_${scope}_enabled`] !== '1') return null;
+  const rate = Number(SETTINGS.currency_conversion_rate || 0);
+  const baseCurrency = String(SETTINGS.currency || 'MXN').toUpperCase();
+  const targetCurrency = String(SETTINGS.currency_conversion_target || '').toUpperCase();
+  if (!Number.isFinite(rate) || rate <= 0 || !targetCurrency || targetCurrency === baseCurrency) return null;
+  return { rate, baseCurrency, targetCurrency };
+}
+
+function fmtConvertedMoney(amount, scope) {
+  const conversion = currencyConversionFor(scope);
+  if (!conversion) return '';
+  return fmtMoney(Number(amount || 0) * conversion.rate, conversion.targetCurrency);
+}
+
+function convertedMoneyHtml(amount, scope, label = 'Equivalente') {
+  const converted = fmtConvertedMoney(amount, scope);
+  const source = SETTINGS?.currency_conversion_mode === 'automatic'
+    ? ` · <a href="https://www.exchangerate-api.com" target="_blank" rel="noopener noreferrer">fuente</a>`
+    : '';
+  return converted ? `<small class="currency-converted-total">${esc(label)}: ${esc(converted)}${source}</small>` : '';
+}
+
 function businessTimeZone() {
   return String(SETTINGS?.timezone || 'America/Mexico_City');
 }
@@ -3233,7 +3257,7 @@ function ordersTableHTML(orders, editable = true) {
         <td style="max-width:280px">${esc(items)}${noteCallout}</td>
         <td style="white-space:nowrap">${deliveryText}${deliveryFeeText}${locationText}${cancelNoteText}</td>
         <td><div class="order-origin-cell"><span class="order-origin-chip ${origin.tone}"><i class="ph-bold ${origin.icon}"></i>${esc(origin.label)}</span><b>${esc(orderBranchLabel(o))}</b></div></td>
-        <td><b>${fmtMoney(o.total)}</b></td>
+        <td><b>${fmtMoney(o.total)}</b>${convertedMoneyHtml(o.total, origin.source === 'chatbot' ? 'chatbot' : 'pos')}</td>
         <td>${paymentText}</td>
         <td>${statusCell}</td>
         <td style="white-space:nowrap;color:var(--ink-3);font-size:12.5px">${esc(o.created_at)}</td>
@@ -4128,6 +4152,7 @@ function openThermalPrintWindow(ticket) {
       ? `<tr><td>Subtotal</td><td class="r">${esc(fmtMoney(subtotal, currency))}</td></tr><tr><td>&#x1F6F5; Envío domicilio</td><td class="r">+ ${esc(fmtMoney(Number(ticket.deliveryFee), currency))}</td></tr>`
       : `<tr><td>Subtotal</td><td class="r">${esc(fmtMoney(subtotal, currency))}</td></tr>`}
     <tr><td class="tot">TOTAL</td><td class="tot r">${esc(fmtMoney(total, currency))}</td></tr>
+    ${fmtConvertedMoney(total, 'pos') ? `<tr><td>Equivalente informativo${SETTINGS?.currency_conversion_mode === 'automatic' ? '<br><small>Fuente: ExchangeRate-API</small>' : ''}</td><td class="r">${esc(fmtConvertedMoney(total, 'pos'))}</td></tr>` : ''}
     ${!isMixed && Number(ticket.cashReceived || 0) > 0 ? `<tr><td>Efectivo recibido</td><td class="r">${esc(fmtMoney(ticket.cashReceived, currency))}</td></tr>` : ''}
     ${!isMixed && Number(ticket.cashChange || 0) > 0 ? `<tr><td>Cambio</td><td class="r">${esc(fmtMoney(ticket.cashChange, currency))}</td></tr>` : ''}`}
   </table>
@@ -5286,8 +5311,8 @@ function renderPosCart() {
       ${POS_IS_DELIVERY && deliveryFeeAmt > 0
         ? `<div class="pos-total-line pos-subtotal-line"><span>Subtotal</span><b>${fmtMoney(subtotalItems)}</b></div>
            <div class="pos-total-line pos-delivery-fee-line"><i class="ph-bold ph-moped"></i><span>Envío</span><b>+ ${fmtMoney(deliveryFeeAmt)}</b></div>
-           <div class="pos-total-line"><span>Total</span><b>${fmtMoney(total)}</b></div>`
-        : `<div class="pos-total-line"><span>Total</span><b>${fmtMoney(total)}</b></div>`}
+           <div class="pos-total-line"><span>Total</span><b>${fmtMoney(total)}${convertedMoneyHtml(total, 'pos')}</b></div>`
+        : `<div class="pos-total-line"><span>Total</span><b>${fmtMoney(total)}${convertedMoneyHtml(total, 'pos')}</b></div>`}
       <form id="posCheckoutForm">
         <div class="field">
           <label><i class="ph-bold ph-credit-card"></i> Medio de pago</label>
@@ -9837,6 +9862,42 @@ function renderRegionalSettingsOptions() {
   ).join('');
 }
 
+function selectedCurrencyConversionMode() {
+  return document.querySelector('[data-conversion-mode].on')?.dataset.conversionMode || 'manual';
+}
+
+function renderCurrencyConversionConfig() {
+  const enabled = $('#cfgCurrencyConversionEnabled')?.checked;
+  const fields = $('#cfgCurrencyConversionFields');
+  if (!fields) return;
+  fields.hidden = !enabled;
+  const base = $('#cfgCurrency')?.value || SETTINGS?.currency || 'MXN';
+  const targetSelect = $('#cfgCurrencyConversionTarget');
+  const currencies = (SETTINGS?.regional?.currencies || []).filter((item) => item.code !== base);
+  const previousTarget = targetSelect.value || SETTINGS?.currency_conversion_target || (base === 'USD' ? 'VES' : 'USD');
+  targetSelect.innerHTML = currencies.map((item) => `<option value="${esc(item.code)}">${esc(item.flag)} ${esc(item.code)} — ${esc(item.name)}</option>`).join('');
+  targetSelect.value = currencies.some((item) => item.code === previousTarget) ? previousTarget : (currencies[0]?.code || '');
+  const automatic = selectedCurrencyConversionMode() === 'automatic';
+  const rateInput = $('#cfgCurrencyConversionRate');
+  rateInput.readOnly = automatic;
+  $('#refreshCurrencyConversionBtn').hidden = !automatic;
+  $('#cfgCurrencyConversionAttribution').hidden = !automatic;
+  $('#cfgCurrencyConversionRateLabel').textContent = `1 ${base} equivale a ${targetSelect.value || '—'}`;
+  const rate = Number(rateInput.value || 0);
+  $('#cfgCurrencyConversionPreview').innerHTML = rate > 0
+    ? `<b>Ejemplo:</b> ${esc(fmtMoney(10, base))} → ${esc(fmtMoney(10 * rate, targetSelect.value))}`
+    : 'Configura una tasa para ver el ejemplo de conversión.';
+  const status = $('#cfgCurrencyConversionStatus');
+  if (automatic) {
+    const updated = SETTINGS?.currency_conversion_updated_at;
+    status.textContent = updated
+      ? `Tasa automática actualizada: ${fmtBusinessDateTime(updated)}${SETTINGS?.currency_conversion_stale === '1' ? ' · usando la última tasa disponible' : ''}`
+      : (SETTINGS?.currency_conversion_warning || 'La tasa se consultará al guardar o actualizar.');
+  } else {
+    status.textContent = 'Escribe cuántas unidades de la segunda moneda equivalen a 1 unidad de la moneda principal.';
+  }
+}
+
 function updateTimezonePreview() {
   const timezone = $('#cfgTimezone')?.value || businessTimeZone();
   const preview = $('#cfgTimezoneNow');
@@ -9861,6 +9922,13 @@ async function fillConfigForm() {
   $('#cfgAddress').value = SETTINGS.address || '';
   $('#cfgHours').value = SETTINGS.hours || '';
   $('#cfgCurrency').value = SETTINGS.currency || 'MXN';
+  $('#cfgCurrencyConversionEnabled').checked = SETTINGS.currency_conversion_enabled === '1';
+  $('#cfgCurrencyConversionChatbot').checked = (SETTINGS.currency_conversion_chatbot_enabled || '1') === '1';
+  $('#cfgCurrencyConversionPos').checked = (SETTINGS.currency_conversion_pos_enabled || '1') === '1';
+  $('#cfgCurrencyConversionRate').value = SETTINGS.currency_conversion_rate || '';
+  const conversionMode = SETTINGS.currency_conversion_mode === 'automatic' ? 'automatic' : 'manual';
+  document.querySelectorAll('[data-conversion-mode]').forEach((button) => button.classList.toggle('on', button.dataset.conversionMode === conversionMode));
+  renderCurrencyConversionConfig();
   $('#cfgTimezone').value = SETTINGS.timezone || 'America/Mexico_City';
   updateTimezonePreview();
   $('#cfgChatPayDeliveryCash').checked = (SETTINGS.chatbot_payment_delivery_cash || '1') === '1';
@@ -10272,6 +10340,54 @@ $('#cutsPageSize')?.addEventListener('change', (event) => { CUTS_PAGE_SIZE = Num
 [$('#cutsDetailClose'), $('#cutsDetailCancel')].forEach((button) => button?.addEventListener('click', () => $('#cutsDetailModal').classList.remove('show')));
 $('#cutsDetailPrint')?.addEventListener('click', () => CUTS_SELECTED && printPosCloseReport(historicalCutResult(CUTS_SELECTED)));
 $('#cutsDetailPdf')?.addEventListener('click', () => CUTS_SELECTED && exportPosClosePdf(historicalCutResult(CUTS_SELECTED)));
+function handleCurrencyConversionSelectionChange() {
+  renderCurrencyConversionConfig();
+  if ($('#cfgCurrencyConversionEnabled').checked && selectedCurrencyConversionMode() === 'automatic') {
+    refreshCurrencyConversionRate().catch(() => {});
+  }
+}
+
+$('#cfgCurrencyConversionEnabled')?.addEventListener('change', handleCurrencyConversionSelectionChange);
+$('#cfgCurrency')?.addEventListener('change', handleCurrencyConversionSelectionChange);
+$('#cfgCurrencyConversionTarget')?.addEventListener('change', handleCurrencyConversionSelectionChange);
+$('#cfgCurrencyConversionRate')?.addEventListener('input', renderCurrencyConversionConfig);
+document.querySelectorAll('[data-conversion-mode]').forEach((button) => button.addEventListener('click', () => {
+  document.querySelectorAll('[data-conversion-mode]').forEach((item) => item.classList.toggle('on', item === button));
+  renderCurrencyConversionConfig();
+  if (button.dataset.conversionMode === 'automatic' && $('#cfgCurrencyConversionEnabled').checked) {
+    refreshCurrencyConversionRate().catch(() => {});
+  }
+}));
+
+async function refreshCurrencyConversionRate() {
+  try {
+    const button = $('#refreshCurrencyConversionBtn');
+    button.disabled = true;
+    $('#cfgCurrencyConversionStatus').textContent = 'Consultando la tasa automática del día…';
+    const result = await api('/api/settings/currency-conversion/refresh', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        baseCurrency: $('#cfgCurrency').value,
+        targetCurrency: $('#cfgCurrencyConversionTarget').value,
+      }),
+    });
+    SETTINGS.currency_conversion_rate = String(result.conversion.rate);
+    SETTINGS.currency_conversion_updated_at = result.conversion.updatedAt;
+    SETTINGS.currency_conversion_mode = 'automatic';
+    SETTINGS.currency_conversion_stale = '0';
+    $('#cfgCurrencyConversionRate').value = String(result.conversion.rate);
+    renderCurrencyConversionConfig();
+    toast('Tipo de cambio actualizado');
+  } catch (error) {
+    toast(error.message, true);
+  } finally {
+    $('#refreshCurrencyConversionBtn').disabled = false;
+  }
+}
+
+$('#refreshCurrencyConversionBtn')?.addEventListener('click', refreshCurrencyConversionRate);
+
 $('#contactForm').addEventListener('submit', async (e) => {
   e.preventDefault();
   CUSTOM_PAYMENT_METHODS = readCustomPaymentMethodInputs();
@@ -10307,10 +10423,24 @@ $('#contactForm').addEventListener('submit', async (e) => {
   if (BANK_ACCOUNTS.some((account) => !account.bankName || !account.holderName || !account.identifierType || !account.identifier)) {
     return toast('Completa todos los datos de cada cuenta bancaria', true);
   }
+  const conversionEnabled = $('#cfgCurrencyConversionEnabled').checked;
+  const conversionRate = Number($('#cfgCurrencyConversionRate').value || 0);
+  if (conversionEnabled && !$('#cfgCurrencyConversionChatbot').checked && !$('#cfgCurrencyConversionPos').checked) {
+    return toast('Elige dónde mostrar la conversión: asistente en línea, punto de venta o ambos', true);
+  }
+  if (conversionEnabled && selectedCurrencyConversionMode() === 'manual' && conversionRate <= 0) {
+    return toast('Escribe un tipo de cambio mayor que cero', true);
+  }
   const fd = new FormData();
   fd.append('address', $('#cfgAddress').value);
   fd.append('hours', $('#cfgHours').value);
   fd.append('currency', $('#cfgCurrency').value);
+  fd.append('currency_conversion_enabled', conversionEnabled ? '1' : '0');
+  fd.append('currency_conversion_target', $('#cfgCurrencyConversionTarget').value);
+  fd.append('currency_conversion_mode', selectedCurrencyConversionMode());
+  if (conversionRate > 0) fd.append('currency_conversion_rate', String(conversionRate));
+  fd.append('currency_conversion_chatbot_enabled', $('#cfgCurrencyConversionChatbot').checked ? '1' : '0');
+  fd.append('currency_conversion_pos_enabled', $('#cfgCurrencyConversionPos').checked ? '1' : '0');
   fd.append('timezone', $('#cfgTimezone').value);
   fd.append('chatbot_payment_delivery_cash', $('#cfgChatPayDeliveryCash').checked ? '1' : '0');
   fd.append('chatbot_payment_delivery_transfer', $('#cfgChatPayDeliveryTransfer').checked ? '1' : '0');
@@ -10508,6 +10638,13 @@ function kdsAreaIcon(name) {
   return 'ph-cooking-pot';
 }
 
+function syncKdsAreaType() {
+  const delivery = $('#kdsAreaType')?.value === 'delivery';
+  $('#kdsPreparationAssignments').hidden = delivery;
+  if (delivery && !$('#kdsAreaName').value.trim()) $('#kdsAreaName').value = 'Delivery';
+  $('#kdsAreaName').placeholder = delivery ? 'Delivery' : 'Cocina, Barra, Postres…';
+}
+
 function kdsAbsoluteLink(area) {
   return `${location.origin}${area.link}`;
 }
@@ -10539,16 +10676,17 @@ function renderKdsAreas() {
   }
 
   grid.innerHTML = areas.map((area) => {
+    const deliveryArea = area.type === 'delivery';
     const categoryNames = kdsCategoryNames(area);
     const productCount = (area.productIds || []).length;
     const chips = categoryNames.map((name) => `<span class="kds-route-chip">${esc(name)}</span>`).join('');
     return `<article class="kds-area-card ${area.active ? '' : 'off'}" style="--kds-color:${esc(area.color || '#f97316')}">
       <div class="kds-area-card-head">
-        <span class="kds-area-card-icon"><i class="ph-bold ${kdsAreaIcon(area.name)}"></i></span>
+        <span class="kds-area-card-icon"><i class="ph-bold ${deliveryArea ? 'ph-scooter' : kdsAreaIcon(area.name)}"></i></span>
         <div class="kds-area-card-title"><h4>${esc(area.name)}</h4><p>${area.branchName ? `<i class="ph-bold ph-storefront"></i> ${esc(area.branchName)}` : 'Todas las sucursales / general'}</p></div>
         <span class="kds-area-status">${area.active ? 'Activa' : 'Pausada'}</span>
       </div>
-      <div class="kds-area-routes"><span>Recibe</span><div class="kds-route-chips">${chips || '<span class="kds-route-chip">Productos individuales</span>'}${productCount ? `<span class="kds-route-chip">+ ${productCount} producto${productCount === 1 ? '' : 's'}</span>` : ''}</div></div>
+      <div class="kds-area-routes"><span>Recibe</span><div class="kds-route-chips">${deliveryArea ? '<span class="kds-route-chip">Sólo pedidos a domicilio</span>' : `${chips || '<span class="kds-route-chip">Productos individuales</span>'}${productCount ? `<span class="kds-route-chip">+ ${productCount} producto${productCount === 1 ? '' : 's'}</span>` : ''}`}</div></div>
       <div class="kds-area-link"><code>${esc(kdsAbsoluteLink(area))}</code><button class="btn btn-ghost btn-icon" type="button" data-kds-copy="${area.id}" title="Copiar enlace"><i class="ph-bold ph-copy"></i></button></div>
       <div class="kds-area-card-actions">
         <a class="btn btn-primary btn-sm" href="${esc(area.link)}" target="_blank" rel="noopener"><i class="ph-bold ph-arrow-square-out"></i> Abrir pantalla</a>
@@ -10602,6 +10740,7 @@ function openKdsAreaModal(area = null) {
     ? '<i class="ph-bold ph-pencil-simple"></i> Configurar área KDS'
     : '<i class="ph-bold ph-monitor-play"></i> Nueva área KDS';
   $('#kdsAreaId').value = area?.id || '';
+  $('#kdsAreaType').value = area?.type || 'preparation';
   $('#kdsAreaName').value = area?.name || '';
   $('#kdsAreaColor').value = area?.color || '#f97316';
   $('#kdsAreaActive').checked = area ? Boolean(area.active) : true;
@@ -10616,6 +10755,7 @@ function openKdsAreaModal(area = null) {
   KDS_PRODUCT_SELECTED = new Set((area?.productIds || []).map(Number));
   $('#kdsProductPicker').innerHTML = '';
   renderKdsProductPicker();
+  syncKdsAreaType();
   $('#kdsAreaModal').classList.add('show');
   setTimeout(() => $('#kdsAreaName')?.focus(), 50);
 }
@@ -10626,9 +10766,11 @@ async function loadKds() {
 }
 
 $('#kdsAddAreaBtn')?.addEventListener('click', () => openKdsAreaModal());
+$('#kdsAddDeliveryBtn')?.addEventListener('click', () => openKdsAreaModal({ type: 'delivery', name: 'Delivery', color: '#16a34a', active: true }));
 $('#kdsRefreshBtn')?.addEventListener('click', () => loadKds().catch((error) => toast(error.message, true)));
 $('#kdsAreaCancel')?.addEventListener('click', () => $('#kdsAreaModal').classList.remove('show'));
 $('#kdsProductSearch')?.addEventListener('input', (event) => renderKdsProductPicker(event.target.value));
+$('#kdsAreaType')?.addEventListener('change', syncKdsAreaType);
 $('#kdsProductPicker')?.addEventListener('change', (event) => {
   const input = event.target.closest('input[type="checkbox"]');
   if (!input) return;
@@ -10644,7 +10786,7 @@ $('#kdsSelectAllCategories')?.addEventListener('click', () => {
 $('#kdsQuickSetupBtn')?.addEventListener('click', async () => {
   try {
     await api('/api/kds/setup/defaults', { method: 'POST' });
-    toast('Áreas Cocina y Barra configuradas');
+    toast('Áreas Cocina, Barra y Delivery configuradas');
     await loadKds();
   } catch (error) { toast(error.message, true); }
 });
@@ -10659,6 +10801,7 @@ $('#kdsAreaForm')?.addEventListener('submit', async (event) => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         name: $('#kdsAreaName').value,
+        type: $('#kdsAreaType').value,
         branchId: $('#kdsAreaBranch').value || null,
         color: $('#kdsAreaColor').value,
         active: $('#kdsAreaActive').checked,

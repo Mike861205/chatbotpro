@@ -9,6 +9,7 @@ const { emitNewOrder, emitSessionUpdate } = require('../notifications');
 const { ensurePurchasingSchema } = require('../utils/purchasing');
 const { ensureBranchStockSchema, initializeBranchStock, applyBranchSaleStock } = require('../utils/branchStock');
 const { parseCustomPaymentMethods } = require('../utils/paymentMethods');
+const { resolveCurrencyConversion, convertedMoney } = require('../utils/currencyConversion');
 
 let aiConfigCache = { expiresAt: 0, value: null };
 const aiClientCache = new Map();
@@ -347,6 +348,13 @@ function money(n, currency = 'MXN') {
   return new Intl.NumberFormat('es-MX', { style: 'currency', currency }).format(n || 0);
 }
 
+function conversionTotalLine(amount, conversion) {
+  const label = convertedMoney(amount, conversion);
+  if (!label) return '';
+  const source = conversion?.mode === 'automatic' ? `\n_Fuente: ${conversion.providerUrl}_` : '';
+  return `\n_Equivalente informativo: ${label}_${source}`;
+}
+
 function paymentMethodLabel(method) {
   return {
     cash: 'Efectivo',
@@ -430,7 +438,8 @@ function cartSummary(cart, currency, labels = RESTAURANT_LABELS) {
     return `• ${it.qty}x ${it.name}${it.variantName ? ` (${it.variantName})` : ''}${modNote} — ${money(it.price * it.qty, currency)}`;
   });
   const title = labels.cartTitle || '🛒 *Tu pedido:*';
-  return `${title}\n${lines.join('\n')}\n\n*Total: ${money(cartTotal(cart), currency)}*`;
+  const total = cartTotal(cart);
+  return `${title}\n${lines.join('\n')}\n\n*Total: ${money(total, currency)}*${conversionTotalLine(total, cart.currencyConversion)}`;
 }
 
 function parseGeoInput(input) {
@@ -551,6 +560,10 @@ function pricingSummary(state, currency, labels = RESTAURANT_LABELS) {
     `*Subtotal: ${money(subtotal, currency)}*`,
     ...(deliveryFee > 0 ? [`*Envío${deliveryLabel ? ` (${deliveryLabel})` : ''}: ${money(deliveryFee, currency)}*`] : []),
     `*Total: ${money(subtotal + deliveryFee, currency)}*`,
+    ...(convertedMoney(subtotal + deliveryFee, state.currencyConversion) ? [
+      `_Equivalente informativo: ${convertedMoney(subtotal + deliveryFee, state.currencyConversion)}_`,
+      ...(state.currencyConversion?.mode === 'automatic' ? [`_Fuente: ${state.currencyConversion.providerUrl}_`] : []),
+    ] : []),
     ...(orderNote ? [`*🧾 Nota del pedido: ${orderNote}*`] : []),
   ].join('\n');
 }
@@ -1025,7 +1038,7 @@ async function replyNextModifierGroup(
   return finish();
 }
 
-function buildOrderText(businessName, cart, customer, delivery, currency, labels = RESTAURANT_LABELS, orderId = null) {
+function buildOrderText(businessName, cart, customer, delivery, currency, labels = RESTAURANT_LABELS, orderId = null, conversion = null) {
   const subtotal = cartTotal(cart);
   const deliveryFee = Number(customer?.deliveryFee || 0);
   const deliveryLabel = deliveryZoneServiceLabel(customer);
@@ -1049,6 +1062,10 @@ function buildOrderText(businessName, cart, customer, delivery, currency, labels
     `*Subtotal: ${money(subtotal, currency)}*`,
     ...(deliveryFee > 0 ? [`*Envío${deliveryLabel ? ` (${deliveryLabel})` : ''}: ${money(deliveryFee, currency)}*`] : []),
     `*Total: ${money(subtotal + deliveryFee, currency)}*`,
+    ...(convertedMoney(subtotal + deliveryFee, conversion) ? [
+      `_Equivalente informativo: ${convertedMoney(subtotal + deliveryFee, conversion)}_`,
+      ...(conversion?.mode === 'automatic' ? [`_Fuente: ${conversion.providerUrl}_`] : []),
+    ] : []),
     ...(orderNote ? [`*🧾 Nota del pedido: ${orderNote}*`] : []),
     '',
     `👤 ${customer.name}`,
@@ -1384,6 +1401,12 @@ async function handleMessage(t, slug, sessionId, rawInput) {
   const businessName = await getSetting(t, 'business_name', slug);
   const businessType = await getSetting(t, 'business_type', 'restaurant');
   const currency = await getSetting(t, 'currency', 'MXN');
+  let currencyConversion = null;
+  try {
+    currencyConversion = await resolveCurrencyConversion(t, { scope: 'chatbot' });
+  } catch (error) {
+    console.warn('[currency-conversion] No se pudo obtener la tasa automática:', error.message);
+  }
   const deliveryFeeRules = parseDeliveryFeeRules(await getSetting(t, 'delivery_fee_rules', ''));
   const deliveryZones = parseDeliveryZones(await getSetting(t, 'delivery_zones_geojson', '[]'));
   let whatsapp = normalizeWhatsappNumber(await getSetting(t, 'whatsapp', ''));
@@ -1450,6 +1473,8 @@ async function handleMessage(t, slug, sessionId, rawInput) {
   let state = (await getState(t, sessionId)) || { step: 'start', cart: [], customer: {}, currency, aiHistory: [] };
   if (!Array.isArray(state.aiHistory)) state.aiHistory = [];
   state.currency = currency;
+  state.currencyConversion = currencyConversion?.enabled ? currencyConversion : null;
+  state.cart.currencyConversion = state.currencyConversion;
 
   const reply = { messages: [], options: [], products: null, cart: null, order: null, bankAccounts: null, bankAccountTitle: null, modifierGroup: null };
   const lower = input.toLowerCase();
@@ -1478,7 +1503,12 @@ async function handleMessage(t, slug, sessionId, rawInput) {
 
   const finish = async () => {
     await saveState(t, sessionId, state);
-    reply.cart = { items: state.cart, total: cartTotal(state.cart), totalLabel: money(cartTotal(state.cart), currency) };
+    reply.cart = {
+      items: state.cart,
+      total: cartTotal(state.cart),
+      totalLabel: money(cartTotal(state.cart), currency),
+      convertedTotalLabel: convertedMoney(cartTotal(state.cart), state.currencyConversion),
+    };
     // Notificar al tenant el estado en vivo de esta sesión
     emitSessionUpdate(slug, {
       sessionId: sessionId.slice(0, 10),
@@ -2704,7 +2734,7 @@ async function handleMessage(t, slug, sessionId, rawInput) {
         await t.run('UPDATE {s}.orders SET branch_stock_applied=1 WHERE id=$1', [orderRow.id]);
       }
 
-      const orderText = buildOrderText(businessName, state.cart, state.customer, state.delivery, currency, labels, orderRow.id);
+      const orderText = buildOrderText(businessName, state.cart, state.customer, state.delivery, currency, labels, orderRow.id, state.currencyConversion);
       const waLink = whatsapp ? `https://wa.me/${whatsapp}?text=${encodeURIComponent(orderText)}` : null;
 
       // Notificar al tenant (Socket.io + Web Push)
@@ -2725,7 +2755,7 @@ async function handleMessage(t, slug, sessionId, rawInput) {
         `🎉 *¡Pedido #${orderRow.id} recibido!*\n\nEn breve lo confirmamos. ¡Gracias por tu preferencia! 🙏`,
       ];
       attachAccountsForPayment(state.customer.paymentMethod);
-      reply.order = { id: orderRow.id, total, totalLabel: money(total, currency), whatsappLink: waLink, summary: orderText };
+      reply.order = { id: orderRow.id, total, totalLabel: money(total, currency), convertedTotalLabel: convertedMoney(total, state.currencyConversion), whatsappLink: waLink, summary: orderText };
       if (waLink) reply.messages.push('👇 Toca el botón para enviar el resumen de tu pedido por WhatsApp y agilizar la atención.');
       if (!waLink) reply.messages.push('⚠️ El negocio aún no tiene un WhatsApp válido para envío automático. Tu pedido ya quedó registrado.');
       state = { step: 'start', cart: [], customer: {}, currency };

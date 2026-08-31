@@ -90,6 +90,15 @@ main { padding: 18px clamp(12px, 1.8vw, 28px) 34px; }
 .ticket-time small.late { color: #f87171; font-weight: 800; }
 .ticket-meta { display: flex; flex-wrap: wrap; gap: 6px; padding: 9px 13px 0 16px; }
 .ticket-meta span { padding: 4px 7px; border-radius: 7px; background: rgba(255,255,255,.055); color: #c5d0df; font-size: 10px; font-weight: 700; }
+.delivery-details { position: relative; margin: 10px 13px 0 16px; padding: 12px; display: grid; gap: 7px; border: 1px solid color-mix(in srgb, var(--area) 45%, transparent); border-radius: 10px; background: color-mix(in srgb, var(--area) 9%, transparent); }
+.delivery-details strong, .delivery-details span { display: flex; align-items: center; gap: 7px; }
+.delivery-details span { color: #c5d0df; font-size: 11px; overflow-wrap: anywhere; }
+.delivery-details b { position: absolute; top: 10px; right: 11px; color: #fff; font-size: 16px; }
+.delivery-progress { margin: 9px 13px 0 16px; display: flex; flex-wrap: wrap; gap: 6px; }
+.delivery-step { display: inline-flex; align-items: center; gap: 5px; padding: 5px 7px; border-radius: 7px; color: #d5deea; background: rgba(255,255,255,.06); font-size: 10px; font-weight: 800; }
+.delivery-step.preparing { color: #93c5fd; background: rgba(59,130,246,.14); }
+.delivery-step.ready, .delivery-step.completed { color: #86efac; background: rgba(34,197,94,.14); }
+.delivery-wait { flex: 1; min-height: 40px; display: flex; align-items: center; justify-content: center; gap: 7px; color: var(--muted); border: 1px dashed var(--line); border-radius: 10px; font-size: 11px; font-weight: 800; }
 .mixed-badge { color: #fcd34d !important; background: rgba(245,158,11,.12) !important; }
 .ticket-items { list-style: none; margin: 0; padding: 10px 13px 11px 16px; display: grid; gap: 8px; }
 .ticket-items li { display: grid; grid-template-columns: 38px 1fr; gap: 8px; align-items: start; }

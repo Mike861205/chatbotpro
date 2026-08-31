@@ -898,7 +898,7 @@
       const bar = document.getElementById('cartBar');
       if (data.cart && data.cart.items.length) {
         const n = data.cart.items.reduce((s, it) => s + it.qty, 0);
-        document.getElementById('cartInfo').textContent = `${n} producto${n > 1 ? 's' : ''} · ${data.cart.totalLabel}`;
+        document.getElementById('cartInfo').textContent = `${n} producto${n > 1 ? 's' : ''} · ${data.cart.totalLabel}${data.cart.convertedTotalLabel ? ` · ≈ ${data.cart.convertedTotalLabel}` : ''}`;
         bar.classList.add('show');
         const delta = Math.max(0, n - lastCartItemsCount);
         animateCartDelta(delta);

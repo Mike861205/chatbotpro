@@ -90,21 +90,33 @@
     catch { return '--:--'; }
   }
 
+  function moneyLabel(value) {
+    try { return new Intl.NumberFormat('es-MX', { style: 'currency', currency: payload?.tenant?.currency || 'MXN' }).format(Number(value || 0)); }
+    catch { return `$${Number(value || 0).toFixed(2)}`; }
+  }
+
   function ticketCard(ticket) {
+    const deliveryArea = payload.area.type === 'delivery';
     const age = minutesSince(ticket.createdAt);
     const urgent = ticket.status !== 'ready' && age >= 15;
-    const action = ticket.status === 'pending'
+    const action = deliveryArea
+      ? ['completed', 'ph-package', 'Pedido recogido']
+      : ticket.status === 'pending'
       ? ['preparing', 'ph-cooking-pot', 'Iniciar preparación']
       : ticket.status === 'preparing'
         ? ['ready', 'ph-check-circle', 'Marcar listo']
         : ['completed', 'ph-hand-palm', 'Entregar / retirar'];
-    const back = ticket.status === 'preparing' ? 'pending' : ticket.status === 'ready' ? 'preparing' : '';
+    const back = deliveryArea ? '' : ticket.status === 'preparing' ? 'pending' : ticket.status === 'ready' ? 'preparing' : '';
     const channelLabel = ticket.channel === 'table_round' ? 'Mesa' : ticket.channel === 'pos' ? 'Punto de venta' : 'Chatbot';
     const ticketLabel = ticket.channel === 'table_round'
       ? `Mesa ${ticket.tableNumber} · Ronda ${ticket.roundNumber}`
       : `#${ticket.id}`;
     const otherNames = ticket.otherItems.map((item) => `${item.qty || 1}× ${item.name || 'Producto'}`).join(' · ');
     const routeNames = ticket.routedAreas.map((area) => area.name).join(' + ');
+    const progressLabels = { pending: 'Pendiente', preparing: 'Preparando', ready: 'Lista', completed: 'Lista' };
+    const preparationProgress = (ticket.preparationProgress || []).map((area) =>
+      `<span class="delivery-step ${esc(area.status)}"><i class="ph-bold ${area.status === 'pending' ? 'ph-clock' : area.status === 'preparing' ? 'ph-cooking-pot' : 'ph-check-circle'}"></i>${esc(area.name)}: ${progressLabels[area.status] || 'Pendiente'}</span>`
+    ).join('');
     return `<article class="kds-ticket ${urgent ? 'urgent' : ''}" data-ticket="${ticket.id}" style="--ticket-color:${esc(payload.area.color)}">
       <div class="ticket-head">
         <div class="ticket-number">${esc(ticketLabel)}<span class="ticket-channel">${channelLabel}</span></div>
@@ -117,21 +129,29 @@
         <span><i class="ph-bold ${ticket.receivingModeBehavior === 'delivery' || ticket.delivery === 'domicilio' ? 'ph-scooter' : (ticket.delivery === 'comer_sucursal' ? 'ph-fork-knife' : 'ph-shopping-bag-open')}"></i> ${esc(ticket.receivingModeLabel || ticket.delivery || 'mostrador')}</span>
         ${ticket.isMixed ? `<span class="mixed-badge"><i class="ph-bold ph-arrows-split"></i> Mixto: ${esc(routeNames || 'varias áreas')}</span>` : ''}
       </div>
+      ${deliveryArea ? `<div class="delivery-details">
+        <strong><i class="ph-bold ph-user"></i> ${esc(ticket.customerName || 'Cliente')}</strong>
+        <span><i class="ph-bold ph-map-pin"></i> Colonia: ${esc(ticket.deliveryNeighborhood || 'Sin colonia registrada')}</span>
+        ${ticket.deliveryAddress ? `<span><i class="ph-bold ph-house-line"></i> ${esc(ticket.deliveryAddress)}</span>` : ''}
+        <b>${esc(moneyLabel(ticket.total))}</b>
+      </div>
+      <div class="delivery-progress">${preparationProgress || '<span class="delivery-step pending"><i class="ph-bold ph-clock"></i>Sin área de preparación asignada</span>'}</div>` : ''}
       <ul class="ticket-items">${itemList(ticket.areaItems)}</ul>
       ${ticket.notes ? `<div class="ticket-notes"><span><i class="ph-fill ph-warning-circle"></i> NOTA DEL PEDIDO</span><b>${esc(ticket.notes)}</b></div>` : ''}
       ${ticket.otherItems.length ? `<details class="ticket-other"><summary>${ticket.otherItems.length} partida(s) enviadas a otra área</summary><p>${esc(otherNames)}</p></details>` : ''}
       <div class="ticket-actions">
         ${back ? `<button class="ticket-back" type="button" data-status="${back}" title="Regresar estado"><i class="ph-bold ph-arrow-u-up-left"></i></button>` : ''}
-        <button class="ticket-action" type="button" data-status="${action[0]}"><i class="ph-bold ${action[1]}"></i> ${action[2]}</button>
+        ${!deliveryArea || ticket.status === 'ready' ? `<button class="ticket-action" type="button" data-status="${action[0]}"><i class="ph-bold ${action[1]}"></i> ${action[2]}</button>` : '<span class="delivery-wait"><i class="ph-bold ph-hourglass-medium"></i> Esperando preparación</span>'}
       </div>
     </article>`;
   }
 
   function emptyColumn(status) {
+    const deliveryArea = payload?.area?.type === 'delivery';
     const messages = {
-      pending: ['ph-bell-simple-slash', 'Sin comandas nuevas'],
-      preparing: ['ph-cooking-pot', 'Nada en preparación'],
-      ready: ['ph-checks', 'Nada esperando entrega'],
+      pending: ['ph-bell-simple-slash', deliveryArea ? 'Sin domicilios nuevos' : 'Sin comandas nuevas'],
+      preparing: ['ph-cooking-pot', deliveryArea ? 'Ningún domicilio en preparación' : 'Nada en preparación'],
+      ready: ['ph-checks', deliveryArea ? 'Nada listo para recoger' : 'Nada esperando entrega'],
     };
     return `<div class="kds-empty"><i class="ph-bold ${messages[status][0]}"></i><span>${messages[status][1]}</span></div>`;
   }
@@ -142,6 +162,14 @@
     document.title = `${payload.area.name} — ${payload.tenant.businessName}`;
     $('#tenantName').textContent = payload.tenant.businessName;
     $('#areaName').textContent = payload.area.name;
+    const deliveryArea = payload.area.type === 'delivery';
+    const summaryLabels = document.querySelectorAll('.kds-summary small');
+    summaryLabels[0].textContent = deliveryArea ? 'Recibidos' : 'Nuevos';
+    summaryLabels[1].textContent = 'Preparando';
+    summaryLabels[2].textContent = deliveryArea ? 'Para recoger' : 'Listos';
+    document.querySelector('[data-column="pending"] header span').innerHTML = `<i class="ph-bold ph-bell-ringing"></i> ${deliveryArea ? 'Recibidos' : 'Nuevos'}`;
+    document.querySelector('[data-column="preparing"] header span').innerHTML = `<i class="ph-bold ph-cooking-pot"></i> En preparación`;
+    document.querySelector('[data-column="ready"] header span').innerHTML = `<i class="ph-bold ph-check-circle"></i> ${deliveryArea ? 'Listos para recoger' : 'Listos'}`;
     const logo = $('#tenantLogo');
     logo.src = payload.tenant.logo || '/static/chatbotpro100.png';
     logo.onerror = () => { logo.onerror = null; logo.src = '/static/chatbotpro100.png'; };
@@ -217,6 +245,9 @@
       if (!document.hidden) refresh();
     });
     socket.on('new_order', () => {
+      if (!document.hidden) refresh();
+    });
+    socket.on('kds_update', () => {
       if (!document.hidden) refresh();
     });
     socket.on('disconnect', () => setConnection('offline', 'Reconectando'));

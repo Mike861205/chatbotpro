@@ -137,4 +137,8 @@ function emitSelfServiceStatus(slug, update) {
   if (_io) _io.to(`tenant:${slug}`).emit('self_service_status', update);
 }
 
-module.exports = { emitter, setIo, emitNewOrder, emitSessionUpdate, emitSelfServiceOrder, emitSelfServiceStatus, sendTenantPush };
+function emitKdsUpdate(slug, update) {
+  if (_io) _io.to(`tenant:${slug}`).emit('kds_update', update);
+}
+
+module.exports = { emitter, setIo, emitNewOrder, emitSessionUpdate, emitSelfServiceOrder, emitSelfServiceStatus, emitKdsUpdate, sendTenantPush };

@@ -4,11 +4,13 @@ const { q, tdb } = require('../db');
 const { requireAuth, requireOwner, requireModules } = require('../middleware/auth');
 const { decrypt } = require('../utils/crypto');
 const { operationalOrderNote } = require('../utils/orderNotes');
+const { emitKdsUpdate } = require('../notifications');
 const { normalizeTimeZone } = require('../utils/regional');
 const { trialState } = require('../utils/trialAccess');
 
 const router = express.Router();
 const KDS_STATUSES = new Set(['pending', 'preparing', 'ready', 'completed']);
+const KDS_AREA_TYPES = new Set(['preparation', 'delivery']);
 const DRINK_WORDS = [
   'bebida', 'refresco', 'soda', 'agua', 'jugo', 'cafe', 'café', 'te', 'té',
   'cerveza', 'vino', 'coctel', 'cóctel', 'licor', 'malteada', 'smoothie', 'barra',
@@ -63,7 +65,7 @@ async function resolvePublicArea(slug, token) {
   tenant.timezone = normalizeTimeZone(tenant.timezone);
   tenantDb.timezone = tenant.timezone;
   const area = await tenantDb.get(
-    `SELECT a.id, a.name, a.branch_id, a.color, a.active, b.name AS branch_name
+    `SELECT a.id, a.name, a.area_type, a.branch_id, a.color, a.active, b.name AS branch_name
      FROM {s}.kds_areas a
      LEFT JOIN {s}.branches b ON b.id = a.branch_id
      WHERE a.access_token = $1 AND a.active = 1
@@ -92,12 +94,23 @@ function itemBelongsToArea(item, productById, assignments) {
   return Number.isInteger(categoryId) && assignments.categoryIds.has(categoryId);
 }
 
+function deliveryPreparationStatus(preparationProgress) {
+  if (preparationProgress.length > 0
+    && preparationProgress.every((rule) => rule.status === 'ready' || rule.status === 'completed')) {
+    return 'ready';
+  }
+  if (preparationProgress.some((rule) => rule.status !== 'pending')) return 'preparing';
+  return 'pending';
+}
+
 async function buildKdsPayload(tenant, tenantDb, area) {
-  const [categoryAssignments, productAssignments, orderRows, tableRoundRows, settingsRows] = await Promise.all([
+  const isDeliveryArea = area.area_type === 'delivery';
+  const [categoryAssignments, productAssignments, orderRows, tableRoundRows, settingsRows, preparationStateRows] = await Promise.all([
     tenantDb.all('SELECT category_id FROM {s}.kds_area_categories WHERE area_id = $1', [area.id]),
     tenantDb.all('SELECT product_id FROM {s}.kds_area_products WHERE area_id = $1', [area.id]),
     tenantDb.all(
-      `SELECT o.id, o.customer_id, o.items, o.status AS order_status, o.channel, o.delivery, o.receiving_mode_label, o.receiving_mode_behavior, o.notes, o.order_notes,
+            `SELECT o.id, o.customer_id, o.items, o.total::float AS total, o.status AS order_status, o.channel, o.delivery, o.receiving_mode_label, o.receiving_mode_behavior,
+              o.delivery_address, o.delivery_neighborhood, o.delivery_reference, o.notes, o.order_notes,
               o.service_branch_id, o.service_branch_name, o.pickup_branch_id, o.pickup_branch_name, o.created_at,
               s.status AS kds_status, s.started_at, s.ready_at, s.completed_at, s.updated_at
        FROM {s}.orders o
@@ -111,8 +124,9 @@ async function buildKdsPayload(tenant, tenantDb, area) {
       [area.id, area.branch_id || null]
     ),
     tenantDb.all(
-      `SELECT (-tr.id) AS id, NULL::int AS customer_id, tr.items, 'pendiente' AS order_status,
+            `SELECT (-tr.id) AS id, NULL::int AS customer_id, tr.items, tr.subtotal::float AS total, 'pendiente' AS order_status,
               'table_round' AS channel, 'mesa' AS delivery, tr.notes, tr.notes AS order_notes,
+              ''::text AS delivery_address, ''::text AS delivery_neighborhood, ''::text AS delivery_reference,
               NULLIF(ta.branch_id, 0) AS service_branch_id, b.name AS service_branch_name,
               NULL::int AS pickup_branch_id, NULL::text AS pickup_branch_name, tr.created_at,
               s.status AS kds_status, s.started_at, s.ready_at, s.completed_at, s.updated_at,
@@ -127,6 +141,12 @@ async function buildKdsPayload(tenant, tenantDb, area) {
       [area.id, area.branch_id || null]
     ),
     tenantDb.all("SELECT key, value FROM {s}.settings WHERE key IN ('business_name','currency','timezone')"),
+    tenantDb.all(
+      `SELECT s.order_id, s.area_id, s.status
+       FROM {s}.kds_ticket_states s
+       JOIN {s}.kds_areas a ON a.id = s.area_id
+       WHERE a.active = 1 AND a.area_type = 'preparation'`
+    ),
   ]);
 
   const parsedOrders = [...orderRows, ...tableRoundRows].map((row) => ({ ...row, parsedItems: parseItems(row.items) }));
@@ -152,7 +172,7 @@ async function buildKdsPayload(tenant, tenantDb, area) {
      FROM {s}.kds_areas a
      LEFT JOIN {s}.kds_area_categories ac ON ac.area_id = a.id
      LEFT JOIN {s}.kds_area_products ap ON ap.area_id = a.id
-     WHERE a.active = 1
+    WHERE a.active = 1 AND a.area_type = 'preparation'
      GROUP BY a.id, a.name, a.branch_id`
   );
   const areaRules = allAssignmentRows.map((row) => ({
@@ -168,19 +188,32 @@ async function buildKdsPayload(tenant, tenantDb, area) {
     ? await tenantDb.all('SELECT id, name_enc FROM {s}.customers WHERE id = ANY($1::int[])', [customerIds])
     : [];
   const customerById = new Map(customers.map((customer) => [Number(customer.id), decrypt(customer.name_enc) || 'Cliente']));
+  const preparationStatusByOrder = new Map();
+  for (const row of preparationStateRows) {
+    preparationStatusByOrder.set(`${Number(row.order_id)}:${Number(row.area_id)}`, row.status);
+  }
 
   const tickets = [];
   for (const order of parsedOrders) {
-    const areaItems = order.parsedItems.filter((item) => itemBelongsToArea(item, productById, assignments));
+    const isDeliveryOrder = order.receiving_mode_behavior === 'delivery' || order.delivery === 'domicilio';
+    if (isDeliveryArea && !isDeliveryOrder) continue;
+    const areaItems = isDeliveryArea
+      ? order.parsedItems
+      : order.parsedItems.filter((item) => itemBelongsToArea(item, productById, assignments));
     if (!areaItems.length) continue;
-    const status = KDS_STATUSES.has(order.kds_status) ? order.kds_status : 'pending';
-    if (status === 'completed') continue;
+    const ownStatus = KDS_STATUSES.has(order.kds_status) ? order.kds_status : 'pending';
+    if (ownStatus === 'completed') continue;
     const orderBranchId = Number(order.service_branch_id || order.pickup_branch_id) || null;
     const applicableAreaRules = areaRules.filter((rule) => !rule.branchId || rule.branchId === orderBranchId);
     const routedAreas = applicableAreaRules
       .filter((rule) => order.parsedItems.some((item) => itemBelongsToArea(item, productById, rule)))
       .map((rule) => ({ id: rule.id, name: rule.name }));
-    const otherItems = order.parsedItems.filter((item) =>
+    const preparationProgress = routedAreas.map((rule) => ({
+      ...rule,
+      status: preparationStatusByOrder.get(`${Number(order.id)}:${rule.id}`) || 'pending',
+    }));
+    const status = isDeliveryArea ? deliveryPreparationStatus(preparationProgress) : ownStatus;
+    const otherItems = isDeliveryArea ? [] : order.parsedItems.filter((item) =>
       !itemBelongsToArea(item, productById, assignments)
       && applicableAreaRules.some((rule) => rule.id !== Number(area.id) && itemBelongsToArea(item, productById, rule))
     );
@@ -192,6 +225,10 @@ async function buildKdsPayload(tenant, tenantDb, area) {
       delivery: order.delivery,
       receivingModeLabel: order.receiving_mode_label || (order.delivery === 'comer_sucursal' ? 'Comer en sucursal' : ''),
       receivingModeBehavior: order.receiving_mode_behavior || '',
+      total: Number(order.total || 0),
+      deliveryAddress: order.delivery_address || '',
+      deliveryNeighborhood: order.delivery_neighborhood || '',
+      deliveryReference: order.delivery_reference || '',
       notes: operationalOrderNote(order),
       branchName: order.service_branch_name || order.pickup_branch_name || '',
       customerName: customerById.get(Number(order.customer_id)) || order.table_customer_name || '',
@@ -201,6 +238,7 @@ async function buildKdsPayload(tenant, tenantDb, area) {
       areaItems,
       otherItems,
       routedAreas,
+      preparationProgress,
       isMixed: routedAreas.length > 1,
       tableNumber: order.table_number ? Number(order.table_number) : null,
       roundNumber: order.round_number ? Number(order.round_number) : null,
@@ -221,6 +259,7 @@ async function buildKdsPayload(tenant, tenantDb, area) {
     area: {
       id: Number(area.id),
       name: area.name,
+      type: area.area_type || 'preparation',
       branchId: area.branch_id ? Number(area.branch_id) : null,
       branchName: area.branch_name || '',
       color: area.color || tenant.primary_color || '#ff6b35',
@@ -251,8 +290,12 @@ router.patch('/public/:slug/:token/orders/:orderId', async (req, res, next) => {
       return res.status(400).json({ error: 'Estado de comanda inválido' });
     }
     const visible = await buildKdsPayload(found.tenant, found.tenantDb, found.area);
-    if (!visible.tickets.some((ticket) => Number(ticket.id) === orderId)) {
+    const visibleTicket = visible.tickets.find((ticket) => Number(ticket.id) === orderId);
+    if (!visibleTicket) {
       return res.status(404).json({ error: 'La comanda no corresponde a esta área o ya fue retirada' });
+    }
+    if (found.area.area_type === 'delivery' && (status !== 'completed' || visibleTicket.status !== 'ready')) {
+      return res.status(409).json({ error: 'El pedido sólo puede entregarse cuando todas las áreas de preparación estén listas' });
     }
 
     await found.tenantDb.run(
@@ -271,6 +314,7 @@ router.patch('/public/:slug/:token/orders/:orderId', async (req, res, next) => {
          updated_at = now()`,
       [found.area.id, orderId, status]
     );
+    emitKdsUpdate(found.tenant.slug, { orderId, areaId: Number(found.area.id), status });
     res.json({ ok: true, orderId, status });
   } catch (error) {
     next(error);
@@ -283,7 +327,7 @@ router.use(requireOwner);
 
 async function listAreas(req) {
   const areas = await req.tdb.all(
-    `SELECT a.id, a.name, a.branch_id, a.color, a.access_token, a.active, a.created_at,
+    `SELECT a.id, a.name, a.area_type, a.branch_id, a.color, a.access_token, a.active, a.created_at,
             b.name AS branch_name
      FROM {s}.kds_areas a
      LEFT JOIN {s}.branches b ON b.id = a.branch_id
@@ -294,6 +338,7 @@ async function listAreas(req) {
     return {
       id: Number(area.id),
       name: area.name,
+      type: area.area_type || 'preparation',
       branchId: area.branch_id ? Number(area.branch_id) : null,
       branchName: area.branch_name || '',
       color: area.color,
@@ -322,12 +367,13 @@ router.get('/', async (req, res, next) => {
 async function validateAndSaveArea(req, res, areaId = null) {
   const body = req.body || {};
   const name = String(body.name || '').trim().slice(0, 60);
+  const areaType = KDS_AREA_TYPES.has(body.type) ? body.type : 'preparation';
   const branchId = body.branchId ? Number(body.branchId) : null;
   const categoryIds = cleanIds(body.categoryIds);
   const productIds = cleanIds(body.productIds);
   const active = body.active === false || body.active === 0 || body.active === '0' ? 0 : 1;
   if (name.length < 2) return res.status(400).json({ error: 'Escribe el nombre del área de preparación' });
-  if (!categoryIds.length && !productIds.length) {
+  if (areaType === 'preparation' && !categoryIds.length && !productIds.length) {
     return res.status(400).json({ error: 'Asigna al menos una categoría o producto al área' });
   }
   if (branchId) {
@@ -337,17 +383,21 @@ async function validateAndSaveArea(req, res, areaId = null) {
 
   let area;
   if (areaId) {
+    const previousArea = await req.tdb.get('SELECT area_type FROM {s}.kds_areas WHERE id = $1', [areaId]);
     area = await req.tdb.get(
-      `UPDATE {s}.kds_areas SET name = $1, branch_id = $2, color = $3, active = $4, updated_at = now()
-       WHERE id = $5 RETURNING *`,
-      [name, branchId, cleanColor(body.color), active, areaId]
+      `UPDATE {s}.kds_areas SET name = $1, area_type = $2, branch_id = $3, color = $4, active = $5, updated_at = now()
+       WHERE id = $6 RETURNING *`,
+      [name, areaType, branchId, cleanColor(body.color), active, areaId]
     );
     if (!area) return res.status(404).json({ error: 'Área KDS no encontrada' });
+    if (previousArea?.area_type !== areaType) {
+      await req.tdb.run('DELETE FROM {s}.kds_ticket_states WHERE area_id = $1', [areaId]);
+    }
   } else {
     area = await req.tdb.get(
-      `INSERT INTO {s}.kds_areas (name, branch_id, color, access_token, active)
-       VALUES ($1, $2, $3, $4, $5) RETURNING *`,
-      [name, branchId, cleanColor(body.color), createToken(), active]
+      `INSERT INTO {s}.kds_areas (name, area_type, branch_id, color, access_token, active)
+       VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
+      [name, areaType, branchId, cleanColor(body.color), createToken(), active]
     );
   }
 
@@ -452,6 +502,11 @@ router.post('/setup/defaults', async (req, res, next) => {
         await req.tdb.run('INSERT INTO {s}.kds_area_categories (area_id, category_id) VALUES ($1, $2)', [bar.id, categoryId]);
       }
     }
+    await req.tdb.run(
+      `INSERT INTO {s}.kds_areas (name, area_type, color, access_token, active)
+       VALUES ('Delivery', 'delivery', '#16a34a', $1, 1)`,
+      [createToken()]
+    );
     res.json({ ok: true, areas: await listAreas(req) });
   } catch (error) {
     next(error);

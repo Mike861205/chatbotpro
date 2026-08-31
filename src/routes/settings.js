@@ -9,6 +9,7 @@ const { createImageUpload, deleteManagedUpload, optimizeUploadedImage, safeUnlin
 const { CURRENCIES, TIME_ZONES, regionalDefaults, isSupportedCurrency, isSupportedTimeZone } = require('../utils/regional');
 const { normalizeCustomPaymentMethods, normalizePaymentAccounts } = require('../utils/paymentMethods');
 const { validateFloatingIcons } = require('../utils/chatbotAppearance');
+const { resolveCurrencyConversion, fetchAutomaticRate, positiveRate, PROVIDER_NAME, PROVIDER_URL } = require('../utils/currencyConversion');
 
 const router = express.Router();
 router.use(requireAuth);
@@ -24,6 +25,13 @@ const SETTING_KEYS = [
   'welcome_message',
   'whatsapp',
   'currency',
+  'currency_conversion_enabled',
+  'currency_conversion_target',
+  'currency_conversion_mode',
+  'currency_conversion_rate',
+  'currency_conversion_updated_at',
+  'currency_conversion_chatbot_enabled',
+  'currency_conversion_pos_enabled',
   'timezone',
   'address',
   'hours',
@@ -112,6 +120,16 @@ router.get('/', async (req, res, next) => {
       "SELECT 1 AS configured FROM {s}.settings WHERE key = 'pos_authorization_pin_hash' AND COALESCE(value, '') <> '' LIMIT 1"
     );
     out.authorization_pin_configured = Boolean(pinSetting);
+    if (out.currency_conversion_mode === 'automatic' && out.currency_conversion_enabled === '1') {
+      try {
+        const conversion = await resolveCurrencyConversion(req.tdb, { raw: out });
+        out.currency_conversion_rate = conversion.rate ? String(conversion.rate) : out.currency_conversion_rate;
+        out.currency_conversion_updated_at = conversion.updatedAt || out.currency_conversion_updated_at;
+        out.currency_conversion_stale = conversion.stale ? '1' : '0';
+      } catch (error) {
+        out.currency_conversion_warning = error.message;
+      }
+    }
     res.json(out);
   } catch (e) { next(e); }
 });
@@ -149,6 +167,32 @@ router.put('/', upload.single('logo'), async (req, res, next) => {
         return res.status(400).json({ error: 'El NIP debe contener de 4 a 8 dígitos' });
       }
       await setSetting(req.tdb, 'pos_authorization_pin_hash', pin ? await bcrypt.hash(pin, 12) : '');
+    }
+    if (body.currency_conversion_target !== undefined) {
+      body.currency_conversion_target = String(body.currency_conversion_target || '').trim().toUpperCase();
+      if (!isSupportedCurrency(body.currency_conversion_target)) return res.status(400).json({ error: 'Selecciona una moneda de conversión válida' });
+      const baseCurrency = body.currency || await req.tdb.get("SELECT value FROM {s}.settings WHERE key='currency'");
+      if (body.currency_conversion_target === String(baseCurrency?.value || baseCurrency || '').toUpperCase()) {
+        return res.status(400).json({ error: 'La moneda de conversión debe ser distinta de la moneda principal' });
+      }
+    }
+    if (body.currency_conversion_mode !== undefined && !['manual', 'automatic'].includes(body.currency_conversion_mode)) {
+      return res.status(400).json({ error: 'Selecciona un modo de tipo de cambio válido' });
+    }
+    if (body.currency_conversion_rate !== undefined && !positiveRate(body.currency_conversion_rate)) {
+      return res.status(400).json({ error: 'El tipo de cambio debe ser mayor que cero' });
+    }
+    if (body.currency_conversion_mode === 'automatic') {
+      const currentRows = await req.tdb.all(
+        "SELECT key,value FROM {s}.settings WHERE key=ANY($1::text[])",
+        [['currency', 'currency_conversion_target']]
+      );
+      const current = Object.fromEntries(currentRows.map((row) => [row.key, row.value]));
+      const nextBase = body.currency || current.currency || 'MXN';
+      const nextTarget = body.currency_conversion_target || current.currency_conversion_target || '';
+      const pairChanged = nextBase !== current.currency || nextTarget !== current.currency_conversion_target;
+      body.currency_conversion_updated_at = '';
+      if (pairChanged) body.currency_conversion_rate = '';
     }
     if (body.chatbot_floating_icons_json !== undefined) {
       try {
@@ -200,6 +244,40 @@ router.put('/', upload.single('logo'), async (req, res, next) => {
       else if (req.file) await safeUnlink(req.file.path);
     } catch {}
     next(e);
+  }
+});
+
+router.post('/currency-conversion/refresh', async (req, res, next) => {
+  try {
+    if (req.user.role !== 'owner' && !(req.user.role === 'staff' && req.user.permissions.some((key) => ['config', 'chatbot'].includes(key)))) {
+      return res.status(403).json({ error: 'No tienes permiso para actualizar el tipo de cambio' });
+    }
+    const baseCurrency = String(req.body?.baseCurrency || '').trim().toUpperCase();
+    const targetCurrency = String(req.body?.targetCurrency || '').trim().toUpperCase();
+    if (!isSupportedCurrency(baseCurrency) || !isSupportedCurrency(targetCurrency)) {
+      return res.status(400).json({ error: 'Selecciona monedas válidas para consultar la tasa' });
+    }
+    if (baseCurrency === targetCurrency) {
+      return res.status(400).json({ error: 'La moneda de conversión debe ser distinta de la moneda principal' });
+    }
+    const fresh = await fetchAutomaticRate(baseCurrency, targetCurrency);
+    res.json({
+      ok: true,
+      conversion: {
+        enabled: true,
+        configured: true,
+        baseCurrency,
+        targetCurrency,
+        mode: 'automatic',
+        rate: fresh.rate,
+        updatedAt: fresh.updatedAt,
+        provider: PROVIDER_NAME,
+        providerUrl: PROVIDER_URL,
+      },
+    });
+  } catch (error) {
+    error.status = 502;
+    next(error);
   }
 });
 

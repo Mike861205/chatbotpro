@@ -550,6 +550,7 @@ async function createTenantSchema(slug) {
     CREATE TABLE IF NOT EXISTS "${s}".kds_areas (
       id SERIAL PRIMARY KEY,
       name TEXT NOT NULL,
+      area_type TEXT NOT NULL DEFAULT 'preparation',
       branch_id INTEGER,
       color TEXT DEFAULT '#ff6b35',
       access_token TEXT UNIQUE NOT NULL,
@@ -557,6 +558,7 @@ async function createTenantSchema(slug) {
       created_at TIMESTAMPTZ DEFAULT now(),
       updated_at TIMESTAMPTZ DEFAULT now()
     );
+    ALTER TABLE "${s}".kds_areas ADD COLUMN IF NOT EXISTS area_type TEXT NOT NULL DEFAULT 'preparation';
     CREATE TABLE IF NOT EXISTS "${s}".kds_area_categories (
       area_id INTEGER NOT NULL,
       category_id INTEGER NOT NULL,
@@ -1168,6 +1170,13 @@ async function ensureTenantDefaults(slug, businessName = slug, regional = {}) {
     welcome_message: `¡Hola! 👋 Bienvenido a ${businessName}. Soy tu asistente virtual y estoy aquí para tomar tu pedido.`,
     whatsapp: '',
     currency: regional.currency || 'MXN',
+    currency_conversion_enabled: '0',
+    currency_conversion_target: (regional.currency || 'MXN') === 'USD' ? 'VES' : 'USD',
+    currency_conversion_mode: 'manual',
+    currency_conversion_rate: '1',
+    currency_conversion_updated_at: '',
+    currency_conversion_chatbot_enabled: '1',
+    currency_conversion_pos_enabled: '1',
     timezone: regional.timezone || 'America/Mexico_City',
     address: '',
     hours: '',

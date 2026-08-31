@@ -260,6 +260,7 @@
             <p>Configura Cocina, Barra, Postres u otras estaciones. Los pedidos mixtos se dividen automáticamente y cada pantalla controla su propio avance.</p>
             <div class="kds-admin-actions">
               <button class="btn btn-primary" type="button" id="kdsAddAreaBtn"><i class="ph-bold ph-plus-circle"></i> Nueva área</button>
+              <button class="btn btn-ghost" type="button" id="kdsAddDeliveryBtn"><i class="ph-bold ph-scooter"></i> Nueva Delivery</button>
               <button class="btn btn-ghost" type="button" id="kdsQuickSetupBtn"><i class="ph-bold ph-magic-wand"></i> Crear Cocina y Barra</button>
             </div>
           </div>
@@ -1190,6 +1191,40 @@
                   <option value="EUR">🇪🇺 EUR — Euro</option>
                 </select>
               </div>
+              <section class="currency-conversion-panel">
+                <div class="toggle-row">
+                  <div class="t-info"><i class="ph-bold ph-arrows-left-right"></i><div><b>Mostrar conversión de moneda</b><span>Conserva la moneda principal para cobrar y muestra una segunda moneda sólo como referencia.</span></div></div>
+                  <label class="switch"><input type="checkbox" id="cfgCurrencyConversionEnabled" /><span class="track"></span></label>
+                </div>
+                <div id="cfgCurrencyConversionFields" hidden>
+                  <div class="field">
+                    <label><i class="ph-bold ph-coins"></i> Convertir a</label>
+                    <select id="cfgCurrencyConversionTarget"></select>
+                  </div>
+                  <div class="field">
+                    <label><i class="ph-bold ph-gauge"></i> Tipo de cambio</label>
+                    <div class="segmented" id="cfgCurrencyConversionMode">
+                      <button type="button" data-conversion-mode="manual">Manual</button>
+                      <button type="button" data-conversion-mode="automatic">Automático</button>
+                    </div>
+                  </div>
+                  <div class="field">
+                    <label id="cfgCurrencyConversionRateLabel">1 moneda principal equivale a</label>
+                    <input type="number" id="cfgCurrencyConversionRate" min="0.000001" step="0.000001" inputmode="decimal" placeholder="750" />
+                    <div class="hint" id="cfgCurrencyConversionStatus"></div>
+                  </div>
+                  <div class="pay-method-group">
+                    <b><i class="ph-bold ph-eye"></i> Mostrar en</b>
+                    <div class="pay-method-grid">
+                      <label class="pay-method-chip"><input type="checkbox" id="cfgCurrencyConversionChatbot" /> <span><i class="ph-bold ph-chats-circle"></i> Asistente en línea</span></label>
+                      <label class="pay-method-chip"><input type="checkbox" id="cfgCurrencyConversionPos" /> <span><i class="ph-bold ph-cash-register"></i> Punto de venta</span></label>
+                    </div>
+                  </div>
+                  <div class="currency-conversion-preview" id="cfgCurrencyConversionPreview"></div>
+                  <button class="btn btn-ghost btn-sm" type="button" id="refreshCurrencyConversionBtn" hidden><i class="ph-bold ph-arrows-clockwise"></i> Actualizar tasa ahora</button>
+                  <div class="hint" id="cfgCurrencyConversionAttribution" hidden>Tasas automáticas por <a href="https://www.exchangerate-api.com" target="_blank" rel="noopener noreferrer">ExchangeRate-API</a>.</div>
+                </div>
+              </section>
               <div class="field">
                 <label><i class="ph-bold ph-globe-hemisphere-west"></i> Zona horaria local</label>
                 <select id="cfgTimezone"></select>
@@ -2171,9 +2206,18 @@
         <input type="hidden" id="kdsAreaId" />
         <div class="row-2">
           <div class="field">
+            <label><i class="ph-bold ph-monitor"></i> Función de la pantalla *</label>
+            <select id="kdsAreaType">
+              <option value="preparation">Preparación (Cocina, Barra u otra)</option>
+              <option value="delivery">Delivery (seguimiento de domicilios)</option>
+            </select>
+          </div>
+          <div class="field">
             <label><i class="ph-bold ph-text-aa"></i> Nombre del área *</label>
             <input type="text" id="kdsAreaName" maxlength="60" required placeholder="Cocina, Barra, Postres…" />
           </div>
+        </div>
+        <div class="row-2">
           <div class="field">
             <label><i class="ph-bold ph-storefront"></i> Sucursal</label>
             <select id="kdsAreaBranch"><option value="">Todas / sin sucursal</option></select>
@@ -2189,6 +2233,7 @@
             <label class="switch"><input type="checkbox" id="kdsAreaActive" checked /><span class="track"></span></label>
           </div>
         </div>
+        <div id="kdsPreparationAssignments">
         <div class="kds-assignment-block">
           <div class="kds-assignment-head">
             <div><h4>Categorías enviadas a esta área *</h4><p>Todo producto de una categoría seleccionada aparecerá aquí automáticamente.</p></div>
@@ -2202,6 +2247,7 @@
           </div>
           <input class="kds-product-search" type="search" id="kdsProductSearch" placeholder="Buscar producto…" autocomplete="off" />
           <div class="kds-check-grid products" id="kdsProductPicker"></div>
+        </div>
         </div>
         <div class="modal-actions">
           <button type="button" class="btn btn-ghost" id="kdsAreaCancel">Cancelar</button>
@@ -2987,6 +3033,6 @@
   </div>
 
 <script src="/socket.io/socket.io.js"></script>
-  <script src="/static/js/app.js?v=20260829trialflow2"></script>
+  <script src="/static/js/app.js?v=20260830delivery"></script>
 </body>
 </html>

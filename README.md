@@ -59,6 +59,8 @@ El panel incluye el módulo **Pantallas KDS** para enviar automáticamente las c
 
 Los pedidos mixtos aparecen en todas las áreas correspondientes, pero cada pantalla resalta únicamente las partidas que debe preparar. Los enlaces contienen un token privado y pueden renovarse desde el panel.
 
+También puedes crear una pantalla de tipo **Delivery**. Esta recibe automáticamente sólo los pedidos a domicilio y muestra cliente, colonia, importe y avance por cada área de preparación. El pedido pasa a **Listo para recoger** cuando todas las estaciones involucradas terminan; entonces el repartidor puede marcarlo como recogido.
+
 ## 🧪 Separar test y producción
 
 El proyecto ya soporta archivos de entorno separados:
