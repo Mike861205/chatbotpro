@@ -1,5 +1,15 @@
 const CORE_PAYMENT_METHOD_IDS = new Set(['cash', 'card', 'transfer', 'mixed', 'multiple']);
 const ACCOUNT_IDENTIFIER_TYPES = new Set(['account', 'clabe', 'card', 'phone', 'document', 'email', 'other']);
+const ACCOUNT_IDENTIFIER_LABELS = { account: 'Número de cuenta', clabe: 'CLABE interbancaria', card: 'Número de tarjeta', phone: 'Teléfono', document: 'Documento / identificación', email: 'Correo electrónico', other: 'Dato para el pago' };
+
+function legacyAccountFields(account) {
+  if (!account?.bankName && !account?.holderName && !account?.identifier) return [];
+  return [
+    { label: 'Banco o institución', value: account.bankName },
+    { label: 'Nombre del titular', value: account.holderName },
+    { label: ACCOUNT_IDENTIFIER_LABELS[account.identifierType] || 'Dato para el pago', value: account.identifier },
+  ];
+}
 
 function normalizePaymentAccounts(raw, options = {}) {
   const { context = 'cuentas', required = false } = options;
@@ -16,16 +26,18 @@ function normalizePaymentAccounts(raw, options = {}) {
     throw new Error(`Agrega al menos una cuenta en ${context}`);
   }
   return accounts.map((account) => {
-    const bankName = String(account?.bankName || '').trim().slice(0, 80);
-    const holderName = String(account?.holderName || '').trim().slice(0, 100);
-    const identifier = String(account?.identifier || '').trim().slice(0, 80);
-    const identifierType = ACCOUNT_IDENTIFIER_TYPES.has(account?.identifierType)
-      ? account.identifierType
-      : '';
-    if (!bankName || !holderName || !identifier || !identifierType) {
-      throw new Error(`Completa institución, titular, tipo y dato en cada cuenta de ${context}`);
+    const sourceFields = Array.isArray(account?.fields) ? account.fields : legacyAccountFields(account);
+    if (!sourceFields.length || sourceFields.length > 12) {
+      throw new Error(`Cada cuenta de ${context} debe tener entre 1 y 12 datos`);
     }
-    return { bankName, holderName, identifierType, identifier };
+    const fields = sourceFields.map((field) => ({
+      label: String(field?.label || '').trim().slice(0, 50),
+      value: String(field?.value || '').trim().slice(0, 160),
+    }));
+    if (fields.some((field) => !field.label || !field.value)) {
+      throw new Error(`Completa el título y la información de cada dato en ${context}`);
+    }
+    return { fields };
   });
 }
 

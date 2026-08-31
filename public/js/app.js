@@ -9711,31 +9711,48 @@ function readCustomPaymentMethodInputs() {
     label: row.querySelector('[data-custom-payment-label]').value.trim(),
     active: row.querySelector('[data-custom-payment-active]').checked,
     accountDetailsEnabled: row.querySelector('[data-custom-payment-accounts-enabled]').checked,
-    accounts: [...row.querySelectorAll('[data-custom-payment-account]')].map((card) => ({
-      bankName: card.querySelector('[data-custom-account-field="bankName"]').value.trim(),
-      holderName: card.querySelector('[data-custom-account-field="holderName"]').value.trim(),
-      identifierType: card.querySelector('[data-custom-account-field="identifierType"]').value,
-      identifier: card.querySelector('[data-custom-account-field="identifier"]').value.trim(),
-    })),
+    accounts: [...row.querySelectorAll('[data-custom-payment-account]')].map(readPaymentAccountCard),
   }));
 }
 
-function paymentAccountFields(account, fieldAttribute) {
+function paymentAccountDataFields(account) {
+  if (Array.isArray(account?.fields) && account.fields.length) return account.fields;
+  const typeLabels = { account: 'Número de cuenta', clabe: 'CLABE interbancaria', card: 'Número de tarjeta', phone: 'Teléfono', document: 'Documento / identificación', email: 'Correo electrónico', other: 'Dato para el pago' };
+  if (account?.bankName || account?.holderName || account?.identifier) return [
+    { label: 'Banco o institución', value: account.bankName || '' },
+    { label: 'Nombre del titular', value: account.holderName || '' },
+    { label: typeLabels[account.identifierType] || 'Dato para el pago', value: account.identifier || '' },
+  ];
+  return [
+    { label: 'Banco o institución', value: '' },
+    { label: 'Nombre del titular', value: '' },
+    { label: 'Número de cuenta', value: '' },
+  ];
+}
+
+function readPaymentAccountCard(card) {
+  return { fields: [...card.querySelectorAll('[data-payment-account-field]')].map((row) => ({
+    label: row.querySelector('[data-payment-field-label]').value.trim(),
+    value: row.querySelector('[data-payment-field-value]').value.trim(),
+  })) };
+}
+
+function paymentAccountIsIncomplete(account) {
+  return !Array.isArray(account?.fields) || !account.fields.length
+    || account.fields.some((field) => !field.label || !field.value);
+}
+
+function paymentAccountFields(account) {
+  const fields = paymentAccountDataFields(account);
   return `
     <div class="bank-account-fields">
-      <div class="field"><label>Banco o institución</label><input type="text" ${fieldAttribute}="bankName" maxlength="80" value="${esc(account.bankName || '')}" placeholder="Ej. Banco de Venezuela" /></div>
-      <div class="field"><label>Nombre del titular</label><input type="text" ${fieldAttribute}="holderName" maxlength="100" value="${esc(account.holderName || '')}" placeholder="Persona o razón social" /></div>
-      <div class="field"><label>Tipo de dato</label><select ${fieldAttribute}="identifierType">
-        <option value="account" ${account.identifierType === 'account' ? 'selected' : ''}>Número de cuenta</option>
-        <option value="clabe" ${account.identifierType === 'clabe' ? 'selected' : ''}>CLABE interbancaria</option>
-        <option value="card" ${account.identifierType === 'card' ? 'selected' : ''}>Número de tarjeta</option>
-        <option value="phone" ${account.identifierType === 'phone' ? 'selected' : ''}>Teléfono</option>
-        <option value="document" ${account.identifierType === 'document' ? 'selected' : ''}>Documento / identificación</option>
-        <option value="email" ${account.identifierType === 'email' ? 'selected' : ''}>Correo electrónico</option>
-        <option value="other" ${account.identifierType === 'other' ? 'selected' : ''}>Otro dato</option>
-      </select></div>
-      <div class="field"><label>Dato para el pago</label><input type="text" ${fieldAttribute}="identifier" maxlength="80" value="${esc(account.identifier || '')}" placeholder="Número, teléfono, correo, etc." /></div>
-    </div>`;
+      ${fields.map((field, index) => `<div class="payment-account-field-row" data-payment-account-field="${index}">
+        <div class="field"><label>Título</label><input type="text" data-payment-field-label maxlength="50" value="${esc(field.label || '')}" placeholder="Ej. Banco, titular, teléfono" /></div>
+        <div class="field"><label>Información</label><input type="text" data-payment-field-value maxlength="160" value="${esc(field.value || '')}" placeholder="Dato que podrá copiar el cliente" /></div>
+        <button class="btn btn-danger btn-icon payment-account-field-remove" type="button" data-remove-payment-field="${index}" title="Eliminar dato" aria-label="Eliminar dato"><i class="ph-bold ph-trash"></i></button>
+      </div>`).join('')}
+    </div>
+    <button class="btn btn-ghost payment-account-add-field" type="button" data-add-payment-field><i class="ph-bold ph-plus"></i> Agregar dato</button>`;
 }
 
 function renderCustomPaymentMethods() {
@@ -9765,7 +9782,7 @@ function renderCustomPaymentMethods() {
             ${accounts.length ? accounts.map((account, accountIndex) => `
               <article class="bank-account-card" data-custom-payment-account="${accountIndex}">
                 <div class="bank-account-card-head"><b>Cuenta ${accountIndex + 1}</b><button class="btn btn-danger btn-icon bank-account-remove" type="button" data-remove-custom-payment-account="${accountIndex}" title="Eliminar cuenta"><i class="ph-bold ph-trash"></i></button></div>
-                ${paymentAccountFields(account, 'data-custom-account-field')}
+                ${paymentAccountFields(account)}
               </article>`).join('') : '<div class="bank-account-empty"><i class="ph-bold ph-bank"></i> Activa esta opción y agrega los datos que verá el cliente.</div>'}
           </div>
         </section>
@@ -9799,12 +9816,7 @@ function syncPosCustomPaymentMethods() {
 }
 
 function readBankAccountInputs() {
-  return [...document.querySelectorAll('#bankAccountsList .bank-account-card')].map((card) => ({
-    bankName: card.querySelector('[data-bank-field="bankName"]').value.trim(),
-    holderName: card.querySelector('[data-bank-field="holderName"]').value.trim(),
-    identifierType: card.querySelector('[data-bank-field="identifierType"]').value,
-    identifier: card.querySelector('[data-bank-field="identifier"]').value.trim(),
-  }));
+  return [...document.querySelectorAll('#bankAccountsList .bank-account-card')].map(readPaymentAccountCard);
 }
 
 function renderBankAccounts() {
@@ -9822,7 +9834,7 @@ function renderBankAccounts() {
           <i class="ph-bold ph-trash"></i>
         </button>
       </div>
-      ${paymentAccountFields(account, 'data-bank-field')}
+      ${paymentAccountFields(account)}
     </article>`).join('');
 }
 
@@ -9996,7 +10008,9 @@ $('#customPaymentMethodsList')?.addEventListener('click', (event) => {
   const removeMethodButton = event.target.closest('[data-remove-custom-payment]');
   const addAccountButton = event.target.closest('[data-add-custom-payment-account]');
   const removeAccountButton = event.target.closest('[data-remove-custom-payment-account]');
-  if (!removeMethodButton && !addAccountButton && !removeAccountButton) return;
+  const addFieldButton = event.target.closest('[data-add-payment-field]');
+  const removeFieldButton = event.target.closest('[data-remove-payment-field]');
+  if (!removeMethodButton && !addAccountButton && !removeAccountButton && !addFieldButton && !removeFieldButton) return;
   CUSTOM_PAYMENT_METHODS = readCustomPaymentMethodInputs();
   if (removeMethodButton) {
     CUSTOM_PAYMENT_METHODS.splice(Number(removeMethodButton.dataset.removeCustomPayment), 1);
@@ -10007,9 +10021,20 @@ $('#customPaymentMethodsList')?.addEventListener('click', (event) => {
     if (methodIndex < 0 || !CUSTOM_PAYMENT_METHODS[methodIndex]) return;
     if (addAccountButton) {
       if (CUSTOM_PAYMENT_METHODS[methodIndex].accounts.length >= 10) return toast('Puedes configurar hasta 10 cuentas por medio de pago', true);
-      CUSTOM_PAYMENT_METHODS[methodIndex].accounts.push({ bankName: '', holderName: '', identifierType: 'phone', identifier: '' });
-    } else {
+      CUSTOM_PAYMENT_METHODS[methodIndex].accounts.push({ fields: paymentAccountDataFields({}) });
+    } else if (removeAccountButton) {
       CUSTOM_PAYMENT_METHODS[methodIndex].accounts.splice(Number(removeAccountButton.dataset.removeCustomPaymentAccount), 1);
+    } else {
+      const accountIndex = Number(event.target.closest('[data-custom-payment-account]')?.dataset.customPaymentAccount);
+      const fields = CUSTOM_PAYMENT_METHODS[methodIndex].accounts[accountIndex]?.fields;
+      if (!fields) return;
+      if (addFieldButton) {
+        if (fields.length >= 12) return toast('Puedes agregar hasta 12 datos por cuenta', true);
+        fields.push({ label: '', value: '' });
+      } else {
+        if (fields.length <= 1) return toast('Cada cuenta debe conservar al menos un dato', true);
+        fields.splice(Number(removeFieldButton.dataset.removePaymentField), 1);
+      }
     }
   }
   renderCustomPaymentMethods();
@@ -10025,16 +10050,31 @@ $('#customPaymentMethodsList')?.addEventListener('change', (event) => {
 $('#addBankAccountBtn')?.addEventListener('click', () => {
   BANK_ACCOUNTS = readBankAccountInputs();
   if (BANK_ACCOUNTS.length >= 10) return toast('Puedes configurar hasta 10 cuentas bancarias', true);
-  BANK_ACCOUNTS.push({ bankName: '', holderName: '', identifierType: 'clabe', identifier: '' });
+  BANK_ACCOUNTS.push({ fields: paymentAccountDataFields({}) });
   renderBankAccounts();
   const cards = document.querySelectorAll('.bank-account-card');
   cards[cards.length - 1]?.querySelector('input')?.focus();
 });
 $('#bankAccountsList')?.addEventListener('click', (event) => {
   const button = event.target.closest('[data-remove-bank]');
-  if (!button) return;
+  const addFieldButton = event.target.closest('[data-add-payment-field]');
+  const removeFieldButton = event.target.closest('[data-remove-payment-field]');
+  if (!button && !addFieldButton && !removeFieldButton) return;
   BANK_ACCOUNTS = readBankAccountInputs();
-  BANK_ACCOUNTS.splice(Number(button.dataset.removeBank), 1);
+  if (button) {
+    BANK_ACCOUNTS.splice(Number(button.dataset.removeBank), 1);
+  } else {
+    const accountIndex = Number(event.target.closest('[data-bank-account]')?.dataset.bankAccount);
+    const fields = BANK_ACCOUNTS[accountIndex]?.fields;
+    if (!fields) return;
+    if (addFieldButton) {
+      if (fields.length >= 12) return toast('Puedes agregar hasta 12 datos por cuenta', true);
+      fields.push({ label: '', value: '' });
+    } else {
+      if (fields.length <= 1) return toast('Cada cuenta debe conservar al menos un dato', true);
+      fields.splice(Number(removeFieldButton.dataset.removePaymentField), 1);
+    }
+  }
   renderBankAccounts();
 });
 [$('#cfgChatPayDeliveryTransfer'), $('#cfgChatPayPickupTransfer')].forEach((checkbox) => {
@@ -10399,7 +10439,7 @@ $('#contactForm').addEventListener('submit', async (e) => {
     return toast(`Agrega al menos una cuenta para ${customMethodWithoutAccounts.label}`, true);
   }
   const incompleteCustomAccount = CUSTOM_PAYMENT_METHODS.find((method) => method.accounts.some((account) => (
-    !account.bankName || !account.holderName || !account.identifierType || !account.identifier
+    paymentAccountIsIncomplete(account)
   )));
   if (incompleteCustomAccount) {
     return toast(`Completa todos los datos de las cuentas de ${incompleteCustomAccount.label}`, true);
@@ -10420,8 +10460,8 @@ $('#contactForm').addEventListener('submit', async (e) => {
   if (transferEnabled && !BANK_ACCOUNTS.length) {
     return toast('Agrega al menos una cuenta para recibir transferencias', true);
   }
-  if (BANK_ACCOUNTS.some((account) => !account.bankName || !account.holderName || !account.identifierType || !account.identifier)) {
-    return toast('Completa todos los datos de cada cuenta bancaria', true);
+  if (BANK_ACCOUNTS.some(paymentAccountIsIncomplete)) {
+    return toast('Completa el título y la información de cada dato bancario', true);
   }
   const conversionEnabled = $('#cfgCurrencyConversionEnabled').checked;
   const conversionRate = Number($('#cfgCurrencyConversionRate').value || 0);

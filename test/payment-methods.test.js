@@ -30,14 +30,24 @@ test('permite cuentas configurables por cada medio de pago local', () => {
     }],
   }]);
   assert.equal(method.accountDetailsEnabled, true);
-  assert.equal(method.accounts[0].identifierType, 'phone');
+  assert.deepEqual(method.accounts[0].fields, [
+    { label: 'Banco o institución', value: 'Banco de Venezuela' },
+    { label: 'Nombre del titular', value: 'Comercial Ejemplo' },
+    { label: 'Teléfono', value: '+58 412-1234567' },
+  ]);
   assert.throws(
     () => normalizeCustomPaymentMethods([{ label: 'Pago Móvil', accountDetailsEnabled: true, accounts: [] }]),
     /al menos una cuenta/
   );
-  assert.equal(normalizePaymentAccounts([{
-    bankName: 'Banco', holderName: 'Titular', identifierType: 'document', identifier: 'V-12345678',
-  }])[0].identifierType, 'document');
+  assert.deepEqual(normalizePaymentAccounts([{ fields: [
+    { label: 'Entidad receptora', value: 'Banco Ejemplo' },
+    { label: 'Cédula o RIF', value: 'V-12345678' },
+    { label: 'Concepto', value: 'Pedido web' },
+  ] }])[0].fields[2], { label: 'Concepto', value: 'Pedido web' });
+  assert.throws(
+    () => normalizePaymentAccounts([{ fields: [{ label: 'Referencia', value: '' }] }]),
+    /título y la información/
+  );
 });
 
 test('limita y valida el catálogo personalizado del tenant', () => {

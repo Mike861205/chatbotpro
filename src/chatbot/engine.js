@@ -378,25 +378,26 @@ function parseBankAccounts(raw) {
   try {
     const accounts = JSON.parse(String(raw || '[]'));
     if (!Array.isArray(accounts)) return [];
-    return accounts.filter((account) => (
-      account
-      && account.bankName
-      && account.holderName
-      && ['account', 'clabe', 'card', 'phone', 'document', 'email', 'other'].includes(account.identifierType)
-      && account.identifier
-    )).slice(0, 10);
+    const typeLabels = { account: 'Número de cuenta', clabe: 'CLABE interbancaria', card: 'Número de tarjeta', phone: 'Teléfono', document: 'Documento / identificación', email: 'Correo electrónico', other: 'Dato para el pago' };
+    return accounts.map((account) => {
+      const sourceFields = Array.isArray(account?.fields) ? account.fields : [
+        { label: 'Banco o institución', value: account?.bankName },
+        { label: 'Nombre del titular', value: account?.holderName },
+        { label: typeLabels[account?.identifierType] || 'Dato para el pago', value: account?.identifier },
+      ];
+      const fields = sourceFields.filter((field) => field?.label && field?.value).slice(0, 12);
+      return fields.length ? { fields } : null;
+    }).filter(Boolean).slice(0, 10);
   } catch {
     return [];
   }
 }
 
 function bankAccountsFallbackMessage(accounts, paymentLabel = 'Transferencia') {
-  const typeLabels = { account: 'Cuenta', clabe: 'CLABE', card: 'Tarjeta', phone: 'Teléfono', document: 'Documento', email: 'Correo', other: 'Dato de pago' };
-  const details = accounts.map((account, index) => [
-    `🏦 ${accounts.length > 1 ? `Cuenta ${index + 1} · ` : ''}${account.bankName}`,
-    `Titular: ${account.holderName}`,
-    `${typeLabels[account.identifierType] || 'Cuenta'}: ${account.identifier}`,
-  ].join('\n'));
+  const details = accounts.map((account, index) => {
+    const heading = accounts.length > 1 ? 'Cuenta ' + String(index + 1) : 'Datos de la cuenta';
+    return ['🏦 ' + heading, ...account.fields.map((field) => field.label + ': ' + field.value)].join('\n');
+  });
   return `Datos para realizar tu pago con ${paymentLabel}:\n\n${details.join('\n\n')}\n\nConserva tu comprobante de pago.`;
 }
 

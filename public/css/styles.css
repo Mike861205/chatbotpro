@@ -2755,10 +2755,12 @@ select.status-sel {
 .bank-account-remove { width: 34px; height: 34px; padding: 0; }
 .bank-account-fields {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 10px;
 }
 .bank-account-fields .field { margin: 0; min-width: 0; }
+.payment-account-field-row { display: grid; grid-template-columns: minmax(150px, .8fr) minmax(200px, 1.2fr) 34px; align-items: end; gap: 8px; }
+.payment-account-field-remove { width: 34px; height: 38px; padding: 0; }
+.payment-account-add-field { margin-top: 10px; }
 .bank-account-empty {
   padding: 18px;
   border: 1px dashed var(--line);
@@ -2772,7 +2774,8 @@ select.status-sel {
   .bank-accounts-head { align-items: stretch; flex-direction: column; }
   .bank-accounts-head .btn { justify-content: center; width: 100%; }
   .bank-accounts-save-row .btn { justify-content:center; width:100%; }
-  .bank-account-fields { grid-template-columns: 1fr; }
+  .payment-account-field-row { grid-template-columns: 1fr 34px; }
+  .payment-account-field-row .field:first-child { grid-column: 1 / -1; }
 }
 
 /* ============================================================

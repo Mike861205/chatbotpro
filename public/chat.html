@@ -190,7 +190,7 @@
     .bank-transfer-head small { display: block; margin-top: 2px; color: #72798a; font-size: 10.5px; }
     .bank-transfer-head i { color: var(--primary); }
     .bank-copy-all,
-    .bank-copy-number {
+    .bank-copy-field {
       display: inline-flex;
       align-items: center;
       justify-content: center;
@@ -205,18 +205,18 @@
       transition: background 0.18s, color 0.18s, transform 0.18s;
     }
     .bank-copy-all { flex-shrink: 0; min-height: 34px; padding: 7px 9px; border-radius: 10px; }
-    .bank-copy-number { width: 100%; min-height: 36px; margin-top: 10px; border-radius: 10px; }
+    .bank-copy-field { flex: 0 0 34px; width: 34px; height: 34px; padding: 0; border-radius: 9px; }
     .bank-copy-all:hover,
-    .bank-copy-number:hover,
+    .bank-copy-field:hover,
     .bank-copy-all.copied,
-    .bank-copy-number.copied { background: var(--primary); color: #fff; }
+    .bank-copy-field.copied { background: var(--primary); color: #fff; }
     .bank-copy-all:active,
-    .bank-copy-number:active { transform: scale(0.97); }
+    .bank-copy-field:active { transform: scale(0.97); }
     .bank-account-chat { padding: 13px 14px; }
     .bank-account-chat + .bank-account-chat { border-top: 1px solid #e9ecf2; }
     .bank-account-chat-title { display: flex; align-items: center; gap: 7px; margin-bottom: 8px; color: #171c2e; font-size: 13px; }
     .bank-account-chat-title i { color: var(--primary); font-size: 17px; }
-    .bank-detail-row { display: grid; grid-template-columns: 62px minmax(0, 1fr); gap: 7px; margin-top: 4px; font-size: 12px; }
+    .bank-detail-row { display: grid; grid-template-columns: minmax(62px, .75fr) minmax(0, 1.25fr) 34px; align-items: center; gap: 7px; margin-top: 6px; font-size: 12px; }
     .bank-detail-row span { color: #7a8191; }
     .bank-detail-row strong { color: #252a38; overflow-wrap: anywhere; user-select: all; }
     .bank-transfer-foot { padding: 9px 14px 11px; color: #72798a; font-size: 10.5px; border-top: 1px solid #e9ecf2; }
@@ -558,7 +558,7 @@
     function renderBankAccounts(accounts, title = 'Datos para Transferencia') {
       if (!Array.isArray(accounts) || !accounts.length) return false;
       title = String(title || 'Datos para Transferencia');
-      const typeLabels = { account: 'Cuenta', clabe: 'CLABE', card: 'Tarjeta', phone: 'Teléfono', document: 'Documento', email: 'Correo', other: 'Dato de pago' };
+      const typeLabels = { account: 'Número de cuenta', clabe: 'CLABE interbancaria', card: 'Número de tarjeta', phone: 'Teléfono', document: 'Documento / identificación', email: 'Correo electrónico', other: 'Dato para el pago' };
       const card = document.createElement('section');
       card.className = 'bank-transfer-card';
       card.innerHTML = `
@@ -570,22 +570,29 @@
         <div class="bank-transfer-foot"><i class="ph-bold ph-receipt"></i> Conserva tu comprobante de pago.</div>`;
       const list = card.querySelector('.bank-transfer-list');
       accounts.forEach((account, index) => {
-        const typeLabel = typeLabels[account.identifierType] || 'Cuenta';
+        const fields = Array.isArray(account.fields) ? account.fields : [
+          { label: 'Banco o institución', value: account.bankName },
+          { label: 'Nombre del titular', value: account.holderName },
+          { label: typeLabels[account.identifierType] || 'Dato para el pago', value: account.identifier },
+        ];
         const item = document.createElement('div');
         item.className = 'bank-account-chat';
         item.innerHTML = `
-          <b class="bank-account-chat-title"><i class="ph-bold ph-buildings"></i>${accounts.length > 1 ? `Cuenta ${index + 1} · ` : ''}${esc(account.bankName)}</b>
-          <div class="bank-detail-row"><span>Titular</span><strong>${esc(account.holderName)}</strong></div>
-          <div class="bank-detail-row"><span>${esc(typeLabel)}</span><strong>${esc(account.identifier)}</strong></div>
-          <button class="bank-copy-number" type="button"><i class="ph-bold ph-copy"></i> Copiar ${esc(typeLabel)}</button>`;
-        item.querySelector('.bank-copy-number').addEventListener('click', (event) => {
-          copyToClipboard(String(account.identifier), event.currentTarget);
-        });
+          <b class="bank-account-chat-title"><i class="ph-bold ph-buildings"></i>${accounts.length > 1 ? `Cuenta ${index + 1}` : 'Datos de la cuenta'}</b>
+          ${fields.map((field, fieldIndex) => `<div class="bank-detail-row"><span>${esc(field.label)}</span><strong>${esc(field.value)}</strong><button class="bank-copy-field" type="button" data-copy-field="${fieldIndex}" title="Copiar ${esc(field.label)}" aria-label="Copiar ${esc(field.label)}"><i class="ph-bold ph-copy"></i></button></div>`).join('')}`;
+        item.querySelectorAll('[data-copy-field]').forEach((button) => button.addEventListener('click', (event) => {
+          copyToClipboard(String(fields[Number(button.dataset.copyField)].value), event.currentTarget);
+        }));
         list.appendChild(item);
       });
       const fullText = accounts.map((account, index) => {
-        const heading = accounts.length > 1 ? `Cuenta ${index + 1} - ${account.bankName}` : account.bankName;
-        return `${heading}\nTitular: ${account.holderName}\n${typeLabels[account.identifierType] || 'Cuenta'}: ${account.identifier}`;
+        const fields = Array.isArray(account.fields) ? account.fields : [
+          { label: 'Banco o institución', value: account.bankName },
+          { label: 'Nombre del titular', value: account.holderName },
+          { label: typeLabels[account.identifierType] || 'Dato para el pago', value: account.identifier },
+        ];
+        const heading = accounts.length > 1 ? `Cuenta ${index + 1}\n` : '';
+        return `${heading}${fields.map((field) => `${field.label}: ${field.value}`).join('\n')}`;
       }).join('\n\n');
       card.querySelector('.bank-copy-all').addEventListener('click', (event) => copyToClipboard(fullText, event.currentTarget));
       messagesEl.appendChild(card);
