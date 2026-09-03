@@ -908,6 +908,63 @@ router.get('/clients', requireSuperAdmin, async (req, res, next) => {
   }
 });
 
+router.get('/invoicing-businesses', requireSuperAdmin, async (req, res, next) => {
+  try {
+    await refreshTenantBillingStatuses();
+    const result = await q(
+      `SELECT t.id,t.slug,t.business_name,t.owner_name,t.phone_enc,t.phone_country,t.phone_calling_code,
+              t.logo,t.primary_color,t.account_status,t.billing_status,t.plan_name,t.customer_since,
+              t.invoicing_enabled,t.invoicing_environment,t.invoicing_activated_at,t.trial_status,
+              t.trial_ends_on,t.sales_stage,t.next_follow_up_at,t.created_at,
+              COALESCE(u.username,'') AS owner_username
+       FROM tenants t
+       LEFT JOIN LATERAL (SELECT username FROM users WHERE tenant_id=t.id ORDER BY id LIMIT 1) u ON true
+       WHERE t.product_code='invoicing'
+       ORDER BY t.created_at DESC`
+    );
+    const businesses = mapBusinessRows(result.rows);
+    await Promise.all(businesses.map(async (business) => {
+      try {
+        const tenantDb = tdb(business.slug);
+        const [profile, wallet, activity] = await Promise.all([
+          tenantDb.get('SELECT rfc,legal_name,fiscal_regime,postal_code,csd_uploaded,api_mode,sandbox_shared FROM {s}.fiscal_emitters WHERE id=1'),
+          tenantDb.get('SELECT unlimited,balance,reserved FROM {s}.stamp_wallet WHERE id=1'),
+          tenantDb.get(`SELECT
+            ((SELECT count(*) FROM {s}.invoices)+(SELECT count(*) FROM {s}.global_invoices))::int AS invoice_count,
+            GREATEST((SELECT max(created_at) FROM {s}.invoices),(SELECT max(created_at) FROM {s}.global_invoices)) AS last_invoice_at`),
+        ]);
+        business.fiscal_profile_complete = Boolean(profile?.rfc && profile?.legal_name && profile?.fiscal_regime && profile?.postal_code);
+        business.csd_ready = Boolean(Number(profile?.csd_uploaded) || profile?.api_mode === 'web' || Number(profile?.sandbox_shared));
+        business.issuer_rfc = profile?.rfc || '';
+        business.invoice_count = Number(activity?.invoice_count || 0);
+        business.last_invoice_at = activity?.last_invoice_at || null;
+        const serializedWallet = serializeStampWallet(wallet);
+        business.stamp_available = serializedWallet.available;
+        business.stamp_unlimited = serializedWallet.unlimited;
+      } catch {
+        business.fiscal_profile_complete = false;
+        business.csd_ready = false;
+        business.issuer_rfc = '';
+        business.invoice_count = 0;
+        business.last_invoice_at = null;
+        business.stamp_available = 0;
+        business.stamp_unlimited = false;
+      }
+    }));
+    const summary = {
+      total: businesses.length,
+      prospects: businesses.filter((item) => !item.customer_since).length,
+      customers: businesses.filter((item) => Boolean(item.customer_since)).length,
+      activated: businesses.filter((item) => Number(item.invoicing_enabled)).length,
+      ready: businesses.filter((item) => item.fiscal_profile_complete && item.csd_ready && Number(item.invoicing_enabled)).length,
+      issued: businesses.reduce((total, item) => total + Number(item.invoice_count || 0), 0),
+    };
+    res.json({ businesses, summary });
+  } catch (error) {
+    next(error);
+  }
+});
+
 router.get('/clients/:id/payments', requireSuperAdmin, async (req, res, next) => {
   try {
     const clientId = Number(req.params.id);

@@ -56,14 +56,14 @@ pm2 status
 
 ## 5) Nginx
 
-Antes de emitir el certificado, crea en DNS un registro `A` para `facturacion.chatbotpro` apuntando a la misma IP del servidor.
+Antes de emitir el certificado, crea en DNS un registro `A` para `facturacion` apuntando a la misma IP del servidor.
 
 ```bash
 sudo tee /etc/nginx/sites-available/chatbotpro.systemdem.online > /dev/null <<'NGINX'
 server {
     listen 80;
     listen [::]:80;
-    server_name chatbotpro.systemdem.online facturacion.chatbotpro.systemdem.online;
+    server_name chatbotpro.systemdem.online facturacion.systemdem.online;
 
     location / {
         proxy_pass http://127.0.0.1:3003;
@@ -87,7 +87,7 @@ sudo systemctl reload nginx
 ## 6) SSL Let's Encrypt
 
 ```bash
-sudo certbot --nginx -d chatbotpro.systemdem.online -d facturacion.chatbotpro.systemdem.online --redirect -m <TU_EMAIL> --agree-tos --no-eff-email
+sudo certbot --nginx -d chatbotpro.systemdem.online -d facturacion.systemdem.online --redirect -m <TU_EMAIL> --agree-tos --no-eff-email
 sudo systemctl reload nginx
 ```
 
@@ -95,12 +95,12 @@ sudo systemctl reload nginx
 
 ```bash
 curl -I https://chatbotpro.systemdem.online
-curl -I https://facturacion.chatbotpro.systemdem.online
+curl -I https://facturacion.systemdem.online
 sudo certbot certificates
 pm2 status
 ```
 
 Esperado:
 - HTTP 200 o 302 en HTTPS.
-- Certificado emitido para chatbotpro.systemdem.online y facturacion.chatbotpro.systemdem.online.
+- Certificado emitido para chatbotpro.systemdem.online y facturacion.systemdem.online.
 - Proceso PM2 online.

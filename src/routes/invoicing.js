@@ -1,6 +1,6 @@
 const express = require('express');
 const multer = require('multer');
-const { X509Certificate } = require('node:crypto');
+const { X509Certificate, createPrivateKey, createPublicKey } = require('node:crypto');
 const config = require('../config');
 const { q, tdb, ensureTenantCourtesyStamps } = require('../db');
 const { encrypt, decrypt, lookupHash } = require('../utils/crypto');
@@ -8,6 +8,7 @@ const { requireAuth, requireOwner, requireModules } = require('../middleware/aut
 const { createRateLimiter } = require('../middleware/security');
 const { FacturamaError, createConfiguredFacturamaClients } = require('../services/facturama');
 const {
+  PAYMENT_FORMS,
   isMexicoIdentity,
   invoicingPortalUrl,
   validateFiscalProfile,
@@ -32,7 +33,7 @@ function normalizeEnvironment(value) {
 }
 
 function tenantEnvironment(tenant) {
-  if (config.NODE_ENV !== 'production' || tenant?.slug === config.DEMO_TENANT_SLUG) return 'sandbox';
+  if (tenant?.slug === config.DEMO_TENANT_SLUG) return 'sandbox';
   return normalizeEnvironment(tenant?.invoicing_environment);
 }
 
@@ -73,7 +74,8 @@ function csdCertificateIdentity(buffer) {
       const separator = line.indexOf('=');
       if (separator > 0) attributes[line.slice(0, separator).trim().toLowerCase()] = line.slice(separator + 1).trim();
     });
-    const rfc = String(attributes.x500uniqueidentifier || '').trim().toUpperCase();
+    const uniqueIdentifier = String(attributes.x500uniqueidentifier || '').trim().toUpperCase();
+    const rfc = uniqueIdentifier.match(/[A-ZÑ&]{3,4}\d{6}[A-Z0-9]{3}/)?.[0] || '';
     const legalName = String(attributes.cn || attributes.name || attributes.o || '').trim().toUpperCase();
     if (!rfc || !legalName) throw new Error('El certificado no contiene RFC y nombre fiscal identificables');
     const validTo = new Date(certificate.validTo);
@@ -81,6 +83,25 @@ function csdCertificateIdentity(buffer) {
     return { rfc, legalName, validTo: certificate.validTo };
   } catch (error) {
     throw Object.assign(new Error(`No se pudo validar el certificado .cer: ${error.message}`), { status: 422 });
+  }
+}
+
+function validateCsdPrivateKey(certificateBuffer, privateKeyBuffer, password) {
+  let privateKey;
+  try {
+    privateKey = createPrivateKey({ key: privateKeyBuffer, format: 'der', type: 'pkcs8', passphrase: password });
+  } catch {
+    throw Object.assign(new Error('No se pudo abrir la llave .key. Verifica que sea una llave CSD en formato DER y que la contraseña sea correcta.'), { status: 422 });
+  }
+  try {
+    const certificateKey = new X509Certificate(certificateBuffer).publicKey.export({ format: 'der', type: 'spki' });
+    const privatePublicKey = createPublicKey(privateKey).export({ format: 'der', type: 'spki' });
+    if (!certificateKey.equals(privatePublicKey)) {
+      throw Object.assign(new Error('El certificado .cer y la llave .key no pertenecen al mismo CSD.'), { status: 422 });
+    }
+  } catch (error) {
+    if (error.status) throw error;
+    throw Object.assign(new Error('No se pudo comprobar la correspondencia entre el certificado .cer y la llave .key.'), { status: 422 });
   }
 }
 
@@ -696,6 +717,100 @@ async function issueSaleInvoice({ tenant, tenantDb, orderId, receiverInput, requ
   }
 }
 
+async function issueDirectInvoice({ tenant, tenantDb, input = {}, actor = '' }) {
+  const profile = await getEmitter(tenantDb, Number(input.emitterId || 1));
+  profile.environment = tenantEnvironment(tenant);
+  const facturama = facturamaFor(profile);
+  const readinessError = profileReadinessError(profile);
+  if (readinessError) throw Object.assign(new Error(readinessError), { status: 409 });
+
+  const externalReference = String(input.externalReference || '').trim().slice(0, 80);
+  const description = String(input.description || '').trim().replace(/\s+/g, ' ').slice(0, 1000);
+  const total = Math.round(Number(input.total || 0) * 100) / 100;
+  const saleDate = /^\d{4}-\d{2}-\d{2}$/.test(String(input.saleDate || '')) ? String(input.saleDate) : new Date().toISOString().slice(0, 10);
+  const paymentForm = String(input.paymentForm || '01').trim();
+  if (!externalReference) throw Object.assign(new Error('Captura el folio o referencia de la venta'), { status: 400 });
+  if (!description) throw Object.assign(new Error('Captura el concepto de la venta'), { status: 400 });
+  if (!Number.isFinite(total) || total <= 0 || total > 9999999999.99) throw Object.assign(new Error('Captura un total válido mayor a cero'), { status: 400 });
+  if (!PAYMENT_FORMS.has(paymentForm)) throw Object.assign(new Error('Selecciona una forma de pago válida'), { status: 400 });
+
+  let expeditionPlace = resolveExpeditionPostalCode(profile);
+  let invoiceSeries = profile.series;
+  if (profile.api_mode === 'web') {
+    const issuanceContext = await facturama.ensureWebIssuanceContext(expeditionPlace, profile.series);
+    expeditionPlace = issuanceContext.postalCode;
+    invoiceSeries = issuanceContext.series;
+  }
+  const receiverInput = input.publicGeneral ? {
+    rfc: 'XAXX010101000', name: 'PUBLICO EN GENERAL', fiscalRegime: '616',
+    postalCode: expeditionPlace, cfdiUse: 'S01',
+  } : input.receiver;
+  const receiver = validateReceiver(receiverInput, { expeditionPostalCode: expeditionPlace });
+  const items = buildFacturamaItems({
+    items: [{ name: description, qty: 1, price: total }], total, delivery_fee: 0,
+  }, new Map(), profile, { conceptMode: 'detailed' });
+
+  const allocated = await tenantDb.tx(async (tx) => {
+    const lockedProfile = await tx.get('SELECT * FROM {s}.fiscal_emitters WHERE id=$1 FOR UPDATE', [profile.id || 1]);
+    const folio = String(lockedProfile.next_folio || 1);
+    await tx.run('UPDATE {s}.fiscal_emitters SET next_folio=next_folio+1,updated_at=now() WHERE id=$1', [lockedProfile.id]);
+    const snapshot = {
+      issuer: { rfc: profile.rfc, legalName: profile.legal_name, fiscalRegime: profile.fiscal_regime, postalCode: expeditionPlace },
+      receiver, externalReference, saleDate, description, paymentForm, items, total,
+    };
+    const row = await tx.get(
+      `INSERT INTO {s}.direct_invoices
+       (external_reference,sale_date,description,total,payment_form,request_key,environment,api_mode,series,folio,status,
+        receiver_data_enc,fiscal_snapshot_enc,issued_by,fiscal_emitter_id,issuer_rfc)
+       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'pending',$11,$12,$13,$14,$15) RETURNING *`,
+      [externalReference,saleDate,description,total,paymentForm,createRequestKey(),profile.environment,profile.api_mode,
+        invoiceSeries,folio,encrypt(JSON.stringify(receiver)),encrypt(JSON.stringify(snapshot)),actor,lockedProfile.id,profile.rfc]
+    );
+    await reserveStamp(tx, 'direct', row.id, lockedProfile.id, actor);
+    return { row, folio, snapshot };
+  });
+
+  const payload = {
+    NameId: 1, CfdiType: 'I', Currency: 'MXN', Exportation: '01', ExpeditionPlace: expeditionPlace,
+    PaymentForm: paymentForm, PaymentMethod: 'PUE', Serie: invoiceSeries, Folio: allocated.folio,
+    Receiver: { Rfc: receiver.rfc, Name: receiver.name, FiscalRegime: receiver.fiscalRegime, TaxZipCode: receiver.postalCode, CfdiUse: receiver.cfdiUse },
+    Items: items, Observations: `Venta externa ${externalReference}`,
+  };
+  const globalInformation = globalInformationForReceiver(receiver, `${saleDate}T12:00:00`);
+  if (globalInformation) payload.GlobalInformation = globalInformation;
+  if (profile.api_mode !== 'web') payload.Issuer = { Rfc: profile.rfc, Name: profile.legal_name, FiscalRegime: profile.fiscal_regime };
+
+  try {
+    let response = await facturama.createCfdi(payload, profile.api_mode);
+    let identity = extractFacturamaIdentity(response);
+    if (identity.providerId && !identity.uuid) {
+      try {
+        const detail = await facturama.getCfdi(identity.providerId, profile.api_mode);
+        response = { ...response, Detail: detail };
+        identity = extractFacturamaIdentity(response);
+      } catch {}
+    }
+    if (!identity.providerId) throw new FacturamaError('Facturama no devolvió el identificador del CFDI', { status: 502, uncertain: true });
+    const fileData = await loadInvoiceFiles({ provider_id: identity.providerId, environment: profile.environment, api_mode: profile.api_mode }, profile);
+    const updated = await tenantDb.get(
+      `UPDATE {s}.direct_invoices SET provider_id=$1,uuid=$2,certificate_number=$3,status='active',provider_response_enc=$4,
+       xml_enc=$5,pdf_enc=$6,issued_at=now(),updated_at=now(),error_message='' WHERE id=$7 RETURNING *`,
+      [identity.providerId,identity.uuid || null,identity.certificateNumber || null,encrypt(JSON.stringify(response)),
+        fileData.xml ? encrypt(fileData.xml) : null,fileData.pdf ? encrypt(fileData.pdf) : null,allocated.row.id]
+    );
+    await finalizeStamp(tenantDb, 'direct', updated.id, 'consumed', profile.id, actor);
+    return { invoice: cfdiDocumentSummary({ ...updated, document_type: 'direct' }) };
+  } catch (error) {
+    const uncertain = Boolean(error.uncertain);
+    await tenantDb.run(
+      `UPDATE {s}.direct_invoices SET status=$1,error_message=$2,provider_response_enc=$3,updated_at=now() WHERE id=$4`,
+      [uncertain ? 'unknown' : 'failed',String(error.message || 'Error de timbrado').slice(0,900),error.details ? encrypt(JSON.stringify(error.details)) : null,allocated.row.id]
+    );
+    if (!uncertain) await finalizeStamp(tenantDb, 'direct', allocated.row.id, 'released', profile.id, actor);
+    throw error;
+  }
+}
+
 // Portal público de autofacturación
 router.get('/public/:slug', publicLimiter, async (req, res, next) => {
   try {
@@ -899,7 +1014,7 @@ router.get('/bootstrap', async (req, res, next) => {
 
 router.get('/documents', async (req, res, next) => {
   try {
-    const type = ['individual', 'global'].includes(String(req.query.type || '')) ? String(req.query.type) : 'all';
+    const type = ['individual', 'global', 'direct'].includes(String(req.query.type || '')) ? String(req.query.type) : 'all';
     const status = ['active', 'cancel_pending', 'canceled', 'failed', 'unknown', 'pending'].includes(String(req.query.status || '')) ? String(req.query.status) : 'all';
     const page = Math.max(1, Number.parseInt(req.query.page, 10) || 1);
     const limit = [10, 20, 50].includes(Number(req.query.limit)) ? Number(req.query.limit) : 10;
@@ -931,6 +1046,12 @@ router.get('/documents', async (req, res, next) => {
            gi.cancellation_motive,gi.replacement_uuid,gi.cancellation_status,gi.cancellation_message,gi.cancellation_receipt_enc,
            gi.cancel_requested_at,gi.canceled_at,gi.issued_at,gi.created_at,gi.error_message
          FROM {s}.global_invoices gi
+         UNION ALL
+         SELECT 'direct'::text,di.id,NULL::integer,di.provider_id,di.uuid,di.series,di.folio,di.status,di.environment,di.api_mode,
+           di.receiver_data_enc,di.total::float,NULL::integer,1::int,COALESCE(di.issuer_rfc,(SELECT rfc FROM {s}.fiscal_emitters WHERE id=1)),
+           di.cancellation_motive,di.replacement_uuid,di.cancellation_status,di.cancellation_message,di.cancellation_receipt_enc,
+           di.cancel_requested_at,di.canceled_at,di.issued_at,di.created_at,di.error_message
+         FROM {s}.direct_invoices di
        )
        SELECT *,count(*) OVER()::int AS total_rows FROM documents
        ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
@@ -1092,6 +1213,7 @@ router.post('/csd', requireOwner, csdUpload.fields([{ name: 'certificate', maxCo
     if (certificateIdentity.rfc !== profile.rfc) {
       return res.status(422).json({ error: `El CSD pertenece al RFC ${certificateIdentity.rfc}, pero el emisor está registrado como ${profile.rfc}. Corrige el RFC o carga los archivos correspondientes.` });
     }
+    validateCsdPrivateKey(certificate.buffer, privateKey.buffer, password);
     profile.environment = tenantEnvironment(req.tenant);
     await facturamaFor(profile).uploadCsd({
       rfc: profile.rfc,
@@ -1155,6 +1277,36 @@ router.post('/sales/:id/issue', requireInvoicingActivated, async (req, res, next
     if (error.status) return res.status(error.status).json({ error: error.message, uncertain: Boolean(error.uncertain) });
     next(error);
   }
+});
+
+router.post('/direct-invoices', requireOwner, requireInvoicingActivated, async (req, res, next) => {
+  try {
+    const result = await issueDirectInvoice({ tenant: req.tenant, tenantDb: req.tdb, input: req.body || {}, actor: req.user.username });
+    res.json({ ok: true, message: 'Factura timbrada correctamente', ...result });
+  } catch (error) {
+    if (error.status) return res.status(error.status).json({ error: error.message, uncertain: Boolean(error.uncertain) });
+    next(error);
+  }
+});
+
+router.get('/direct-invoices/:id/:format', async (req, res, next) => {
+  try {
+    const invoice = await req.tdb.get('SELECT * FROM {s}.direct_invoices WHERE id=$1 LIMIT 1', [req.params.id]);
+    if (!invoice) return res.status(404).end();
+    if (!['xml','pdf'].includes(req.params.format)) return res.status(400).json({ error: 'Formato no válido' });
+    const format = req.params.format;
+    let content = decrypt(format === 'xml' ? invoice.xml_enc : invoice.pdf_enc);
+    if (!content && invoice.provider_id) {
+      const profile = await getEmitter(req.tdb, invoice.fiscal_emitter_id);
+      const result = await facturamaFor(invoice.environment || profile).downloadCfdi(invoice.provider_id, format, apiModeFor(invoice, profile));
+      content = String(result?.Content || '');
+      if (content) await req.tdb.run(`UPDATE {s}.direct_invoices SET ${format === 'xml' ? 'xml_enc' : 'pdf_enc'}=$1,updated_at=now() WHERE id=$2`, [encrypt(content),invoice.id]);
+    }
+    if (!content) return res.status(404).json({ error: 'El archivo todavía no está disponible' });
+    res.type(format === 'xml' ? 'application/xml' : 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="CFDI-${invoice.uuid || invoice.folio}.${format}"`);
+    res.send(Buffer.from(content, 'base64'));
+  } catch (error) { next(error); }
 });
 
 router.post('/invoices/:id/email', async (req, res, next) => {

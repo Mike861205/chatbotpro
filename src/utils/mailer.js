@@ -111,10 +111,13 @@ async function sendLeadNotification({ contactName, phone, phoneCountry, callingC
 
 /* ───────────────────── notificación: nuevo registro ───────────────────── */
 
-async function sendRegistrationNotification({ ownerName, phone, phoneCountry, callingCode, businessName, slug, username, timezone }) {
+async function sendRegistrationNotification({ ownerName, phone, phoneCountry, callingCode, businessName, slug, username, timezone, productCode = 'chatbotpro' }) {
   const transport = requireNotificationTransport();
+  const isInvoicing = productCode === 'invoicing';
+  const productLabel = isInvoicing ? 'Facturación independiente' : 'ChatBotPro';
 
   const tableRows = [
+    row('Producto', productLabel),
     row('Dueño', ownerName),
     row('Teléfono', phone),
     row('País', phoneCountry),
@@ -125,15 +128,17 @@ async function sendRegistrationNotification({ ownerName, phone, phoneCountry, ca
     row('Zona horaria', timezone),
   ].filter(Boolean).join('\n');
 
-  const html = emailWrapper('#16a34a', '🎉 Nuevo Registro de Prospecto', tableRows);
+  const html = emailWrapper(isInvoicing ? '#0f766e' : '#16a34a', isInvoicing ? '🧾 Nuevo Registro de Facturación' : '🎉 Nuevo Registro de Prospecto ChatBotPro', tableRows);
 
   await transport.sendMail({
     from: `"ChatBotPro" <${config.SMTP_USER}>`,
     to: config.NOTIFICATION_EMAIL,
-    subject: `🎉 Nuevo Registro — ${businessName} (${ownerName})`,
+    subject: isInvoicing
+      ? `🧾 Nuevo Registro Facturación — ${businessName} (${ownerName})`
+      : `🎉 Nuevo Registro ChatBotPro — ${businessName} (${ownerName})`,
     html,
   });
-  console.log(`[mailer] Registro notificado: ${businessName} (${ownerName})`);
+  console.log(`[mailer] Registro ${productLabel} notificado: ${businessName} (${ownerName})`);
   return true;
 }
 

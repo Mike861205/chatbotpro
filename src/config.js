@@ -85,7 +85,7 @@ module.exports = {
   FACTURAMA_SANDBOX_NAME: String(process.env.FACTURAMA_SANDBOX_NAME || 'ESCUELA KEMPER URGATE').trim().toUpperCase(),
   FACTURAMA_SANDBOX_REGIME: String(process.env.FACTURAMA_SANDBOX_REGIME || '601').trim(),
   FACTURAMA_SANDBOX_POSTAL_CODE: String(process.env.FACTURAMA_SANDBOX_POSTAL_CODE || '78240').trim(),
-  INVOICING_PORTAL_ORIGIN: String(process.env.INVOICING_PORTAL_ORIGIN || 'https://facturacion.chatbotpro.systemdem.online').trim().replace(/\/+$/, ''),
+  INVOICING_PORTAL_ORIGIN: String(process.env.INVOICING_PORTAL_ORIGIN || 'https://facturacion.systemdem.online').trim().replace(/\/+$/, ''),
   MERCADO_PAGO_ACCESS_TOKEN: String(process.env.MERCADO_PAGO_ACCESS_TOKEN || '').trim(),
   MERCADO_PAGO_PUBLIC_KEY: String(process.env.MERCADO_PAGO_PUBLIC_KEY || '').trim(),
   MERCADO_PAGO_WEBHOOK_SECRET: String(process.env.MERCADO_PAGO_WEBHOOK_SECRET || '').trim(),

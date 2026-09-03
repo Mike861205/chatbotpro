@@ -11013,6 +11013,10 @@ async function boot(navigateToHash = true) {
   }
 
   ME = await api('/api/auth/me');
+  if (ME?.tenant?.productCode === 'invoicing') {
+    location.replace('/facturacion/panel');
+    return;
+  }
   [ME, SETTINGS] = await Promise.all([
     Promise.resolve(ME),
     ME?.trial?.isExpired ? Promise.resolve({}) : api('/api/settings'),

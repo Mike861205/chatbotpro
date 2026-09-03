@@ -15,6 +15,9 @@ test('cada lead demo nuevo y cada prospecto registrado disparan su correo', () =
   assert.match(auth, /initTenantDefaults\([\s\S]+sendRegistrationNotification\(/);
   assert.match(auth, /fire-and-forget lead error/);
   assert.match(auth, /fire-and-forget register error/);
+  assert.match(auth, /productCode: cleanProductCode/);
+  assert.match(mailer, /Nuevo Registro Facturación/);
+  assert.match(mailer, /Facturación independiente/);
 });
 
 test('el arranque verifica credenciales SMTP y destinatario de producción', () => {

@@ -213,11 +213,15 @@ router.get('/register-ready', async (req, res, next) => {
 
 router.post('/register', authAttemptLimiter, async (req, res, next) => {
   try {
-    const { ownerName, phone, phoneCountry, businessName, slug, username, password, timezone, reseller } = req.body || {};
+    const { ownerName, phone, phoneCountry, businessName, slug, username, password, timezone, reseller, productCode } = req.body || {};
     if (!ownerName || !phone || !phoneCountry || !businessName || !slug || !username || !password) {
       return res.status(400).json({ error: 'Todos los campos marcados son obligatorios' });
     }
     const normalizedPhone = normalizeInternationalPhone(phone, phoneCountry);
+    const cleanProductCode = productCode === 'invoicing' ? 'invoicing' : 'chatbotpro';
+    if (cleanProductCode === 'invoicing' && normalizedPhone.country !== 'MX') {
+      return res.status(400).json({ error: 'La facturación electrónica CFDI está disponible para negocios de México' });
+    }
     const regional = regionalDefaults(normalizedPhone.country);
     if (isSupportedTimeZone(timezone)) regional.timezone = String(timezone).trim();
     const cleanSlug = String(slug).trim().toLowerCase();
@@ -253,8 +257,8 @@ router.post('/register', authAttemptLimiter, async (req, res, next) => {
     // Tenant y propietario se crean de forma atómica y en un solo viaje a Neon.
     const created = await q(
       `WITH new_tenant AS (
-         INSERT INTO tenants (slug, business_name, owner_name, phone_enc, phone_country, phone_calling_code, timezone, reseller_id, invoicing_environment, trial_started_on, trial_ends_on, trial_status, sales_stage)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $10, $11, (now() AT TIME ZONE $7)::date, (now() AT TIME ZONE $7)::date + $12::int, 'active', 'potential')
+         INSERT INTO tenants (slug, business_name, owner_name, phone_enc, phone_country, phone_calling_code, timezone, reseller_id, invoicing_environment, trial_started_on, trial_ends_on, trial_status, sales_stage, product_code, invoicing_enabled, invoicing_activated_at, invoicing_activated_by)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $10, $11, (now() AT TIME ZONE $7)::date, (now() AT TIME ZONE $7)::date + $12::int, 'active', 'potential', $13, $14, CASE WHEN $14=1 THEN now() END, CASE WHEN $14=1 THEN 'system:invoicing-registration' ELSE '' END)
          RETURNING *
        ), new_user AS (
          INSERT INTO users (tenant_id, username, password_hash, onboarding_completed)
@@ -276,6 +280,8 @@ router.post('/register', authAttemptLimiter, async (req, res, next) => {
         resellerId,
         normalizedPhone.country === 'MX' || String(normalizedPhone.callingCode || '').replace(/\D/g, '') === '52' ? 'production' : 'sandbox',
         TRIAL_DAYS,
+        cleanProductCode,
+        cleanProductCode === 'invoicing' ? 1 : 0,
       ]
     );
     const tenant = created.rows[0].tenant;
@@ -314,6 +320,7 @@ router.post('/register', authAttemptLimiter, async (req, res, next) => {
       slug: cleanSlug,
       username: cleanUser,
       timezone: regional.timezone,
+      productCode: cleanProductCode,
     }).catch(err => console.error('[mailer] fire-and-forget register error:', err.message));
 
     setAuthCookie(res, signToken(owner, tenant), 'owner');
@@ -325,8 +332,10 @@ router.post('/register', authAttemptLimiter, async (req, res, next) => {
 
 router.post('/login', authAttemptLimiter, async (req, res, next) => {
   try {
-    const { username, password } = req.body || {};
+    const { username, password, productCode } = req.body || {};
     if (!username || !password) return res.status(400).json({ error: 'Usuario y contraseña requeridos' });
+    const requestedProductCode = productCode === 'invoicing' ? 'invoicing' : productCode === 'chatbotpro' ? 'chatbotpro' : '';
+    if (!requestedProductCode) return res.status(400).json({ error: 'Selecciona el acceso correspondiente a tu producto' });
     const cleanUsername = String(username).trim().toLowerCase();
     const cleanPassword = String(password);
     if (!USERNAME_RE.test(cleanUsername) || cleanPassword.length > 128) {
@@ -343,6 +352,13 @@ router.post('/login', authAttemptLimiter, async (req, res, next) => {
     const t = await q('SELECT * FROM tenants WHERE id = $1', [user.tenant_id]);
     const tenant = t.rows[0];
     if (!tenant) return res.status(401).json({ error: 'Tenant no encontrado' });
+    const tenantProductCode = tenant.product_code === 'invoicing' ? 'invoicing' : 'chatbotpro';
+    if (tenantProductCode !== requestedProductCode) {
+      const error = tenantProductCode === 'invoicing'
+        ? 'Esta cuenta es exclusiva de Facturación. Ingresa desde el acceso de Facturación.'
+        : 'Esta cuenta pertenece a ChatBotPro. Ingresa desde el acceso principal.';
+      return res.status(403).json({ error, errorCode: 'WRONG_PRODUCT', productCode: tenantProductCode });
+    }
     const loginTrial = trialState(tenant);
     if (loginTrial.isExpired) {
       await q("UPDATE tenants SET trial_status = 'expired', account_status = 'inactive' WHERE id = $1 AND trial_status = 'active'", [tenant.id]);
@@ -660,6 +676,7 @@ router.post('/demo-convert', authAttemptLimiter, requireAuth, async (req, res, n
       slug,
       username,
       timezone: regional.timezone,
+      productCode: 'chatbotpro',
     }).catch(err => console.error('[mailer] fire-and-forget demo conversion error:', err.message));
 
     setAuthCookie(res, signToken(owner, tenant), 'owner');
@@ -775,7 +792,7 @@ router.get('/me', requireAuth, async (req, res, next) => {
     let invoicingReady = false;
     const invoicingReadyByBranch = {};
     if (invoicingActivated) {
-      const environment = config.NODE_ENV !== 'production' || isDemoTenant
+      const environment = isDemoTenant
         ? 'sandbox'
         : (String(req.tenant.invoicing_environment || '').toLowerCase() === 'production' ? 'production' : 'sandbox');
       const [emitters, branches] = await Promise.all([
@@ -820,6 +837,7 @@ router.get('/me', requireAuth, async (req, res, next) => {
       primaryColor: req.tenant.primary_color,
       phoneCountry,
       phoneCallingCode,
+      productCode: req.tenant.product_code || 'chatbotpro',
       invoicingEligible,
       invoicingActivated,
       invoicingReady,

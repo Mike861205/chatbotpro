@@ -2,7 +2,7 @@
 set -euo pipefail
 
 DOMAIN="chatbotpro.systemdem.online"
-INVOICE_DOMAIN="facturacion.chatbotpro.systemdem.online"
+INVOICE_DOMAIN="facturacion.systemdem.online"
 APP_DIR="/var/www/chatbotpro"
 PORT=3003
 REPO="https://github.com/Mike861205/chatbotpro.git"

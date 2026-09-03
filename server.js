@@ -75,12 +75,18 @@ app.use('/api/self-service', require('./src/routes/selfService'));
 
 // Páginas
 const page = (name) => (req, res) => res.sendFile(path.join(__dirname, 'public', name));
+const isInvoicingHost = (req) => String(req.hostname || '').toLowerCase().startsWith('facturacion.');
+const productPage = (defaultPage, invoicingPage) => (req, res) => page(isInvoicingHost(req) ? invoicingPage : defaultPage)(req, res);
 const validSlug = (req, res, next) => /^[a-z0-9-]{3,40}$/.test(String(req.params.slug || '')) ? next() : res.status(404).end();
 const validKdsToken = (req, res, next) => /^[A-Za-z0-9_-]{20,80}$/.test(String(req.params.token || '')) ? next() : res.status(404).end();
-app.get('/', page('index.html'));
-app.get('/login', page('login.html'));
-app.get('/register', page('register.html'));
-app.get('/app', page('app.html'));
+app.get('/', productPage('index.html', 'invoicing-home.html'));
+app.get('/login', productPage('login.html', 'invoicing-login.html'));
+app.get('/register', productPage('register.html', 'invoicing-register.html'));
+app.get('/app', productPage('app.html', 'invoicing-app.html'));
+app.get('/facturacion', page('invoicing-home.html'));
+app.get('/facturacion/login', page('invoicing-login.html'));
+app.get('/facturacion/registro', page('invoicing-register.html'));
+app.get('/facturacion/panel', page('invoicing-app.html'));
 app.get('/notificaciones', page('notify.html'));
 app.get('/caja/:slug', validSlug, page('cashier-login.html'));
 app.get('/kds/:slug/:token', validSlug, validKdsToken, page('kds.html'));

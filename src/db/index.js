@@ -113,6 +113,7 @@ async function initMaster() {
       trial_started_on DATE,
       trial_ends_on DATE,
       trial_status TEXT NOT NULL DEFAULT 'not_applicable',
+      product_code TEXT NOT NULL DEFAULT 'chatbotpro',
       created_at TIMESTAMPTZ DEFAULT now()
     );
     CREATE TABLE IF NOT EXISTS demo_leads (
@@ -263,6 +264,7 @@ async function initMaster() {
   await q(`ALTER TABLE tenants ADD COLUMN IF NOT EXISTS sales_stage TEXT NOT NULL DEFAULT 'new'`);
   await q(`ALTER TABLE tenants ADD COLUMN IF NOT EXISTS next_follow_up_at TIMESTAMPTZ`);
   await q(`ALTER TABLE tenants ADD COLUMN IF NOT EXISTS sales_updated_at TIMESTAMPTZ DEFAULT now()`);
+  await q(`ALTER TABLE tenants ADD COLUMN IF NOT EXISTS product_code TEXT NOT NULL DEFAULT 'chatbotpro'`);
   await q(`ALTER TABLE demo_leads ADD COLUMN IF NOT EXISTS contact_name TEXT NOT NULL DEFAULT ''`);
   await q(`ALTER TABLE demo_leads ADD COLUMN IF NOT EXISTS phone_enc TEXT NOT NULL DEFAULT ''`);
   await q(`ALTER TABLE demo_leads ADD COLUMN IF NOT EXISTS phone_hash TEXT`);
@@ -339,12 +341,36 @@ async function initMaster() {
 
   await ensureSuperAdminSeed();
 
+  // El producto fiscal independiente nace activo y opera contra SAT real.
+  await q(
+    `UPDATE tenants SET invoicing_enabled=1,invoicing_environment='production',
+       invoicing_activated_at=COALESCE(invoicing_activated_at,now()),
+       invoicing_activated_by=CASE WHEN invoicing_activated_by='' THEN 'system:standalone-migration' ELSE invoicing_activated_by END
+     WHERE product_code='invoicing' AND slug<>$1`,
+    [config.DEMO_TENANT_SLUG || '__no_demo_tenant__']
+  );
+
   // Migra/asegura el esquema aislado de tenants existentes.
-  const existing = await q('SELECT id, slug, business_name FROM tenants');
+  const existing = await q('SELECT id, slug, business_name, product_code FROM tenants');
   for (const t of existing.rows) {
     await createTenantSchema(t.slug);
     await ensureTenantDefaults(t.slug, t.business_name);
     await ensureTenantCourtesyStamps(t.slug, t.id, 'system:migration');
+    if (t.product_code === 'invoicing' && t.slug !== config.DEMO_TENANT_SLUG) {
+      const tenantDb = tdb(t.slug);
+      await tenantDb.run(
+        `UPDATE {s}.fiscal_profiles SET environment='production',
+         api_mode=CASE WHEN upper(rfc)=$1 THEN 'web' ELSE 'multi' END,
+         sandbox_shared=0,csd_uploaded=CASE WHEN environment='production' THEN csd_uploaded ELSE 0 END,updated_at=now()`,
+        [config.FACTURAMA_PRODUCTION_RFC]
+      );
+      await tenantDb.run(
+        `UPDATE {s}.fiscal_emitters SET environment='production',
+         api_mode=CASE WHEN upper(rfc)=$1 THEN 'web' ELSE 'multi' END,
+         sandbox_shared=0,csd_uploaded=CASE WHEN environment='production' THEN csd_uploaded ELSE 0 END,updated_at=now()`,
+        [config.FACTURAMA_PRODUCTION_RFC]
+      );
+    }
   }
 
   console.log('[db] Neon conectado — schema maestro listo');
@@ -1104,6 +1130,46 @@ async function createTenantSchema(slug) {
     );
     CREATE INDEX IF NOT EXISTS idx_${s}_invoice_events_invoice ON "${s}".invoice_events(invoice_id, created_at DESC);
 
+    CREATE TABLE IF NOT EXISTS "${s}".direct_invoices (
+      id BIGSERIAL PRIMARY KEY,
+      external_reference TEXT NOT NULL,
+      sale_date DATE NOT NULL DEFAULT CURRENT_DATE,
+      description TEXT NOT NULL,
+      total NUMERIC(12,2) NOT NULL,
+      payment_form TEXT NOT NULL DEFAULT '01',
+      request_key UUID NOT NULL UNIQUE,
+      provider TEXT NOT NULL DEFAULT 'facturama',
+      environment TEXT NOT NULL DEFAULT 'production',
+      api_mode TEXT NOT NULL DEFAULT 'multi',
+      provider_id TEXT,
+      uuid TEXT,
+      series TEXT NOT NULL DEFAULT '',
+      folio TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending',
+      receiver_data_enc TEXT NOT NULL,
+      fiscal_snapshot_enc TEXT NOT NULL,
+      provider_response_enc TEXT,
+      xml_enc TEXT,
+      pdf_enc TEXT,
+      certificate_number TEXT,
+      error_message TEXT NOT NULL DEFAULT '',
+      cancellation_motive TEXT,
+      replacement_uuid TEXT,
+      cancellation_status TEXT,
+      cancellation_message TEXT,
+      cancellation_receipt_enc TEXT,
+      fiscal_emitter_id BIGINT,
+      issuer_rfc TEXT,
+      issued_by TEXT NOT NULL DEFAULT '',
+      issued_at TIMESTAMPTZ,
+      cancel_requested_at TIMESTAMPTZ,
+      canceled_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_${s}_direct_invoices_uuid ON "${s}".direct_invoices(uuid) WHERE uuid IS NOT NULL;
+    CREATE INDEX IF NOT EXISTS idx_${s}_direct_invoices_reference ON "${s}".direct_invoices(external_reference, created_at DESC);
+
     CREATE TABLE IF NOT EXISTS "${s}".global_invoices (
       id BIGSERIAL PRIMARY KEY,
       request_key UUID NOT NULL UNIQUE,
@@ -1259,7 +1325,7 @@ async function ensureTenantCourtesyStamps(slug, tenantId = null, actor = 'system
     await tx.run(`INSERT INTO {s}.stamp_wallet(id,unlimited,balance,reserved) VALUES(1,0,0,0) ON CONFLICT(id) DO NOTHING`);
     const wallet = await tx.get('SELECT * FROM {s}.stamp_wallet WHERE id=1 FOR UPDATE');
     if (tenant.invoicing_trial_granted_at) {
-      const priorTrial = await tx.get("SELECT COALESCE(SUM(quantity),0)::int AS quantity FROM {s}.stamp_ledger WHERE movement_type='trial_grant'");
+      const priorTrial = await tx.get("SELECT COALESCE(SUM(quantity),0)::int AS quantity FROM {s}.stamp_ledger WHERE movement_type IN ('trial_grant','courtesy_grant')");
       const priorAdjustment = await tx.get("SELECT id FROM {s}.stamp_ledger WHERE movement_type='courtesy_policy_adjustment' LIMIT 1");
       if (Number(priorTrial?.quantity || 0) > 2 && !priorAdjustment) {
         const reduction = Number(priorTrial.quantity) - 2;
@@ -1269,7 +1335,7 @@ async function ensureTenantCourtesyStamps(slug, tenantId = null, actor = 'system
         if (quantity) {
           await tx.run(
             `INSERT INTO {s}.stamp_ledger(movement_type,quantity,balance_after,detail,actor)
-             VALUES('courtesy_policy_adjustment',$1,$2,'Ajuste de cortesía inicial de 10 a 2 timbres',$3)`,
+             VALUES('courtesy_policy_adjustment',$1,$2,'Ajuste de cortesía inicial a 2 timbres',$3)`,
             [quantity, nextBalance, actor]
           );
         }

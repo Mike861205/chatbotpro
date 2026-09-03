@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="es-MX">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="theme-color" content="#123c37">
+  <title>Crear portal de facturación | ChatBotPro</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display&family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/bold/style.css" integrity="sha384-nblAP2mo2pVPyMQZDw9Xy9Cwgs9lowushAYep4w5+Q9kF4Ibf3n0B/gCMVdR+Vqy" crossorigin="anonymous"><link rel="stylesheet" href="/static/css/invoicing-product.css?v=20260902">
+  <link rel="icon" type="image/png" href="/static/chatbotpro100.png">
+</head>
+<body>
+  <main class="iv-auth">
+    <aside class="iv-auth-aside">
+      <a class="iv-brand" href="/facturacion"><img src="/static/chatbotpro100.png" alt=""><span><strong>ChatBotPro Facturación</strong><small>CFDI para tu negocio</small></span></a>
+      <div class="iv-auth-copy"><span class="iv-kicker"><i class="ph-bold ph-storefront"></i> Registro de negocio</span><h1>Tu espacio fiscal empieza aquí.</h1><p>Esta cuenta es exclusiva para facturación. No cambia ni reemplaza el punto de venta que utilizas actualmente.</p><div class="iv-auth-points"><div class="iv-auth-point"><i class="ph-bold ph-link"></i> Dirección pública para tus clientes</div><div class="iv-auth-point"><i class="ph-bold ph-palette"></i> Identidad visual de tu negocio</div><div class="iv-auth-point"><i class="ph-bold ph-chart-line-up"></i> Seguimiento de activación asistido</div></div></div>
+      <span class="iv-auth-note">Servicio de facturación electrónica disponible en México.</span>
+    </aside>
+    <section class="iv-auth-main">
+      <div class="iv-auth-card">
+        <span class="iv-kicker">Paso 1 de 3 · Crea tu acceso</span><h2>Registra tu negocio</h2><p>Después completarás los datos fiscales y la identidad del portal.</p>
+        <div class="iv-alert" id="error" hidden><i class="ph-bold ph-warning-circle"></i><span id="errorMsg"></span></div>
+        <form class="iv-form" id="registerForm">
+          <div class="iv-form-grid"><div class="iv-field"><label for="ownerName">Nombre del responsable *</label><div class="iv-input"><i class="ph-bold ph-user"></i><input id="ownerName" type="text" autocomplete="name" required maxlength="120"></div></div><div class="iv-field"><label for="businessName">Nombre del negocio *</label><div class="iv-input"><i class="ph-bold ph-storefront"></i><input id="businessName" type="text" required maxlength="160" placeholder="Ej. Comercial del Centro"></div></div></div>
+          <div class="iv-field"><label for="phone">Teléfono de México *</label><div class="iv-input"><i class="ph-bold ph-phone"></i><span class="iv-phone-prefix" aria-hidden="true">+52</span><input id="phone" class="iv-phone-number" type="tel" inputmode="numeric" autocomplete="tel" required minlength="10" maxlength="10" pattern="[0-9]{10}" placeholder="10 dígitos"></div><span class="iv-hint">Captura los 10 dígitos, sin espacios ni lada internacional.</span></div>
+          <div class="iv-field"><label for="slug">Dirección de tu portal</label><div class="iv-input"><i class="ph-bold ph-link"></i><input id="slug" type="text" required readonly pattern="[a-z0-9\-]{3,40}"></div><span class="iv-hint" id="slugPreview">Se genera con el nombre de tu negocio.</span></div>
+          <div class="iv-form-grid"><div class="iv-field"><label for="username">Usuario *</label><div class="iv-input"><i class="ph-bold ph-at"></i><input id="username" type="text" autocomplete="username" required minlength="3" maxlength="60"></div></div><div class="iv-field"><label for="password">Contraseña *</label><div class="iv-input"><i class="ph-bold ph-lock-key"></i><input id="password" type="password" autocomplete="new-password" required minlength="8" maxlength="128"></div></div></div>
+          <label class="iv-hint"><input type="checkbox" required> Confirmo que los datos pertenecen al negocio que administraré y acepto continuar con la configuración fiscal.</label>
+          <button class="iv-btn iv-btn-primary iv-btn-block" id="submitBtn" type="submit"><i class="ph-bold ph-arrow-right"></i> Crear mi portal de facturación</button>
+        </form>
+        <div class="iv-auth-alt">¿Ya tienes una cuenta? <a href="/facturacion/login">Inicia sesión</a></div>
+      </div>
+    </section>
+  </main>
+  <script>
+    const errorBox = document.getElementById('error');
+    const showError = (message) => { document.getElementById('errorMsg').textContent = message; errorBox.hidden = false; };
+    const slugify = (value) => value.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40);
+    const businessName = document.getElementById('businessName');
+    const slug = document.getElementById('slug');
+    const updateSlug = () => { slug.value = slugify(businessName.value); document.getElementById('slugPreview').textContent = `${location.host}/facturacion/${slug.value || 'tu-negocio'}`; };
+    businessName.addEventListener('input', updateSlug); updateSlug();
+    fetch('/api/auth/register-ready', { cache: 'no-store' }).catch(() => {});
+    document.getElementById('phone').addEventListener('input', (event) => {
+      event.target.value = event.target.value.replace(/\D/g, '').slice(0, 10);
+    });
+    document.getElementById('registerForm').addEventListener('submit', async (event) => {
+      event.preventDefault(); errorBox.hidden = true;
+      const button = document.getElementById('submitBtn'); const original = button.innerHTML; button.disabled = true; button.innerHTML = '<i class="ph-bold ph-spinner-gap"></i> Preparando tu espacio fiscal…';
+      try {
+        const response = await fetch('/api/auth/register', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ownerName: document.getElementById('ownerName').value, businessName: businessName.value, phone: document.getElementById('phone').value, phoneCountry: 'MX', slug: slug.value, username: document.getElementById('username').value, password: document.getElementById('password').value, timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'America/Mexico_City', productCode: 'invoicing' }) });
+        const data = await response.json(); if (!response.ok) throw new Error(data.error || 'No se pudo crear la cuenta');
+        sessionStorage.setItem('cbp_auth_scope', 'owner'); location.replace('/facturacion/panel');
+      } catch (error) { showError(error instanceof TypeError ? 'No pudimos conectar con el servidor. Verifica que ChatBotPro esté ejecutándose y vuelve a intentar.' : error.message); button.disabled = false; button.innerHTML = original; }
+    });
+  </script>
+</body>
+</html>

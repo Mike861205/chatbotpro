@@ -46,7 +46,7 @@ test('separa el acceso al módulo México de la autorización para consumir timb
 test('el portal usa localhost durante pruebas y el subdominio configurado en producción', () => {
   const localReq = { hostname: 'localhost', protocol: 'http', get: (name) => name === 'host' ? 'localhost:3000' : '' };
   const productionReq = { hostname: 'chatbotpro.systemdem.online', protocol: 'https', get: () => 'chatbotpro.systemdem.online' };
-  const origin = 'https://facturacion.chatbotpro.systemdem.online';
+  const origin = 'https://facturacion.systemdem.online';
   assert.equal(invoicingPortalUrl(localReq, origin, 'daddypollo'), 'http://localhost:3000/facturacion/daddypollo');
   assert.equal(invoicingPortalUrl(productionReq, origin, 'daddypollo'), `${origin}/daddypollo`);
 });
@@ -397,7 +397,8 @@ test('separa Sandbox y Producción por tenant y conserva el origen de cada CFDI'
   assert.match(database, /invoicing_environment TEXT NOT NULL DEFAULT 'sandbox'/);
   assert.match(database, /api_mode TEXT NOT NULL DEFAULT 'multi'/);
   assert.match(auth, /invoicing_environment/);
-  assert.match(routes, /config\.NODE_ENV !== 'production'/);
+  assert.match(routes, /tenant\?\.slug === config\.DEMO_TENANT_SLUG/);
+  assert.doesNotMatch(routes, /config\.NODE_ENV !== 'production' \|\| tenant\?\.slug/);
   assert.match(routes, /tenant\?\.slug === config\.DEMO_TENANT_SLUG/);
   assert.match(routes, /facturamaFor\(invoice\.environment \|\| profile\)/);
   assert.match(superadmin, /invoicing-environment/);
@@ -419,11 +420,15 @@ test('producción usa API Web para el RFC dueño de la cuenta y Multiemisor para
   assert.match(client, /Gestionado en Facturama/);
 });
 
-test('la carga de CSD valida RFC, vigencia y sincroniza el nombre fiscal del certificado', () => {
+test('la carga de CSD valida identidad, vigencia, llave privada y pareja criptográfica', () => {
   const route = fs.readFileSync(path.join(__dirname, '../src/routes/invoicing.js'), 'utf8');
   assert.match(route, /new X509Certificate\(buffer\)/);
+  assert.match(route, /uniqueIdentifier\.match\(\/\[A-ZÑ&\]/);
   assert.match(route, /certificateIdentity\.rfc !== profile\.rfc/);
   assert.match(route, /El CSD pertenece al RFC/);
+  assert.match(route, /createPrivateKey/);
+  assert.match(route, /certificateKey\.equals\(privatePublicKey\)/);
+  assert.match(route, /no pertenecen al mismo CSD/);
   assert.match(route, /SET legal_name=\$1,csd_uploaded=1/);
   assert.match(route, /El certificado CSD está vencido/);
 });

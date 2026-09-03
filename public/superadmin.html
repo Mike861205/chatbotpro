@@ -25,6 +25,7 @@
       <nav>
         <a href="#tenants" data-sa-view="tenants" data-color="cyan" class="active"><span class="nav-ic"><i class="ph-fill ph-buildings"></i></span><span>Prospectos</span><span class="sa-module-icon"><i class="ph-bold ph-users-three"></i></span></a>
         <a href="#clients" data-sa-view="clients" data-color="green"><span class="nav-ic"><i class="ph-fill ph-handshake"></i></span><span>Clientes</span><span class="sa-module-icon"><i class="ph-bold ph-identification-card"></i></span></a>
+        <a href="#invoicing" data-sa-view="invoicing" data-color="amber"><span class="nav-ic"><i class="ph-fill ph-file-text"></i></span><span>Facturación</span><span class="sa-module-icon"><i class="ph-bold ph-stamp"></i></span></a>
         <a href="#demo-leads" data-sa-view="demo-leads" data-color="violet"><span class="nav-ic"><i class="ph-fill ph-rocket-launch"></i></span><span>Leads demo</span><span class="sa-module-icon"><i class="ph-bold ph-phone-call"></i></span></a>
         <a href="#follow-up" data-sa-view="follow-up" data-color="cyan"><span class="nav-ic"><i class="ph-fill ph-path"></i></span><span>Seguimiento</span><span class="sa-module-icon"><i class="ph-bold ph-kanban"></i></span></a>
         <a href="#resellers" data-sa-view="resellers" data-color="green"><span class="nav-ic"><i class="ph-fill ph-users-four"></i></span><span>Resellers</span><span class="sa-module-icon"><i class="ph-bold ph-link"></i></span></a>
@@ -117,6 +118,22 @@
             <input id="saClientSearch" type="search" placeholder="Buscar cliente, dueño, país o teléfono" style="max-width:360px" />
           </div>
           <div id="saClientsTable"></div>
+        </div>
+      </section>
+
+      <section id="saViewInvoicing" class="section" hidden>
+        <div class="card clients-hero-card" style="padding:18px;margin-bottom:14px">
+          <div><span class="clients-hero-kicker"><i class="ph-bold ph-stamp"></i> Producto independiente</span><h3>Clientes de Facturación</h3><p>Da seguimiento a los negocios que conservan su propio punto de venta y contratan únicamente el portal fiscal.</p></div>
+          <button type="button" class="btn btn-ghost" id="saReloadInvoicing"><i class="ph-bold ph-arrows-clockwise"></i> Actualizar</button>
+        </div>
+        <div class="card" style="padding:16px;margin-bottom:14px"><div id="saInvoicingSummary" class="client-summary-grid"></div></div>
+        <div class="card" style="padding:16px">
+          <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:12px">
+            <div class="segmented" id="saInvoicingFilters"><button type="button" class="active" data-status="all">Todos</button><button type="button" data-status="prospect">Prospectos</button><button type="button" data-status="customer">Clientes</button><button type="button" data-status="pending">Por configurar</button><button type="button" data-status="ready">Listos</button></div>
+            <label for="saInvoicingSearch" style="position:absolute;left:-9999px;width:1px;height:1px;overflow:hidden">Buscar cuentas de facturación</label>
+            <input id="saInvoicingSearch" type="search" placeholder="Buscar negocio, responsable, RFC o usuario" style="max-width:380px" />
+          </div>
+          <div id="saInvoicingTable"></div>
         </div>
       </section>
 

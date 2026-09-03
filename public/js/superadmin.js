@@ -4,6 +4,8 @@ let SA_SUMMARY = null;
 let SA_CLIENTS = [];
 let SA_CLIENT_FILTER = 'all';
 let SA_CLIENT_SUMMARY = null;
+let SA_INVOICING = [];
+let SA_INVOICING_FILTER = 'all';
 let SA_DEMO_LEADS = [];
 let SA_FOLLOW_UP = [];
 let SA_RESELLERS = [];
@@ -131,7 +133,7 @@ function fmtMoney(value) {
 }
 
 function findBusiness(id) {
-  return [...SA_TENANTS, ...SA_CLIENTS].find((item) => Number(item.id) === Number(id));
+  return [...SA_TENANTS, ...SA_CLIENTS, ...SA_INVOICING].find((item) => Number(item.id) === Number(id));
 }
 
 function usageModules(entity) {
@@ -1277,6 +1279,54 @@ async function loadClients() {
   renderClientsTable();
 }
 
+function renderInvoicingSummary(summary = {}) {
+  const cards = [
+    ['Registros', summary.total || 0, 'ph-storefront', 'tone-total'],
+    ['Prospectos', summary.prospects || 0, 'ph-user-plus', 'tone-due'],
+    ['Clientes', summary.customers || 0, 'ph-handshake', 'tone-active'],
+    ['Activados', summary.activated || 0, 'ph-power', 'tone-current'],
+    ['Listos para timbrar', summary.ready || 0, 'ph-seal-check', 'tone-soon'],
+    ['CFDI emitidos', summary.issued || 0, 'ph-files', 'tone-active'],
+  ];
+  $('#saInvoicingSummary').innerHTML = cards.map(([label, value, icon, tone]) => `<div class="pos-mini-stat sa-client-summary-card ${tone}"><span><i class="ph-bold ${icon}"></i> ${esc(label)}</span><b>${Number(value).toLocaleString('es-MX')}</b></div>`).join('');
+}
+
+function invoicingStage(item) {
+  if (!Number(item.invoicing_enabled)) return ['Pendiente de activación', 'warn'];
+  if (!item.fiscal_profile_complete) return ['Faltan datos fiscales', 'warn'];
+  if (!item.csd_ready) return ['Falta CSD', 'warn'];
+  return ['Listo para timbrar', 'ok'];
+}
+
+function renderInvoicingTable() {
+  const query = String($('#saInvoicingSearch')?.value || '').trim().toLowerCase();
+  const rows = SA_INVOICING.filter((item) => {
+    const ready = Number(item.invoicing_enabled) && item.fiscal_profile_complete && item.csd_ready;
+    if (SA_INVOICING_FILTER === 'prospect' && item.customer_since) return false;
+    if (SA_INVOICING_FILTER === 'customer' && !item.customer_since) return false;
+    if (SA_INVOICING_FILTER === 'pending' && ready) return false;
+    if (SA_INVOICING_FILTER === 'ready' && !ready) return false;
+    return !query || [item.business_name, item.owner_name, item.owner_username, item.issuer_rfc, item.slug].some((value) => String(value || '').toLowerCase().includes(query));
+  });
+  const target = $('#saInvoicingTable');
+  if (!rows.length) { target.innerHTML = '<div class="empty"><i class="ph ph-file-text"></i><b>Sin cuentas de facturación</b><p>No hay resultados con este filtro.</p></div>'; return; }
+  target.innerHTML = `<div class="table-wrap"><table><thead><tr><th>Negocio</th><th>Contacto</th><th>Tipo</th><th>Avance fiscal</th><th>Timbres</th><th>Actividad</th><th>Acciones</th></tr></thead><tbody>${rows.map((item) => {
+    const [stage, tone] = invoicingStage(item);
+    const waUrl = item.phone_valid && item.phone_digits ? `https://wa.me/${item.phone_digits}` : '';
+    return `<tr><td><b>${esc(item.business_name)}</b><div class="meta">/${esc(item.slug)} · ${esc(item.issuer_rfc || 'RFC pendiente')}</div></td><td>${esc(item.owner_name)}<div class="meta">${esc(item.phone || '—')} · @${esc(item.owner_username || '—')}</div></td><td>${item.customer_since ? '<span class="tag ok">Cliente</span>' : '<span class="tag warn">Prospecto</span>'}<div class="meta">${fmtDate(item.created_at)}</div></td><td><span class="tag ${tone}">${esc(stage)}</span><div class="meta">${Number(item.invoicing_enabled) ? 'Servicio activado' : 'Sin activar'}</div></td><td><b>${item.stamp_unlimited ? 'Ilimitados' : Number(item.stamp_available || 0)}</b><div class="meta">disponibles</div></td><td><b>${Number(item.invoice_count || 0)} CFDI</b><div class="meta">${item.last_invoice_at ? `Último: ${fmtDate(item.last_invoice_at)}` : 'Sin emisiones'}</div></td><td><div class="sa-actions-grid"><button type="button" class="btn btn-ghost" data-iv-access="${item.id}"><i class="ph-bold ph-sign-in"></i> Entrar</button><button type="button" class="btn btn-sa-manage" data-iv-follow="${item.id}"><i class="ph-bold ph-note-pencil"></i> Seguimiento</button><button type="button" class="btn btn-ghost" data-iv-stamps="${item.id}"><i class="ph-bold ph-stamp"></i> Timbres</button>${waUrl ? `<a class="btn btn-ghost" href="${waUrl}" target="_blank" rel="noopener"><i class="ph-bold ph-whatsapp-logo"></i> WhatsApp</a>` : ''}</div></td></tr>`;
+  }).join('')}</tbody></table></div>`;
+  target.querySelectorAll('[data-iv-access]').forEach((button) => button.onclick = async () => { const item = SA_INVOICING.find((row) => Number(row.id) === Number(button.dataset.ivAccess)); await api(`/api/superadmin/tenants/${item.id}/access`, { method: 'POST' }); window.open('/facturacion/panel', '_blank'); toast(`Sesión fiscal iniciada para ${item.business_name}`); });
+  target.querySelectorAll('[data-iv-stamps]').forEach((button) => button.onclick = () => manageTenantStamps(Number(button.dataset.ivStamps)).catch((error) => toast(error.message, true)));
+  target.querySelectorAll('[data-iv-follow]').forEach((button) => button.onclick = () => openFollowUpModal('tenant', Number(button.dataset.ivFollow)));
+}
+
+async function loadInvoicingBusinesses() {
+  const data = await api('/api/superadmin/invoicing-businesses');
+  SA_INVOICING = data.businesses || [];
+  renderInvoicingSummary(data.summary);
+  renderInvoicingTable();
+}
+
 async function refreshBilling() {
   const payload = await api('/api/superadmin/billing/refresh', { method: 'POST' });
   await Promise.all([loadTenants(), loadClients()]);
@@ -1845,6 +1895,7 @@ async function uploadSuperAdminLogo(fileParam, options = {}) {
 function setView(view) {
   const isTenants = view === 'tenants';
   const isClients = view === 'clients';
+  const isInvoicing = view === 'invoicing';
   const isDemoLeads = view === 'demo-leads';
   const isFollowUp = view === 'follow-up';
   const isResellers = view === 'resellers';
@@ -1856,6 +1907,9 @@ function setView(view) {
   } else if (isClients) {
     title = '<i class="ph-bold ph-handshake"></i> Clientes';
     subtitle = 'Cartera de clientes, ingresos, licencias y cobranza.';
+  } else if (isInvoicing) {
+    title = '<i class="ph-bold ph-file-text"></i> Facturación';
+    subtitle = 'Prospectos y clientes del portal fiscal independiente.';
   } else if (isDemoLeads) {
     title = '<i class="ph-bold ph-rocket-launch"></i> Leads demo';
     subtitle = 'Contactos que pidieron acceso al demo con sus datos de negocio.';
@@ -1870,14 +1924,16 @@ function setView(view) {
   $('#saViewTenants').classList.toggle('active', isTenants);
   $('#saViewClients').hidden = !isClients;
   $('#saViewClients').classList.toggle('active', isClients);
+  $('#saViewInvoicing').hidden = !isInvoicing;
+  $('#saViewInvoicing').classList.toggle('active', isInvoicing);
   $('#saViewDemoLeads').hidden = !isDemoLeads;
   $('#saViewDemoLeads').classList.toggle('active', isDemoLeads);
   $('#saViewFollowUp').hidden = !isFollowUp;
   $('#saViewFollowUp').classList.toggle('active', isFollowUp);
   $('#saViewResellers').hidden = !isResellers;
   $('#saViewResellers').classList.toggle('active', isResellers);
-  $('#saViewIntegrations').hidden = isTenants || isClients || isDemoLeads || isFollowUp || isResellers;
-  $('#saViewIntegrations').classList.toggle('active', !isTenants && !isClients && !isDemoLeads && !isFollowUp && !isResellers);
+  $('#saViewIntegrations').hidden = isTenants || isClients || isInvoicing || isDemoLeads || isFollowUp || isResellers;
+  $('#saViewIntegrations').classList.toggle('active', !isTenants && !isClients && !isInvoicing && !isDemoLeads && !isFollowUp && !isResellers);
   $('#saTitle').innerHTML = title;
   $('#saSub').textContent = subtitle;
   document.querySelectorAll('[data-sa-view]').forEach((a) => a.classList.toggle('active', a.dataset.saView === view));
@@ -1889,7 +1945,7 @@ async function boot() {
     $('#saUserName').textContent = me.username || 'superadmin';
     startSuperAdminClock();
     initSalesStageControls();
-    await Promise.all([loadTenants(), loadClients(), loadDemoLeads(), loadFollowUp(), loadResellers(), loadIntegrations(), loadDeployStatus(), loadGitDeployStatus()]);
+    await Promise.all([loadTenants(), loadClients(), loadInvoicingBusinesses(), loadDemoLeads(), loadFollowUp(), loadResellers(), loadIntegrations(), loadDeployStatus(), loadGitDeployStatus()]);
   } catch (err) {
     toast(err.message, true);
   }
@@ -1910,6 +1966,13 @@ $('#saTenantResellerFilter')?.addEventListener('change', () => { SA_TENANT_PAGE 
 $('#saReloadTenants')?.addEventListener('click', () => { SA_TENANT_PAGE = 1; loadTenants().catch((e) => toast(e.message, true)); });
 $('#saClientSearch')?.addEventListener('input', renderClientsTable);
 $('#saReloadClients')?.addEventListener('click', () => loadClients().catch((e) => toast(e.message, true)));
+$('#saReloadInvoicing')?.addEventListener('click', () => loadInvoicingBusinesses().catch((e) => toast(e.message, true)));
+$('#saInvoicingSearch')?.addEventListener('input', renderInvoicingTable);
+document.querySelectorAll('#saInvoicingFilters button').forEach((button) => button.addEventListener('click', () => {
+  SA_INVOICING_FILTER = button.dataset.status;
+  document.querySelectorAll('#saInvoicingFilters button').forEach((item) => item.classList.toggle('active', item === button));
+  renderInvoicingTable();
+}));
 $('#saDemoLeadSearch')?.addEventListener('input', () => { SA_DEMO_PAGE = 1; renderDemoLeadsTable(); });
 $('#saDemoModuleFilter')?.addEventListener('change', () => { SA_DEMO_PAGE = 1; renderDemoLeadsTable(); });
 $('#saDemoStageFilter')?.addEventListener('change', () => { SA_DEMO_PAGE = 1; renderDemoLeadsTable(); });
@@ -2009,7 +2072,7 @@ $('#saResellerCancel')?.addEventListener('click', closeResellerModal);
 $('#saResellerModal')?.addEventListener('click', (event) => { if (event.target?.id === 'saResellerModal') closeResellerModal(); });
 $('#saResellerForm')?.addEventListener('submit', (event) => saveReseller(event).catch((error) => toast(error.message, true)));
 
-const SA_INITIAL_VIEW = ['tenants', 'clients', 'demo-leads', 'follow-up', 'resellers', 'integrations'].includes((location.hash || '#tenants').slice(1))
+const SA_INITIAL_VIEW = ['tenants', 'clients', 'invoicing', 'demo-leads', 'follow-up', 'resellers', 'integrations'].includes((location.hash || '#tenants').slice(1))
   ? (location.hash || '#tenants').slice(1)
   : 'tenants';
 setView(SA_INITIAL_VIEW);
