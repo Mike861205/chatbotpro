@@ -22,7 +22,8 @@ test('el pedido se cotiza en servidor y nace pendiente de cobro', () => {
   assert.match(route, /normalizeKioskItems/);
   assert.match(route, /modifier_options WHERE active=1/);
   assert.match(route, /variants\.length > 1 && !variant/);
-  assert.match(route, /modifiersExtraPrice \+= Number\(option\.extra_price/);
+  assert.match(route, /effectiveProductPrice\(option\.extra_price, taxConfig\)/);
+  assert.match(route, /productTaxLineSnapshot\(unitPrice, taxConfig\)/);
   assert.match(route, /'pendiente_cobro','kiosk'/);
   assert.match(route, /self_service_folio/);
   assert.match(route, /emitSelfServiceOrder/);

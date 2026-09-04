@@ -32,6 +32,9 @@ const SETTING_KEYS = [
   'currency_conversion_updated_at',
   'currency_conversion_chatbot_enabled',
   'currency_conversion_pos_enabled',
+  'product_tax_enabled',
+  'product_tax_mode',
+  'product_tax_rate',
   'timezone',
   'address',
   'hours',
@@ -181,6 +184,19 @@ router.put('/', upload.single('logo'), async (req, res, next) => {
     }
     if (body.currency_conversion_rate !== undefined && !positiveRate(body.currency_conversion_rate)) {
       return res.status(400).json({ error: 'El tipo de cambio debe ser mayor que cero' });
+    }
+    if (body.product_tax_enabled !== undefined && !['0', '1'].includes(String(body.product_tax_enabled))) {
+      return res.status(400).json({ error: 'Indica si deseas activar o desactivar el IVA en productos' });
+    }
+    if (body.product_tax_mode !== undefined && !['added', 'included'].includes(String(body.product_tax_mode))) {
+      return res.status(400).json({ error: 'Selecciona si el IVA se agrega al precio o ya está incluido' });
+    }
+    if (body.product_tax_rate !== undefined) {
+      const productTaxRate = Number(body.product_tax_rate);
+      if (!Number.isFinite(productTaxRate) || productTaxRate < 0 || productTaxRate > 1) {
+        return res.status(400).json({ error: 'La tasa de IVA debe estar entre 0% y 100%' });
+      }
+      body.product_tax_rate = String(productTaxRate);
     }
     if (body.currency_conversion_mode === 'automatic') {
       const currentRows = await req.tdb.all(

@@ -86,7 +86,7 @@ const DASHBOARD_PERIOD_LABELS = {
   month: 'del mes',
   year: 'del año',
 };
-let POS_PAYMENT_FORM = { cashReceived: '', cash: '', card: '', cardType: '', transfer: '', notes: '', deliveryAddress: '', deliveryNeighborhood: '', deliveryReference: '' };
+let POS_PAYMENT_FORM = { cashReceived: '', cash: '', card: '', cardType: '', transfer: '', creditCustomerName: '', creditCustomerPhone: '', notes: '', deliveryAddress: '', deliveryNeighborhood: '', deliveryReference: '' };
 let LAST_POS_SALE = null;
 let INVOICING_DATA = null;
 let SELF_SERVICE_DEVICES = [];
@@ -3704,6 +3704,20 @@ function posCartTotal() {
   return moneyNum(POS_CART.reduce((sum, item) => sum + item.price * item.qty, 0));
 }
 
+function productTaxSummary(items = []) {
+  const taxable = items.filter((item) => item?.taxEnabled === true && Number.isFinite(Number(item.taxRate)));
+  if (!taxable.length) return null;
+  const base = moneyNum(taxable.reduce((sum, item) => {
+    const unitBase = Number.isFinite(Number(item.taxBasePrice))
+      ? Number(item.taxBasePrice)
+      : Number(item.price || 0) / (1 + Number(item.taxRate || 0));
+    return sum + unitBase * Number(item.qty || 0);
+  }, 0));
+  const gross = moneyNum(taxable.reduce((sum, item) => sum + Number(item.price || 0) * Number(item.qty || 0), 0));
+  const rates = [...new Set(taxable.map((item) => Number(item.taxRate)))];
+  return { base, tax: moneyNum(gross - base), rate: rates.length === 1 ? rates[0] : null };
+}
+
 function posGrandTotal() {
   if (POS_TABLE_ACCOUNT) {
     return moneyNum(Number(POS_TABLE_ACCOUNT.total || 0) + posCartTotal());
@@ -3718,6 +3732,7 @@ function posMethodLabel(method, breakdown = null) {
     card: 'Tarjeta',
     transfer: 'Transferencia',
     mixed: 'Múltiple',
+    credit: 'Crédito',
   }[method];
   return coreLabel || breakdown?.customLabel || CUSTOM_PAYMENT_METHODS.find((item) => item.id === method)?.label || method;
 }
@@ -3821,9 +3836,18 @@ function openPosPaymentEditModal(id) {
   if (sale.status === 'cancelado') return toast('No puedes cambiar pago en una venta cancelada', true);
 
   const breakdown = sale.payment_breakdown || {};
-  const method = sale.payment_method || 'cash';
+  const isPendingCredit = sale.payment_status === 'pending' && sale.payment_method === 'credit';
+  const method = isPendingCredit ? 'cash' : sale.payment_method || 'cash';
+  const title = document.querySelector('#posPaymentEditModal h3');
+  if (title) title.innerHTML = isPendingCredit
+    ? '<i class="ph-bold ph-hand-coins"></i> Cobrar venta a crédito'
+    : '<i class="ph-bold ph-credit-card"></i> Cambiar medio de pago';
+  const submit = document.querySelector('#posPaymentEditForm button[type="submit"]');
+  if (submit) submit.innerHTML = isPendingCredit
+    ? '<i class="ph-bold ph-check-circle"></i> Liquidar crédito'
+    : '<i class="ph-bold ph-floppy-disk"></i> Guardar cambio';
   $('#posPaymentEditSaleId').value = String(sale.id);
-  $('#posPaymentEditTicket').value = `#${sale.id} · ${fmtMoney(sale.total)}`;
+  $('#posPaymentEditTicket').value = `#${sale.id} · ${breakdown.creditCustomerName ? `${breakdown.creditCustomerName} · ` : ''}${fmtMoney(sale.total)}`;
   $('#posPaymentEditCashReceived').value = String(sale.cash_received || sale.total || '');
   $('#posPaymentEditMixCash').value = String(Number(breakdown.cash || 0));
   $('#posPaymentEditMixCard').value = String(Number(breakdown.card || 0));
@@ -3923,7 +3947,7 @@ function setPosPaymentDefaults() {
 
 function resetPosPaymentForm() {
   POS_PAYMENT_METHOD = 'cash';
-  POS_PAYMENT_FORM = { cashReceived: '', cash: '', card: '', cardType: '', transfer: '', notes: '', deliveryAddress: '', deliveryNeighborhood: '', deliveryReference: '' };
+  POS_PAYMENT_FORM = { cashReceived: '', cash: '', card: '', cardType: '', transfer: '', creditCustomerName: '', creditCustomerPhone: '', notes: '', deliveryAddress: '', deliveryNeighborhood: '', deliveryReference: '' };
   POS_IS_DELIVERY = false;
   POS_DELIVERY_FEE = '';
   POS_CHECKOUT_IDEMPOTENCY_KEY = '';
@@ -3985,6 +4009,7 @@ function updatePosMixedHint() {
 function buildPosTicketData() {
   if (POS_CART.length) {
     const items = POS_CART.map((item) => ({
+      ...item,
       qty: item.qty,
       name: item.name,
       price: Number(item.price),
@@ -4002,6 +4027,7 @@ function buildPosTicketData() {
       id: null,
       createdAt: fmtBusinessDateTime(),
       paymentMethod: POS_PAYMENT_METHOD,
+      paymentStatus: POS_PAYMENT_METHOD === 'credit' ? 'pending' : 'paid',
       items,
       subtotal,
       deliveryFee,
@@ -4012,6 +4038,9 @@ function buildPosTicketData() {
         ? Math.max(moneyNum(POS_PAYMENT_FORM.cashReceived || 0) - total, 0)
         : 0,
       notes: POS_PAYMENT_FORM.notes || '',
+      customerName: POS_PAYMENT_METHOD === 'credit' ? POS_PAYMENT_FORM.creditCustomerName || '' : '',
+      customerPhone: POS_PAYMENT_METHOD === 'credit' ? POS_PAYMENT_FORM.creditCustomerPhone || '' : '',
+      suppressInvoice: POS_PAYMENT_METHOD === 'credit',
       delivery: POS_IS_DELIVERY ? 'domicilio' : 'mostrador',
       deliveryAddress: POS_IS_DELIVERY ? POS_PAYMENT_FORM.deliveryAddress || '' : '',
       deliveryNeighborhood: POS_IS_DELIVERY ? POS_PAYMENT_FORM.deliveryNeighborhood || '' : '',
@@ -4023,7 +4052,9 @@ function buildPosTicketData() {
       id: LAST_POS_SALE.id,
       createdAt: fmtBusinessDateTime(),
       paymentMethod: LAST_POS_SALE.paymentMethod,
+      paymentStatus: LAST_POS_SALE.paymentStatus || 'paid',
       items: LAST_POS_SALE.items.map((item) => ({
+        ...item,
         qty: item.qty,
         name: item.name,
         price: Number(item.price),
@@ -4036,6 +4067,9 @@ function buildPosTicketData() {
       cashReceived: moneyNum(LAST_POS_SALE.cashReceived || 0),
       cashChange: moneyNum(LAST_POS_SALE.cashChange || 0),
       notes: LAST_POS_SALE.notes || '',
+      customerName: LAST_POS_SALE.paymentBreakdown?.creditCustomerName || '',
+      customerPhone: LAST_POS_SALE.paymentBreakdown?.creditCustomerPhone || '',
+      suppressInvoice: LAST_POS_SALE.paymentStatus === 'pending',
       delivery: LAST_POS_SALE.delivery || '',
       deliveryAddress: LAST_POS_SALE.deliveryAddress || LAST_POS_SALE.delivery_address || '',
       deliveryNeighborhood: LAST_POS_SALE.deliveryNeighborhood || LAST_POS_SALE.delivery_neighborhood || '',
@@ -4093,6 +4127,8 @@ function openThermalPrintWindow(ticket) {
     : '';
 
   const breakdownObj = ticket.paymentBreakdown || {};
+  const isPendingCredit = ticket.paymentStatus === 'pending' || ticket.paymentMethod === 'credit';
+  const isSettledCredit = !isPendingCredit && Number(breakdownObj.creditOriginalAmount || 0) > 0;
   const ticketPaymentLabel = (method) => method === 'card'
     ? (breakdownObj.cardType === 'debit' ? 'Tarjeta de débito' : breakdownObj.cardType === 'credit' ? 'Tarjeta de crédito' : 'Tarjeta')
     : posMethodLabel(method, breakdownObj);
@@ -4104,6 +4140,7 @@ function openThermalPrintWindow(ticket) {
 
   const subtotal = Number(ticket.subtotal || ticket.total || 0);
   const total = Number(ticket.total || 0);
+  const taxSummary = productTaxSummary(ticket.items || []);
   const deliveryAddress = esc(ticket.deliveryAddress || ticket.delivery_address || '');
   const deliveryNeighborhood = esc(ticket.deliveryNeighborhood || ticket.delivery_neighborhood || '');
   const deliveryReference = esc(ticket.deliveryReference || ticket.delivery_reference || '');
@@ -4162,6 +4199,9 @@ function openThermalPrintWindow(ticket) {
     .invoice-code { margin: 2px 0 5px; font-size: ${Math.max(fontPx + 5, 18)}px; font-weight: 900; letter-spacing: 2px; }
     .invoice-qr { width: 31mm; height: 31mm; margin: 4px auto; display: block; image-rendering: pixelated; }
     .invoice-link { font-size: ${Math.max(fontPx - 3, 9)}px; overflow-wrap: anywhere; }
+    .credit-state { margin: 8px 0; padding: 9px 5px; border: 3px double #000; text-align: center; font-weight: 900; }
+    .credit-state strong, .credit-state span { display: block; }
+    .credit-state strong { font-size: ${Math.max(fontPx + 3, 17)}px; }
   </style>
 </head>
 <body>
@@ -4174,6 +4214,8 @@ function openThermalPrintWindow(ticket) {
   <div class="center meta">Ticket ${esc(ticketId)}</div>
   <div class="center meta">${esc(ticket.createdAt)}</div>
   <div class="center meta">Cajero: ${seller}</div>
+  ${isPendingCredit ? `<div class="credit-state"><strong>VENTA A CRÉDITO</strong><span>SALDO PENDIENTE · NO PAGADO</span><span>${esc(fmtMoney(total, currency))}</span></div>` : ''}
+  ${isSettledCredit ? `<div class="credit-state"><strong>CRÉDITO LIQUIDADO</strong><span>Pagado con ${esc(ticketPaymentLabel(ticket.paymentMethod))}</span>${ticket.creditPaidAt ? `<span>${esc(String(ticket.creditPaidAt))}</span>` : ''}</div>` : ''}
   ${isRoundTicket ? `<div class="center meta"><b>Mesero: ${esc(ticket.waiterName || '—')}</b></div><div class="center meta"><b>COMANDA DE RONDA</b></div>` : ''}
   ${!isRoundTicket && ticket.tableNumber ? `<div class="center meta"><b>Mesa ${esc(String(ticket.tableNumber))} · Mesero: ${esc(ticket.waiterName || '—')}</b></div>` : ''}
   ${ticket.customerName ? `<div class="center meta"><b>A nombre de ${esc(ticket.customerName)}</b>${ticket.customerPhone ? `<br><span>${esc(ticket.customerPhone)}</span>` : ''}</div>` : ''}
@@ -4189,11 +4231,12 @@ function openThermalPrintWindow(ticket) {
     ${isRoundTicket
       ? `<tr><td>Total ronda ${esc(String(ticket.roundNumber))}</td><td class="r">${esc(fmtMoney(subtotal, currency))}</td></tr>
          <tr><td class="tot">ACUMULADO MESA</td><td class="tot r">${esc(fmtMoney(total, currency))}</td></tr>`
-      : `${ticket.paymentPending ? `<tr><td><b>ESTADO</b></td><td class="r"><b>PENDIENTE DE COBRO</b></td></tr><tr><td>Pago indicado</td><td class="r">${esc(ticketPaymentLabel(ticket.paymentMethod || 'cash'))}</td></tr>` : `<tr><td>Método</td><td class="r">${esc(ticketPaymentLabel(ticket.paymentMethod || 'cash'))}</td></tr>`}
+      : `${ticket.paymentPending ? `<tr><td><b>ESTADO</b></td><td class="r"><b>PENDIENTE DE COBRO</b></td></tr><tr><td>Pago indicado</td><td class="r">${esc(ticketPaymentLabel(ticket.paymentMethod || 'cash'))}</td></tr>` : isPendingCredit ? `<tr><td><b>CONCEPTO</b></td><td class="r"><b>VENTA A CRÉDITO</b></td></tr><tr><td>Estado</td><td class="r"><b>SALDO PENDIENTE</b></td></tr>` : `<tr><td>Método</td><td class="r">${esc(ticketPaymentLabel(ticket.paymentMethod || 'cash'))}</td></tr>`}
     ${breakdownLines}
     ${Number(ticket.deliveryFee || 0) > 0
       ? `<tr><td>Subtotal</td><td class="r">${esc(fmtMoney(subtotal, currency))}</td></tr><tr><td>&#x1F6F5; Envío domicilio</td><td class="r">+ ${esc(fmtMoney(Number(ticket.deliveryFee), currency))}</td></tr>`
       : `<tr><td>Subtotal</td><td class="r">${esc(fmtMoney(subtotal, currency))}</td></tr>`}
+    ${taxSummary ? `<tr><td>Base gravable</td><td class="r">${esc(fmtMoney(taxSummary.base, currency))}</td></tr><tr><td>IVA${taxSummary.rate === null ? '' : ` ${esc(String(taxSummary.rate * 100))}%`}</td><td class="r">${esc(fmtMoney(taxSummary.tax, currency))}</td></tr>` : ''}
     <tr><td class="tot">TOTAL</td><td class="tot r">${esc(fmtMoney(total, currency))}</td></tr>
     ${fmtConvertedMoney(total, 'pos') ? `<tr><td>Equivalente informativo${SETTINGS?.currency_conversion_mode === 'automatic' ? '<br><small>Fuente: ExchangeRate-API</small>' : ''}</td><td class="r">${esc(fmtConvertedMoney(total, 'pos'))}</td></tr>` : ''}
     ${!isMixed && Number(ticket.cashReceived || 0) > 0 ? `<tr><td>Efectivo recibido</td><td class="r">${esc(fmtMoney(ticket.cashReceived, currency))}</td></tr>` : ''}
@@ -4235,6 +4278,7 @@ function printTableRoundTicket(round, account, accumulatedTotal) {
     waiterName: account.waiter_name,
     createdAt: round.createdAt || fmtBusinessDateTime(),
     items: items.map((item) => ({
+      ...item,
       qty: Number(item.qty || 0), name: String(item.name || ''), price: Number(item.price || 0),
       total: moneyNum(Number(item.qty || 0) * Number(item.price || 0)),
     })),
@@ -4258,6 +4302,7 @@ function printSelfServiceOrder(order, pending = true) {
     ticketLabel: `Autoservicio ${order.folio || order.self_service_folio || `#${order.id}`}`,
     createdAt: order.createdAt || order.created_at || fmtBusinessDateTime(),
     items: items.map((item) => ({
+      ...item,
       qty: Number(item.qty || 0), name: String(item.name || 'Producto'), price: Number(item.price || 0),
       total: moneyNum(Number(item.qty || 0) * Number(item.price || 0)),
     })),
@@ -4288,7 +4333,9 @@ function printPosSaleById(id) {
     id: sale.id,
     createdAt: sale.created_at || fmtBusinessDateTime(),
     paymentMethod: sale.payment_method,
+    paymentStatus: sale.payment_status || 'paid',
     items: items.map((it) => ({
+      ...it,
       qty: Number(it.qty || 0),
       name: String(it.name || ''),
       price: Number(it.price || 0),
@@ -4298,6 +4345,10 @@ function printPosSaleById(id) {
     deliveryFee: Number(sale.delivery_fee || 0),
     total: Number(sale.total || 0),
     paymentBreakdown: sale.payment_breakdown || null,
+    customerName: sale.payment_breakdown?.creditCustomerName || '',
+    customerPhone: sale.payment_breakdown?.creditCustomerPhone || '',
+    suppressInvoice: sale.payment_status === 'pending',
+    creditPaidAt: sale.credit_paid_at || sale.payment_breakdown?.creditSettledAt || '',
     cashReceived: moneyNum(sale.cash_received || 0),
     cashChange: moneyNum(sale.cash_change || 0),
     notes: String(sale.notes || ''),
@@ -4314,6 +4365,25 @@ function printPosSaleById(id) {
   openThermalPrintWindow(ticket);
 }
 
+function printPosCreditSale(sale) {
+  if (!sale) return;
+  openThermalPrintWindow({
+    id: sale.id,
+    createdAt: sale.created_at || fmtBusinessDateTime(),
+    paymentMethod: 'credit',
+    paymentStatus: 'pending',
+    paymentBreakdown: sale.payment_breakdown || {},
+    customerName: sale.payment_breakdown?.creditCustomerName || 'Cliente',
+    customerPhone: sale.payment_breakdown?.creditCustomerPhone || '',
+    items: (sale.items || []).map((item) => ({ ...item, total: moneyNum(Number(item.qty || 0) * Number(item.price || 0)) })),
+    subtotal: Number(sale.total || 0),
+    total: Number(sale.total || 0),
+    notes: sale.notes || '',
+    tableNumber: sale.table_number || null,
+    suppressInvoice: true,
+  });
+}
+
 function exportPosClosePdf(closeResult) {
   if (!closeResult) return;
   if (!globalThis.jspdf || !globalThis.jspdf.jsPDF) {
@@ -4328,6 +4398,8 @@ function exportPosClosePdf(closeResult) {
   const cancellations = totals.cancellations || {};
   const delivery = totals.delivery || {};
   const tables = totals.tables || {};
+  const productTax = totals.productTax || {};
+  const openCredit = totals.openCredit || { tickets: 0, total: 0, lines: [] };
 
   const doc = new globalThis.jspdf.jsPDF({ orientation: 'portrait' });
   const bizName = SETTINGS?.business_name || ME?.tenant?.businessName || 'Negocio';
@@ -4349,10 +4421,15 @@ function exportPosClosePdf(closeResult) {
     body: [
       ['Fondo inicial', fmtMoney(session.opening_amount || 0)],
       ['Ventas del turno', fmtMoney(totals.totalSales || 0)],
+      ...(Number(productTax.lines || 0) > 0 ? [
+        ['Base gravable productos', fmtMoney(productTax.base || 0)],
+        [`IVA productos${(productTax.rates || []).length === 1 ? ` ${Number(productTax.rates[0]) * 100}%` : ''}`, fmtMoney(productTax.tax || 0)],
+      ] : []),
       ['Efectivo esperado', fmtMoney(closeResult.expectedAmount || 0)],
       ['Efectivo contado', fmtMoney(closeResult.closingAmount || 0)],
       ['Diferencia', fmtMoney(closeResult.differenceAmount || 0)],
       ['Tickets', String(totals.tickets || 0)],
+      ['Créditos abiertos al cierre', `${Number(openCredit.tickets || 0)} · ${fmtMoney(openCredit.total || 0)}`],
     ],
     styles: { fontSize: 9 },
     headStyles: { fillColor: [23, 28, 46] },
@@ -4405,6 +4482,16 @@ function exportPosClosePdf(closeResult) {
     headStyles: { fillColor: [249, 115, 22] },
   });
 
+  if (openCredit.tickets) {
+    doc.autoTable({
+      startY: doc.lastAutoTable.finalY + 6,
+      head: [['Crédito pendiente', 'Fecha', 'Monto']],
+      body: (openCredit.lines || []).map((line) => [`#${line.id} · ${line.customerName || 'Cliente'}`, line.createdAt || '', fmtMoney(line.amount || 0)]),
+      styles: { fontSize: 9 },
+      headStyles: { fillColor: [190, 24, 93] },
+    });
+  }
+
   const notes = String(session.notes || '').trim();
   if (notes) {
     doc.setFontSize(9);
@@ -4424,6 +4511,8 @@ function printPosCloseReport(closeResult) {
   const cancellations = totals.cancellations || {};
   const delivery = totals.delivery || {};
   const tables = totals.tables || {};
+  const productTax = totals.productTax || {};
+  const openCredit = totals.openCredit || { tickets: 0, total: 0, lines: [] };
   const biz = esc(SETTINGS?.business_name || ME?.tenant?.businessName || 'Negocio');
   const now = fmtBusinessDateTime();
   const session = closeResult?.closedSession || {};
@@ -4455,10 +4544,13 @@ function printPosCloseReport(closeResult) {
     <tr><th>Concepto</th><th>Valor</th></tr>
     <tr><td>Fondo inicial</td><td>${esc(fmtMoney(session.opening_amount || 0))}</td></tr>
     <tr><td>Ventas del turno</td><td>${esc(fmtMoney(totals.totalSales || 0))}</td></tr>
+    <tr><td>Créditos abiertos al cierre</td><td>${esc(String(openCredit.tickets || 0))} · ${esc(fmtMoney(openCredit.total || 0))}</td></tr>
+    ${Number(productTax.lines || 0) > 0 ? `<tr><td>Base gravable productos</td><td>${esc(fmtMoney(productTax.base || 0))}</td></tr><tr><td>IVA productos${(productTax.rates || []).length === 1 ? ` ${esc(String(Number(productTax.rates[0]) * 100))}%` : ''}</td><td>${esc(fmtMoney(productTax.tax || 0))}</td></tr>` : ''}
     <tr><td>Efectivo esperado</td><td>${esc(fmtMoney(closeResult.expectedAmount || 0))}</td></tr>
     <tr><td>Efectivo contado</td><td>${esc(fmtMoney(closeResult.closingAmount || 0))}</td></tr>
     <tr class="tot"><td>Diferencia</td><td>${esc(fmtMoney(closeResult.differenceAmount || 0))}</td></tr>
   </table>
+  ${openCredit.tickets ? `<table><tr><th>Venta a crédito sin cobrar</th><th>Monto</th></tr>${(openCredit.lines || []).map((line) => `<tr><td>#${esc(String(line.id))} · ${esc(line.customerName || 'Cliente')}<br><small>${esc(line.createdAt || '')}</small></td><td>${esc(fmtMoney(line.amount || 0))}</td></tr>`).join('')}<tr class="tot"><td>Total pendiente informativo</td><td>${esc(fmtMoney(openCredit.total || 0))}</td></tr></table><p><b>Auditoría:</b> estos créditos no forman parte del efectivo esperado ni de la diferencia de caja.</p>` : ''}
   ${session.notes ? `<p><b>Notas:</b> ${esc(session.notes)}</p>` : ''}
   <table>
     <tr><th>Medio</th><th>Monto</th></tr>
@@ -4545,7 +4637,7 @@ function addPosProduct(productId) {
   if (existing) {
     existing.qty += 1;
   } else {
-    POS_CART.push({ id: Number(product.id), name: product.name, price: Number(product.price), image: product.image, qty: 1 });
+    POS_CART.push({ id: Number(product.id), name: product.name, price: Number(product.price), image: product.image, qty: 1, taxEnabled: product.taxEnabled, taxMode: product.taxMode, taxRate: product.taxRate });
   }
   setPosPaymentDefaults();
   renderPosCart();
@@ -4690,6 +4782,9 @@ $('#posProductConfigAdd')?.addEventListener('click', () => {
       modifiers: modifiersDetail,
       modifiersLabel,
       modifiersExtraPrice: modifiersExtra,
+      taxEnabled: product.taxEnabled,
+      taxMode: product.taxMode,
+      taxRate: product.taxRate,
     });
   }
 
@@ -4867,10 +4962,42 @@ function renderPos() {
   renderPosFinanceStrip();
   renderPosDeliveryStrip();
   renderPosSelfServiceQueue();
+  renderPosCreditQueue();
   renderPosActions();
   renderPosSession();
   renderPosCatalog();
   renderPosCart();
+}
+
+function renderPosCreditQueue() {
+  const host = $('#posCreditQueue');
+  if (!host) return;
+  const rows = Array.isArray(POS_OVERVIEW?.creditSales) ? POS_OVERVIEW.creditSales : [];
+  if (!POS_OVERVIEW?.activeSession || !rows.length) { host.innerHTML = ''; return; }
+  const total = moneyNum(rows.reduce((sum, row) => sum + Number(row.total || 0), 0));
+  host.innerHTML = `<section class="card pos-credit-queue">
+    <div class="pos-credit-head"><div><h3><i class="ph-bold ph-credit-card"></i> Ventas a crédito</h3><div class="hint">Saldos pendientes que todavía no afectan el corte de caja.</div></div><div><span>${rows.length} abierta${rows.length === 1 ? '' : 's'}</span><b>${fmtMoney(total)}</b></div></div>
+    <div class="pos-credit-grid">${rows.map((sale) => {
+      const breakdown = sale.payment_breakdown || {};
+      return `<article class="pos-credit-card">
+        <header><span>Ticket #${sale.id}</span><b>${fmtMoney(sale.total)}</b></header>
+        <div class="pos-credit-customer"><i class="ph-bold ph-user-circle"></i><div><strong>${esc(breakdown.creditCustomerName || 'Cliente')}</strong>${breakdown.creditCustomerPhone ? `<small>${esc(breakdown.creditCustomerPhone)}</small>` : ''}</div></div>
+        <div class="pos-credit-meta"><span><i class="ph-bold ph-calendar"></i>${esc(sale.created_at || '')}</span>${sale.table_number ? `<span><i class="ph-bold ph-fork-knife"></i>Mesa ${esc(String(sale.table_number))}</span>` : ''}</div>
+        <footer><button class="btn btn-ghost" type="button" data-print-credit="${sale.id}"><i class="ph-bold ph-printer"></i> Ticket</button><button class="btn btn-primary" type="button" data-settle-credit="${sale.id}"><i class="ph-bold ph-hand-coins"></i> Cobrar</button></footer>
+      </article>`;
+    }).join('')}</div>
+  </section>`;
+  host.querySelectorAll('[data-settle-credit]').forEach((button) => button.addEventListener('click', () => {
+    const sale = rows.find((row) => Number(row.id) === Number(button.dataset.settleCredit));
+    if (!sale) return;
+    const normalizedSale = { ...sale, payment_status: 'pending', payment_method: 'credit', cash_received: 0, cash_change: 0 };
+    POS_SALES_HISTORY_CACHE = [normalizedSale, ...POS_SALES_HISTORY_CACHE.filter((row) => Number(row.id) !== Number(sale.id))];
+    openPosPaymentEditModal(sale.id);
+  }));
+  host.querySelectorAll('[data-print-credit]').forEach((button) => button.addEventListener('click', () => {
+    const sale = rows.find((row) => Number(row.id) === Number(button.dataset.printCredit));
+    if (sale) printPosCreditSale(sale);
+  }));
 }
 
 function renderPosSelfServiceQueue() {
@@ -5276,6 +5403,7 @@ function renderPosCart() {
   const total = posGrandTotal();
   const subtotalItems = posCartTotal();
   const deliveryFeeAmt = POS_IS_DELIVERY ? moneyNum(Number(POS_DELIVERY_FEE) || 0) : 0;
+  const taxSummary = productTaxSummary(POS_CART);
   const session = POS_OVERVIEW?.activeSession;
   const tableAccount = POS_TABLE_ACCOUNT;
   const tableNumber = tableAccount?.table_number || tableAccount?.tableNumber;
@@ -5291,8 +5419,8 @@ function renderPosCart() {
     </div>` : (tableAccount ? '<div class="hint" style="margin-bottom:10px">Aún no se ha enviado ninguna ronda.</div>' : '');
   setPosPaymentDefaults();
   const activeCustomMethods = CUSTOM_PAYMENT_METHODS.filter((item) => item.active).map((item) => item.id);
-  if (!['cash', 'card', 'transfer', 'mixed', ...activeCustomMethods].includes(POS_PAYMENT_METHOD)) POS_PAYMENT_METHOD = 'cash';
-  const methodButtons = ['cash', 'card', 'transfer', ...activeCustomMethods, 'mixed']
+  if (!['cash', 'card', 'transfer', 'credit', 'mixed', ...activeCustomMethods].includes(POS_PAYMENT_METHOD)) POS_PAYMENT_METHOD = 'cash';
+  const methodButtons = ['cash', 'card', 'transfer', ...activeCustomMethods, 'credit', 'mixed']
     .map((method) => `<button type="button" class="${POS_PAYMENT_METHOD === method ? 'on' : ''}" data-pos-method="${method}">${posMethodLabel(method)}</button>`)
     .join('');
   const cashField = POS_PAYMENT_METHOD === 'cash'
@@ -5312,6 +5440,13 @@ function renderPosCart() {
           <option value="credit" ${POS_PAYMENT_FORM.cardType === 'credit' ? 'selected' : ''}>Crédito · SAT 04</option>
         </select>
         <div class="hint">Se utilizará automáticamente como forma de pago al timbrar el CFDI.</div>
+      </div>`
+    : '';
+  const creditFields = POS_PAYMENT_METHOD === 'credit'
+    ? `<div class="pos-credit-customer-fields">
+        <div class="field"><label><i class="ph-bold ph-user"></i> Cliente *</label><input id="posCreditCustomerName" maxlength="120" required value="${esc(POS_PAYMENT_FORM.creditCustomerName || '')}" placeholder="Nombre de quien debe" /></div>
+        <div class="field"><label><i class="ph-bold ph-phone"></i> Teléfono</label><input id="posCreditCustomerPhone" maxlength="40" value="${esc(POS_PAYMENT_FORM.creditCustomerPhone || '')}" placeholder="Contacto opcional" /></div>
+        <div class="pos-credit-warning"><i class="ph-bold ph-info"></i><span>Se registrará como saldo pendiente y no entrará al corte hasta que se liquide.</span></div>
       </div>`
     : '';
   const mixedFields = POS_PAYMENT_METHOD === 'mixed'
@@ -5356,6 +5491,7 @@ function renderPosCart() {
            <div class="pos-total-line pos-delivery-fee-line"><i class="ph-bold ph-moped"></i><span>Envío</span><b>+ ${fmtMoney(deliveryFeeAmt)}</b></div>
            <div class="pos-total-line"><span>Total</span><b>${fmtMoney(total)}${convertedMoneyHtml(total, 'pos')}</b></div>`
         : `<div class="pos-total-line"><span>Total</span><b>${fmtMoney(total)}${convertedMoneyHtml(total, 'pos')}</b></div>`}
+      ${taxSummary ? `<div class="pos-total-line pos-subtotal-line"><span>Base gravable</span><b>${fmtMoney(taxSummary.base)}</b></div><div class="pos-total-line pos-subtotal-line"><span>IVA${taxSummary.rate === null ? '' : ` ${taxSummary.rate * 100}%`}</span><b>${fmtMoney(taxSummary.tax)}</b></div>` : ''}
       <form id="posCheckoutForm">
         <div class="field">
           <label><i class="ph-bold ph-credit-card"></i> Medio de pago</label>
@@ -5363,6 +5499,7 @@ function renderPosCart() {
         </div>
         ${cashField}
         ${cardTypeField}
+        ${creditFields}
         ${mixedFields}
         ${tableAccount ? '' : `<div class="toggle-row pos-delivery-toggle">
           <div class="t-info"><i class="ph-bold ph-moped"></i><div><b>Entrega a domicilio</b><span>Cobra envío y registra el pedido como domicilio</span></div></div>
@@ -5390,7 +5527,7 @@ function renderPosCart() {
           <textarea id="posSaleNotes" rows="2" placeholder="${tableAccount ? 'Ej. Sin cebolla, término medio...' : POS_IS_DELIVERY ? 'Indicaciones de preparación: sin cebolla, salsa aparte...' : 'Mesa 4, venta rápida, pedido interno...'}">${esc(POS_PAYMENT_FORM.notes || '')}</textarea>
         </div>
         <div style="display:flex;gap:10px;flex-wrap:wrap">
-          <button class="btn btn-primary" type="submit" ${submitDisabled}><i class="ph-bold ph-check-circle"></i> ${tableAccount ? 'Cerrar y cobrar cuenta' : 'Cobrar venta'}</button>
+          <button class="btn btn-primary" type="submit" ${submitDisabled}><i class="ph-bold ${POS_PAYMENT_METHOD === 'credit' ? 'ph-file-plus' : 'ph-check-circle'}"></i> ${POS_PAYMENT_METHOD === 'credit' ? 'Registrar venta a crédito' : tableAccount ? 'Cerrar y cobrar cuenta' : 'Cobrar venta'}</button>
           ${tableAccount ? `<button class="btn btn-ghost" type="button" id="posSaveTable" ${POS_CART.length ? '' : 'disabled'}><i class="ph-bold ph-paper-plane-tilt"></i> Enviar ronda e imprimir</button>` : ''}
           <button class="btn btn-ghost" type="button" id="posClearCart"><i class="ph-bold ${tableAccount ? 'ph-arrow-left' : 'ph-broom'}"></i> ${tableAccount ? 'Salir de mesa' : 'Vaciar ticket'}</button>
           ${tableAccount ? '' : '<button class="btn btn-ghost" type="button" id="posPrintTicket"><i class="ph-bold ph-printer"></i> Imprimir ticket</button>'}
@@ -5444,6 +5581,8 @@ function renderPosCart() {
     updatePosMixedHint();
   });
   $('#posCardType')?.addEventListener('change', (e) => (POS_PAYMENT_FORM.cardType = e.target.value));
+  $('#posCreditCustomerName')?.addEventListener('input', (e) => (POS_PAYMENT_FORM.creditCustomerName = e.target.value));
+  $('#posCreditCustomerPhone')?.addEventListener('input', (e) => (POS_PAYMENT_FORM.creditCustomerPhone = e.target.value));
   $('#posMixTransfer')?.addEventListener('input', (e) => {
     POS_PAYMENT_FORM.transfer = e.target.value;
     updatePosMixedHint();
@@ -5492,6 +5631,8 @@ function renderPosCart() {
           card: Number($('#posMixCard')?.value || 0),
           transfer: Number($('#posMixTransfer')?.value || 0),
           cardType: $('#posCardType')?.value || '',
+          creditCustomerName: $('#posCreditCustomerName')?.value || '',
+          creditCustomerPhone: $('#posCreditCustomerPhone')?.value || '',
         },
         cashReceived: Number($('#posCashReceived')?.value || 0),
         notes: $('#posSaleNotes')?.value || '',
@@ -5761,18 +5902,21 @@ function cfdiDate(value) {
 
 function renderCfdiDocuments() {
   const rows = CFDI_DATA.rows || [];
+  const canManageFiscalDocuments = !isCashierUser();
   const pagination = CFDI_DATA.pagination || { page: 1, pages: 1, total: 0, limit: 10 };
   $('#cfdiSummary').innerHTML = `<div><i class="ph-bold ph-files"></i><span><b>${pagination.total}</b> CFDI encontrados</span></div><div class="cfdi-page-size"><label>Mostrar</label><select id="cfdiPageSize"><option value="10" ${pagination.limit === 10 ? 'selected' : ''}>10</option><option value="20" ${pagination.limit === 20 ? 'selected' : ''}>20</option><option value="50" ${pagination.limit === 50 ? 'selected' : ''}>50</option></select></div>`;
   $('#cfdiDocuments').innerHTML = rows.length ? `<div class="cfdi-document-grid">${rows.map((doc) => {
     const [statusLabel, statusClass, statusIcon] = cfdiStatusMeta(doc.status);
     const identity = [doc.series, doc.folio].filter(Boolean).join('-') || doc.uuid || `#${doc.id}`;
-    const base = doc.type === 'global' ? `/api/invoicing/global-invoices/${doc.id}` : `/api/invoicing/invoices/${doc.id}`;
+    const base = doc.type === 'global' ? `/api/invoicing/global-invoices/${doc.id}` : doc.type === 'payment' ? `/api/invoicing/payment-complements/${doc.id}` : ['direct','manual_global','credit_note'].includes(doc.type) ? `/api/invoicing/direct-invoices/${doc.id}` : `/api/invoicing/invoices/${doc.id}`;
     const receiver = doc.receiver || {};
+    const typeLabel = ({individual:`Ticket #${doc.orderId}`,global:`Factura global · ${doc.orderCount} tickets`,direct:'Factura manual',manual_global:'Factura global manual',credit_note:'Nota de crédito',payment:'Complemento de pago 2.0'})[doc.type] || doc.type;
+    const sourceActions = canManageFiscalDocuments && doc.status === 'active' && ['individual','global','direct'].includes(doc.type) ? `${doc.paymentMethod === 'PPD' ? `<button class="btn btn-primary" data-payment-cfdi="${doc.type}:${doc.id}"><i class="ph-bold ph-hand-coins"></i> Registrar pago</button>` : ''}<button class="btn btn-ghost" data-credit-cfdi="${doc.type}:${doc.id}"><i class="ph-bold ph-arrow-u-down-left"></i> Nota de crédito</button>` : '';
     return `<article class="cfdi-document-card ${statusClass}">
-      <header><div class="cfdi-doc-icon"><i class="ph-bold ${doc.type === 'global' ? 'ph-stack' : 'ph-file-text'}"></i></div><div><span>${doc.type === 'global' ? `Factura global · ${doc.orderCount} tickets` : `Ticket #${doc.orderId}`}</span><h3>${esc(identity)}</h3></div><span class="cfdi-status ${statusClass}"><i class="ph-bold ${statusIcon}"></i>${esc(statusLabel)}</span></header>
-      <div class="cfdi-doc-body"><div><span>UUID</span><b class="cfdi-copy-value">${esc(doc.uuid || 'Pendiente')}</b></div><div><span>Emisor</span><b>${esc(doc.issuerRfc || '—')}</b></div><div><span>Receptor</span><b>${esc(receiver.rfc || '—')}</b><small>${esc(receiver.name || '')}</small></div><div><span>Total</span><b class="cfdi-total">${fmtMoney(doc.total)}</b></div><div><span>Emisión</span><b>${esc(cfdiDate(doc.issuedAt || doc.createdAt))}</b></div>${doc.cancellationMotive ? `<div><span>Cancelación</span><b>Motivo ${esc(doc.cancellationMotive)}</b><small>${esc(doc.cancellationMessage || doc.cancellationStatus || '')}</small></div>` : ''}</div>
+      <header><div class="cfdi-doc-icon"><i class="ph-bold ${['global','manual_global'].includes(doc.type) ? 'ph-stack' : doc.type === 'payment' ? 'ph-hand-coins' : 'ph-file-text'}"></i></div><div><span>${esc(typeLabel)}</span><h3>${esc(identity)}</h3></div><span class="cfdi-status ${statusClass}"><i class="ph-bold ${statusIcon}"></i>${esc(statusLabel)}</span></header>
+      <div class="cfdi-doc-body"><div><span>UUID</span><b class="cfdi-copy-value">${esc(doc.uuid || 'Pendiente')}</b></div><div><span>Emisor</span><b>${esc(doc.issuerRfc || '—')}</b></div><div><span>Receptor</span><b>${esc(receiver.rfc || '—')}</b><small>${esc(receiver.name || '')}</small></div><div><span>Total</span><b class="cfdi-total">${fmtMoney(doc.total)}</b></div><div><span>Pago</span><b>${esc(doc.type === 'payment' ? 'REP 2.0' : (doc.paymentMethod || 'PUE'))}</b></div><div><span>Emisión</span><b>${esc(cfdiDate(doc.issuedAt || doc.createdAt))}</b></div>${doc.cancellationMotive ? `<div><span>Cancelación</span><b>Motivo ${esc(doc.cancellationMotive)}</b><small>${esc(doc.cancellationMessage || doc.cancellationStatus || '')}</small></div>` : ''}</div>
       ${doc.error ? `<div class="cfdi-doc-alert"><i class="ph-bold ph-warning-circle"></i>${esc(doc.error)}</div>` : ''}
-      <footer>${doc.status !== 'failed' && doc.providerId ? `<a class="btn btn-ghost" href="${base}/pdf" target="_blank"><i class="ph-bold ph-file-pdf"></i> PDF</a><a class="btn btn-ghost" href="${base}/xml" target="_blank"><i class="ph-bold ph-code"></i> XML</a>` : ''}${doc.hasCancellationReceipt ? `<a class="btn btn-ghost" href="/api/invoicing/documents/${doc.type}/${doc.id}/cancellation-receipt" target="_blank"><i class="ph-bold ph-seal-check"></i> Acuse</a>` : ''}${doc.status === 'cancel_pending' ? `<button class="btn btn-ghost" data-refresh-cfdi="${doc.type}:${doc.id}"><i class="ph-bold ph-arrows-clockwise"></i> Actualizar estado</button>` : ''}${doc.status === 'active' ? `<button class="btn btn-danger" data-open-cfdi-cancel="${doc.type}:${doc.id}"><i class="ph-bold ph-x-circle"></i> Solicitar cancelación</button>` : ''}</footer>
+      <footer>${doc.status !== 'failed' && doc.providerId ? `<a class="btn btn-ghost" href="${base}/pdf" target="_blank"><i class="ph-bold ph-file-pdf"></i> PDF</a><a class="btn btn-ghost" href="${base}/xml" target="_blank"><i class="ph-bold ph-code"></i> XML</a>` : ''}${sourceActions}${canManageFiscalDocuments && doc.status === 'active' ? `<button class="btn btn-ghost" data-email-cfdi="${doc.type}:${doc.id}"><i class="ph-bold ph-envelope"></i> Correo</button>` : ''}${doc.hasCancellationReceipt ? `<a class="btn btn-ghost" href="/api/invoicing/documents/${doc.type}/${doc.id}/cancellation-receipt" target="_blank"><i class="ph-bold ph-seal-check"></i> Acuse</a>` : ''}${canManageFiscalDocuments && doc.status === 'cancel_pending' ? `<button class="btn btn-ghost" data-refresh-cfdi="${doc.type}:${doc.id}"><i class="ph-bold ph-arrows-clockwise"></i> Actualizar estado</button>` : ''}${canManageFiscalDocuments && doc.status === 'unknown' ? `<button class="btn btn-ghost" data-reconcile-cfdi="${doc.type}:${doc.id}"><i class="ph-bold ph-magnifying-glass"></i> Conciliar</button>` : ''}${canManageFiscalDocuments && doc.status === 'active' ? `<button class="btn btn-danger" data-open-cfdi-cancel="${doc.type}:${doc.id}"><i class="ph-bold ph-x-circle"></i> Solicitar cancelación</button>` : ''}</footer>
     </article>`;
   }).join('')}</div>` : emptyHTML('ph-files', 'No encontramos CFDI', 'Modifica los filtros o selecciona otro periodo.');
   $('#cfdiPagination').innerHTML = pagination.total ? `<button class="btn btn-ghost" data-cfdi-page="${pagination.page - 1}" ${pagination.page <= 1 ? 'disabled' : ''}><i class="ph-bold ph-caret-left"></i> Anterior</button><span>Página <b>${pagination.page}</b> de <b>${pagination.pages}</b></span><button class="btn btn-ghost" data-cfdi-page="${pagination.page + 1}" ${pagination.page >= pagination.pages ? 'disabled' : ''}>Siguiente <i class="ph-bold ph-caret-right"></i></button>` : '';
@@ -5789,6 +5933,10 @@ function renderCfdiDocuments() {
     try { await api(`/api/invoicing/documents/${type}/${id}/refresh-cancellation`, { method: 'POST' }); toast('Estado consultado en Facturama'); await loadCfdiDocuments(); }
     catch (error) { toast(error.message, true); } finally { button.disabled = false; }
   }));
+  document.querySelectorAll('[data-reconcile-cfdi]').forEach((button) => button.addEventListener('click', async()=>{const[type,id]=button.dataset.reconcileCfdi.split(':');button.disabled=true;try{const result=await api(`/api/invoicing/documents/${type}/${id}/reconcile`,{method:'POST'});toast(result.message||(result.found?'CFDI conciliado':'Aún sin confirmación'));await loadCfdiDocuments();}catch(error){toast(error.message,true);}finally{button.disabled=false;}}));
+  document.querySelectorAll('[data-email-cfdi]').forEach((button)=>button.addEventListener('click',async()=>{const email=prompt('Correo del cliente');if(!email)return;const[type,id]=button.dataset.emailCfdi.split(':');try{await api(`/api/invoicing/documents/${type}/${id}/email`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email})});toast('CFDI enviado por correo');}catch(error){toast(error.message,true);}}));
+  document.querySelectorAll('[data-payment-cfdi]').forEach((button)=>button.addEventListener('click',async()=>{const[type,id]=button.dataset.paymentCfdi.split(':');try{const receivables=await api('/api/invoicing/receivables');const source=receivables.rows.find((row)=>row.type===type&&Number(row.id)===Number(id));if(!source)throw new Error('La factura ya no tiene saldo pendiente');const raw=prompt(`Saldo pendiente ${fmtMoney(source.balance)}. Importe recibido:`,source.balance.toFixed(2));if(!raw)return;const form=prompt('Forma de pago SAT: 03 transferencia, 01 efectivo, 04 crédito, 28 débito','03');if(!form)return;const operationNumber=prompt('Número de operación o referencia (opcional)','')||'';await api('/api/invoicing/payment-complements',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sourceType:type,sourceId:Number(id),amount:Number(raw),paymentDate:new Date().toISOString(),paymentForm:form,operationNumber})});toast('Complemento de pago timbrado');await loadCfdiDocuments();}catch(error){toast(error.message,true);}}));
+  document.querySelectorAll('[data-credit-cfdi]').forEach((button)=>button.addEventListener('click',async()=>{const[type,id]=button.dataset.creditCfdi.split(':');const total=prompt('Importe total de la nota de crédito');if(!total)return;const description=prompt('Motivo de la devolución, descuento o bonificación','Devolución, descuento o bonificación');if(!description)return;try{await api('/api/invoicing/credit-notes',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sourceType:type,sourceId:Number(id),total:Number(total),description,paymentForm:'01'})});toast('Nota de crédito timbrada');await loadCfdiDocuments();}catch(error){toast(error.message,true);}}));
 }
 
 async function loadCfdiDocuments() {
@@ -5827,12 +5975,12 @@ $('#cfdiCancelForm')?.addEventListener('submit', async (event) => {
   event.preventDefault();
   const type = $('#cfdiCancelType').value;
   const id = $('#cfdiCancelId').value;
-  const endpoint = type === 'global' ? `/api/invoicing/global-invoices/${id}/cancel` : `/api/invoicing/invoices/${id}/cancel`;
+  const endpoint = `/api/invoicing/documents/${type}/${id}/cancel`;
   const button = event.currentTarget.querySelector('button[type="submit"]'); button.disabled = true;
   try {
     const result = await api(endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ motive: $('#cfdiCancelMotive').value, replacementUuid: $('#cfdiReplacementUuid').value.trim() }) });
     closeCfdiCancelModal();
-    const status = result.invoice?.status;
+    const status = result.document?.status;
     toast(status === 'canceled' ? 'CFDI cancelado y conservado en el historial' : status === 'active' ? 'La cancelación no procedió; el CFDI continúa vigente' : 'Solicitud enviada; espera la respuesta del receptor');
     await loadCfdiDocuments();
   } catch (error) { toast(error.message, true); } finally { button.disabled = false; }
@@ -5936,9 +6084,11 @@ async function openPosInvoiceModal(saleId) {
   const sale = POS_SALES_HISTORY_CACHE.find((row) => Number(row.id) === Number(saleId));
   const cardPayment = sale?.payment_method === 'card';
   const cardType = String(sale?.payment_breakdown?.cardType || sale?.payment_breakdown?.card_type || '').toLowerCase();
-  $('#posInvoicePaymentWrap').hidden = !cardPayment;
-  $('#posInvoicePaymentForm').required = cardPayment;
+  $('#posInvoicePaymentMethod').value = 'PUE';
+  $('#posInvoiceRelationType').value = '';
+  $('#posInvoiceRelatedUuid').value = '';
   $('#posInvoicePaymentForm').value = cardType === 'debit' ? '28' : cardType === 'credit' ? '04' : '';
+  syncPosInvoicePaymentMethod();
   const environment = String(INVOICING_DATA?.provider?.environment || 'sandbox').toLowerCase();
   const environmentBadge = $('#posInvoiceEnvironment');
   environmentBadge.classList.toggle('production', environment === 'production');
@@ -5948,6 +6098,15 @@ async function openPosInvoiceModal(saleId) {
   if (environment === 'sandbox' && !$('#posInvoiceRfc').value.trim()) setPosGenericReceiver();
   else applyPosGenericReceiverDefaults();
   $('#posInvoiceModal').classList.add('show');
+}
+
+function syncPosInvoicePaymentMethod() {
+  const saleId = Number($('#posInvoiceSaleId')?.value || 0);
+  const sale = POS_SALES_HISTORY_CACHE.find((row) => Number(row.id) === saleId);
+  const cardPayment = sale?.payment_method === 'card';
+  const ppd = $('#posInvoicePaymentMethod')?.value === 'PPD';
+  $('#posInvoicePaymentWrap').hidden = ppd || !cardPayment;
+  $('#posInvoicePaymentForm').required = !ppd && cardPayment;
 }
 
 function clearPosInvoiceError() {
@@ -5971,12 +6130,16 @@ function showPosInvoiceError(error) {
 
 function setPosGenericReceiver() {
   $('#posInvoiceRfc').value = 'XAXX010101000';
+  $('#posInvoicePaymentMethod').value = 'PUE';
+  syncPosInvoicePaymentMethod();
   applyPosGenericReceiverDefaults();
   clearPosInvoiceError();
 }
 
 function applyPosGenericReceiverDefaults() {
   if ($('#posInvoiceRfc')?.value.trim().toUpperCase() !== 'XAXX010101000') return;
+  $('#posInvoicePaymentMethod').value = 'PUE';
+  syncPosInvoicePaymentMethod();
   $('#posInvoiceName').value = 'PUBLICO EN GENERAL';
   $('#posInvoiceRegime').value = '616';
   $('#posInvoiceUse').value = 'S01';
@@ -5994,6 +6157,7 @@ $('#posInvoiceRfc')?.addEventListener('input', (event) => {
   clearPosInvoiceError();
 });
 $('#posInvoiceGeneric')?.addEventListener('click', setPosGenericReceiver);
+$('#posInvoicePaymentMethod')?.addEventListener('change', syncPosInvoicePaymentMethod);
 $('#posInvoiceCancel')?.addEventListener('click', () => $('#posInvoiceModal').classList.remove('show'));
 $('#posInvoiceClose')?.addEventListener('click', () => $('#posInvoiceModal').classList.remove('show'));
 $('#posInvoiceForm')?.addEventListener('submit', async (event) => {
@@ -6006,7 +6170,7 @@ $('#posInvoiceForm')?.addEventListener('submit', async (event) => {
   button.innerHTML = '<i class="ph-bold ph-spinner-gap"></i> Timbrando con Facturama…';
   try {
     const saleId = $('#posInvoiceSaleId').value;
-    const data = await api(`/api/invoicing/sales/${saleId}/issue`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ paymentForm: $('#posInvoicePaymentWrap').hidden ? '' : $('#posInvoicePaymentForm').value, receiver: { rfc: $('#posInvoiceRfc').value, name: $('#posInvoiceName').value, fiscalRegime: $('#posInvoiceRegime').value, postalCode: $('#posInvoicePostal').value, cfdiUse: $('#posInvoiceUse').value, email: $('#posInvoiceEmail').value } }) });
+    const data = await api(`/api/invoicing/sales/${saleId}/issue`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ paymentMethod: $('#posInvoicePaymentMethod').value, paymentForm: $('#posInvoicePaymentWrap').hidden ? '' : $('#posInvoicePaymentForm').value, relationType: $('#posInvoiceRelationType').value, relatedUuid: $('#posInvoiceRelatedUuid').value, receiver: { rfc: $('#posInvoiceRfc').value, name: $('#posInvoiceName').value, fiscalRegime: $('#posInvoiceRegime').value, postalCode: $('#posInvoicePostal').value, cfdiUse: $('#posInvoiceUse').value, email: $('#posInvoiceEmail').value } }) });
     const invoice = data.invoice;
     form.hidden = true; const result = $('#posInvoiceResult'); result.hidden = false;
     const receiverEmail = String($('#posInvoiceEmail').value || '').trim();
@@ -6080,10 +6244,11 @@ function posFiscalStatus(row) {
   return '<span class="badge"><i class="ph-bold ph-receipt"></i> Sin facturar</span>';
 }
 
-function posSaleIsInvoiceEligible(row) {
+function posSaleIsInvoiceEligible(row, { includePendingCredit = false } = {}) {
   const individual = String(row.fiscal_invoice_status || '');
   const global = String(row.global_invoice_status || '');
   return row.status !== 'cancelado'
+    && (includePendingCredit || row.payment_status !== 'pending')
     && !['pending', 'unknown', 'active', 'cancel_pending'].includes(individual)
     && !['pending', 'unknown', 'active'].includes(global);
 }
@@ -6159,31 +6324,33 @@ async function loadPosSalesHistory(page = 1) {
         .map((row) => {
           const paymentBreakdown = row.payment_breakdown
             ? Object.entries(row.payment_breakdown)
-                .filter(([, amount]) => Number(amount) > 0)
+                .filter(([method, amount]) => (['cash', 'card', 'transfer'].includes(method) || method.startsWith('custom_')) && Number(amount) > 0)
                 .map(([method, amount]) => `${posMethodLabel(method)}${method === 'card' && posCardTypeLabel(row.payment_breakdown) ? ` ${posCardTypeLabel(row.payment_breakdown)}` : ''} ${fmtMoney(amount)}`)
                 .join(' · ')
             : posMethodLabel(row.payment_method, row.payment_breakdown);
           const noteText = String(row.notes || '').trim();
           const isCanceled = row.status === 'cancelado';
+          const isPendingCredit = row.payment_status === 'pending';
           const invoiceEligible = posSaleIsInvoiceEligible(row);
+          const individualInvoiceEligible = posSaleIsInvoiceEligible(row, { includePendingCredit: true });
           const isSelected = POS_GLOBAL_INVOICE_SELECTION.has(Number(row.id));
           return `<tr>
             <td><input class="pos-global-ticket-check" type="checkbox" data-global-ticket="${row.id}" ${isSelected ? 'checked' : ''} ${invoiceEligible ? '' : 'disabled'} aria-label="Seleccionar ticket ${row.id} para factura global"></td>
             <td><b>#${row.id}</b></td>
             <td>${esc(row.items.map((item) => `${item.qty}x ${item.name}`).join(', '))}</td>
-            <td><div><b>${esc(posMethodLabel(row.payment_method, row.payment_breakdown))}${row.payment_method === 'card' && posCardTypeLabel(row.payment_breakdown) ? ` · ${esc(posCardTypeLabel(row.payment_breakdown))}` : ''}</b></div><div style="font-size:12px;color:var(--ink-3)">${esc(paymentBreakdown)}</div></td>
+            <td><div><b>${esc(posMethodLabel(row.payment_method, row.payment_breakdown))}${row.payment_method === 'card' && posCardTypeLabel(row.payment_breakdown) ? ` · ${esc(posCardTypeLabel(row.payment_breakdown))}` : ''}</b></div><div style="font-size:12px;color:var(--ink-3)">${isPendingCredit ? `${esc(row.payment_breakdown?.creditCustomerName || 'Cliente')} · saldo pendiente` : esc(paymentBreakdown)}</div></td>
             <td><b>${fmtMoney(row.total)}</b>${row.cash_change ? `<div style="font-size:12px;color:var(--ink-3)">Cambio ${fmtMoney(row.cash_change)}</div>` : ''}</td>
-            <td>${posSaleStatusBadge(row.status)}</td>
+            <td>${posSaleStatusBadge(row.status)}${isPendingCredit ? ' <span class="badge b-pendiente"><i class="ph-bold ph-credit-card"></i> Crédito abierto</span>' : ''}</td>
             <td>${posFiscalStatus(row)}</td>
             <td style="max-width:220px;white-space:normal;line-height:1.4">${noteText ? esc(noteText) : '<span style="color:var(--ink-3)">—</span>'}</td>
             <td>${esc(row.created_at || '')}</td>
             <td>
               <div style="display:flex;gap:6px;flex-wrap:wrap">
                 <button type="button" class="btn btn-ghost" data-print-pos-sale="${row.id}"><i class="ph-bold ph-printer"></i> Ticket</button>
-                ${ME?.tenant?.invoicingEligible && invoiceEligible ? `<button type="button" class="btn btn-ghost" data-invoice-pos-sale="${row.id}"><i class="ph-bold ph-file-text"></i> Facturar</button>` : ''}
+                ${ME?.tenant?.invoicingEligible && individualInvoiceEligible ? `<button type="button" class="btn btn-ghost" data-invoice-pos-sale="${row.id}"><i class="ph-bold ph-file-text"></i> Facturar</button>` : ''}
                 ${row.fiscal_invoice_status === 'active' ? `<a class="btn btn-ghost" target="_blank" href="/api/invoicing/invoices/${row.fiscal_invoice_id}/pdf"><i class="ph-bold ph-file-pdf"></i> Ver factura</a>` : ''}
                 ${row.global_invoice_status === 'active' ? `<a class="btn btn-ghost" target="_blank" href="/api/invoicing/global-invoices/${row.global_invoice_id}/pdf"><i class="ph-bold ph-files"></i> Ver global</a>` : ''}
-                <button type="button" class="btn btn-ghost" data-edit-pos-payment="${row.id}" ${isCanceled ? 'disabled' : ''}><i class="ph-bold ph-credit-card"></i> Pago</button>
+                <button type="button" class="btn ${isPendingCredit ? 'btn-primary' : 'btn-ghost'}" data-edit-pos-payment="${row.id}" ${isCanceled ? 'disabled' : ''}><i class="ph-bold ${isPendingCredit ? 'ph-hand-coins' : 'ph-credit-card'}"></i> ${isPendingCredit ? 'Cobrar' : 'Pago'}</button>
                 ${POS_OVERVIEW?.policy?.sameDayCancelEnabled ? `<button type="button" class="btn btn-danger" data-cancel-pos-sale="${row.id}" ${isCanceled ? 'disabled' : ''}><i class="ph-bold ph-x-circle"></i> Cancelar</button>` : ''}
               </div>
             </td>
@@ -6569,6 +6736,7 @@ function openPosCloseModal() {
   };
   const delivery = totals.delivery || { tickets: 0, total: 0, fees: 0 };
   const tableSummary = totals.tables || { closedCount: 0, closedTotal: 0, openCount: 0, openTotal: 0, closed: [], open: [] };
+  const openCredit = totals.openCredit || { tickets: 0, total: 0, lines: [] };
   const expectedCash = moneyNum(session.expectedCash || 0);
 
   const subtitleEl = $('#posCloseSubtitle');
@@ -6673,6 +6841,13 @@ function openPosCloseModal() {
           <div class="pos-mini-stat tone-amber"><span>Consumo abierto</span><b>${fmtMoney(tableSummary.openTotal || 0)}</b></div>
         </div>
         ${tableSummary.openCount ? `<div class="hint" style="margin-top:8px;color:var(--red)"><i class="ph-bold ph-warning"></i> Cuentas abiertas: ${tableSummary.open.map((row) => `Mesa ${esc(String(row.table_number))} (${esc(row.waiter_name || 'sin mesero')})`).join(', ')}.</div>` : ''}
+      </div>` : ''}
+
+      ${openCredit.tickets ? `<div class="pos-close-group cancel pos-close-credit-audit">
+        <div class="pos-close-group-head"><div class="pos-close-group-title"><span class="pos-close-group-icon"><i class="ph-bold ph-credit-card"></i></span><span>Créditos abiertos al cierre</span></div></div>
+        <div class="pos-close-grid"><div class="pos-mini-stat tone-red"><span>Ventas sin cobrar</span><b>${Number(openCredit.tickets)}</b></div><div class="pos-mini-stat tone-amber"><span>Cartera pendiente</span><b>${fmtMoney(openCredit.total || 0)}</b></div></div>
+        <div class="pos-close-credit-lines">${(openCredit.lines || []).map((line) => `<span><b>#${line.id} · ${esc(line.customerName || 'Cliente')}</b><small>${esc(line.createdAt || '')}</small><strong>${fmtMoney(line.amount || 0)}</strong></span>`).join('')}</div>
+        <div class="hint" style="margin-top:8px;color:var(--red)"><i class="ph-bold ph-warning"></i> Importe pendiente informativo: no forma parte del efectivo esperado ni de la diferencia de caja.</div>
       </div>` : ''}
 
       ${(totals.cancellations?.tickets || totals.cancellations?.total) ? `
@@ -6901,6 +7076,7 @@ $('#posPaymentEditForm')?.addEventListener('submit', async (e) => {
   e.preventDefault();
   const saleId = Number($('#posPaymentEditSaleId')?.value || 0);
   if (!saleId) return toast('Venta inválida', true);
+  const wasPendingCredit = POS_SALES_HISTORY_CACHE.some((sale) => Number(sale.id) === saleId && sale.payment_status === 'pending');
   const payload = {
     paymentMethod: POS_PAYMENT_EDIT_METHOD,
     payments: {
@@ -6920,7 +7096,7 @@ $('#posPaymentEditForm')?.addEventListener('submit', async (e) => {
       body: JSON.stringify(payload),
     });
     $('#posPaymentEditModal').classList.remove('show');
-    toast('Medio de pago actualizado');
+    toast(wasPendingCredit ? 'Venta a crédito liquidada y aplicada a la caja' : 'Medio de pago actualizado');
     await loadPos();
     await loadPosSalesHistory(POS_SALES_PAGE);
   } catch (err) {
@@ -7220,6 +7396,7 @@ async function loadProducts() {
   bindProductViewSwitch();
   PRODUCT_VIEW_MODE = readStoredProductViewMode();
   POS_PRODUCT_SORT = normalizePosSortMode(SETTINGS?.pos_catalog_sort_mode || readStoredPosSortMode());
+  fillProductTaxForm();
   CATS = await api('/api/products/categories');
   PRODUCTS_CACHE = await api('/api/products');
 
@@ -9921,6 +10098,53 @@ function selectedCurrencyConversionMode() {
   return document.querySelector('[data-conversion-mode].on')?.dataset.conversionMode || 'manual';
 }
 
+function selectedProductTaxMode() {
+  return document.querySelector('[data-product-tax-mode].on')?.dataset.productTaxMode || 'included';
+}
+
+function renderProductTaxConfig() {
+  const enabled = Boolean($('#cfgProductTaxEnabled')?.checked);
+  const fields = $('#cfgProductTaxFields');
+  if (fields) fields.hidden = !enabled;
+  const mode = selectedProductTaxMode();
+  const ratePercent = Math.max(0, Math.min(100, Number($('#cfgProductTaxRate')?.value || 0)));
+  const status = $('#cfgProductTaxStatus');
+  const panel = $('#productTaxForm');
+  panel?.classList.toggle('is-active', enabled);
+  if (status) {
+    status.textContent = enabled
+      ? `Activo · ${ratePercent}% ${mode === 'added' ? 'se agrega al cobrar' : 'incluido en el precio'}`
+      : 'Desactivado · se cobran los precios capturados';
+  }
+  const captured = 100;
+  const total = enabled && mode === 'added' ? captured * (1 + ratePercent / 100) : captured;
+  const base = enabled && ratePercent > 0 ? total / (1 + ratePercent / 100) : total;
+  const tax = total - base;
+  const preview = $('#cfgProductTaxPreview');
+  if (preview) {
+    preview.innerHTML = enabled
+      ? `<b>Ejemplo con precio capturado de ${esc(fmtMoney(captured))}:</b> Base ${esc(fmtMoney(base))} + IVA ${esc(fmtMoney(tax))} = cobro ${esc(fmtMoney(total))}`
+      : 'IVA operativo desactivado: los precios se cobran como están capturados.';
+  }
+  const priceLabel = $('#pPriceLabel');
+  const priceHint = $('#pPriceTaxHint');
+  if (priceLabel) priceLabel.innerHTML = `<i class="ph-bold ph-currency-dollar"></i> ${enabled && mode === 'added' ? 'Precio sin IVA *' : 'Precio de venta *'}`;
+  if (priceHint) {
+    priceHint.textContent = enabled
+      ? (mode === 'added' ? `Al cobrar se agregará ${ratePercent}% de IVA. Si usas variantes, captura también sus precios sin IVA.` : `Este precio ya incluye ${ratePercent}% de IVA y se desglosará sin aumentar el cobro.`)
+      : 'Se cobrará exactamente este precio. Si usas variantes, es el precio de referencia.';
+  }
+}
+
+function fillProductTaxForm() {
+  if (!SETTINGS || !$('#cfgProductTaxEnabled')) return;
+  $('#cfgProductTaxEnabled').checked = (SETTINGS.product_tax_enabled || '0') === '1';
+  $('#cfgProductTaxRate').value = String(Number(SETTINGS.product_tax_rate ?? 0.16) * 100);
+  const productTaxMode = SETTINGS.product_tax_mode === 'added' ? 'added' : 'included';
+  document.querySelectorAll('[data-product-tax-mode]').forEach((button) => button.classList.toggle('on', button.dataset.productTaxMode === productTaxMode));
+  renderProductTaxConfig();
+}
+
 function renderCurrencyConversionConfig() {
   const enabled = $('#cfgCurrencyConversionEnabled')?.checked;
   const fields = $('#cfgCurrencyConversionFields');
@@ -9984,6 +10208,7 @@ async function fillConfigForm() {
   const conversionMode = SETTINGS.currency_conversion_mode === 'automatic' ? 'automatic' : 'manual';
   document.querySelectorAll('[data-conversion-mode]').forEach((button) => button.classList.toggle('on', button.dataset.conversionMode === conversionMode));
   renderCurrencyConversionConfig();
+  fillProductTaxForm();
   $('#cfgTimezone').value = SETTINGS.timezone || 'America/Mexico_City';
   updateTimezonePreview();
   $('#cfgChatPayDeliveryCash').checked = (SETTINGS.chatbot_payment_delivery_cash || '1') === '1';
@@ -10381,12 +10606,15 @@ function openCutDetail(id) {
   const methods = totals.salesByMethod || {};
   const customPayments = totals.customPayments || [];
   const movements = totals.movements || {};
+  const productTax = totals.productTax || {};
+  const openCredit = totals.openCredit || { tickets: 0, total: 0, lines: [] };
   const difference = Number(row.difference_amount || 0);
   $('#cutsDetailTitle').innerHTML = `<i class="ph-bold ph-receipt"></i> Corte #${row.id} · ${esc(row.branch_name || 'General')}`;
   $('#cutsDetailContent').innerHTML = `
     <div class="cut-detail-meta"><span><i class="ph-bold ph-user"></i><b>Abrió</b>${esc(row.opened_by || '—')}</span><span><i class="ph-bold ph-door-open"></i><b>Apertura</b>${esc(row.opened_at || '—')}</span><span><i class="ph-bold ph-lock-key"></i><b>Cierre</b>${esc(row.closed_at || 'Pendiente')}</span></div>
-    <div class="cut-detail-kpis"><article class="opening"><i class="ph-bold ph-wallet"></i><span>Fondo inicial</span><b>${fmtMoney(row.opening_amount || 0)}</b></article><article class="sales"><i class="ph-bold ph-chart-line-up"></i><span>Ventas</span><b>${fmtMoney(totals.totalSales || 0)}</b><small>${Number(totals.tickets || 0)} tickets</small></article><article class="expected"><i class="ph-bold ph-calculator"></i><span>Esperado</span><b>${fmtMoney(row.expected_cash || 0)}</b></article><article class="counted"><i class="ph-bold ph-money"></i><span>Contado</span><b>${row.closing_amount == null ? 'Pendiente' : fmtMoney(row.closing_amount)}</b></article><article class="difference ${difference < 0 ? 'negative' : difference > 0 ? 'positive' : ''}"><i class="ph-bold ph-scales"></i><span>Diferencia</span><b>${row.status === 'open' ? 'Pendiente' : fmtMoney(difference)}</b></article></div>
+    <div class="cut-detail-kpis"><article class="opening"><i class="ph-bold ph-wallet"></i><span>Fondo inicial</span><b>${fmtMoney(row.opening_amount || 0)}</b></article><article class="sales"><i class="ph-bold ph-chart-line-up"></i><span>Ventas</span><b>${fmtMoney(totals.totalSales || 0)}</b><small>${Number(totals.tickets || 0)} tickets</small></article>${Number(productTax.lines || 0) > 0 ? `<article class="sales"><i class="ph-bold ph-percent"></i><span>IVA productos</span><b>${fmtMoney(productTax.tax || 0)}</b><small>Base ${fmtMoney(productTax.base || 0)}</small></article>` : ''}${openCredit.tickets ? `<article class="difference negative"><i class="ph-bold ph-credit-card"></i><span>Crédito abierto</span><b>${fmtMoney(openCredit.total || 0)}</b><small>${Number(openCredit.tickets)} sin cobrar</small></article>` : ''}<article class="expected"><i class="ph-bold ph-calculator"></i><span>Esperado</span><b>${fmtMoney(row.expected_cash || 0)}</b></article><article class="counted"><i class="ph-bold ph-money"></i><span>Contado</span><b>${row.closing_amount == null ? 'Pendiente' : fmtMoney(row.closing_amount)}</b></article><article class="difference ${difference < 0 ? 'negative' : difference > 0 ? 'positive' : ''}"><i class="ph-bold ph-scales"></i><span>Diferencia</span><b>${row.status === 'open' ? 'Pendiente' : fmtMoney(difference)}</b></article></div>
     <div class="cut-detail-groups"><section><h4><i class="ph-bold ph-credit-card"></i> Ventas por medio</h4><div><span>Efectivo <b>${fmtMoney(methods.cash || 0)}</b></span><span>Tarjeta <b>${fmtMoney(methods.card || 0)}</b></span><span>Transferencia <b>${fmtMoney(methods.transfer || 0)}</b></span>${customPayments.map((method) => `<span>${esc(method.label)} <b>${fmtMoney(method.total || 0)}</b></span>`).join('')}<span>Mixto <b>${fmtMoney(methods.mixed || 0)}</b></span></div></section><section><h4><i class="ph-bold ph-arrows-left-right"></i> Movimientos de caja</h4><div><span>Ingresos <b>${fmtMoney(movements.income || 0)}</b></span><span>Retiros <b>${fmtMoney(movements.withdrawal || 0)}</b></span><span>Gastos <b>${fmtMoney(movements.expense || 0)}</b></span><span>Cancelaciones <b>${fmtMoney(totals.cancellations?.total || 0)}</b></span></div></section></div>
+    ${openCredit.tickets ? `<div class="cut-detail-notes"><i class="ph-bold ph-warning"></i><div><b>Ventas a crédito abiertas al cierre · ${fmtMoney(openCredit.total || 0)}</b><p>${(openCredit.lines || []).map((line) => `#${line.id} ${esc(line.customerName || 'Cliente')} (${fmtMoney(line.amount || 0)})`).join(' · ')}</p></div></div>` : ''}
     ${row.notes ? `<div class="cut-detail-notes"><i class="ph-bold ph-note"></i><div><b>Notas del corte</b><p>${esc(row.notes)}</p></div></div>` : ''}`;
   $('#cutsDetailModal').classList.add('show');
 }
@@ -10470,6 +10698,47 @@ async function refreshCurrencyConversionRate() {
 }
 
 $('#refreshCurrencyConversionBtn')?.addEventListener('click', refreshCurrencyConversionRate);
+
+$('#cfgProductTaxEnabled')?.addEventListener('change', async () => {
+  const previousEnabled = (SETTINGS.product_tax_enabled || '0') === '1';
+  renderProductTaxConfig();
+  try {
+    await saveProductTaxConfig();
+  } catch (error) {
+    $('#cfgProductTaxEnabled').checked = previousEnabled;
+    renderProductTaxConfig();
+    toast(error.message, true);
+  }
+});
+$('#cfgProductTaxRate')?.addEventListener('input', renderProductTaxConfig);
+document.querySelectorAll('[data-product-tax-mode]').forEach((button) => button.addEventListener('click', () => {
+  document.querySelectorAll('[data-product-tax-mode]').forEach((item) => item.classList.toggle('on', item === button));
+  renderProductTaxConfig();
+}));
+
+async function saveProductTaxConfig() {
+  const ratePercent = Number($('#cfgProductTaxRate').value);
+  if (!Number.isFinite(ratePercent) || ratePercent < 0 || ratePercent > 100) {
+    throw new Error('La tasa de IVA debe estar entre 0% y 100%');
+  }
+  const fd = new FormData();
+  fd.append('product_tax_enabled', $('#cfgProductTaxEnabled').checked ? '1' : '0');
+  fd.append('product_tax_mode', selectedProductTaxMode());
+  fd.append('product_tax_rate', String(ratePercent / 100));
+  await api('/api/settings', { method: 'PUT', body: fd });
+  SETTINGS = await api('/api/settings');
+  fillProductTaxForm();
+}
+
+$('#productTaxForm')?.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  try {
+    await saveProductTaxConfig();
+  } catch (error) {
+    return toast(error.message, true);
+  }
+  toast($('#cfgProductTaxEnabled').checked ? 'Configuración de IVA activada' : 'IVA en productos desactivado');
+});
 
 $('#contactForm').addEventListener('submit', async (e) => {
   e.preventDefault();

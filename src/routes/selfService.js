@@ -18,6 +18,7 @@ const {
 } = require('../utils/mercadoPagoPoint');
 const { finalizeSelfServiceOrder, getOpenBranchSession } = require('../utils/selfServiceCheckout');
 const { trialState } = require('../utils/trialAccess');
+const { loadProductTaxConfig, effectiveProductPrice, productTaxLineSnapshot, applyProductTaxToCatalogProduct } = require('../utils/productTax');
 
 const router = express.Router();
 const publicLimiter = createRateLimiter({
@@ -242,13 +243,15 @@ async function buildCatalog(tenantDb) {
   const { variantsByProduct, groupsByProduct } = ids.length
     ? await productConfiguration(tenantDb, ids)
     : { variantsByProduct: new Map(), groupsByProduct: new Map() };
+  const taxConfig = await loadProductTaxConfig(tenantDb);
   return {
     categories,
-    products: products.map((product) => ({
+    products: products.map((product) => applyProductTaxToCatalogProduct({
       ...product,
       variants: variantsByProduct.get(Number(product.id)) || [],
       modifierGroups: groupsByProduct.get(Number(product.id)) || [],
-    })),
+    }, taxConfig)),
+    productTax: taxConfig,
   };
 }
 
@@ -263,6 +266,7 @@ async function normalizeKioskItems(tenantDb, requestedItems) {
   );
   const productById = new Map(products.map((row) => [Number(row.id), row]));
   const { variantsByProduct, groupsByProduct } = await productConfiguration(tenantDb, ids);
+  const taxConfig = await loadProductTaxConfig(tenantDb);
 
   return input.map((requested) => {
     const productId = Number(requested.productId || requested.id);
@@ -291,11 +295,12 @@ async function normalizeKioskItems(tenantDb, requestedItems) {
         throw Object.assign(new Error(`Revisa las opciones de ${group.name} para ${product.name}`), { status: 400 });
       }
       selected.forEach((option) => {
-        modifiersExtraPrice += Number(option.extra_price || 0);
+        const optionPrice = effectiveProductPrice(option.extra_price, taxConfig);
+        modifiersExtraPrice += optionPrice;
         selectedModifiers.push({
           groupId: Number(group.id), groupName: group.name,
           optionId: Number(option.id), optionName: option.name,
-          extraPrice: money(option.extra_price),
+          extraPrice: optionPrice,
         });
       });
     }
@@ -303,7 +308,7 @@ async function normalizeKioskItems(tenantDb, requestedItems) {
     if ([...selectedOptionIds].some((id) => !allowedOptionIds.has(id))) {
       throw Object.assign(new Error(`Una opción de ${product.name} ya no está disponible`), { status: 409 });
     }
-    const basePrice = variant ? Number(variant.price) : Number(product.price);
+    const basePrice = effectiveProductPrice(variant ? variant.price : product.price, taxConfig);
     const unitPrice = money(basePrice + modifiersExtraPrice);
     const modifiersLabel = selectedModifiers.map((item) => item.optionName).join(', ');
     return {
@@ -311,6 +316,7 @@ async function normalizeKioskItems(tenantDb, requestedItems) {
       name: `${product.name}${variant ? ` · ${variant.name}` : ''}`,
       price: unitPrice,
       qty,
+      ...productTaxLineSnapshot(unitPrice, taxConfig),
       variantId: variant ? Number(variant.id) : null,
       variantName: variant?.name || null,
       modifiers: selectedModifiers,

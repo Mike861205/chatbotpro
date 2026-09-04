@@ -15,6 +15,8 @@ test('el propietario puede seleccionar una caja abierta por sucursal', () => {
   assert.match(pos, /req\.user\?\.role === 'cashier'/);
   assert.match(pos, /openSessions: allOpenSessions/);
   assert.match(pos, /SELECT id, branch_id, branch_name, opened_by,[\s\S]+WHERE status = 'open'/);
+  assert.match(pos, /ORDER BY ps\.opened_at DESC/);
+  assert.match(pos, /ORDER BY ps\.closed_at DESC NULLS LAST LIMIT 1/);
 });
 
 test('el navegador conserva la caja administrada solo durante la pestaña', () => {

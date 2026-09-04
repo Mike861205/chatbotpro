@@ -55,6 +55,7 @@ test('cortes permite buscar, filtrar, paginar e imprimir reportes generales', ()
   assert.match(pos, /\[10, 20, 40, 60\]\.includes\(requestedPageSize\)/);
   assert.match(pos, /String\(req\.query\.search \|\| ''\)/);
   assert.match(pos, /branchId === 'general'/);
+  assert.match(pos, /FROM \{s\}\.pos_sessions ps \$\{whereSql\} ORDER BY ps\.opened_at DESC/);
   assert.match(pos, /Promise\.all\(rows\.map/);
   assert.match(html, /id="cutsBranchFilter"/);
   assert.match(html, /<option value="60">60 por página<\/option>/);

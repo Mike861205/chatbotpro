@@ -12,6 +12,7 @@ const {
   maskInvoiceEmail,
   globalInformationForReceiver,
   resolveExpeditionPostalCode,
+  roundMoney,
   paymentFormFromSale,
   paymentFormFromSales,
   buildFacturamaItems,
@@ -102,6 +103,56 @@ test('convierte precios POS con IVA incluido a conceptos Facturama sin alterar e
   assert.equal(items[0].Subtotal, 100);
   assert.equal(items[0].Taxes[0].Total, 16);
   assert.equal(items.reduce((sum, item) => sum + item.Total, 0), 136);
+});
+
+test('IVA operativo congela la tasa cobrada para Facturama sin duplicar el impuesto', () => {
+  const profile = {
+    default_product_code: '01010101', default_unit_code: 'E48', default_unit_name: 'Unidad de servicio',
+    default_tax_object: '01', default_iva_rate: 0, default_isr_rate: 0,
+  };
+  const sale = {
+    items: [{ id: 7, name: 'Consumo', qty: 1, price: 116, taxEnabled: true, taxMode: 'added', taxRate: 0.16 }],
+    delivery_fee: 0,
+    total: 116,
+  };
+  const detailed = buildFacturamaItems(sale, new Map(), profile);
+  assert.equal(detailed[0].Subtotal, 100);
+  assert.equal(detailed[0].Taxes[0].Rate, 0.16);
+  assert.equal(detailed[0].Taxes[0].Total, 16);
+  assert.equal(detailed[0].Total, 116);
+  const total = buildFacturamaItems(sale, new Map(), profile, { conceptMode: 'total' });
+  assert.equal(total[0].Subtotal, 100);
+  assert.equal(total[0].Taxes[0].Total, 16);
+  assert.equal(total[0].Total, 116);
+});
+
+test('IVA operativo no hereda ISR y conserva tasas mixtas o entrega como conceptos separados', () => {
+  const profile = {
+    default_product_code: '90101501', default_unit_code: 'E48', default_unit_name: 'Unidad de servicio',
+    default_tax_object: '02', default_iva_rate: 0.16, default_isr_rate: 0.1,
+    delivery_product_code: '78102203',
+  };
+  const mixedSale = {
+    total: 224,
+    items: [
+      { id: 1, name: 'Tasa 16', qty: 1, price: 116, taxEnabled: true, taxRate: 0.16 },
+      { id: 2, name: 'Tasa 8', qty: 1, price: 108, taxEnabled: true, taxRate: 0.08 },
+    ],
+  };
+  const mixed = buildFacturamaItems(mixedSale, new Map(), profile, { conceptMode: 'total' });
+  assert.equal(mixed.length, 2);
+  assert.deepEqual(mixed.map((item) => item.Taxes[0].Rate), [0.16, 0.08]);
+  assert.ok(mixed.every((item) => item.Taxes.length === 1));
+
+  const deliverySale = {
+    total: 136, delivery_fee: 20,
+    items: [{ id: 1, name: 'Consumo', qty: 1, price: 116, taxEnabled: true, taxRate: 0.16 }],
+  };
+  const delivery = buildFacturamaItems(deliverySale, new Map(), profile, { conceptMode: 'total' });
+  assert.equal(delivery.length, 2);
+  assert.equal(delivery[0].Taxes.length, 1);
+  assert.equal(delivery[0].Taxes[0].Rate, 0.16);
+  assert.equal(roundMoney(delivery.reduce((sum, item) => sum + item.Total, 0)), 136);
 });
 
 test('conserva seis decimales fiscales y permite consumo total o desglosado', () => {
@@ -215,17 +266,59 @@ test('mapea el medio de pago POS al catálogo SAT', () => {
   assert.match(app, /id="fiscalEmitterRegime" required><option/);
   assert.match(app, /id="posPaymentEditCardType"/);
   assert.match(app, /id="posInvoicePaymentForm"/);
+  assert.match(app, /id="posInvoicePaymentMethod"/);
   assert.match(app, /value="D10"/);
-  assert.match(app, /value="CN01"/);
+  assert.doesNotMatch(app, /value="CN01"/);
+  assert.doesNotMatch(app, /value="CP01"/);
   assert.match(client, /id="posCardType"/);
-  assert.match(client, /paymentForm: \$\('#posInvoicePaymentWrap'\)/);
+  assert.match(client, /paymentMethod: \$\('#posInvoicePaymentMethod'\)\.value/);
   assert.match(pos, /Selecciona si la tarjeta es de débito o crédito/);
   const portalHtml = read('public/invoice.html');
   const portalClient = read('public/js/invoice.js');
   assert.match(portalHtml, /id="receiverPaymentForm"/);
   assert.match(portalHtml, /value="I08"/);
+  assert.doesNotMatch(portalHtml, /value="CP01"/);
   assert.match(portalClient, /function configureTicketPayment/);
   assert.match(read('src/routes/invoicing.js'), /Selecciona si el ticket se pagó con tarjeta de débito o crédito/);
+});
+
+test('cubre el ciclo fiscal PPD, REP 2.0, notas de crédito y cancelación unificada', () => {
+  const route = read('src/routes/invoicing.js');
+  const database = read('src/db/index.js');
+  const provider = read('src/services/facturama.js');
+  assert.match(database, /CREATE TABLE IF NOT EXISTS "\$\{s\}"\.payment_complements/);
+  assert.match(database, /CREATE TABLE IF NOT EXISTS "\$\{s\}"\.payment_complement_documents/);
+  assert.match(database, /payment_method TEXT NOT NULL DEFAULT 'PUE'/);
+  assert.match(route, /CfdiType:'P'/);
+  assert.match(route, /NameId:14/);
+  assert.match(route, /CfdiUse:'CP01'/);
+  assert.match(route, /PreviousBalanceAmount:item\.previousBalance/);
+  assert.match(route, /ImpSaldoInsoluto:item\.outstandingBalance/);
+  assert.match(route, /CfdiType:'E'/);
+  assert.match(route, /Relations:\{Type:'01'/);
+  assert.match(route, /post\('\/documents\/:type\/:id\/cancel'/);
+  assert.match(route, /post\('\/documents\/:type\/:id\/reconcile'/);
+  assert.match(provider, /validateReceiver\(\{ rfc, name, postalCode, fiscalRegime \}\)/);
+  assert.match(provider, /downloadCancellationReceipt/);
+  assert.match(provider, /listIssuedCfdis/);
+});
+
+test('ambos paneles exponen controles del ciclo fiscal y el independiente incluye global manual', () => {
+  const integratedHtml = read('public/app.html');
+  const integratedJs = read('public/js/app.js');
+  const standaloneHtml = read('public/invoicing-app.html');
+  const standaloneJs = read('public/js/invoicing-app.js');
+  assert.match(integratedHtml, /id="posInvoicePaymentMethod"/);
+  assert.match(integratedHtml, /value="PPD"/);
+  assert.match(integratedHtml, /value="payment">Complementos de pago/);
+  assert.match(integratedJs, /\/api\/invoicing\/payment-complements/);
+  assert.match(integratedJs, /\/api\/invoicing\/credit-notes/);
+  assert.match(standaloneHtml, /id="manualGlobalForm"/);
+  assert.match(standaloneHtml, /id="paymentComplementForm"/);
+  assert.match(standaloneHtml, /id="creditNoteForm"/);
+  assert.match(standaloneJs, /\/api\/invoicing\/manual-global-invoices/);
+  assert.match(standaloneJs, /\/api\/invoicing\/documents\/\$\{type\}\/\$\{id\}\/email/);
+  assert.match(standaloneJs, /\/api\/invoicing\/documents\/\$\{type\}\/\$\{id\}\/cancel/);
 });
 
 test('la integración está montada, aislada por México y expone POS y portal público', () => {

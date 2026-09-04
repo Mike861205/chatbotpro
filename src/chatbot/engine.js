@@ -10,6 +10,7 @@ const { ensurePurchasingSchema } = require('../utils/purchasing');
 const { ensureBranchStockSchema, initializeBranchStock, applyBranchSaleStock } = require('../utils/branchStock');
 const { parseCustomPaymentMethods } = require('../utils/paymentMethods');
 const { resolveCurrencyConversion, convertedMoney } = require('../utils/currencyConversion');
+const { loadProductTaxConfig, applyProductTaxToCatalogProduct, productTaxLineSnapshot } = require('../utils/productTax');
 
 let aiConfigCache = { expiresAt: 0, value: null };
 const aiClientCache = new Map();
@@ -415,17 +416,18 @@ async function saveState(t, sessionId, state) {
 }
 
 async function activeProducts(t) {
+  const taxConfig = await loadProductTaxConfig(t);
   const rows = await t.all(
     `SELECT p.id, p.name, p.description, p.price::float AS price, p.image, c.name AS category
      FROM {s}.products p LEFT JOIN {s}.categories c ON c.id = p.category_id
      WHERE p.active = 1 ORDER BY c.sort, c.name, p.name`
   );
-  return rows.map((p) => ({
+  return rows.map((p) => applyProductTaxToCatalogProduct({
     ...p,
     image: String(p.image || '').trim()
       ? (String(p.image).startsWith('/') ? String(p.image) : `/${String(p.image).replace(/^\/+/, '')}`)
       : '',
-  }));
+  }, taxConfig));
 }
 
 function cartTotal(cart) {
@@ -744,6 +746,7 @@ function addPendingProductToCart(state) {
       name: displayName,
       price: finalPrice,
       qty: qtyToAdd,
+      ...productTaxLineSnapshot(finalPrice, prod),
       _cartKey: cartKey,
       variantId,
       variantName,
@@ -763,6 +766,7 @@ function addPendingProductToCart(state) {
 }
 
 async function loadProductConfig(t, productId) {
+  const taxConfig = await loadProductTaxConfig(t);
   const prod = await t.get('SELECT id, name, price::float AS price FROM {s}.products WHERE id = $1 AND active = 1', [Number(productId)]);
   if (!prod) return null;
   const variants = await t.all(
@@ -779,13 +783,13 @@ async function loadProductConfig(t, productId) {
       [g.id]
     );
   }
-  return {
+  return applyProductTaxToCatalogProduct({
     ...prod,
     variants,
     groups,
     hasVariants: variants.length > 1,
     hasModifiers: groups.length > 0,
-  };
+  }, taxConfig);
 }
 
 function parseCustomReceivingModes(raw) {
@@ -820,6 +824,9 @@ function setPendingProductConfiguration(state, cfg, qty = 1) {
     id: cfg.id,
     name: cfg.name,
     price: cfg.price,
+    taxEnabled: cfg.taxEnabled,
+    taxMode: cfg.taxMode,
+    taxRate: cfg.taxRate,
     variants: cfg.variants,
     groups: cfg.groups,
   };
@@ -1777,7 +1784,7 @@ async function handleMessage(t, slug, sessionId, rawInput) {
           lines.push(`• Quitado: *${cfg.name}*`);
         } else if (!cfg.hasVariants && !cfg.hasModifiers) {
           if (existing) existing.qty = item.qty;
-          else state.cart.push({ id: cfg.id, name: cfg.name, price: cfg.price, qty: item.qty });
+          else state.cart.push({ id: cfg.id, name: cfg.name, price: cfg.price, qty: item.qty, ...productTaxLineSnapshot(cfg.price, cfg) });
           lines.push(`• *${item.qty}x ${cfg.name}* = *${money(item.qty * Number(cfg.price || 0), currency)}*`);
         }
       }
@@ -1835,7 +1842,7 @@ async function handleMessage(t, slug, sessionId, rawInput) {
         } else if (existing) {
           existing.qty = finalQty;
         } else {
-          state.cart.push({ id: prod.id, name: prod.name, price: prod.price, qty: finalQty });
+          state.cart.push({ id: prod.id, name: prod.name, price: prod.price, qty: finalQty, ...productTaxLineSnapshot(prod.price, prod) });
         }
 
         resetUpsellProgress();
@@ -1939,7 +1946,7 @@ async function handleMessage(t, slug, sessionId, rawInput) {
 
       const existing = state.cart.find((it) => it.id === prod.id && !it._cartKey);
       if (existing) existing.qty += 1;
-      else state.cart.push({ id: prod.id, name: prod.name, price: prod.price, qty: 1 });
+      else state.cart.push({ id: prod.id, name: prod.name, price: prod.price, qty: 1, ...productTaxLineSnapshot(prod.price, prod) });
       resetUpsellProgress();
 
       const currentQty = state.cart.find((it) => it.id === prod.id && !it._cartKey)?.qty || 0;
@@ -2064,7 +2071,7 @@ async function handleMessage(t, slug, sessionId, rawInput) {
     if (qty > 0 && qty <= 50 && state.pendingProduct) {
       const existing = state.cart.find((it) => it.id === state.pendingProduct.id);
       if (existing) existing.qty += qty;
-      else state.cart.push({ ...state.pendingProduct, qty });
+      else state.cart.push({ ...state.pendingProduct, qty, ...productTaxLineSnapshot(state.pendingProduct.price, state.pendingProduct) });
       resetUpsellProgress();
       const name = state.pendingProduct.name;
       state.pendingProduct = null;
@@ -2328,7 +2335,7 @@ async function handleMessage(t, slug, sessionId, rawInput) {
 
       const existing = state.cart.find((item) => Number(item.id) === Number(product.id));
       if (existing) existing.qty += 1;
-      else state.cart.push({ id: product.id, name: product.name, price: product.price, qty: 1 });
+      else state.cart.push({ id: product.id, name: product.name, price: product.price, qty: 1, ...productTaxLineSnapshot(product.price, product) });
 
       reply.messages = [
         `✅ Excelente elección: agregué *${product.name}* a tu pedido.`,
@@ -2813,7 +2820,7 @@ async function handleMessage(t, slug, sessionId, rawInput) {
   if (match) {
     const existing = state.cart.find((it) => it.id === match.id);
     if (existing) existing.qty += 1;
-    else state.cart.push({ id: match.id, name: match.name, price: match.price, qty: 1 });
+    else state.cart.push({ id: match.id, name: match.name, price: match.price, qty: 1, ...productTaxLineSnapshot(match.price, match) });
     resetUpsellProgress();
     reply.messages = [`¡Agregado! 1x *${match.name}* 🎉\n\n${cartSummary(state.cart, currency, labels)}`];
     showPostSendOptions();

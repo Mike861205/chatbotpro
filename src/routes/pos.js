@@ -12,6 +12,7 @@ const { ensurePurchasingSchema } = require('../utils/purchasing');
 const { ensureBranchStockSchema, initializeBranchStock, applyBranchSaleStock, restoreBranchSaleStock } = require('../utils/branchStock');
 const { emitNewOrder, emitSelfServiceStatus } = require('../notifications');
 const { parseCustomPaymentMethods, isCustomPaymentMethod } = require('../utils/paymentMethods');
+const { loadProductTaxConfig, effectiveProductPrice, productTaxLineSnapshot, applyProductTaxToCatalogProduct } = require('../utils/productTax');
 
 const router = express.Router();
 router.use(requireAuth);
@@ -28,7 +29,7 @@ router.use(async (req, res, next) => {
   }
 });
 
-const PAYMENT_METHODS = new Set(['cash', 'card', 'transfer', 'mixed']);
+const PAYMENT_METHODS = new Set(['cash', 'card', 'transfer', 'mixed', 'credit']);
 const MOVEMENT_KINDS = new Set(['income', 'withdrawal', 'expense']);
 const tenantTimeZone = (tenantDb) => tenantDb?.timezone || 'America/Mexico_City';
 const SALES_HISTORY_FILTERS = new Set(['today', 'week', 'month', 'custom']);
@@ -181,9 +182,9 @@ async function getSessionTableSummary(t, sessionId) {
     `SELECT id, table_number, table_label, waiter_name, total::float AS total, order_id,
             to_char(opened_at AT TIME ZONE '${tenantTimeZone(t)}', 'DD Mon YYYY, HH24:MI') AS opened_at,
             to_char(closed_at AT TIME ZONE '${tenantTimeZone(t)}', 'DD Mon YYYY, HH24:MI') AS closed_at
-     FROM {s}.table_accounts
+     FROM {s}.table_accounts ta
      WHERE closed_session_id = $1 AND status = 'closed'
-     ORDER BY closed_at, table_number`,
+     ORDER BY ta.closed_at, table_number`,
     [sessionId]
   );
   const openRows = await t.all(
@@ -230,16 +231,16 @@ async function getOpenSession(t, { forUsername = null, forBranchId = null } = {}
             notes, opened_by, closed_by,
             to_char(opened_at AT TIME ZONE '${tenantTimeZone(t)}', 'DD Mon YYYY, HH24:MI') AS opened_at,
             to_char(closed_at AT TIME ZONE '${tenantTimeZone(t)}', 'DD Mon YYYY, HH24:MI') AS closed_at
-     FROM {s}.pos_sessions`;
+          FROM {s}.pos_sessions ps`;
 
   const branchId = Number.isInteger(Number(forBranchId)) && Number(forBranchId) > 0 ? Number(forBranchId) : null;
   if (branchId) {
-    return t.get(`${SEL} WHERE status = 'open' AND branch_id = $1 ORDER BY opened_at DESC LIMIT 1`, [branchId]);
+    return t.get(`${SEL} WHERE status = 'open' AND branch_id = $1 ORDER BY ps.opened_at DESC LIMIT 1`, [branchId]);
   }
   if (forUsername) {
-    return t.get(`${SEL} WHERE status = 'open' AND opened_by = $1 ORDER BY opened_at DESC LIMIT 1`, [forUsername]);
+    return t.get(`${SEL} WHERE status = 'open' AND opened_by = $1 ORDER BY ps.opened_at DESC LIMIT 1`, [forUsername]);
   }
-  return t.get(`${SEL} WHERE status = 'open' ORDER BY opened_at DESC LIMIT 1`);
+  return t.get(`${SEL} WHERE status = 'open' ORDER BY ps.opened_at DESC LIMIT 1`);
 }
 
 async function getLastClosedSession(t, { forUsername = null, forBranchId = null } = {}) {
@@ -249,19 +250,21 @@ async function getLastClosedSession(t, { forUsername = null, forBranchId = null 
             notes, opened_by, closed_by,
             to_char(opened_at AT TIME ZONE '${tenantTimeZone(t)}', 'DD Mon YYYY, HH24:MI') AS opened_at,
             to_char(closed_at AT TIME ZONE '${tenantTimeZone(t)}', 'DD Mon YYYY, HH24:MI') AS closed_at
-     FROM {s}.pos_sessions`;
+          FROM {s}.pos_sessions ps`;
 
   const branchId = Number.isInteger(Number(forBranchId)) && Number(forBranchId) > 0 ? Number(forBranchId) : null;
   if (branchId) {
-    return t.get(`${SEL} WHERE status = 'closed' AND branch_id = $1 ORDER BY closed_at DESC NULLS LAST LIMIT 1`, [branchId]);
+    return t.get(`${SEL} WHERE status = 'closed' AND branch_id = $1 ORDER BY ps.closed_at DESC NULLS LAST LIMIT 1`, [branchId]);
   }
   if (forUsername) {
-    return t.get(`${SEL} WHERE status = 'closed' AND opened_by = $1 ORDER BY closed_at DESC NULLS LAST LIMIT 1`, [forUsername]);
+    return t.get(`${SEL} WHERE status = 'closed' AND opened_by = $1 ORDER BY ps.closed_at DESC NULLS LAST LIMIT 1`, [forUsername]);
   }
-  return t.get(`${SEL} WHERE status = 'closed' ORDER BY closed_at DESC NULLS LAST LIMIT 1`);
+  return t.get(`${SEL} WHERE status = 'closed' ORDER BY ps.closed_at DESC NULLS LAST LIMIT 1`);
 }
 
 async function getSessionTotals(t, sessionId) {
+  const paidInSession = `channel = 'pos' AND status != 'cancelado' AND COALESCE(payment_status, 'paid') = 'paid'
+    AND ((pos_session_id = $1 AND credit_paid_session_id IS NULL) OR credit_paid_session_id = $1)`;
   const sales = await t.get(
     `SELECT COUNT(*)::int AS tickets,
             COALESCE(SUM(total), 0)::float AS total_sales,
@@ -276,23 +279,36 @@ async function getSessionTotals(t, sessionId) {
             COUNT(CASE WHEN delivery = 'domicilio' THEN 1 END)::int AS delivery_tickets,
             COALESCE(SUM(CASE WHEN delivery = 'domicilio' THEN total ELSE 0 END), 0)::float AS delivery_total,
             COALESCE(SUM(CASE WHEN delivery = 'domicilio' THEN COALESCE(delivery_fee, 0) ELSE 0 END), 0)::float AS delivery_fees
-     FROM {s}.orders
-     WHERE channel = 'pos' AND pos_session_id = $1 AND status != 'cancelado'`,
+     FROM {s}.orders WHERE ${paidInSession}`,
     [sessionId]
   );
   const canceled = await t.get(
-    `SELECT COUNT(*)::int AS canceled_tickets,
-            COALESCE(SUM(total), 0)::float AS canceled_total
-     FROM {s}.orders
-     WHERE channel = 'pos' AND pos_session_id = $1 AND status = 'cancelado'`,
+    `SELECT COUNT(*)::int AS canceled_tickets, COALESCE(SUM(total), 0)::float AS canceled_total
+     FROM {s}.orders WHERE channel = 'pos' AND pos_session_id = $1 AND status = 'cancelado'`,
     [sessionId]
   );
+  const taxRows = await t.all(`SELECT items FROM {s}.orders WHERE ${paidInSession}`, [sessionId]);
+  const productTax = taxRows.reduce((summary, row) => {
+    for (const line of parseJsonArray(row.items)) {
+      if (line?.taxEnabled !== true || !Number.isFinite(Number(line.taxRate))) continue;
+      const qty = Math.max(1, Number(line.qty || 1));
+      const gross = n(Number(line.price || 0) * qty);
+      const base = n((Number.isFinite(Number(line.taxBasePrice))
+        ? Number(line.taxBasePrice)
+        : Number(line.price || 0) / (1 + Number(line.taxRate || 0))) * qty);
+      summary.base = n(summary.base + base);
+      summary.tax = n(summary.tax + gross - base);
+      summary.gross = n(summary.gross + gross);
+      summary.lines += 1;
+      summary.rates.add(Number(line.taxRate));
+    }
+    return summary;
+  }, { base: 0, tax: 0, gross: 0, lines: 0, rates: new Set() });
   const moves = await t.get(
     `SELECT COALESCE(SUM(CASE WHEN kind = 'income' THEN amount ELSE 0 END), 0)::float AS incomes,
             COALESCE(SUM(CASE WHEN kind = 'withdrawal' THEN amount ELSE 0 END), 0)::float AS withdrawals,
             COALESCE(SUM(CASE WHEN kind = 'expense' THEN amount ELSE 0 END), 0)::float AS expenses
-     FROM {s}.pos_cash_movements
-     WHERE session_id = $1`,
+     FROM {s}.pos_cash_movements WHERE session_id = $1`,
     [sessionId]
   );
   const configuredCustomMethods = parseCustomPaymentMethods(await getSetting(t, 'custom_payment_methods_json', '[]'));
@@ -300,11 +316,9 @@ async function getSessionTotals(t, sessionId) {
     `SELECT payment_method AS id, COUNT(*)::int AS tickets, COALESCE(SUM(total), 0)::float AS total,
             MAX(CASE WHEN payment_breakdown ~ '^\\s*\\{.*\\}\\s*$'
               THEN NULLIF(payment_breakdown::jsonb ->> 'customLabel', '') ELSE NULL END) AS stored_label
-     FROM {s}.orders
-     WHERE channel = 'pos' AND pos_session_id = $1 AND status != 'cancelado'
+     FROM {s}.orders WHERE ${paidInSession}
        AND payment_method LIKE 'custom\\_%' ESCAPE '\\'
-     GROUP BY payment_method
-     ORDER BY payment_method`,
+     GROUP BY payment_method ORDER BY payment_method`,
     [sessionId]
   );
   const customRowsById = new Map(customRows.map((row) => [row.id, row]));
@@ -323,6 +337,27 @@ async function getSessionTotals(t, sessionId) {
       active: configured?.active !== false,
     };
   });
+  const openCreditRows = await t.all(
+    `SELECT o.id, o.total::float AS total, o.payment_breakdown,
+            to_char(o.created_at AT TIME ZONE '${tenantTimeZone(t)}', 'DD Mon YYYY, HH24:MI') AS created_at
+     FROM {s}.orders o JOIN {s}.pos_sessions ps ON ps.id = $1
+     WHERE o.channel = 'pos' AND o.pos_session_id = $1 AND o.status != 'cancelado'
+       AND (o.payment_method = 'credit' OR o.credit_paid_session_id IS NOT NULL)
+       AND ((ps.status = 'open' AND COALESCE(o.payment_status, 'paid') = 'pending')
+         OR (ps.status = 'closed' AND (o.credit_paid_at IS NULL OR o.credit_paid_at > ps.closed_at)))
+     ORDER BY o.id`,
+    [sessionId]
+  );
+  const openCreditLines = openCreditRows.map((row) => {
+    const breakdown = parseJsonObject(row.payment_breakdown);
+    return {
+      id: Number(row.id),
+      customerName: breakdown.creditCustomerName || 'Cliente',
+      customerPhone: breakdown.creditCustomerPhone || '',
+      amount: n(row.total),
+      createdAt: row.created_at,
+    };
+  });
   const tables = await getSessionTableSummary(t, sessionId);
   return {
     tickets: Number(sales?.tickets || 0),
@@ -335,6 +370,11 @@ async function getSessionTotals(t, sessionId) {
       other: n(sales?.sales_other_only),
     },
     customPayments,
+    openCredit: {
+      tickets: openCreditLines.length,
+      total: n(openCreditLines.reduce((sum, line) => sum + line.amount, 0)),
+      lines: openCreditLines,
+    },
     collected: {
       cash: n(sales?.collected_cash),
       card: n(sales?.collected_card),
@@ -349,6 +389,13 @@ async function getSessionTotals(t, sessionId) {
       tickets: Number(canceled?.canceled_tickets || 0),
       total: n(canceled?.canceled_total),
     },
+    productTax: {
+      base: productTax.base,
+      tax: productTax.tax,
+      gross: productTax.gross,
+      lines: productTax.lines,
+      rates: [...productTax.rates].sort((a, b) => a - b),
+    },
     delivery: {
       tickets: Number(sales?.delivery_tickets || 0),
       total: n(sales?.delivery_total),
@@ -356,10 +403,6 @@ async function getSessionTotals(t, sessionId) {
     },
     tables,
   };
-}
-
-function expectedCashForSession(session, totals) {
-  return n(session.opening_amount) + totals.collected.cash + totals.movements.income - totals.movements.withdrawal - totals.movements.expense;
 }
 
 async function isChatbotPosIntegrationEnabled(t) {
@@ -481,7 +524,8 @@ async function listRecentSales(t, sessionId = null) {
   }
   params.push(15);
   const rows = await t.all(
-    `SELECT id, invoice_code, invoice_token, total::float AS total, status, payment_method, payment_breakdown, cash_received::float AS cash_received,
+        `SELECT id, invoice_code, invoice_token, total::float AS total, status, payment_status, payment_method, payment_breakdown, cash_received::float AS cash_received,
+          credit_paid_session_id, credit_paid_at, credit_paid_by,
             cash_change::float AS cash_change, COALESCE(NULLIF(order_notes, ''), notes) AS notes, items, table_account_id, table_number, waiter_name,
             service_branch_id, service_branch_name,
             delivery, delivery_fee::float AS delivery_fee, receiving_mode_label, receiving_mode_behavior, delivery_address, delivery_neighborhood, delivery_reference,
@@ -521,6 +565,26 @@ async function listPendingSelfServiceOrders(t, branchId) {
     payment_breakdown: parseJsonObject(row.payment_breakdown),
     name_enc: undefined,
     phone_enc: undefined,
+  }));
+}
+
+async function listOpenCreditSales(t, branchId) {
+  const normalizedBranchId = Number(branchId || 0);
+  if (!Number.isInteger(normalizedBranchId) || normalizedBranchId <= 0) return [];
+  const rows = await t.all(
+    `SELECT id, items, total::float AS total, payment_breakdown, notes, table_number,
+            service_branch_id, service_branch_name,
+            to_char(created_at AT TIME ZONE '${tenantTimeZone(t)}', 'DD Mon YYYY, HH24:MI') AS created_at
+     FROM {s}.orders
+     WHERE channel = 'pos' AND status != 'cancelado' AND payment_status = 'pending'
+       AND payment_method = 'credit' AND service_branch_id = $1
+    ORDER BY orders.created_at, id`,
+    [normalizedBranchId]
+  );
+  return rows.map((row) => ({
+    ...row,
+    items: parseJsonArray(row.items),
+    payment_breakdown: parseJsonObject(row.payment_breakdown),
   }));
 }
 
@@ -585,7 +649,8 @@ async function listSalesHistoryPage(t, options = {}) {
   const offset = (boundedPage - 1) * safeSize;
 
   const rows = await t.all(
-    `SELECT id, invoice_code, invoice_token, total::float AS total, status, payment_method, payment_breakdown, cash_received::float AS cash_received,
+        `SELECT id, invoice_code, invoice_token, total::float AS total, status, payment_status, payment_method, payment_breakdown, cash_received::float AS cash_received,
+          credit_paid_session_id, credit_paid_at, credit_paid_by,
             cash_change::float AS cash_change, COALESCE(NULLIF(order_notes, ''), notes) AS notes, items, table_account_id, table_number, waiter_name,
             service_branch_id, service_branch_name,
             delivery, delivery_fee::float AS delivery_fee, receiving_mode_label, receiving_mode_behavior, delivery_address, delivery_neighborhood, delivery_reference,
@@ -672,6 +737,18 @@ function normalizePayment(method, paymentInput, total, cashReceivedInput, custom
   const customMethod = customMethods.find((item) => item.id === method);
   if (!PAYMENT_METHODS.has(method) && !customMethod) throw badRequest('Método de pago inválido');
 
+  if (method === 'credit') {
+    const creditCustomerName = String(paymentInput?.creditCustomerName || '').trim().replace(/\s+/g, ' ').slice(0, 120);
+    const creditCustomerPhone = String(paymentInput?.creditCustomerPhone || '').trim().replace(/\s+/g, ' ').slice(0, 40);
+    if (creditCustomerName.length < 2) throw badRequest('Captura el nombre del cliente para registrar la venta a crédito');
+    return {
+      method,
+      breakdown: { creditCustomerName, creditCustomerPhone, creditOriginalAmount: n(total) },
+      cashReceived: 0,
+      cashChange: 0,
+    };
+  }
+
   if (isCustomPaymentMethod(method)) {
     breakdown[method] = n(total);
     breakdown.customLabel = customMethod.label;
@@ -733,6 +810,7 @@ async function normalizePosItems(t, inputItems) {
      WHERE id = ANY($1::int[])`,
     [ids]
   );
+  const taxConfig = await loadProductTaxConfig(t);
   const byId = new Map(rows.map((row) => [Number(row.id), row]));
   return items.map((item) => {
     const product = byId.get(Number(item.productId ?? item.id));
@@ -744,11 +822,15 @@ async function normalizePosItems(t, inputItems) {
     const requestedPrice = Number(item.price);
     const hasCustomLine = Boolean(item.cartKey || item._cartKey || item.variantId || item.modifiersLabel || Array.isArray(item.modifiers));
     const unitCost = preciseCost(product.unit_cost);
+    const effectivePrice = hasCustomLine && Number.isFinite(requestedPrice) && requestedPrice >= 0
+      ? n(requestedPrice)
+      : effectiveProductPrice(product.price, taxConfig);
     return {
       id: product.id,
       name: hasCustomLine ? (requestedName || product.name) : product.name,
-      price: hasCustomLine && Number.isFinite(requestedPrice) && requestedPrice >= 0 ? n(requestedPrice) : n(product.price),
+      price: effectivePrice,
       qty,
+      ...productTaxLineSnapshot(effectivePrice, taxConfig),
       unitCost,
       lineCost: preciseCost(unitCost * qty),
       variantId: item.variantId ? Number(item.variantId) : null,
@@ -1112,6 +1194,7 @@ router.post('/table-accounts/:id/checkout', async (req, res, next) => {
       const subtotal = n(items.reduce((sum, item) => sum + n(item.price) * Number(item.qty), 0));
       const paymentMethod = String(req.body?.paymentMethod || '').trim();
       const payment = await normalizeTenantPayment(tx, paymentMethod, req.body?.payments || {}, subtotal, req.body?.cashReceived);
+      const paymentStatus = payment.method === 'credit' ? 'pending' : 'paid';
       const waiterName = String(account.waiter_name || '').trim();
       const userNote = String(req.body?.notes || '').trim().slice(0, 180);
       const notes = [`Mesa ${account.table_number}`, `Mesero: ${waiterName}`, userNote].filter(Boolean).join(' · ');
@@ -1127,23 +1210,24 @@ router.post('/table-accounts/:id/checkout', async (req, res, next) => {
                payment_method=$4, payment_breakdown=$5, cash_received=$6, cash_change=$7,
                pos_session_id=$8, delivery_fee=0, service_branch_id=$9, service_branch_name=$10,
                table_account_id=$11, table_number=$12, waiter_name=$13, cogs_total=$14,
-               order_notes=CASE WHEN $15 <> '' THEN $15 ELSE order_notes END
-           WHERE id=$16 RETURNING id, invoice_code, invoice_token`,
+               order_notes=CASE WHEN $15 <> '' THEN $15 ELSE order_notes END,
+               payment_status=$16, credit_paid_session_id=NULL, credit_paid_at=NULL, credit_paid_by=''
+             WHERE id=$17 RETURNING id, invoice_code, invoice_token`,
           [JSON.stringify(items), subtotal, notes, payment.method, JSON.stringify(payment.breakdown), payment.cashReceived || null,
             payment.cashChange || null, session.id, session.branch_id || null, session.branch_name || null,
-            account.id, account.table_number, waiterName, cogsTotal, userNote, linkedOrder.id]
+            account.id, account.table_number, waiterName, cogsTotal, userNote, paymentStatus, linkedOrder.id]
         );
       } else {
         saleRow = await tx.get(
           `INSERT INTO {s}.orders
            (customer_id, items, subtotal, total, status, channel, source_channel, delivery, notes, payment_method, payment_breakdown,
             cash_received, cash_change, pos_session_id, delivery_fee, service_branch_id, service_branch_name,
-            table_account_id, table_number, waiter_name, cogs_total, order_notes)
-           VALUES (NULL, $1, $2, $2, 'entregado', 'pos', 'pos', 'mesa', $3, $4, $5, $6, $7, $8, 0, $9, $10, $11, $12, $13, $14, $15)
+            table_account_id, table_number, waiter_name, cogs_total, order_notes, payment_status)
+           VALUES (NULL, $1, $2, $2, 'entregado', 'pos', 'pos', 'mesa', $3, $4, $5, $6, $7, $8, 0, $9, $10, $11, $12, $13, $14, $15, $16)
            RETURNING id, invoice_code, invoice_token`,
           [JSON.stringify(items), subtotal, notes, payment.method, JSON.stringify(payment.breakdown), payment.cashReceived || null,
             payment.cashChange || null, session.id, session.branch_id || null, session.branch_name || null,
-            account.id, account.table_number, waiterName, cogsTotal, userNote]
+            account.id, account.table_number, waiterName, cogsTotal, userNote, paymentStatus]
         );
       }
       if (!Number(linkedOrder?.branch_stock_applied) && await decrementBranchStockForSale(tx, session.branch_id, items)) {
@@ -1169,6 +1253,7 @@ router.post('/table-accounts/:id/checkout', async (req, res, next) => {
         total: result.subtotal,
         items: result.items,
         paymentMethod: result.payment.method,
+        paymentStatus: result.payment.method === 'credit' ? 'pending' : 'paid',
         paymentBreakdown: result.payment.breakdown,
         cashReceived: result.payment.cashReceived,
         cashChange: result.payment.cashChange,
@@ -1197,9 +1282,9 @@ router.get('/overview', async (req, res, next) => {
       `SELECT id, branch_id, branch_name, opened_by,
               opening_amount::float AS opening_amount,
               to_char(opened_at AT TIME ZONE '${tenantTimeZone(req.tdb)}', 'DD Mon YYYY, HH24:MI') AS opened_at
-       FROM {s}.pos_sessions
+       FROM {s}.pos_sessions ps
        WHERE status = 'open'
-       ORDER BY opened_at DESC`
+       ORDER BY ps.opened_at DESC`
     );
     const products = await req.tdb.all(
       `SELECT p.id, p.category_id, p.name, p.description, p.price::float AS price, p.image, c.name AS category_name
@@ -1209,14 +1294,15 @@ router.get('/overview', async (req, res, next) => {
        ORDER BY COALESCE(c.sort, 0), c.name NULLS FIRST, p.name`
     );
     const { variantsMap, groupsMap } = await getProductExtrasMaps(req.tdb, products.map((p) => p.id));
+    const taxConfig = await loadProductTaxConfig(req.tdb);
     const soldQtyByProduct = await listSoldQtyByProduct(req.tdb);
-    const productsWithExtras = await Promise.all(products.map(async (p) => ({
+    const productsWithExtras = await Promise.all(products.map(async (p) => applyProductTaxToCatalogProduct({
       ...p,
       image: await resolveExistingPublicMediaPath(p.image),
       soldQty: Number(soldQtyByProduct.get(Number(p.id)) || 0),
       variants: variantsMap.get(p.id) || [],
       modifierGroups: groupsMap.get(p.id) || [],
-    })));
+    }, taxConfig)));
     const ctx = userSessionContext(req.user, req);
     const session = await getOpenSession(req.tdb, ctx);
     const sessionTotals = session ? await getSessionTotals(req.tdb, session.id) : null;
@@ -1240,6 +1326,7 @@ router.get('/overview', async (req, res, next) => {
       categories,
       branches,
       products: productsWithExtras,
+      productTax: taxConfig,
       activeSession,
       lastClosedSession,
       chatbotIntegrationEnabled,
@@ -1253,6 +1340,7 @@ router.get('/overview', async (req, res, next) => {
       tables: await listRestaurantTables(req.tdb, activeSession, false),
       blockedBranchIds,
       selfServiceOrders: await listPendingSelfServiceOrders(req.tdb, activeSession?.branch_id),
+      creditSales: await listOpenCreditSales(req.tdb, activeSession?.branch_id),
       recentSales: await listRecentSales(req.tdb, activeSession?.id || null),
       recentMovements: await listRecentMovements(req.tdb, activeSession?.id || null),
     });
@@ -1566,6 +1654,19 @@ router.get('/sales-history', async (req, res, next) => {
   }
 });
 
+router.get('/credits', async (req, res, next) => {
+  try {
+    const session = await getOpenSession(req.tdb, userSessionContext(req.user, req));
+    if (!session) return res.json({ rows: [], total: 0, amount: 0 });
+    const rows = await listOpenCreditSales(req.tdb, session.branch_id);
+    res.json({
+      rows,
+      total: rows.length,
+      amount: n(rows.reduce((sum, row) => sum + Number(row.total || 0), 0)),
+    });
+  } catch (e) { next(e); }
+});
+
 router.post('/session/open', async (req, res, next) => {
   try {
     const openingAmount = n(req.body?.openingAmount);
@@ -1680,7 +1781,7 @@ async function findPosSaleByIdempotency(t, key) {
   if (!key) return null;
   return t.get(
     `SELECT id, items, subtotal::float AS subtotal, total::float AS total, delivery_fee::float AS delivery_fee,
-            payment_method, payment_breakdown, cash_received::float AS cash_received, cash_change::float AS cash_change,
+            payment_status, payment_method, payment_breakdown, cash_received::float AS cash_received, cash_change::float AS cash_change,
             notes, delivery, delivery_address, delivery_neighborhood, delivery_reference, invoice_code, invoice_token
      FROM {s}.orders
      WHERE channel = 'pos' AND pos_idempotency_key = $1
@@ -1697,6 +1798,7 @@ function posSaleResponse(row) {
     total: n(row.total),
     items: parseJsonArray(row.items),
     paymentMethod: row.payment_method,
+    paymentStatus: row.payment_status || 'paid',
     paymentBreakdown: parseJsonObject(row.payment_breakdown),
     cashReceived: n(row.cash_received),
     cashChange: n(row.cash_change),
@@ -1737,11 +1839,12 @@ async function createPosSale(req, res, next) {
       const total = n(subtotal + deliveryFee);
       const paymentMethod = String(req.body?.paymentMethod || '').trim();
       const payment = await normalizeTenantPayment(tx, paymentMethod, req.body?.payments || {}, total, req.body?.cashReceived);
+      const paymentStatus = payment.method === 'credit' ? 'pending' : 'paid';
       const cogsTotal = itemsCost(saleItems);
       const row = await tx.get(
         `INSERT INTO {s}.orders
-         (customer_id, items, subtotal, total, status, channel, source_channel, delivery, notes, payment_method, payment_breakdown, cash_received, cash_change, pos_session_id, delivery_fee, service_branch_id, service_branch_name, cogs_total, order_notes, delivery_address, delivery_neighborhood, delivery_reference, pos_idempotency_key)
-         VALUES (NULL, $1, $2, $3, 'confirmado', 'pos', 'pos', $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
+         (customer_id, items, subtotal, total, status, channel, source_channel, delivery, notes, payment_method, payment_breakdown, cash_received, cash_change, pos_session_id, delivery_fee, service_branch_id, service_branch_name, cogs_total, order_notes, delivery_address, delivery_neighborhood, delivery_reference, pos_idempotency_key, payment_status)
+         VALUES (NULL, $1, $2, $3, 'confirmado', 'pos', 'pos', $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
          RETURNING id, invoice_code, invoice_token`,
         [
           JSON.stringify(saleItems),
@@ -1763,6 +1866,7 @@ async function createPosSale(req, res, next) {
           deliveryNeighborhood,
           deliveryReference,
           idempotencyKey,
+          paymentStatus,
         ]
       );
       if (await decrementBranchStockForSale(tx, session.branch_id, saleItems)) {
@@ -1787,6 +1891,7 @@ async function createPosSale(req, res, next) {
         total: result.total,
         items: result.saleItems,
         paymentMethod: result.payment.method,
+        paymentStatus: result.payment.method === 'credit' ? 'pending' : 'paid',
         paymentBreakdown: result.payment.breakdown,
         cashReceived: result.payment.cashReceived,
         cashChange: result.payment.cashChange,
@@ -1966,7 +2071,7 @@ router.put('/sales/:id/payment', async (req, res, next) => {
     const id = Number(req.params.id);
     if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: 'Venta inválida' });
     const sale = await req.tdb.get(
-      `SELECT id, total::float AS total, status, pos_session_id, payment_method, payment_breakdown,
+      `SELECT id, total::float AS total, status, payment_status, pos_session_id, payment_method, payment_breakdown,
               cash_received::float AS cash_received, cash_change::float AS cash_change, service_branch_id
        FROM {s}.orders
        WHERE id = $1 AND channel = 'pos'
@@ -1975,6 +2080,12 @@ router.put('/sales/:id/payment', async (req, res, next) => {
     );
     if (!sale) return res.status(404).json({ error: 'No se encontró la venta POS' });
     if (sale.status === 'cancelado') return res.status(409).json({ error: 'No se puede cambiar pago de una venta cancelada' });
+    const settlingCredit = sale.payment_status === 'pending' && sale.payment_method === 'credit';
+    const settlementSession = settlingCredit ? await getOpenSession(req.tdb, userSessionContext(req.user, req)) : null;
+    if (settlingCredit && !settlementSession) return res.status(409).json({ error: 'Abre una caja para cobrar esta venta a crédito' });
+    if (settlingCredit && Number(settlementSession.branch_id || 0) !== Number(sale.service_branch_id || 0)) {
+      return res.status(403).json({ error: 'La venta a crédito pertenece a otra sucursal' });
+    }
     const fiscalInvoice = await req.tdb.get(
       `SELECT status FROM {s}.invoices WHERE order_id=$1 AND status IN ('pending','unknown','active','cancel_pending') ORDER BY id DESC LIMIT 1`,
       [id]
@@ -1987,39 +2098,59 @@ router.put('/sales/:id/payment', async (req, res, next) => {
     if (globalInvoice) return res.status(409).json({ error: 'No puedes cambiar el pago de una venta incluida en una factura global' });
 
     const paymentMethod = String(req.body?.paymentMethod || '').trim();
+    if (paymentMethod === 'credit') return res.status(400).json({ error: 'Selecciona un medio de pago para liquidar el crédito' });
     const payment = await normalizeTenantPayment(req.tdb, paymentMethod, req.body?.payments || {}, n(sale.total), req.body?.cashReceived);
-    await req.tdb.run(
+    const previousBreakdown = parseJsonObject(sale.payment_breakdown);
+    const nextBreakdown = settlingCredit
+      ? { ...previousBreakdown, ...payment.breakdown, creditSettledAt: new Date().toISOString(), creditSettledBy: req.user.username }
+      : payment.breakdown;
+    const updatedPayment = await req.tdb.get(
       `UPDATE {s}.orders
        SET payment_method = $1,
            payment_breakdown = $2,
            cash_received = $3,
-           cash_change = $4
-       WHERE id = $5`,
+           cash_change = $4,
+           payment_status = CASE WHEN $6 THEN 'paid' ELSE payment_status END,
+           credit_paid_session_id = CASE WHEN $6 THEN $7 ELSE credit_paid_session_id END,
+           credit_paid_at = CASE WHEN $6 THEN now() ELSE credit_paid_at END,
+           credit_paid_by = CASE WHEN $6 THEN $8 ELSE credit_paid_by END
+       WHERE id = $5 AND (NOT $6 OR payment_status = 'pending')
+       RETURNING id`,
       [
         payment.method,
-        JSON.stringify(payment.breakdown),
+        JSON.stringify(nextBreakdown),
         payment.cashReceived || null,
         payment.cashChange || null,
         id,
+        settlingCredit,
+        settlementSession?.id || null,
+        req.user.username,
       ]
     );
-    await insertSalesAudit(req.tdb, req, {
-      eventType: 'sale_payment_edited', orderId: id, sessionId: sale.pos_session_id,
-      branchId: sale.service_branch_id, amount: sale.total, reason: 'Cambio de forma de pago',
+    if (!updatedPayment) return res.status(409).json({ error: 'Esta venta a crédito ya fue liquidada' });
+    const paymentAuditEvent = {
+      eventType: 'sale_payment_edited', orderId: id,
+      sessionId: settlingCredit ? settlementSession.id : sale.pos_session_id,
+      branchId: sale.service_branch_id, amount: sale.total,
+      reason: settlingCredit ? 'Liquidación de venta a crédito' : 'Cambio de forma de pago',
       before: { paymentMethod: sale.payment_method, paymentBreakdown: sale.payment_breakdown, cashReceived: sale.cash_received, cashChange: sale.cash_change },
-      after: { paymentMethod: payment.method, paymentBreakdown: payment.breakdown, cashReceived: payment.cashReceived, cashChange: payment.cashChange },
-    });
+      after: { paymentMethod: payment.method, paymentStatus: 'paid', paymentBreakdown: nextBreakdown, cashReceived: payment.cashReceived, cashChange: payment.cashChange },
+    };
+    if (settlingCredit) paymentAuditEvent.eventType = 'credit_sale_paid';
+    await insertSalesAudit(req.tdb, req, paymentAuditEvent);
 
     const updated = await req.tdb.get(
-      `SELECT id, total::float AS total, status, payment_method, payment_breakdown,
+      `SELECT id, total::float AS total, status, payment_status, payment_method, payment_breakdown,
               cash_received::float AS cash_received, cash_change::float AS cash_change,
+              credit_paid_session_id, credit_paid_at, credit_paid_by,
               notes, items,
               to_char(created_at AT TIME ZONE '${req.timezone}', 'DD Mon YYYY, HH24:MI') AS created_at
        FROM {s}.orders
        WHERE id = $1`,
       [id]
     );
-    const totals = sale.pos_session_id ? await getSessionTotals(req.tdb, sale.pos_session_id) : null;
+    const totalsSessionId = settlingCredit ? settlementSession.id : sale.pos_session_id;
+    const totals = totalsSessionId ? await getSessionTotals(req.tdb, totalsSessionId) : null;
     res.json({
       ok: true,
       sale: {
@@ -2144,7 +2275,7 @@ router.get('/cuts', async (req, res, next) => {
               branch_id, branch_name, notes, opened_by, closed_by,
               to_char(opened_at AT TIME ZONE '${tenantTimeZone(req.tdb)}', 'DD Mon YYYY, HH24:MI') AS opened_at,
               to_char(closed_at AT TIME ZONE '${tenantTimeZone(req.tdb)}', 'DD Mon YYYY, HH24:MI') AS closed_at
-       FROM {s}.pos_sessions ${whereSql} ORDER BY opened_at DESC LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
+            FROM {s}.pos_sessions ps ${whereSql} ORDER BY ps.opened_at DESC LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
       [...params, pageSize, (page - 1) * pageSize]
     );
     const enriched = await Promise.all(rows.map(async (row) => {

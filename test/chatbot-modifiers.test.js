@@ -42,6 +42,7 @@ function fakeTenantDb(initialState) {
       throw new Error(`Consulta get inesperada: ${sql}`);
     },
     async all(sql) {
+      if (sql.includes('settings')) return [];
       throw new Error(`Consulta all inesperada: ${sql}`);
     },
     async run(sql, params) {
@@ -85,6 +86,7 @@ function fakeCatalogTenantDb(initialState) {
       throw new Error(`Consulta get inesperada: ${sql}`);
     },
     async all(sql, params) {
+      if (sql.includes('settings')) return [];
       const id = Number(params[0]);
       if (sql.includes('product_variants')) return variants.get(id) || [];
       if (sql.includes('modifier_groups')) return groups.get(id) || [];
@@ -115,6 +117,7 @@ function fakeMenuTenantDb(initialState) {
       throw new Error(`Consulta get inesperada: ${sql}`);
     },
     async all(sql) {
+      if (sql.includes('settings')) return [];
       if (sql.includes('SELECT * FROM {s}.categories')) return categories;
       if (sql.includes('FROM {s}.products p LEFT JOIN {s}.categories')) return products;
       throw new Error(`Consulta all inesperada: ${sql}`);

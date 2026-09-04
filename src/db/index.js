@@ -705,6 +705,14 @@ async function createTenantSchema(slug) {
     ALTER TABLE "${s}".orders ADD COLUMN IF NOT EXISTS payment_reference TEXT DEFAULT '';
     ALTER TABLE "${s}".orders ADD COLUMN IF NOT EXISTS source_channel TEXT DEFAULT '';
     ALTER TABLE "${s}".orders ADD COLUMN IF NOT EXISTS pos_idempotency_key TEXT DEFAULT '';
+    ALTER TABLE "${s}".orders ADD COLUMN IF NOT EXISTS payment_status TEXT NOT NULL DEFAULT 'paid';
+    ALTER TABLE "${s}".orders ADD COLUMN IF NOT EXISTS credit_paid_session_id INTEGER;
+    ALTER TABLE "${s}".orders ADD COLUMN IF NOT EXISTS credit_paid_at TIMESTAMPTZ;
+    ALTER TABLE "${s}".orders ADD COLUMN IF NOT EXISTS credit_paid_by TEXT DEFAULT '';
+    CREATE INDEX IF NOT EXISTS idx_${s}_orders_credit_status
+      ON "${s}".orders(payment_status, service_branch_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_${s}_orders_credit_paid_session
+      ON "${s}".orders(credit_paid_session_id) WHERE credit_paid_session_id IS NOT NULL;
     CREATE UNIQUE INDEX IF NOT EXISTS idx_${s}_orders_pos_idempotency
       ON "${s}".orders(pos_idempotency_key) WHERE COALESCE(pos_idempotency_key, '') <> '';
     UPDATE "${s}".orders
@@ -1113,6 +1121,10 @@ async function createTenantSchema(slug) {
     ALTER TABLE "${s}".invoices ADD COLUMN IF NOT EXISTS fiscal_emitter_id BIGINT;
     ALTER TABLE "${s}".invoices ADD COLUMN IF NOT EXISTS issuer_rfc TEXT;
     ALTER TABLE "${s}".invoices ADD COLUMN IF NOT EXISTS api_mode TEXT;
+    ALTER TABLE "${s}".invoices ADD COLUMN IF NOT EXISTS payment_method TEXT NOT NULL DEFAULT 'PUE';
+    ALTER TABLE "${s}".invoices ADD COLUMN IF NOT EXISTS payment_form TEXT NOT NULL DEFAULT '01';
+    ALTER TABLE "${s}".invoices ADD COLUMN IF NOT EXISTS relation_type TEXT;
+    ALTER TABLE "${s}".invoices ADD COLUMN IF NOT EXISTS related_uuids_enc TEXT;
     UPDATE "${s}".invoices i SET api_mode=COALESCE((SELECT e.api_mode FROM "${s}".fiscal_emitters e WHERE e.id=i.fiscal_emitter_id),'multi') WHERE i.api_mode IS NULL;
     ALTER TABLE "${s}".invoices ALTER COLUMN api_mode SET DEFAULT 'multi';
     ALTER TABLE "${s}".invoices ALTER COLUMN api_mode SET NOT NULL;
@@ -1137,6 +1149,12 @@ async function createTenantSchema(slug) {
       description TEXT NOT NULL,
       total NUMERIC(12,2) NOT NULL,
       payment_form TEXT NOT NULL DEFAULT '01',
+      payment_method TEXT NOT NULL DEFAULT 'PUE',
+      document_kind TEXT NOT NULL DEFAULT 'invoice',
+      relation_type TEXT,
+      related_uuids_enc TEXT,
+      source_document_type TEXT,
+      source_document_id BIGINT,
       request_key UUID NOT NULL UNIQUE,
       provider TEXT NOT NULL DEFAULT 'facturama',
       environment TEXT NOT NULL DEFAULT 'production',
@@ -1169,6 +1187,14 @@ async function createTenantSchema(slug) {
     );
     CREATE UNIQUE INDEX IF NOT EXISTS idx_${s}_direct_invoices_uuid ON "${s}".direct_invoices(uuid) WHERE uuid IS NOT NULL;
     CREATE INDEX IF NOT EXISTS idx_${s}_direct_invoices_reference ON "${s}".direct_invoices(external_reference, created_at DESC);
+    ALTER TABLE "${s}".direct_invoices ADD COLUMN IF NOT EXISTS payment_method TEXT NOT NULL DEFAULT 'PUE';
+    ALTER TABLE "${s}".direct_invoices ADD COLUMN IF NOT EXISTS document_kind TEXT NOT NULL DEFAULT 'invoice';
+    ALTER TABLE "${s}".direct_invoices ADD COLUMN IF NOT EXISTS relation_type TEXT;
+    ALTER TABLE "${s}".direct_invoices ADD COLUMN IF NOT EXISTS related_uuids_enc TEXT;
+    ALTER TABLE "${s}".direct_invoices ADD COLUMN IF NOT EXISTS source_document_type TEXT;
+    ALTER TABLE "${s}".direct_invoices ADD COLUMN IF NOT EXISTS source_document_id BIGINT;
+    CREATE INDEX IF NOT EXISTS idx_${s}_direct_invoices_kind ON "${s}".direct_invoices(document_kind, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_${s}_direct_invoices_source ON "${s}".direct_invoices(source_document_type,source_document_id,document_kind,status);
 
     CREATE TABLE IF NOT EXISTS "${s}".global_invoices (
       id BIGSERIAL PRIMARY KEY,
@@ -1216,6 +1242,9 @@ async function createTenantSchema(slug) {
     CREATE UNIQUE INDEX IF NOT EXISTS idx_${s}_global_invoices_uuid ON "${s}".global_invoices(uuid) WHERE uuid IS NOT NULL;
     CREATE INDEX IF NOT EXISTS idx_${s}_global_invoices_date ON "${s}".global_invoices(business_date DESC, service_branch_id, id DESC);
     ALTER TABLE "${s}".global_invoices ADD COLUMN IF NOT EXISTS concept_mode TEXT NOT NULL DEFAULT 'detailed';
+    ALTER TABLE "${s}".global_invoices ADD COLUMN IF NOT EXISTS payment_method TEXT NOT NULL DEFAULT 'PUE';
+    ALTER TABLE "${s}".global_invoices ADD COLUMN IF NOT EXISTS relation_type TEXT;
+    ALTER TABLE "${s}".global_invoices ADD COLUMN IF NOT EXISTS related_uuids_enc TEXT;
 
     CREATE TABLE IF NOT EXISTS "${s}".global_invoice_orders (
       global_invoice_id BIGINT NOT NULL REFERENCES "${s}".global_invoices(id) ON DELETE CASCADE,
@@ -1227,6 +1256,76 @@ async function createTenantSchema(slug) {
     );
     CREATE UNIQUE INDEX IF NOT EXISTS idx_${s}_global_invoice_orders_live ON "${s}".global_invoice_orders(order_id) WHERE active=1;
     CREATE INDEX IF NOT EXISTS idx_${s}_global_invoice_orders_batch ON "${s}".global_invoice_orders(global_invoice_id, order_id);
+
+    CREATE TABLE IF NOT EXISTS "${s}".payment_complements (
+      id BIGSERIAL PRIMARY KEY,
+      request_key UUID NOT NULL UNIQUE,
+      provider TEXT NOT NULL DEFAULT 'facturama',
+      environment TEXT NOT NULL DEFAULT 'production',
+      api_mode TEXT NOT NULL DEFAULT 'multi',
+      provider_id TEXT,
+      uuid TEXT,
+      series TEXT NOT NULL DEFAULT '',
+      folio TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending',
+      payment_date TIMESTAMPTZ NOT NULL,
+      payment_form TEXT NOT NULL,
+      currency TEXT NOT NULL DEFAULT 'MXN',
+      exchange_rate NUMERIC(18,10) NOT NULL DEFAULT 1,
+      amount NUMERIC(14,2) NOT NULL,
+      receiver_data_enc TEXT NOT NULL,
+      fiscal_snapshot_enc TEXT NOT NULL,
+      provider_response_enc TEXT,
+      xml_enc TEXT,
+      pdf_enc TEXT,
+      certificate_number TEXT,
+      error_message TEXT NOT NULL DEFAULT '',
+      cancellation_motive TEXT,
+      replacement_uuid TEXT,
+      cancellation_status TEXT,
+      cancellation_message TEXT,
+      cancellation_receipt_enc TEXT,
+      fiscal_emitter_id BIGINT,
+      issuer_rfc TEXT,
+      issued_by TEXT NOT NULL DEFAULT '',
+      issued_at TIMESTAMPTZ,
+      cancel_requested_at TIMESTAMPTZ,
+      canceled_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_${s}_payment_complements_uuid ON "${s}".payment_complements(uuid) WHERE uuid IS NOT NULL;
+    CREATE INDEX IF NOT EXISTS idx_${s}_payment_complements_created ON "${s}".payment_complements(created_at DESC,id DESC);
+
+    CREATE TABLE IF NOT EXISTS "${s}".payment_complement_documents (
+      payment_complement_id BIGINT NOT NULL REFERENCES "${s}".payment_complements(id) ON DELETE CASCADE,
+      source_type TEXT NOT NULL,
+      source_id BIGINT NOT NULL,
+      source_uuid TEXT NOT NULL,
+      currency TEXT NOT NULL DEFAULT 'MXN',
+      equivalence NUMERIC(18,10) NOT NULL DEFAULT 1,
+      partiality_number INTEGER NOT NULL,
+      previous_balance NUMERIC(14,2) NOT NULL,
+      amount_paid NUMERIC(14,2) NOT NULL,
+      outstanding_balance NUMERIC(14,2) NOT NULL,
+      tax_object TEXT NOT NULL DEFAULT '01',
+      taxes_enc TEXT,
+      active INTEGER NOT NULL DEFAULT 1,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      PRIMARY KEY(payment_complement_id,source_type,source_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_${s}_payment_complement_source ON "${s}".payment_complement_documents(source_type,source_id,active);
+
+    CREATE TABLE IF NOT EXISTS "${s}".fiscal_document_events (
+      id BIGSERIAL PRIMARY KEY,
+      document_type TEXT NOT NULL,
+      document_id BIGINT NOT NULL,
+      event_type TEXT NOT NULL,
+      detail TEXT NOT NULL DEFAULT '',
+      actor TEXT NOT NULL DEFAULT '',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS idx_${s}_fiscal_document_events_document ON "${s}".fiscal_document_events(document_type,document_id,created_at DESC);
 
     CREATE TABLE IF NOT EXISTS "${s}".global_invoice_events (
       id BIGSERIAL PRIMARY KEY,
@@ -1266,6 +1365,9 @@ async function ensureTenantDefaults(slug, businessName = slug, regional = {}) {
     currency_conversion_updated_at: '',
     currency_conversion_chatbot_enabled: '1',
     currency_conversion_pos_enabled: '1',
+    product_tax_enabled: '0',
+    product_tax_mode: 'included',
+    product_tax_rate: '0.16',
     timezone: regional.timezone || 'America/Mexico_City',
     address: '',
     hours: '',

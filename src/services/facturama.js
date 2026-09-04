@@ -134,6 +134,18 @@ class FacturamaClient {
     return this.request(endpoint, { method: 'POST', body: payload });
   }
 
+  validateReceiver({ rfc, name, postalCode, fiscalRegime }) {
+    return this.request('/customers/validate', {
+      method: 'POST',
+      body: {
+        Rfc: String(rfc || '').trim().toUpperCase(),
+        Name: String(name || '').trim().toUpperCase(),
+        ZipCode: String(postalCode || '').trim(),
+        FiscalRegime: String(fiscalRegime || '').trim(),
+      },
+    });
+  }
+
   getCfdi(id, apiMode = 'multi') {
     return apiMode === 'web'
       ? this.request(`/api/cfdi/${encodeURIComponent(id)}?type=issued`)
@@ -144,6 +156,24 @@ class FacturamaClient {
     const safeFormat = format === 'xml' ? 'xml' : 'pdf';
     const type = apiMode === 'web' ? 'issued' : 'issuedLite';
     return this.request(`/cfdi/${safeFormat}/${type}/${encodeURIComponent(id)}`);
+  }
+
+  downloadCancellationReceipt(id, format = 'pdf', apiMode = 'multi') {
+    const safeFormat = ['pdf', 'html'].includes(format) ? format : 'pdf';
+    const type = apiMode === 'web' ? 'issued' : 'issuedLite';
+    return this.request(`/acuse/${safeFormat}/${type}/${encodeURIComponent(id)}`);
+  }
+
+  listIssuedCfdis({ folio = '', series = '', rfcIssuer = '', apiMode = 'multi' } = {}) {
+    const query = new URLSearchParams({
+      type: apiMode === 'web' ? 'issued' : 'issuedLite',
+      status: 'all',
+      page: '0',
+    });
+    if (folio) query.set('folio', String(folio));
+    if (series) query.set('serie', String(series));
+    if (rfcIssuer && apiMode !== 'web') query.set('rfcIssuer', String(rfcIssuer));
+    return this.request(`/cfdi?${query}`);
   }
 
   async sendCfdiEmail(id, email, apiMode = 'multi', options = {}) {

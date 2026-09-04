@@ -78,6 +78,7 @@ router.get('/report', async (req, res, next) => {
 
     const costedOrdersCte = `costed_orders AS (
       SELECT o.*,
+              COALESCE(o.credit_paid_at, o.created_at) AS financial_at,
              COALESCE(o.cogs_total, item_cost.cogs, 0)::numeric AS calculated_cogs,
              CASE
                WHEN o.payment_method IN ('mixed', 'multiple') OR (o.payment_breakdown IS NOT NULL AND o.payment_breakdown ~ '^\\s*\\{.*\\}\\s*$') THEN
@@ -146,8 +147,9 @@ router.get('/report', async (req, res, next) => {
              COUNT(o.id)::int AS tickets
       FROM days d
       LEFT JOIN costed_orders o
-        ON (o.created_at AT TIME ZONE '${TZ}')::date = d.sale_date
+        ON (o.financial_at AT TIME ZONE '${TZ}')::date = d.sale_date
        AND o.status != 'cancelado'
+             AND COALESCE(o.payment_status, 'paid') = 'paid'
        ${branchFilter.orderClause}
       GROUP BY d.sale_date
       ORDER BY d.sale_date`;
@@ -173,8 +175,9 @@ router.get('/report', async (req, res, next) => {
              COUNT(o.id)::int AS tickets
       FROM months m
       LEFT JOIN costed_orders o
-        ON date_trunc('month', o.created_at AT TIME ZONE '${TZ}')::date = m.sale_month
+        ON date_trunc('month', o.financial_at AT TIME ZONE '${TZ}')::date = m.sale_month
        AND o.status != 'cancelado'
+             AND COALESCE(o.payment_status, 'paid') = 'paid'
        ${branchFilter.orderClause}
       GROUP BY m.sale_month
       ORDER BY m.sale_month`;
@@ -200,9 +203,10 @@ router.get('/report', async (req, res, next) => {
       FROM costed_orders o
       CROSS JOIN input i
       LEFT JOIN {s}.branches b ON b.id = COALESCE(o.service_branch_id, o.pickup_branch_id)
-      WHERE EXTRACT(YEAR FROM o.created_at AT TIME ZONE '${TZ}')::int = i.report_year
-        AND EXTRACT(MONTH FROM o.created_at AT TIME ZONE '${TZ}')::int = i.report_month
+      WHERE EXTRACT(YEAR FROM o.financial_at AT TIME ZONE '${TZ}')::int = i.report_year
+        AND EXTRACT(MONTH FROM o.financial_at AT TIME ZONE '${TZ}')::int = i.report_month
         AND o.status != 'cancelado'
+        AND COALESCE(o.payment_status, 'paid') = 'paid'
         ${branchFilter.orderClause}
       GROUP BY COALESCE(o.service_branch_id, o.pickup_branch_id),
                COALESCE(b.name, NULLIF(o.service_branch_name, ''), NULLIF(o.pickup_branch_name, ''), 'Sin sucursal')
@@ -258,19 +262,20 @@ router.get('/report', async (req, res, next) => {
     const customPaymentsSql = `
       WITH input AS (SELECT $1::int AS report_year, $2::int AS report_month)
       SELECT o.payment_method AS id,
-             to_char(o.created_at AT TIME ZONE '${TZ}', 'YYYY-MM-DD') AS date,
-             EXTRACT(MONTH FROM o.created_at AT TIME ZONE '${TZ}')::int AS month,
+             to_char(COALESCE(o.credit_paid_at, o.created_at) AT TIME ZONE '${TZ}', 'YYYY-MM-DD') AS date,
+             EXTRACT(MONTH FROM COALESCE(o.credit_paid_at, o.created_at) AT TIME ZONE '${TZ}')::int AS month,
              COUNT(*)::int AS tickets,
              COALESCE(SUM(o.total), 0)::float AS total,
              MAX(CASE WHEN o.payment_breakdown ~ '^\\s*\\{.*\\}\\s*$'
                THEN NULLIF(o.payment_breakdown::jsonb ->> 'customLabel', '') ELSE NULL END) AS stored_label
       FROM {s}.orders o CROSS JOIN input i
-      WHERE EXTRACT(YEAR FROM o.created_at AT TIME ZONE '${TZ}')::int = i.report_year
+      WHERE EXTRACT(YEAR FROM COALESCE(o.credit_paid_at, o.created_at) AT TIME ZONE '${TZ}')::int = i.report_year
         AND o.status != 'cancelado'
+        AND COALESCE(o.payment_status, 'paid') = 'paid'
         AND o.payment_method LIKE 'custom\\_%' ESCAPE '\\'
         ${branchFilter.orderClause}
-      GROUP BY o.payment_method, to_char(o.created_at AT TIME ZONE '${TZ}', 'YYYY-MM-DD'),
-               EXTRACT(MONTH FROM o.created_at AT TIME ZONE '${TZ}')
+      GROUP BY o.payment_method, to_char(COALESCE(o.credit_paid_at, o.created_at) AT TIME ZONE '${TZ}', 'YYYY-MM-DD'),
+           EXTRACT(MONTH FROM COALESCE(o.credit_paid_at, o.created_at) AT TIME ZONE '${TZ}')
       ORDER BY o.payment_method, date`;
 
     const [dailyRows, monthlyRows, branchRows, dailyExpenseRows, monthlyExpenseRows, branchExpenseRows, dailyPurchaseRows, monthlyPurchaseRows, branchPurchaseRows, customPaymentRows, branches, customMethodsRaw] = await Promise.all([
@@ -496,6 +501,7 @@ router.get('/detail', async (req, res, next) => {
     const ordersSql = `
       WITH costed_orders AS (
         SELECT o.*,
+               COALESCE(o.credit_paid_at, o.created_at) AS financial_at,
                COALESCE(o.cogs_total, item_cost.cogs, 0)::numeric AS calculated_cogs
         FROM {s}.orders o
         LEFT JOIN LATERAL (
@@ -513,14 +519,15 @@ router.get('/detail', async (req, res, next) => {
              o.payment_method, o.payment_breakdown, o.service_branch_id, o.pickup_branch_id,
              COALESCE(b.name, NULLIF(o.service_branch_name, ''), NULLIF(o.pickup_branch_name, ''), 'Sin sucursal') AS branch_name,
              o.table_number, o.waiter_name,
-             to_char(o.created_at AT TIME ZONE '${TZ}', 'YYYY-MM-DD') AS sale_date,
-             to_char(o.created_at AT TIME ZONE '${TZ}', 'DD/MM/YYYY HH24:MI') AS created_at
+             to_char(o.financial_at AT TIME ZONE '${TZ}', 'YYYY-MM-DD') AS sale_date,
+             to_char(o.financial_at AT TIME ZONE '${TZ}', 'DD/MM/YYYY HH24:MI') AS created_at
       FROM costed_orders o
       LEFT JOIN {s}.branches b ON b.id = COALESCE(o.service_branch_id, o.pickup_branch_id)
-      WHERE (o.created_at AT TIME ZONE '${TZ}')::date BETWEEN $1::date AND $2::date
+      WHERE (o.financial_at AT TIME ZONE '${TZ}')::date BETWEEN $1::date AND $2::date
         AND o.status != 'cancelado'
+        AND COALESCE(o.payment_status, 'paid') = 'paid'
         ${branchFilter.orderClause}
-      ORDER BY o.created_at ASC, o.id ASC`;
+      ORDER BY o.financial_at ASC, o.id ASC`;
 
     const expensesSql = `
       WITH expense_events AS (

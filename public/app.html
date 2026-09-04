@@ -230,6 +230,7 @@
         <div class="pos-finance-strip" id="posFinanceStrip"></div>
         <div class="pos-delivery-strip" id="posDeliveryStrip"></div>
         <div id="posSelfServiceQueue"></div>
+        <div id="posCreditQueue"></div>
         <div class="pos-action-icons" id="posActionIcons"></div>
         <div class="card pos-session-card" id="posSessionCard"></div>
         <div class="pos-shell">
@@ -426,6 +427,30 @@
       </section>
 
       <section class="section" id="view-productos">
+        <form id="productTaxForm" class="product-tax-panel">
+          <div class="product-tax-main">
+            <div class="product-tax-heading">
+              <span class="product-tax-icon"><i class="ph-bold ph-percent"></i></span>
+              <div><b>IVA en productos</b><span id="cfgProductTaxStatus">Desactivado · se cobran los precios capturados</span></div>
+            </div>
+            <label class="switch product-tax-switch" title="Activar o desactivar IVA en productos"><input type="checkbox" id="cfgProductTaxEnabled" /><span class="track"></span></label>
+          </div>
+          <div class="product-tax-fields" id="cfgProductTaxFields" hidden>
+            <div class="field product-tax-mode-field">
+              <label><i class="ph-bold ph-sliders-horizontal"></i> Precio capturado</label>
+              <div class="segmented" id="cfgProductTaxMode">
+                <button type="button" data-product-tax-mode="added">Agregar IVA</button>
+                <button type="button" data-product-tax-mode="included">IVA incluido</button>
+              </div>
+            </div>
+            <div class="field product-tax-rate-field">
+              <label for="cfgProductTaxRate"><i class="ph-bold ph-percent"></i> Tasa</label>
+              <div class="product-tax-rate-input"><input type="number" id="cfgProductTaxRate" min="0" max="100" step="0.01" inputmode="decimal" value="16" required /><span>%</span></div>
+            </div>
+            <div class="product-tax-preview" id="cfgProductTaxPreview"></div>
+            <button class="btn btn-primary" type="submit"><i class="ph-bold ph-floppy-disk"></i> Guardar IVA</button>
+          </div>
+        </form>
         <div class="prod-toolbar">
           <div class="chips" id="catChips"></div>
           <div style="display:flex;gap:10px">
@@ -1081,7 +1106,7 @@
             <div class="field"><label>Desde</label><input id="cfdiDateFrom" type="date" /></div>
             <div class="field"><label>Hasta</label><input id="cfdiDateTo" type="date" /></div>
             <div class="field"><label>Estado</label><select id="cfdiStatus"><option value="all">Todos</option><option value="active">Vigentes</option><option value="cancel_pending">Cancelación pendiente</option><option value="canceled">Cancelados</option><option value="failed">Fallidos</option><option value="unknown">Por verificar</option></select></div>
-            <div class="field"><label>Tipo</label><select id="cfdiType"><option value="all">Todos</option><option value="individual">Por ticket</option><option value="global">Globales</option></select></div>
+            <div class="field"><label>Tipo</label><select id="cfdiType"><option value="all">Todos</option><option value="individual">Por ticket</option><option value="global">Globales automáticas</option><option value="direct">Facturas manuales</option><option value="manual_global">Globales manuales</option><option value="credit_note">Notas de crédito</option><option value="payment">Complementos de pago</option></select></div>
             <button class="btn btn-primary" type="button" id="cfdiApplyFilters"><i class="ph-bold ph-magnifying-glass"></i> Consultar</button>
             <button class="btn btn-ghost" type="button" id="cfdiClearFilters"><i class="ph-bold ph-eraser"></i> Limpiar</button>
           </div>
@@ -2032,7 +2057,7 @@
           <div class="field"><label><i class="ph-bold ph-tag"></i> Nombre *</label><input type="text" id="pName" required placeholder="Hamburguesa clásica" /></div>
           <div class="field"><label><i class="ph-bold ph-text-align-left"></i> Descripción</label><textarea id="pDesc" rows="2" placeholder="Carne 150g, queso, lechuga y tomate"></textarea></div>
           <div class="row-2">
-            <div class="field"><label><i class="ph-bold ph-currency-dollar"></i> Precio base *</label><input type="number" id="pPrice" step="0.01" min="0" required placeholder="99.00" /><div class="hint">Si usas variantes, este precio es el de referencia.</div></div>
+            <div class="field"><label id="pPriceLabel"><i class="ph-bold ph-currency-dollar"></i> Precio base *</label><input type="number" id="pPrice" step="0.01" min="0" required placeholder="99.00" /><div class="hint" id="pPriceTaxHint">Si usas variantes, este precio es el de referencia.</div></div>
             <div class="field"><label><i class="ph-bold ph-folder"></i> Categoría</label><select id="pCat"><option value="">Sin categoría</option></select></div>
           </div>
           <div class="toggle-row" style="margin-bottom:0">
@@ -2680,9 +2705,11 @@
         <div class="field"><label>Nombre o razón social</label><input id="posInvoiceName" maxlength="254" required /></div>
         <div class="row-2">
           <div class="field"><label>Régimen fiscal</label><input id="posInvoiceRegime" maxlength="3" inputmode="numeric" required placeholder="Ej. 612" /></div>
-          <div class="field"><label>Uso del CFDI</label><select id="posInvoiceUse"><optgroup label="Usos generales"><option value="G01">G01 — Adquisición de mercancías</option><option value="G02">G02 — Devoluciones, descuentos o bonificaciones</option><option value="G03" selected>G03 — Gastos en general</option></optgroup><optgroup label="Inversiones"><option value="I01">I01 — Construcciones</option><option value="I02">I02 — Mobiliario y equipo de oficina</option><option value="I03">I03 — Equipo de transporte</option><option value="I04">I04 — Equipo de cómputo y accesorios</option><option value="I05">I05 — Dados, troqueles, moldes y herramental</option><option value="I06">I06 — Comunicaciones telefónicas</option><option value="I07">I07 — Comunicaciones satelitales</option><option value="I08">I08 — Otra maquinaria y equipo</option></optgroup><optgroup label="Deducciones personales"><option value="D01">D01 — Honorarios médicos y gastos hospitalarios</option><option value="D02">D02 — Gastos médicos por incapacidad o discapacidad</option><option value="D03">D03 — Gastos funerales</option><option value="D04">D04 — Donativos</option><option value="D05">D05 — Intereses reales por créditos hipotecarios</option><option value="D06">D06 — Aportaciones voluntarias al SAR</option><option value="D07">D07 — Primas de seguros de gastos médicos</option><option value="D08">D08 — Transportación escolar obligatoria</option><option value="D09">D09 — Depósitos para ahorro y pensiones</option><option value="D10">D10 — Pagos por servicios educativos</option></optgroup><optgroup label="Otros"><option value="S01">S01 — Sin efectos fiscales</option><option value="CP01">CP01 — Pagos</option><option value="CN01">CN01 — Nómina</option></optgroup></select></div>
+          <div class="field"><label>Uso del CFDI</label><select id="posInvoiceUse"><optgroup label="Usos generales"><option value="G01">G01 — Adquisición de mercancías</option><option value="G02">G02 — Devoluciones, descuentos o bonificaciones</option><option value="G03" selected>G03 — Gastos en general</option></optgroup><optgroup label="Inversiones"><option value="I01">I01 — Construcciones</option><option value="I02">I02 — Mobiliario y equipo de oficina</option><option value="I03">I03 — Equipo de transporte</option><option value="I04">I04 — Equipo de cómputo y accesorios</option><option value="I05">I05 — Dados, troqueles, moldes y herramental</option><option value="I06">I06 — Comunicaciones telefónicas</option><option value="I07">I07 — Comunicaciones satelitales</option><option value="I08">I08 — Otra maquinaria y equipo</option></optgroup><optgroup label="Deducciones personales"><option value="D01">D01 — Honorarios médicos y gastos hospitalarios</option><option value="D02">D02 — Gastos médicos por incapacidad o discapacidad</option><option value="D03">D03 — Gastos funerales</option><option value="D04">D04 — Donativos</option><option value="D05">D05 — Intereses reales por créditos hipotecarios</option><option value="D06">D06 — Aportaciones voluntarias al SAR</option><option value="D07">D07 — Primas de seguros de gastos médicos</option><option value="D08">D08 — Transportación escolar obligatoria</option><option value="D09">D09 — Depósitos para ahorro y pensiones</option><option value="D10">D10 — Pagos por servicios educativos</option></optgroup><optgroup label="Otros"><option value="S01">S01 — Sin efectos fiscales</option></optgroup></select></div>
         </div>
+        <div class="field"><label>Método de pago</label><select id="posInvoicePaymentMethod"><option value="PUE">PUE — Pago en una sola exhibición</option><option value="PPD">PPD — Pago diferido o en parcialidades</option></select><div class="hint">PPD emitirá la factura con forma 99 y habilitará sus complementos de pago.</div></div>
         <div class="field" id="posInvoicePaymentWrap" hidden><label>Forma de pago de la tarjeta</label><select id="posInvoicePaymentForm"><option value="">Selecciona débito o crédito</option><option value="28">28 — Tarjeta de débito</option><option value="04">04 — Tarjeta de crédito</option></select><div class="hint">Este dato es necesario porque el ticket fue cobrado con tarjeta.</div></div>
+        <details class="field"><summary>Relacionar este CFDI (opcional)</summary><div class="row-2" style="margin-top:10px"><div class="field"><label>Tipo de relación</label><select id="posInvoiceRelationType"><option value="">Sin relación</option><option value="04">04 — Sustitución de CFDI previos</option><option value="07">07 — Aplicación de anticipo</option></select></div><div class="field"><label>UUID relacionado</label><input id="posInvoiceRelatedUuid" maxlength="36" placeholder="XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX" /></div></div></details>
         <div class="field"><label>Correo del receptor (opcional)</label><input id="posInvoiceEmail" type="email" maxlength="160" /></div>
         <div class="modal-actions"><button type="button" class="btn btn-ghost" id="posInvoiceCancel">Cancelar</button><button type="submit" class="btn btn-primary" id="posInvoiceSubmit"><i class="ph-bold ph-seal-check"></i> Timbrar CFDI</button></div>
       </form>
@@ -3066,6 +3093,6 @@
   </div>
 
 <script src="/socket.io/socket.io.js"></script>
-  <script src="/static/js/app.js?v=20260831usdplans"></script>
+  <script src="/static/js/app.js?v=20260904fiscalcycle"></script>
 </body>
 </html>
