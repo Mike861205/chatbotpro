@@ -30,6 +30,9 @@ test('excluye deuda abierta del corte y conserva auditoría histórica', () => {
   assert.match(pos, /credit_paid_session_id = \$1/);
   assert.match(pos, /o\.credit_paid_at > ps\.closed_at/);
   assert.match(pos, /openCredit:/);
+  assert.match(pos, /function expectedCashForSession\(session, totals\)/);
+  assert.match(pos, /n\(session\.opening_amount\) \+ totals\.collected\.cash \+ totals\.movements\.income/);
+  assert.match(pos, /totals\.movements\.withdrawal - totals\.movements\.expense/);
   assert.match(app, /Créditos abiertos al cierre/);
   assert.match(app, /no forman parte del efectivo esperado ni de la diferencia de caja/);
 });

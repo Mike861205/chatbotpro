@@ -405,6 +405,11 @@ async function getSessionTotals(t, sessionId) {
   };
 }
 
+function expectedCashForSession(session, totals) {
+  return n(session.opening_amount) + totals.collected.cash + totals.movements.income
+    - totals.movements.withdrawal - totals.movements.expense;
+}
+
 async function isChatbotPosIntegrationEnabled(t) {
   const value = await getSetting(t, 'chatbot_pos_integration_enabled', '0');
   return String(value || '0') === '1';
