@@ -9,7 +9,7 @@ const { emitNewOrder, emitSessionUpdate } = require('../notifications');
 const { ensurePurchasingSchema } = require('../utils/purchasing');
 const { ensureBranchStockSchema, initializeBranchStock, applyBranchSaleStock } = require('../utils/branchStock');
 const { parseCustomPaymentMethods } = require('../utils/paymentMethods');
-const { resolveCurrencyConversion, convertedMoney } = require('../utils/currencyConversion');
+const { resolveCurrencyConversion, convertedMoney, formatCurrencyAmount, conversionRateLabel } = require('../utils/currencyConversion');
 const { loadProductTaxConfig, applyProductTaxToCatalogProduct, productTaxLineSnapshot } = require('../utils/productTax');
 
 let aiConfigCache = { expiresAt: 0, value: null };
@@ -346,14 +346,23 @@ function getOpenAiClient(key, baseUrl) {
 }
 
 function money(n, currency = 'MXN') {
-  return new Intl.NumberFormat('es-MX', { style: 'currency', currency }).format(n || 0);
+  return formatCurrencyAmount(n, currency);
+}
+
+function conversionSummaryLines(amount, conversion) {
+  const label = convertedMoney(amount, conversion);
+  if (!label) return [];
+  const rate = conversionRateLabel(conversion);
+  return [
+    `Equivalente informativo: *${label}*`,
+    ...(rate ? [`_Tasa de cambio: ${rate}_`] : []),
+    ...(conversion?.mode === 'automatic' ? [`_Fuente: ${conversion.providerUrl}_`] : []),
+  ];
 }
 
 function conversionTotalLine(amount, conversion) {
-  const label = convertedMoney(amount, conversion);
-  if (!label) return '';
-  const source = conversion?.mode === 'automatic' ? `\n_Fuente: ${conversion.providerUrl}_` : '';
-  return `\n_Equivalente informativo: ${label}_${source}`;
+  const lines = conversionSummaryLines(amount, conversion);
+  return lines.length ? `\n${lines.join('\n')}` : '';
 }
 
 function paymentMethodLabel(method) {
@@ -563,10 +572,7 @@ function pricingSummary(state, currency, labels = RESTAURANT_LABELS) {
     `*Subtotal: ${money(subtotal, currency)}*`,
     ...(deliveryFee > 0 ? [`*Envío${deliveryLabel ? ` (${deliveryLabel})` : ''}: ${money(deliveryFee, currency)}*`] : []),
     `*Total: ${money(subtotal + deliveryFee, currency)}*`,
-    ...(convertedMoney(subtotal + deliveryFee, state.currencyConversion) ? [
-      `_Equivalente informativo: ${convertedMoney(subtotal + deliveryFee, state.currencyConversion)}_`,
-      ...(state.currencyConversion?.mode === 'automatic' ? [`_Fuente: ${state.currencyConversion.providerUrl}_`] : []),
-    ] : []),
+    ...conversionSummaryLines(subtotal + deliveryFee, state.currencyConversion),
     ...(orderNote ? [`*🧾 Nota del pedido: ${orderNote}*`] : []),
   ].join('\n');
 }
@@ -608,7 +614,7 @@ function mainOptions(cart, infoOptions = [], labels = RESTAURANT_LABELS) {
 function returningAddressText(profile) {
   const lines = [];
   if (profile.address) lines.push(`📍 Dirección: ${profile.address}`);
-  if (profile.neighborhood) lines.push(`🏘️ Colonia / barrio: ${profile.neighborhood}`);
+  if (profile.neighborhood) lines.push(`🏘️ Urbanización / colonia / barrio / sector: ${profile.neighborhood}`);
   if (Number.isFinite(profile.locationLat) && Number.isFinite(profile.locationLng)) {
     lines.push(`🗺️ Maps: ${mapsUrl(profile.locationLat, profile.locationLng)}`);
   }
@@ -1070,10 +1076,7 @@ function buildOrderText(businessName, cart, customer, delivery, currency, labels
     `*Subtotal: ${money(subtotal, currency)}*`,
     ...(deliveryFee > 0 ? [`*Envío${deliveryLabel ? ` (${deliveryLabel})` : ''}: ${money(deliveryFee, currency)}*`] : []),
     `*Total: ${money(subtotal + deliveryFee, currency)}*`,
-    ...(convertedMoney(subtotal + deliveryFee, conversion) ? [
-      `_Equivalente informativo: ${convertedMoney(subtotal + deliveryFee, conversion)}_`,
-      ...(conversion?.mode === 'automatic' ? [`_Fuente: ${conversion.providerUrl}_`] : []),
-    ] : []),
+    ...conversionSummaryLines(subtotal + deliveryFee, conversion),
     ...(orderNote ? [`*🧾 Nota del pedido: ${orderNote}*`] : []),
     '',
     `👤 ${customer.name}`,
@@ -1082,7 +1085,7 @@ function buildOrderText(businessName, cart, customer, delivery, currency, labels
     isAddressDelivery
       ? `${addressLbl}: ${customer.address}`
       : `${receivingLabel}${customer.branchName ? `: ${customer.branchName}` : ''}`,
-    ...(isAddressDelivery && customer?.neighborhood ? [`🏘️ Colonia / barrio: ${customer.neighborhood}`] : []),
+    ...(isAddressDelivery && customer?.neighborhood ? [`🏘️ Urbanización / colonia / barrio / sector: ${customer.neighborhood}`] : []),
     ...(isAddressDelivery && customer?.deliveryBranchName ? [`🏪 Atiende: Sucursal ${customer.deliveryBranchName}`] : []),
     ...(isAddressDelivery && customer?.reference ? [`📝 Referencia cliente: ${customer.reference}`] : []),
   ];
@@ -1516,6 +1519,7 @@ async function handleMessage(t, slug, sessionId, rawInput) {
       total: cartTotal(state.cart),
       totalLabel: money(cartTotal(state.cart), currency),
       convertedTotalLabel: convertedMoney(cartTotal(state.cart), state.currencyConversion),
+      exchangeRateLabel: conversionRateLabel(state.currencyConversion),
     };
     // Notificar al tenant el estado en vivo de esta sesión
     emitSessionUpdate(slug, {
@@ -2515,7 +2519,7 @@ async function handleMessage(t, slug, sessionId, rawInput) {
     }
     state.customer.address = input.slice(0, 200);
     state.step = 'ask_neighborhood';
-    reply.messages = ['¿En qué colonia, barrio o sector está el domicilio?'];
+    reply.messages = ['¿En qué urbanización, colonia, barrio o sector está el domicilio?'];
     return finish();
   }
 
@@ -2527,14 +2531,14 @@ async function handleMessage(t, slug, sessionId, rawInput) {
     }
     state.customer.address = address.slice(0, 200);
     state.step = 'ask_neighborhood';
-    reply.messages = ['¿En qué colonia, barrio o sector está el domicilio?'];
+    reply.messages = ['¿En qué urbanización, colonia, barrio o sector está el domicilio?'];
     return finish();
   }
 
   if (state.step === 'ask_neighborhood') {
     const neighborhood = String(input || '').trim();
     if (neighborhood.length < 2) {
-      reply.messages = ['Escribe la colonia, barrio o sector para identificar correctamente el domicilio.'];
+      reply.messages = ['Escribe la urbanización, colonia, barrio o sector para identificar correctamente el domicilio.'];
       return finish();
     }
     state.customer.neighborhood = neighborhood.slice(0, 160);
@@ -2763,7 +2767,7 @@ async function handleMessage(t, slug, sessionId, rawInput) {
         `🎉 *¡Pedido #${orderRow.id} recibido!*\n\nEn breve lo confirmamos. ¡Gracias por tu preferencia! 🙏`,
       ];
       attachAccountsForPayment(state.customer.paymentMethod);
-      reply.order = { id: orderRow.id, total, totalLabel: money(total, currency), convertedTotalLabel: convertedMoney(total, state.currencyConversion), whatsappLink: waLink, summary: orderText };
+      reply.order = { id: orderRow.id, total, totalLabel: money(total, currency), convertedTotalLabel: convertedMoney(total, state.currencyConversion), exchangeRateLabel: conversionRateLabel(state.currencyConversion), whatsappLink: waLink, summary: orderText };
       if (waLink) reply.messages.push('👇 Toca el botón para enviar el resumen de tu pedido por WhatsApp y agilizar la atención.');
       if (!waLink) reply.messages.push('⚠️ El negocio aún no tiene un WhatsApp válido para envío automático. Tu pedido ya quedó registrado.');
       state = { step: 'start', cart: [], customer: {}, currency };

@@ -508,7 +508,7 @@ function chatbotSummaryNote(order) {
   parts.push(`Modalidad: ${receivingLabel}${order.pickup_branch_name ? ` · ${order.pickup_branch_name}` : ''}`);
   if (order.service_branch_name) parts.push(`Sucursal gestora: ${order.service_branch_name}`);
   if (address) parts.push(`Dirección: ${address}`);
-  if (order.delivery_neighborhood) parts.push(`Colonia / barrio: ${order.delivery_neighborhood}`);
+  if (order.delivery_neighborhood) parts.push(`Urbanización / colonia / barrio / sector: ${order.delivery_neighborhood}`);
   if (order.delivery_reference) parts.push(`Referencia: ${order.delivery_reference}`);
   if (order.customer_location_text) parts.push(`Ubicación: ${order.customer_location_text}`);
   if (order.customer_location_resolved) parts.push(`Referencia mapa: ${order.customer_location_resolved}`);
@@ -1833,7 +1833,7 @@ async function createPosSale(req, res, next) {
     const deliveryNeighborhood = isDelivery ? String(req.body?.deliveryNeighborhood || '').trim().replace(/\s+/g, ' ').slice(0, 160) : '';
     const deliveryReference = isDelivery ? String(req.body?.deliveryReference || '').trim().replace(/\s+/g, ' ').slice(0, 240) : '';
     if (isDelivery && (!deliveryAddress || !deliveryNeighborhood)) {
-      throw badRequest('Captura el domicilio y la colonia o barrio para la entrega');
+      throw badRequest('Captura el domicilio y la urbanización, colonia, barrio o sector para la entrega');
     }
     const result = await req.tdb.tx(async (tx) => {
       const session = await getOpenSession(tx, userSessionContext(req.user, req));

@@ -108,10 +108,27 @@ function convertedAmount(amount, conversion) {
   return Number.isFinite(value) ? Math.round((value + Number.EPSILON) * 100) / 100 : null;
 }
 
+function formatCurrencyAmount(amount, currency, locale = 'es-MX', options = {}) {
+  const code = String(currency || 'MXN').trim().toUpperCase();
+  const value = Number(amount || 0);
+  const minimumFractionDigits = Number.isInteger(options.minimumFractionDigits) ? options.minimumFractionDigits : 2;
+  const maximumFractionDigits = Number.isInteger(options.maximumFractionDigits) ? options.maximumFractionDigits : 2;
+  if (code === 'VES') {
+    return `Bs ${new Intl.NumberFormat('es-VE', { minimumFractionDigits, maximumFractionDigits }).format(value)}`;
+  }
+  return new Intl.NumberFormat(locale, { style: 'currency', currency: code, minimumFractionDigits, maximumFractionDigits }).format(value);
+}
+
+function conversionRateLabel(conversion, locale = 'es-MX') {
+  if (!conversion?.enabled || !positiveRate(conversion.rate)) return '';
+  const target = formatCurrencyAmount(conversion.rate, conversion.targetCurrency, locale, { minimumFractionDigits: 2, maximumFractionDigits: 6 });
+  return `1 ${conversion.baseCurrency} = ${target}`;
+}
+
 function convertedMoney(amount, conversion, locale = 'es-MX') {
   const value = convertedAmount(amount, conversion);
   if (value === null) return '';
-  return new Intl.NumberFormat(locale, { style: 'currency', currency: conversion.targetCurrency }).format(value);
+  return formatCurrencyAmount(value, conversion.targetCurrency, locale);
 }
 
 module.exports = {
@@ -124,4 +141,6 @@ module.exports = {
   resolveCurrencyConversion,
   convertedAmount,
   convertedMoney,
+  formatCurrencyAmount,
+  conversionRateLabel,
 };

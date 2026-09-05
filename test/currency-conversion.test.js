@@ -7,6 +7,8 @@ const {
   fetchAutomaticRate,
   convertedAmount,
   convertedMoney,
+  formatCurrencyAmount,
+  conversionRateLabel,
 } = require('../src/utils/currencyConversion');
 
 const root = path.resolve(__dirname, '..');
@@ -24,6 +26,9 @@ test('convierte importes sin alterar el valor base', () => {
   assert.equal(conversion.enabled, true);
   assert.equal(convertedAmount(10, conversion), 7500);
   assert.match(convertedMoney(10, conversion), /7[.,]500/);
+  assert.match(convertedMoney(10, conversion), /^Bs /);
+  assert.equal(formatCurrencyAmount(12.5, 'VES'), 'Bs 12,50');
+  assert.match(conversionRateLabel(conversion), /^1 USD = Bs 750,00$/);
 });
 
 test('respeta el alcance independiente para chatbot y punto de venta', () => {
@@ -64,7 +69,13 @@ test('chatbot y POS muestran el equivalente sólo como información', () => {
   const engine = read('src', 'chatbot', 'engine.js');
   const app = read('public', 'js', 'app.js');
   assert.match(engine, /Equivalente informativo/);
+  assert.match(engine, /Tasa de cambio/);
+  assert.match(engine, /Equivalente informativo: \*\$\{label\}\*/);
   assert.match(engine, /convertedTotalLabel/);
+  assert.match(engine, /exchangeRateLabel/);
+  assert.match(read('public', 'chat.html'), /class="cart-rate">Tasa de cambio/);
   assert.match(app, /convertedMoneyHtml\(total, 'pos'\)/);
   assert.match(app, /Equivalente informativo/);
+  assert.match(app, /currencyConversionRateLabel\('pos'\)/);
+  assert.match(app, /<b>\$\{esc\(fmtConvertedMoney\(total, 'pos'\)\)\}<\/b><br><small>Tasa de cambio:/);
 });

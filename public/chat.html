@@ -66,6 +66,9 @@
     .cart-bar.show { display: flex; }
     .cart-bar .ci { font-size: 13px; font-weight: 800; color: var(--ink); display: flex; align-items: center; gap: 8px; }
     .cart-bar .ci i { color: var(--primary); font-size: 17px; }
+    #cartInfo { display: inline-flex; flex-wrap: wrap; align-items: baseline; column-gap: 4px; }
+    #cartInfo .cart-rate { flex-basis: 100%; font-size: 10px; font-weight: 700; color: var(--muted); }
+    #cartInfo strong { color: var(--primary); font-weight: 900; }
     .cart-bar .delta {
       margin-left: 2px;
       padding: 2px 8px;
@@ -905,7 +908,8 @@
       const bar = document.getElementById('cartBar');
       if (data.cart && data.cart.items.length) {
         const n = data.cart.items.reduce((s, it) => s + it.qty, 0);
-        document.getElementById('cartInfo').textContent = `${n} producto${n > 1 ? 's' : ''} · ${data.cart.totalLabel}${data.cart.convertedTotalLabel ? ` · ≈ ${data.cart.convertedTotalLabel}` : ''}`;
+        const cartInfo = document.getElementById('cartInfo');
+        cartInfo.innerHTML = `<span>${esc(`${n} producto${n > 1 ? 's' : ''} · ${data.cart.totalLabel}`)}${data.cart.convertedTotalLabel ? ` · ≈ <strong>${esc(data.cart.convertedTotalLabel)}</strong>` : ''}</span>${data.cart.exchangeRateLabel ? `<small class="cart-rate">Tasa de cambio: ${esc(data.cart.exchangeRateLabel)}</small>` : ''}`;
         bar.classList.add('show');
         const delta = Math.max(0, n - lastCartItemsCount);
         animateCartDelta(delta);

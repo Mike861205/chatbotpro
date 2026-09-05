@@ -207,8 +207,15 @@ if (document.body) {
   new MutationObserver(scheduleResponsiveTableEnhancement).observe(document.body, { childList: true, subtree: true });
   scheduleResponsiveTableEnhancement();
 }
-const fmtMoney = (n, c) =>
-  new Intl.NumberFormat('es-MX', { style: 'currency', currency: c || (SETTINGS && SETTINGS.currency) || 'MXN' }).format(n || 0);
+function formatCurrencyValue(n, c, options = {}) {
+  const currency = String(c || (SETTINGS && SETTINGS.currency) || 'MXN').toUpperCase();
+  const minimumFractionDigits = Number.isInteger(options.minimumFractionDigits) ? options.minimumFractionDigits : 2;
+  const maximumFractionDigits = Number.isInteger(options.maximumFractionDigits) ? options.maximumFractionDigits : 2;
+  if (currency === 'VES') return `Bs ${new Intl.NumberFormat('es-VE', { minimumFractionDigits, maximumFractionDigits }).format(Number(n || 0))}`;
+  return new Intl.NumberFormat('es-MX', { style: 'currency', currency, minimumFractionDigits, maximumFractionDigits }).format(Number(n || 0));
+}
+
+const fmtMoney = (n, c) => formatCurrencyValue(n, c);
 
 function currencyConversionFor(scope) {
   if (!SETTINGS || SETTINGS.currency_conversion_enabled !== '1') return null;
@@ -226,12 +233,18 @@ function fmtConvertedMoney(amount, scope) {
   return fmtMoney(Number(amount || 0) * conversion.rate, conversion.targetCurrency);
 }
 
+function currencyConversionRateLabel(scope) {
+  const conversion = currencyConversionFor(scope);
+  if (!conversion) return '';
+  return `1 ${conversion.baseCurrency} = ${formatCurrencyValue(conversion.rate, conversion.targetCurrency, { minimumFractionDigits: 2, maximumFractionDigits: 6 })}`;
+}
+
 function convertedMoneyHtml(amount, scope, label = 'Equivalente') {
   const converted = fmtConvertedMoney(amount, scope);
   const source = SETTINGS?.currency_conversion_mode === 'automatic'
     ? ` · <a href="https://www.exchangerate-api.com" target="_blank" rel="noopener noreferrer">fuente</a>`
     : '';
-  return converted ? `<small class="currency-converted-total">${esc(label)}: ${esc(converted)}${source}</small>` : '';
+  return converted ? `<small class="currency-converted-total">${esc(label)}: <strong>${esc(converted)}</strong>${source}<br>Tasa de cambio: ${esc(currencyConversionRateLabel(scope))}</small>` : '';
 }
 
 function businessTimeZone() {
@@ -3172,7 +3185,7 @@ function buildComandaHtml(order, areaItems, areaLabel) {
     <div class="meta"><b>Sucursal:</b> ${branch}</div>
     ${addressDelivery && (deliveryAddress || deliveryNeighborhood || deliveryReference || deliveryLocation) ? `<div class="delivery-block">
       <div><b>DOMICILIO:</b> ${deliveryAddress || '—'}</div>
-      ${deliveryNeighborhood ? `<div><b>COLONIA / BARRIO:</b> ${deliveryNeighborhood}</div>` : ''}
+      ${deliveryNeighborhood ? `<div><b>URBANIZACIÓN / COLONIA / BARRIO / SECTOR:</b> ${deliveryNeighborhood}</div>` : ''}
       ${deliveryReference ? `<div><b>REFERENCIA:</b> ${deliveryReference}</div>` : ''}
       ${deliveryLocation && deliveryLocation !== deliveryAddress ? `<div><b>UBICACIÓN:</b> ${deliveryLocation}</div>` : ''}
     </div>` : ''}
@@ -4221,7 +4234,7 @@ function openThermalPrintWindow(ticket) {
   ${ticket.customerName ? `<div class="center meta"><b>A nombre de ${esc(ticket.customerName)}</b>${ticket.customerPhone ? `<br><span>${esc(ticket.customerPhone)}</span>` : ''}</div>` : ''}
   ${hasDeliveryData ? `<div class="delivery-block"><div class="center"><b>ENTREGA A DOMICILIO</b></div>
     ${deliveryAddress ? `<div><b>DOMICILIO:</b> ${deliveryAddress}</div>` : ''}
-    ${deliveryNeighborhood ? `<div><b>COLONIA / BARRIO:</b> ${deliveryNeighborhood}</div>` : ''}
+    ${deliveryNeighborhood ? `<div><b>URBANIZACIÓN / COLONIA / BARRIO / SECTOR:</b> ${deliveryNeighborhood}</div>` : ''}
     ${deliveryReference ? `<div><b>REFERENCIA:</b> ${deliveryReference}</div>` : ''}
   </div>` : ''}
   <div class="sep"></div>
@@ -4238,7 +4251,7 @@ function openThermalPrintWindow(ticket) {
       : `<tr><td>Subtotal</td><td class="r">${esc(fmtMoney(subtotal, currency))}</td></tr>`}
     ${taxSummary ? `<tr><td>Base gravable</td><td class="r">${esc(fmtMoney(taxSummary.base, currency))}</td></tr><tr><td>IVA${taxSummary.rate === null ? '' : ` ${esc(String(taxSummary.rate * 100))}%`}</td><td class="r">${esc(fmtMoney(taxSummary.tax, currency))}</td></tr>` : ''}
     <tr><td class="tot">TOTAL</td><td class="tot r">${esc(fmtMoney(total, currency))}</td></tr>
-    ${fmtConvertedMoney(total, 'pos') ? `<tr><td>Equivalente informativo${SETTINGS?.currency_conversion_mode === 'automatic' ? '<br><small>Fuente: ExchangeRate-API</small>' : ''}</td><td class="r">${esc(fmtConvertedMoney(total, 'pos'))}</td></tr>` : ''}
+    ${fmtConvertedMoney(total, 'pos') ? `<tr><td>Equivalente informativo${SETTINGS?.currency_conversion_mode === 'automatic' ? '<br><small>Fuente: ExchangeRate-API</small>' : ''}</td><td class="r"><b>${esc(fmtConvertedMoney(total, 'pos'))}</b><br><small>Tasa de cambio: ${esc(currencyConversionRateLabel('pos'))}</small></td></tr>` : ''}
     ${!isMixed && Number(ticket.cashReceived || 0) > 0 ? `<tr><td>Efectivo recibido</td><td class="r">${esc(fmtMoney(ticket.cashReceived, currency))}</td></tr>` : ''}
     ${!isMixed && Number(ticket.cashChange || 0) > 0 ? `<tr><td>Cambio</td><td class="r">${esc(fmtMoney(ticket.cashChange, currency))}</td></tr>` : ''}`}
   </table>
@@ -5515,8 +5528,8 @@ function renderPosCart() {
           <textarea id="posDeliveryAddress" rows="2" maxlength="300" required placeholder="Calle, número exterior/interior">${esc(POS_PAYMENT_FORM.deliveryAddress || '')}</textarea>
         </div>
         <div class="field">
-          <label><i class="ph-bold ph-map-trifold"></i> Colonia / barrio / sector *</label>
-          <input id="posDeliveryNeighborhood" maxlength="160" required value="${esc(POS_PAYMENT_FORM.deliveryNeighborhood || '')}" placeholder="Nombre de la colonia o barrio" />
+          <label><i class="ph-bold ph-map-trifold"></i> Urbanización / colonia / barrio / sector *</label>
+          <input id="posDeliveryNeighborhood" maxlength="160" required value="${esc(POS_PAYMENT_FORM.deliveryNeighborhood || '')}" placeholder="Nombre de la urbanización, colonia, barrio o sector" />
         </div>
         <div class="field">
           <label><i class="ph-bold ph-signpost"></i> Referencias de entrega</label>
