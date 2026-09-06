@@ -50,7 +50,8 @@ function routeForPortal(url) {
 
 function renderPortal() {
   const portalUrl = routeForPortal(INVOICING.portalUrl);
-  const color = ME.tenant.primaryColor || '#123c37';
+  const color = /^#[0-9a-f]{6}$/i.test(ME.tenant.primaryColor || '') ? ME.tenant.primaryColor : '#123c37';
+  document.documentElement.style.setProperty('--tenant-color', color);
   ['#portalBrand', '#portalBrandLarge'].forEach((selector) => $(selector).style.setProperty('--tenant-color', color));
   ['#portalBusiness', '#portalBusinessLarge'].forEach((selector) => $(selector).textContent = ME.tenant.businessName);
   ['#portalLogo', '#portalLogoLarge'].forEach((selector) => { $(selector).src = ME.tenant.logo || '/static/chatbotpro100.png'; });
@@ -60,9 +61,83 @@ function renderPortal() {
   $('#copyPortal').onclick = async () => { await navigator.clipboard.writeText(new URL(portalUrl, location.origin).href); toast('Liga del portal copiada'); };
 }
 
+$('#identityBusinessName').addEventListener('input', (event) => {
+  const name = event.target.value.trim() || 'Tu negocio';
+  ['#portalBusiness', '#portalBusinessLarge'].forEach((selector) => $(selector).textContent = name);
+});
+
+$('#identityColor').addEventListener('input', (event) => {
+  const color = event.target.value;
+  document.documentElement.style.setProperty('--tenant-color', color);
+  ['#portalBrand', '#portalBrandLarge'].forEach((selector) => $(selector).style.setProperty('--tenant-color', color));
+});
+
+$('#identityLogo').addEventListener('change', (event) => {
+  const file = event.target.files?.[0];
+  $('#identityLogoName').textContent = file?.name || 'Seleccionar una nueva imagen';
+  if (!file) return;
+  const previewUrl = URL.createObjectURL(file);
+  ['#portalLogo', '#portalLogoLarge'].forEach((selector) => { $(selector).src = previewUrl; });
+});
+
 function fillIdentity() {
   $('#identityBusinessName').value = ME.tenant.businessName || '';
   $('#identityColor').value = /^#[0-9a-f]{6}$/i.test(ME.tenant.primaryColor || '') ? ME.tenant.primaryColor : '#123c37';
+}
+
+function fiscalDraftCount(profile = {}) {
+  return ['rfc', 'legal_name', 'fiscal_regime', 'postal_code'].filter((key) => String(profile?.[key] || '').trim()).length;
+}
+
+function fillInvoicingSetup() {
+  const profile = INVOICING?.profile || {};
+  $('#setupBusinessName').value = ME?.tenant?.businessName || '';
+  $('#setupColor').value = /^#[0-9a-f]{6}$/i.test(ME?.tenant?.primaryColor || '') ? ME.tenant.primaryColor : '#123c37';
+  $('#setupRfc').value = profile.rfc || '';
+  $('#setupLegalName').value = profile.legal_name || '';
+  $('#setupFiscalRegime').value = profile.fiscal_regime || '';
+  $('#setupPostalCode').value = profile.postal_code || '';
+  const logo = String(ME?.tenant?.logo || '').trim();
+  $('#setupLogo').required = !logo;
+  $('#setupLogoPreview').innerHTML = logo ? `<img src="${escapeHtml(logo)}" alt="Logo actual" />` : '<i class="ph-bold ph-image-square"></i>';
+}
+
+function showInvoicingSetup() {
+  fillInvoicingSetup();
+  $('#invoicingSetupError').hidden = true;
+  $('#invoicingSetupModal').hidden = false;
+  document.body.classList.add('iv-journey-open');
+  setTimeout(() => $('#setupBusinessName').focus(), 80);
+}
+
+function showInvoicingWelcome() {
+  const ownerName = String(ME?.tenant?.ownerName || ME?.displayName || '').trim();
+  const businessName = String(ME?.tenant?.businessName || 'Tu negocio').trim();
+  const logo = String(ME?.tenant?.logo || '').trim();
+  const completed = fiscalDraftCount(INVOICING?.profile);
+  $('#invoicingWelcomeEyebrow').textContent = ownerName ? `¡Felicidades por tu registro, ${ownerName}!` : '¡Felicidades por tu registro!';
+  $('#invoicingWelcomeTitle').textContent = `${businessName}, es hora de facturar fácil`;
+  $('#invoicingWelcomeText').textContent = `Tu espacio de facturación ya tiene la identidad de ${businessName}. Completa tu expediente cuando estés listo y expide facturas de manera sencilla para ti y tus clientes.`;
+  $('#invoicingWelcomeBusiness').textContent = businessName;
+  $('#invoicingWelcomePortal').textContent = routeForPortal(INVOICING.portalUrl);
+  $('#invoicingWelcomeFiscal').textContent = completed === 4 ? 'Datos capturados' : `${completed} de 4 capturados`;
+  $('#invoicingWelcomeLogo').innerHTML = logo ? `<img src="${escapeHtml(logo)}" alt="Logo de ${escapeHtml(businessName)}" />` : '<i class="ph-bold ph-buildings"></i>';
+  $('#invoicingWelcomeModal').hidden = false;
+  document.body.classList.add('iv-journey-open');
+}
+
+function presentInvoicingStartup() {
+  if (ME?.identityRequired) return showInvoicingSetup();
+  if (ME?.onboardingRequired) showInvoicingWelcome();
+}
+
+async function completeInvoicingWelcome(view) {
+  await api('/api/auth/onboarding/complete', { method: 'POST' });
+  ME.onboardingCompleted = true;
+  ME.onboardingRequired = false;
+  $('#invoicingWelcomeModal').hidden = true;
+  document.body.classList.remove('iv-journey-open');
+  setView(view);
 }
 
 function renderSummary() {
@@ -288,6 +363,52 @@ $('#identityForm').addEventListener('submit', async (event) => {
   } catch (error) { toast(error.message, true); }
 });
 
+$('#setupLogo').addEventListener('change', (event) => {
+  const file = event.target.files?.[0];
+  if (!file) return;
+  if (file.size > 8 * 1024 * 1024) {
+    event.target.value = '';
+    return toast('El logotipo no puede superar 8 MB', true);
+  }
+  $('#setupLogoPreview').innerHTML = `<img src="${URL.createObjectURL(file)}" alt="Vista previa del logotipo" />`;
+});
+
+$('#invoicingSetupForm').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const button = $('#invoicingSetupSubmit');
+  const errorBox = $('#invoicingSetupError');
+  const identity = new FormData();
+  identity.append('business_name', $('#setupBusinessName').value.trim());
+  identity.append('primary_color', $('#setupColor').value);
+  const logo = $('#setupLogo').files?.[0];
+  if (logo) identity.append('logo', logo);
+  button.disabled = true;
+  button.innerHTML = '<i class="ph-bold ph-spinner-gap"></i> Preparando tu espacio fiscal…';
+  errorBox.hidden = true;
+  try {
+    await api('/api/settings', { method: 'PUT', body: identity });
+    await api('/api/invoicing/profile-draft', {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({
+        rfc: $('#setupRfc').value, legalName: $('#setupLegalName').value,
+        fiscalRegime: $('#setupFiscalRegime').value, postalCode: $('#setupPostalCode').value,
+      }),
+    });
+    await api('/api/auth/identity/complete', { method: 'POST' });
+    $('#invoicingSetupModal').hidden = true;
+    document.body.classList.remove('iv-journey-open');
+    await initialize();
+  } catch (error) {
+    errorBox.textContent = error.message;
+    errorBox.hidden = false;
+  } finally {
+    button.disabled = false;
+    button.innerHTML = '<i class="ph-bold ph-arrow-right"></i> Guardar lo que tengo y continuar';
+  }
+});
+
+$('#invoicingWelcomeExplore').addEventListener('click', () => completeInvoicingWelcome('summary').catch((error) => toast(error.message, true)));
+$('#invoicingWelcomeConfigure').addEventListener('click', () => completeInvoicingWelcome('settings').catch((error) => toast(error.message, true)));
+
 async function initialize() {
   ME = await api('/api/auth/me');
   if (ME.tenant?.productCode !== 'invoicing') {
@@ -301,6 +422,7 @@ async function initialize() {
   renderSummary(); renderPortal(); fillProfile(); fillIdentity(); await loadDocuments();
   $('#loading').hidden = true;
   setView(location.hash.slice(1) || 'summary');
+  presentInvoicingStartup();
 }
 
 initialize().catch((error) => { $('#loading').innerHTML = `<span>${escapeHtml(error.message)}</span>`; toast(error.message, true); });

@@ -807,10 +807,35 @@ function onboardingStepMarkup(step, compact = false) {
 }
 
 function renderInstructions() {
+  const ui = businessUi();
+  const steps = ONBOARDING_STEPS.map((step) => ({ ...step, details: [...step.details] }));
+  steps[1] = {
+    ...steps[1],
+    description: `Configura cómo atenderás a tus clientes y cómo recibirás sus ${ui.orders.toLowerCase()}.`,
+    details: ['WhatsApp que recibirá cada solicitud', 'Modalidades de atención, entrega o visita', 'Mensajes y opciones propias de tu negocio'],
+  };
+  steps[2] = {
+    ...steps[2], icon: ui.itemIcon, title: `Da de alta ${ui.items.toLowerCase()}`,
+    description: `Construye el catálogo de ${ui.itemPlural.toLowerCase()} que verán tus clientes.`,
+    details: ['Crea categorías claras para tu catálogo', `Agrega nombre, descripción, precio e imagen a cada ${ui.itemSingular}`, 'Configura variantes u opciones cuando las necesites'],
+    actionLabel: `Agregar ${ui.itemPlural.toLowerCase()}`,
+  };
+  steps[3] = {
+    ...steps[3], title: `Haz ${ui.orderArticle} ${ui.orderSingular} real en tu chatbot`,
+    description: `Realiza ${ui.orderArticle} ${ui.orderSingular} completa como lo haría uno de tus clientes.`,
+    details: [`Comprueba el catálogo y el proceso de ${ui.orderSingular}`, 'Finaliza el flujo con datos reales de prueba', 'Confirma que el resumen llegue al WhatsApp configurado'],
+  };
+  if (!ui.supportsRestaurantOperations) {
+    steps[5] = {
+      ...steps[5], icon: 'ph-chart-line-up', title: 'Revisa tus resultados', action: 'ventas', actionLabel: 'Abrir reportes',
+      description: `Consulta el seguimiento de tus ${ui.orders.toLowerCase()} y los resultados por periodo.`,
+      details: ['Revisa ventas y solicitudes recientes', 'Compara periodos y sucursales', 'Exporta la información cuando la necesites'],
+    };
+  }
   const moduleTarget = $('#instructionsSteps');
   const introTarget = $('#onboardingIntroSteps');
-  if (moduleTarget) moduleTarget.innerHTML = ONBOARDING_STEPS.map((step) => onboardingStepMarkup(step)).join('');
-  if (introTarget) introTarget.innerHTML = ONBOARDING_STEPS.map((step) => onboardingStepMarkup(step, true)).join('');
+  if (moduleTarget) moduleTarget.innerHTML = steps.map((step) => onboardingStepMarkup(step)).join('');
+  if (introTarget) introTarget.innerHTML = steps.map((step) => onboardingStepMarkup(step, true)).join('');
 }
 
 async function completeOnboarding() {
@@ -836,7 +861,15 @@ function acknowledgeTrialDay() {
 function continueAfterTrialNotice() {
   acknowledgeTrialDay();
   $('#trialWelcomeModal')?.classList.remove('show');
-  if (ME?.onboardingRequired) setTimeout(openOnboardingIntro, 100);
+  setTimeout(openNextInitialSetup, 100);
+}
+
+function openNextInitialSetup() {
+  if (ME?.identityRequired) {
+    openInitialIdentitySetup();
+    return;
+  }
+  if (ME?.onboardingRequired) openOnboardingIntro();
 }
 
 function presentStartupJourney() {
@@ -851,18 +884,42 @@ function presentStartupJourney() {
     });
     return;
   }
+  if (ME?.identityRequired) {
+    setTimeout(openInitialIdentitySetup, 180);
+    return;
+  }
   if (ME?.trial?.isActive) {
     const days = Math.max(1, Number(ME.trial.daysRemaining || 1));
     const todayKey = `${ME?.trial?.endsOn || 'trial'}:${days}`;
     let alreadyShown = false;
     try { alreadyShown = localStorage.getItem(`cbp_trial_notice_${ME.tenant.slug}`) === todayKey; } catch {}
     if (!alreadyShown) {
+      const ownerName = String(ME?.tenant?.ownerName || '').trim();
+      const businessName = String(SETTINGS?.business_name || ME?.tenant?.businessName || 'Tu negocio').trim();
+      const businessModel = BUSINESS_MODELS.find((model) => model.id === currentBusinessType());
+      const currency = SETTINGS?.regional?.currencies?.find((item) => item.code === SETTINGS?.currency);
+      const timezone = SETTINGS?.regional?.timezones?.find((item) => item.value === businessTimeZone());
+      const logo = String(SETTINGS?.logo || ME?.tenant?.logo || '').trim();
       $('#trialDaysNumber').textContent = String(days);
       $('#trialDaysLabel').textContent = days === 1 ? 'día disponible' : 'días disponibles';
-      $('#trialWelcomeTitle').textContent = days === 5 ? 'Tu negocio ya está listo para probar' : `Te ${days === 1 ? 'queda' : 'quedan'} ${days} ${days === 1 ? 'día' : 'días'} de prueba`;
-      $('#trialWelcomeText').textContent = days === 1
+      $('#trialBusinessName').textContent = businessName;
+      $('#trialWelcomeEyebrow').textContent = days === 5 && ownerName
+        ? `¡Felicidades por tu registro, ${ownerName}!`
+        : 'Prueba real de ChatBotPro';
+      $('#trialWelcomeTitle').textContent = days === 5
+        ? `${businessName} ya tiene su sistema listo`
+        : `Te ${days === 1 ? 'queda' : 'quedan'} ${days} ${days === 1 ? 'día' : 'días'} de prueba`;
+      $('#trialWelcomeText').textContent = days === 5
+        ? `Preparamos ChatBotPro con la identidad de ${businessName}. Ahora tienes 5 días para cargar información real y comprobar todo el sistema.`
+        : days === 1
         ? 'Aprovecha hoy para terminar tus pruebas. Mañana el sistema se bloqueará hasta activar una suscripción.'
         : `Usa estos ${days} días para cargar tus productos, registrar ventas y comprobar pedidos desde tu chatbot.`;
+      $('#trialBusinessModel').textContent = businessModel?.label || 'Restaurante / cafetería';
+      $('#trialBusinessCurrency').textContent = currency ? `${currency.flag} ${currency.code}` : (SETTINGS?.currency || 'MXN');
+      $('#trialBusinessTimezone').textContent = timezone?.label || businessTimeZone();
+      const logoHost = $('#trialBusinessLogo');
+      logoHost.hidden = !logo;
+      logoHost.innerHTML = logo ? `<img src="${esc(logo)}" alt="Logo de ${esc(businessName)}" />` : '';
       $('#trialWelcomeModal')?.classList.add('show');
       return;
     }
@@ -948,6 +1005,7 @@ function normalizeView(view) {
   const hidden = new Set(Array.isArray(ME?.tenant?.hiddenModules) ? ME.tenant.hiddenModules : []);
   if (ME?.role === 'owner' && hidden.has(view)) return permissions.has('dashboard') && !hidden.has('dashboard') ? 'dashboard' : 'config';
   if (['facturacion', 'cfdi'].includes(view) && !ME?.tenant?.invoicingEligible) return 'dashboard';
+  if (view === 'kds' && !businessUi().supportsRestaurantOperations) return 'dashboard';
   return VIEW_META[view] ? view : 'dashboard';
 }
 
@@ -988,7 +1046,8 @@ function applyUserScopeUI() {
     const mexicoAllowed = a.dataset.mexicoOnly !== 'true' || mexicoEligible;
     const roleAllowed = cashierMode ? CASHIER_ALLOWED_VIEWS.has(a.dataset.view) : (!staffMode || permissions.has(a.dataset.view));
     const ownerVisible = ME?.role !== 'owner' || !hiddenModules.has(a.dataset.view);
-    const allowed = mexicoAllowed && roleAllowed && ownerVisible;
+    const businessAllowed = a.dataset.businessFeature !== 'restaurant' || businessUi().supportsRestaurantOperations;
+    const allowed = mexicoAllowed && roleAllowed && ownerVisible && businessAllowed;
     a.hidden = !allowed;
   });
   document.querySelectorAll('[data-mexico-only="true"]:not(.sidebar nav a)').forEach((element) => {
@@ -1279,10 +1338,11 @@ async function loadDashboard() {
   $('#stPending').textContent = s.pending;
   $('#stAvgTicket').textContent = fmtMoney(s.avgTicket);
   $('#stSalesLabel').textContent = periodMeta.salesLabel || `Ventas ${periodSuffix}`;
-  $('#stOrdersLabel').textContent = periodMeta.ordersLabel || `Pedidos ${periodSuffix}`;
+  const ui = businessUi();
+  $('#stOrdersLabel').textContent = `${ui.orders} ${periodSuffix}`;
   $('#stPendingLabel').textContent = `Pendientes ${periodSuffix}`;
   $('#dashboardSalesTitle').innerHTML = `<i class="ph-bold ph-trend-up"></i> ${periodMeta.chartTitle || 'Ventas'}`;
-  $('#dashboardTopTitle').innerHTML = `<i class="ph-bold ph-trophy"></i> ${periodMeta.topTitle || 'Más vendidos'}`;
+  $('#dashboardTopTitle').innerHTML = `<i class="ph-bold ph-trophy"></i> ${ui.itemPlural} con mayor movimiento`;
   renderDashboardSubscription(s.subscription);
   document.querySelectorAll('#dashboardPeriodFilter button').forEach((button) => {
     button.classList.toggle('on', button.dataset.period === periodKey);
@@ -3277,9 +3337,9 @@ function ordersTableHTML(orders, editable = true) {
         : '';
       const statusCell = editable
         ? `<select data-order="${o.id}" class="status-sel s-${o.status}">
-            ${STATUSES.map((st) => `<option value="${st}" ${st === o.status ? 'selected' : ''}>${st[0].toUpperCase() + st.slice(1)}</option>`).join('')}
+            ${STATUSES.map((st) => `<option value="${st}" ${st === o.status ? 'selected' : ''}>${esc(businessOrderStatusLabel(st))}</option>`).join('')}
           </select>`
-        : `<span class="badge b-${o.status}">${o.status}</span>`;
+        : `<span class="badge b-${o.status}">${esc(businessOrderStatusLabel(o.status))}</span>`;
       const isAddressDelivery = o.receiving_mode_behavior === 'delivery' || o.delivery === 'domicilio';
       const origin = orderOriginMeta(o);
       const deliveryText = `<i class="ph-bold ${isAddressDelivery ? 'ph-moped' : (o.delivery === 'comer_sucursal' ? 'ph-fork-knife' : 'ph-storefront')}" style="color:${isAddressDelivery ? 'var(--blue)' : 'var(--violet)'}"></i> ${esc(buildOrderDeliveryLabel(o))}`;
@@ -3321,7 +3381,8 @@ function ordersTableHTML(orders, editable = true) {
       </tr>`;
     })
     .join('');
-  return `<table><thead><tr><th>Pedido</th><th>Cliente</th><th>Productos</th><th>Entrega</th><th>Sucursal</th><th>Total</th><th>Pago</th><th>Estatus</th><th>Fecha</th>${actionHead}</tr></thead><tbody>${rows}</tbody></table>`;
+  const ui = businessUi();
+  return `<table><thead><tr><th>${esc(ui.orderSingularCapitalized)}</th><th>Cliente</th><th>${esc(ui.itemPlural)}</th><th>Atención / entrega</th><th>Sucursal</th><th>Total</th><th>Pago</th><th>Estatus</th><th>Fecha</th>${actionHead}</tr></thead><tbody>${rows}</tbody></table>`;
 }
 
 function renderOrdersPagination(totalItems) {
@@ -5186,9 +5247,9 @@ function renderPosActions() {
   const tables = Array.isArray(POS_OVERVIEW?.tables) ? POS_OVERVIEW.tables : [];
   const openTables = tables.filter((table) => table.account).length;
   el.innerHTML = `
-    <button type="button" class="pos-action-btn" id="posOpenTables" ${hasSession ? '' : 'disabled'}>
+    ${businessUi().supportsRestaurantOperations ? `<button type="button" class="pos-action-btn" id="posOpenTables" ${hasSession ? '' : 'disabled'}>
       <i class="ph-bold ph-fork-knife"></i> Mesas${openTables ? ` (${openTables})` : ''}
-    </button>
+    </button>` : ''}
     ${chatbotEnabled ? `<button type="button" class="pos-action-btn" id="posOpenChatbotQueue" ${hasSession ? '' : 'disabled'}>
       <i class="ph-bold ph-chat-circle-dots"></i> Pedidos chatbot
     </button>` : ''}
@@ -7307,7 +7368,8 @@ function renderProductsGrid() {
   };
 
   if (!visible.length) {
-    grid.innerHTML = `<div class="card" style="grid-column:1/-1">${emptyHTML('ph-hamburger', 'Sin productos para este filtro', 'Cambia de categoria o agrega productos nuevos al menu.')}</div>`;
+    const ui = businessUi();
+    grid.innerHTML = `<div class="card" style="grid-column:1/-1">${emptyHTML(ui.itemIcon, `Sin ${ui.itemPlural.toLowerCase()} para este filtro`, `Cambia de categoría o agrega ${ui.itemPlural.toLowerCase()} al catálogo.`)}</div>`;
     return;
   }
 
@@ -7397,9 +7459,10 @@ function renderProductsGrid() {
   );
   document.querySelectorAll('[data-del]').forEach((b) =>
     b.addEventListener('click', async () => {
-      if (!(await askConfirm('¿Eliminar producto?', 'Se quitara de tu menu y del chatbot de inmediato.'))) return;
+      const ui = businessUi();
+      if (!(await askConfirm(`¿Eliminar ${ui.itemSingular}?`, `Se quitará de tu catálogo y del chatbot de inmediato.`))) return;
       await api(`/api/products/${b.dataset.del}`, { method: 'DELETE' });
-      toast('Producto eliminado');
+      toast(`${ui.itemSingularCapitalized} eliminado`);
       loadProducts();
     })
   );
@@ -7440,7 +7503,7 @@ let AI_ANALYZE_PROGRESS_TIMER = null;
 let AI_ANALYZE_SUCCESS_TIMER = null;
 let AI_ANALYZE_COOLDOWN_TIMER = null;
 let AI_ANALYZE_COOLDOWN_UNTIL = 0;
-const AI_ANALYZE_BTN_IDLE_HTML = $('#aiAnalyzeBtn')?.innerHTML || '<i class="ph-bold ph-brain"></i> Analizar menú';
+let AI_ANALYZE_BTN_IDLE_HTML = $('#aiAnalyzeBtn')?.innerHTML || '<i class="ph-bold ph-brain"></i> Analizar catálogo';
 
 function isAiAnalyzeCooldownActive() {
   return AI_ANALYZE_COOLDOWN_UNTIL > Date.now();
@@ -7514,8 +7577,8 @@ function startAiAnalyzeProgress() {
   progress?.classList.remove('done');
   const phases = [
     'Subiendo imagen...',
-    'Leyendo texto del menú...',
-    'Analizando productos y precios...',
+    'Leyendo texto del catálogo...',
+    `Analizando ${businessUi().itemPlural.toLowerCase()} y precios...`,
     'Estructurando resultados...',
   ];
   let step = 0;
@@ -7551,7 +7614,7 @@ function finishAiAnalyzeProgress(ok = true, text = '') {
     if (doneNote) {
       doneNote.hidden = false;
       doneNote.classList.remove('error');
-      doneNote.textContent = text || 'Éxito: menú analizado correctamente.';
+      doneNote.textContent = text || 'Éxito: catálogo analizado correctamente.';
       AI_ANALYZE_SUCCESS_TIMER = setTimeout(() => {
         doneNote.hidden = true;
         AI_ANALYZE_SUCCESS_TIMER = null;
@@ -7718,9 +7781,10 @@ $('#pImage').addEventListener('change', () => {
 );
 
 function openProdModal(p = null) {
+  const ui = businessUi();
   $('#prodModalTitle').innerHTML = p
-    ? '<i class="ph-bold ph-pencil-simple"></i> Editar producto'
-    : '<i class="ph-bold ph-plus-circle"></i> Nuevo producto';
+    ? `<i class="ph-bold ph-pencil-simple"></i> Editar ${ui.itemSingular}`
+    : `<i class="ph-bold ph-plus-circle"></i> Nuevo ${ui.itemSingular}`;
   $('#pId').value = p ? p.id : '';
   $('#pName').value = p ? p.name : '';
   $('#pDesc').value = p ? p.description || '' : '';
@@ -8107,7 +8171,7 @@ $('#aiProductForm')?.addEventListener('submit', async (e) => {
   }
   const file = $('#aiMenuImage').files?.[0] || null;
   if (!file) {
-    toast('Selecciona una imagen del menú para analizar', true);
+    toast('Selecciona una imagen del catálogo para analizar', true);
     return;
   }
 
@@ -8119,7 +8183,7 @@ $('#aiProductForm')?.addEventListener('submit', async (e) => {
     const fd = new FormData();
     fd.append('menuImage', file);
     const out = await api('/api/products/ai/suggest', { method: 'POST', body: fd });
-    setAiAnalyzeProgress(96, 'Menú leído. Preparando tabla para editar...');
+    setAiAnalyzeProgress(96, 'Catálogo leído. Preparando tabla para editar...');
     AI_PRODUCTS_DRAFT = Array.isArray(out.products) ? out.products : [];
     $('#aiProductResult').hidden = false;
 
@@ -8132,10 +8196,11 @@ $('#aiProductForm')?.addEventListener('submit', async (e) => {
     if (Array.isArray(out.variantGroupsDetected) && out.variantGroupsDetected.length) {
       notes.push(`Se detectaron variantes para: ${out.variantGroupsDetected.join(', ')}`);
     }
-    $('#aiProductNotes').textContent = notes.join(' · ') || `Se detectaron ${AI_PRODUCTS_DRAFT.length} productos. Puedes editar antes de importar.`;
+    const ui = businessUi();
+    $('#aiProductNotes').textContent = notes.join(' · ') || `Se detectaron ${AI_PRODUCTS_DRAFT.length} ${ui.itemPlural.toLowerCase()}. Puedes editar antes de importar.`;
     renderAiDraftRows();
-    finishAiAnalyzeProgress(true, `Éxito: ${AI_PRODUCTS_DRAFT.length} productos detectados`);
-    toast(`IA detectó ${AI_PRODUCTS_DRAFT.length} productos`);
+    finishAiAnalyzeProgress(true, `Éxito: ${AI_PRODUCTS_DRAFT.length} ${ui.itemPlural.toLowerCase()} detectados`);
+    toast(`IA detectó ${AI_PRODUCTS_DRAFT.length} ${ui.itemPlural.toLowerCase()}`);
   } catch (err) {
     const retryAfter = Number(err?.data?.retryAfterSec || 0);
     if (Number(err?.status) === 429) {
@@ -8144,7 +8209,7 @@ $('#aiProductForm')?.addEventListener('submit', async (e) => {
       startAiAnalyzeCooldown(wait);
       toast(`Límite temporal de IA. Reintenta en ${wait}s`, true);
     } else {
-      finishAiAnalyzeProgress(false, err?.message || 'Error al analizar menú. Intenta de nuevo');
+      finishAiAnalyzeProgress(false, err?.message || 'Error al analizar el catálogo. Intenta de nuevo');
       toast(err.message, true);
     }
   } finally {
@@ -9370,7 +9435,8 @@ async function fillBotForm() {
   const link = `${location.origin}/${SETTINGS.slug}`;
   $('#chatLink').value = link;
   $('#qrImg').src = `https://api.qrserver.com/v1/create-qr-code/?size=296x296&margin=8&data=${encodeURIComponent(link)}`;
-  $('#waShareBtn').href = `https://wa.me/?text=${encodeURIComponent(`¡Haz tu pedido en ${SETTINGS.business_name}! 🍔 Ordena aquí: ${link}`)}`;
+  const ui = businessUi();
+  $('#waShareBtn').href = `https://wa.me/?text=${encodeURIComponent(`${SETTINGS.business_name}: aquí puedes ${ui.shareAction}. ${link}`)}`;
   $('#botWelcome').value = SETTINGS.welcome_message || '';
   $('#botWhatsapp').value = SETTINGS.whatsapp || '';
   $('#botDelivery').checked = SETTINGS.delivery_enabled === '1';
@@ -9816,14 +9882,18 @@ $('#cashierForm')?.addEventListener('submit', async (e) => {
 });
 
 function moduleLabel(key) {
-  return MODULE_CATALOG.find((item) => item.key === key)?.label || VIEW_META[key]?.[0] || key;
+  return VIEW_META[key]?.[0] || MODULE_CATALOG.find((item) => item.key === key)?.label || key;
+}
+
+function businessModuleCatalog() {
+  return MODULE_CATALOG.filter((item) => item.key !== 'kds' || businessUi().supportsRestaurantOperations);
 }
 
 function renderPermissionPicker(selected = []) {
   const selectedSet = new Set(selected);
   const host = $('#internalUserPermissions');
   if (!host) return;
-  host.innerHTML = MODULE_CATALOG.map((item) => `<label class="module-permission-item"><input type="checkbox" value="${esc(item.key)}" ${selectedSet.has(item.key) ? 'checked' : ''}/><span>${esc(item.label)}</span></label>`).join('');
+  host.innerHTML = businessModuleCatalog().map((item) => `<label class="module-permission-item"><input type="checkbox" value="${esc(item.key)}" ${selectedSet.has(item.key) ? 'checked' : ''}/><span>${esc(moduleLabel(item.key))}</span></label>`).join('');
 }
 
 function internalUsersTableHTML(rows) {
@@ -9862,7 +9932,7 @@ function renderModuleVisibility() {
   const host = $('#moduleVisibilityGrid');
   if (!host || ME?.role !== 'owner') return;
   const hidden = new Set(ME?.tenant?.hiddenModules || []);
-  host.innerHTML = MODULE_CATALOG.filter((item) => item.key !== 'config').map((item) => `<label class="module-permission-item"><input type="checkbox" value="${esc(item.key)}" ${hidden.has(item.key) ? '' : 'checked'}/><span>${esc(item.label)}</span></label>`).join('');
+  host.innerHTML = businessModuleCatalog().filter((item) => item.key !== 'config').map((item) => `<label class="module-permission-item"><input type="checkbox" value="${esc(item.key)}" ${hidden.has(item.key) ? '' : 'checked'}/><span>${esc(moduleLabel(item.key))}</span></label>`).join('');
 }
 
 $('#addInternalUserBtn')?.addEventListener('click', () => openInternalUserModal());
@@ -10940,9 +11010,273 @@ const BUSINESS_MODELS = [
   },
 ];
 
+function renderInitialIdentityColors() {
+  const host = $('#initialIdentityColors');
+  const hidden = $('#initialIdentityColor');
+  if (!host || !hidden) return;
+  const current = String(hidden.value || '#ff6b35').toLowerCase();
+  host.innerHTML = PALETTE.map((color) => `<button type="button" class="initial-identity-color ${color.toLowerCase() === current ? 'on' : ''}" data-initial-color="${color}" style="background:${color}" aria-label="Usar color ${color}"></button>`).join('') +
+    `<label class="initial-identity-color custom" title="Color personalizado"><input type="color" id="initialIdentityCustomColor" value="${esc(current)}" aria-label="Elegir color personalizado" /></label>`;
+  host.querySelectorAll('[data-initial-color]').forEach((button) => button.addEventListener('click', () => {
+    hidden.value = button.dataset.initialColor;
+    renderInitialIdentityColors();
+  }));
+  $('#initialIdentityCustomColor')?.addEventListener('input', (event) => {
+    hidden.value = event.target.value;
+    host.querySelectorAll('[data-initial-color]').forEach((button) => button.classList.remove('on'));
+  });
+}
+
+function renderInitialIdentityModels() {
+  const host = $('#initialIdentityModels');
+  const hidden = $('#initialIdentityBusinessType');
+  if (!host || !hidden) return;
+  const selected = BUSINESS_MODELS.some((model) => model.id === hidden.value) ? hidden.value : 'restaurant';
+  hidden.value = selected;
+  host.innerHTML = BUSINESS_MODELS.map((model) => `
+    <button type="button" class="initial-identity-model ${model.id === selected ? 'on' : ''}" data-initial-model="${model.id}">
+      <i class="ph-bold ${model.icon}"></i><b>${esc(model.label)}</b>
+    </button>`).join('');
+  host.querySelectorAll('[data-initial-model]').forEach((button) => button.addEventListener('click', () => {
+    hidden.value = button.dataset.initialModel;
+    renderInitialIdentityModels();
+  }));
+}
+
+function updateInitialIdentityTimePreview() {
+  const target = $('#initialIdentityTimePreview');
+  const timezone = $('#initialIdentityTimezone')?.value;
+  if (!target || !timezone) return;
+  try {
+    target.textContent = `Hora local: ${new Intl.DateTimeFormat('es-MX', { timeZone: timezone, dateStyle: 'medium', timeStyle: 'short' }).format(new Date())}`;
+  } catch {
+    target.textContent = '';
+  }
+}
+
+function openInitialIdentitySetup() {
+  if (!SETTINGS || !ME?.identityRequired) return;
+  const currencies = Array.isArray(SETTINGS.regional?.currencies) ? SETTINGS.regional.currencies : [];
+  const timezones = Array.isArray(SETTINGS.regional?.timezones) ? SETTINGS.regional.timezones : [];
+  $('#initialIdentityName').value = SETTINGS.business_name || ME?.tenant?.businessName || '';
+  $('#initialIdentityColor').value = SETTINGS.primary_color || ME?.tenant?.primaryColor || '#ff6b35';
+  $('#initialIdentityBusinessType').value = currentBusinessType();
+  $('#initialIdentityCurrency').innerHTML = currencies.map((item) => `<option value="${esc(item.code)}">${esc(item.flag)} ${esc(item.code)} — ${esc(item.name)}</option>`).join('');
+  $('#initialIdentityTimezone').innerHTML = timezones.map((item) => `<option value="${esc(item.value)}">${esc(item.label)} · ${esc(item.value)}</option>`).join('');
+  $('#initialIdentityCurrency').value = SETTINGS.currency || 'MXN';
+  $('#initialIdentityTimezone').value = SETTINGS.timezone || 'America/Mexico_City';
+  const logo = String(SETTINGS.logo || ME?.tenant?.logo || '').trim();
+  $('#initialIdentityLogoPreview').innerHTML = logo ? `<img src="${esc(logo)}" alt="Logo actual" />` : '<i class="ph ph-image"></i>';
+  $('#initialIdentityLogo').value = '';
+  $('#initialIdentityLogo').required = !logo;
+  $('#initialIdentityError').hidden = true;
+  renderInitialIdentityColors();
+  renderInitialIdentityModels();
+  updateInitialIdentityTimePreview();
+  $('#initialIdentityModal').classList.add('show');
+  document.body.classList.add('initial-identity-open');
+  setTimeout(() => $('#initialIdentityName')?.focus(), 80);
+}
+
+$('#initialIdentityLogo')?.addEventListener('change', (event) => {
+  const file = event.target.files?.[0];
+  if (!file) return;
+  if (file.size > 8 * 1024 * 1024) {
+    event.target.value = '';
+    return toast('El logo supera 8 MB. Elige una imagen más ligera.', true);
+  }
+  $('#initialIdentityLogoPreview').innerHTML = `<img src="${URL.createObjectURL(file)}" alt="Vista previa del logo" />`;
+});
+
+$('#initialIdentityTimezone')?.addEventListener('change', updateInitialIdentityTimePreview);
+
+$('#initialIdentityForm')?.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const submit = $('#initialIdentitySubmit');
+  const error = $('#initialIdentityError');
+  const businessName = String($('#initialIdentityName').value || '').trim();
+  if (businessName.length < 2) return $('#initialIdentityName').focus();
+  const fd = new FormData();
+  fd.append('business_name', businessName);
+  fd.append('primary_color', $('#initialIdentityColor').value);
+  fd.append('business_type', $('#initialIdentityBusinessType').value);
+  fd.append('currency', $('#initialIdentityCurrency').value);
+  fd.append('timezone', $('#initialIdentityTimezone').value);
+  const logo = $('#initialIdentityLogo').files?.[0];
+  if (logo) fd.append('logo', logo);
+  submit.disabled = true;
+  submit.innerHTML = '<i class="ph-bold ph-spinner-gap" style="animation:spin .8s linear infinite"></i> Guardando identidad...';
+  error.hidden = true;
+  try {
+    await api('/api/settings', { method: 'PUT', body: fd });
+    await api('/api/auth/identity/complete', { method: 'POST' });
+    SETTINGS = await api('/api/settings');
+    ME.identityCompleted = true;
+    ME.identityRequired = false;
+    ME.tenant.businessName = SETTINGS.business_name;
+    ME.tenant.logo = SETTINGS.logo;
+    ME.tenant.primaryColor = SETTINGS.primary_color;
+    document.documentElement.style.setProperty('--primary', SETTINGS.primary_color || '#ff6b35');
+    const brandLogo = SETTINGS.logo || '/static/chatbotpro100.png';
+    $('#brandMark').innerHTML = `<img src="${esc(brandLogo)}" alt="ChatBotPro" />`;
+    $('#avatar').innerHTML = `<img src="${esc(brandLogo)}" alt="" />`;
+    $('#brandName').textContent = SETTINGS.business_name;
+    $('#userBizName').textContent = SETTINGS.business_name;
+    applyBusinessModelUI();
+    applyUserScopeUI();
+    renderInstructions();
+    $('#initialIdentityModal').classList.remove('show');
+    document.body.classList.remove('initial-identity-open');
+    toast('Identidad de tu negocio guardada');
+    setTimeout(presentStartupJourney, 140);
+  } catch (err) {
+    error.textContent = err.message || 'No se pudo guardar la identidad. Inténtalo de nuevo.';
+    error.hidden = false;
+  } finally {
+    submit.disabled = false;
+    submit.innerHTML = '<i class="ph-bold ph-arrow-right"></i> Guardar y continuar';
+  }
+});
+
+const BUSINESS_UI = {
+  restaurant: {
+    orders: 'Pedidos', orderSingular: 'pedido', orderArticle: 'un', items: 'Productos', itemSingular: 'producto', itemIcon: 'ph-hamburger',
+    catalogSub: 'Tu menú visible en el chatbot', shareAction: 'hacer su pedido', supportsRestaurantOperations: true,
+    statusLabels: { pendiente: 'Pendiente', confirmado: 'Confirmado', preparando: 'Preparando', enviado: 'Enviado', entregado: 'Entregado', cancelado: 'Cancelado' },
+  },
+  furniture: {
+    orders: 'Cotizaciones', orderSingular: 'cotización', orderArticle: 'una', items: 'Muebles', itemSingular: 'mueble', itemIcon: 'ph-armchair',
+    catalogSub: 'Tu catálogo de muebles visible en el chatbot', shareAction: 'solicitar una cotización',
+    statusLabels: { pendiente: 'Solicitada', confirmado: 'Confirmada', preparando: 'En fabricación', enviado: 'En camino', entregado: 'Entregada', cancelado: 'Cancelada' },
+  },
+  travel_agency: {
+    orders: 'Reservaciones', orderSingular: 'reservación', orderArticle: 'una', items: 'Paquetes y servicios', itemSingular: 'paquete', itemIcon: 'ph-airplane-tilt',
+    catalogSub: 'Paquetes, destinos y servicios visibles en el chatbot', shareAction: 'consultar y reservar su viaje',
+    statusLabels: { pendiente: 'Solicitada', confirmado: 'Confirmada', preparando: 'Gestionando', enviado: 'Documentación enviada', entregado: 'Completada', cancelado: 'Cancelada' },
+  },
+  office_services: {
+    orders: 'Solicitudes', orderSingular: 'solicitud', orderArticle: 'una', items: 'Servicios', itemSingular: 'servicio', itemIcon: 'ph-briefcase',
+    catalogSub: 'Tus servicios profesionales visibles en el chatbot', shareAction: 'consultar tus servicios',
+    statusLabels: { pendiente: 'Recibida', confirmado: 'Confirmada', preparando: 'En proceso', enviado: 'Respuesta enviada', entregado: 'Completada', cancelado: 'Cancelada' },
+  },
+  screen_printing: {
+    orders: 'Pedidos', orderSingular: 'pedido', orderArticle: 'un', items: 'Productos y estampados', itemSingular: 'producto', itemIcon: 'ph-t-shirt',
+    catalogSub: 'Prendas, técnicas y estampados visibles en el chatbot', shareAction: 'solicitar su pedido o cotización',
+    statusLabels: { pendiente: 'Pendiente', confirmado: 'Confirmado', preparando: 'En producción', enviado: 'Enviado', entregado: 'Entregado', cancelado: 'Cancelado' },
+  },
+  carpentry: {
+    orders: 'Cotizaciones', orderSingular: 'cotización', orderArticle: 'una', items: 'Muebles y trabajos', itemSingular: 'trabajo', itemIcon: 'ph-hammer',
+    catalogSub: 'Muebles y trabajos a medida visibles en el chatbot', shareAction: 'solicitar una cotización',
+    statusLabels: { pendiente: 'Solicitada', confirmado: 'Confirmada', preparando: 'En fabricación', enviado: 'En camino', entregado: 'Entregada', cancelado: 'Cancelada' },
+  },
+  health: {
+    orders: 'Citas', orderSingular: 'cita', orderArticle: 'una', items: 'Servicios médicos', itemSingular: 'servicio', itemIcon: 'ph-first-aid-kit',
+    catalogSub: 'Servicios y especialidades visibles en el chatbot', shareAction: 'solicitar una cita',
+    statusLabels: { pendiente: 'Solicitada', confirmado: 'Confirmada', preparando: 'En atención', enviado: 'Seguimiento enviado', entregado: 'Completada', cancelado: 'Cancelada' },
+  },
+  dentist: {
+    orders: 'Citas', orderSingular: 'cita', orderArticle: 'una', items: 'Tratamientos', itemSingular: 'tratamiento', itemIcon: 'ph-tooth',
+    catalogSub: 'Tratamientos y servicios dentales visibles en el chatbot', shareAction: 'solicitar una cita dental',
+    statusLabels: { pendiente: 'Solicitada', confirmado: 'Confirmada', preparando: 'En atención', enviado: 'Seguimiento enviado', entregado: 'Completada', cancelado: 'Cancelada' },
+  },
+};
+
+const BUSINESS_CATALOG_EXAMPLES = {
+  restaurant: { name: 'Hamburguesa clásica', description: 'Carne 150 g, queso, lechuga y tomate', optionLabel: 'Ingredientes / Opciones', visible: 'Los clientes podrán pedirlo' },
+  furniture: { name: 'Sillón de dos plazas', description: 'Tapizado gris, 160 cm de ancho', optionLabel: 'Acabados / Opciones', visible: 'Los clientes podrán cotizarlo' },
+  travel_agency: { name: 'Paquete Cancún 4 noches', description: 'Hotel, traslados y desayuno incluidos', optionLabel: 'Planes / Opciones', visible: 'Los clientes podrán reservarlo' },
+  office_services: { name: 'Consultoría inicial', description: 'Sesión de 60 minutos por videollamada', optionLabel: 'Modalidades / Opciones', visible: 'Los clientes podrán solicitarlo' },
+  screen_printing: { name: 'Playera estampada DTF', description: 'Algodón, impresión frontal y varias tallas', optionLabel: 'Tallas / Opciones', visible: 'Los clientes podrán pedirlo' },
+  carpentry: { name: 'Clóset a medida', description: 'MDF con acabado nogal y puertas corredizas', optionLabel: 'Materiales / Opciones', visible: 'Los clientes podrán cotizarlo' },
+  health: { name: 'Consulta de valoración', description: 'Atención con cita previa de 45 minutos', optionLabel: 'Modalidades / Opciones', visible: 'Los pacientes podrán solicitarlo' },
+  dentist: { name: 'Limpieza dental', description: 'Valoración y limpieza profesional', optionLabel: 'Modalidades / Opciones', visible: 'Los pacientes podrán solicitarlo' },
+};
+
 function currentBusinessType() {
   const raw = String(SETTINGS?.business_type || 'restaurant').toLowerCase().trim();
   return BUSINESS_MODELS.some((m) => m.id === raw) ? raw : 'restaurant';
+}
+
+function businessUi() {
+  const profile = BUSINESS_UI[currentBusinessType()] || BUSINESS_UI.restaurant;
+  return {
+    ...profile,
+    itemPlural: profile.items,
+    itemSingularCapitalized: profile.itemSingular.charAt(0).toUpperCase() + profile.itemSingular.slice(1),
+    orderSingularCapitalized: profile.orderSingular.charAt(0).toUpperCase() + profile.orderSingular.slice(1),
+    supportsRestaurantOperations: profile.supportsRestaurantOperations === true,
+  };
+}
+
+function businessOrderStatusLabel(status) {
+  const normalized = String(status || '').toLowerCase();
+  return businessUi().statusLabels?.[normalized] || normalized || '—';
+}
+
+function setBusinessText(selector, text) {
+  const element = document.querySelector(selector);
+  if (element) element.textContent = text;
+}
+
+function applyBusinessModelUI() {
+  const ui = businessUi();
+  const catalogExample = BUSINESS_CATALOG_EXAMPLES[currentBusinessType()] || BUSINESS_CATALOG_EXAMPLES.restaurant;
+  document.body.dataset.businessType = currentBusinessType();
+
+  VIEW_META.pedidos = [ui.orders, `Administra y actualiza tus ${ui.orders.toLowerCase()}`, 'ph-receipt'];
+  VIEW_META.productos = [ui.items, ui.catalogSub, ui.itemIcon];
+  setBusinessText('.sidebar a[data-view="pedidos"] > span:nth-of-type(2)', ui.orders);
+  setBusinessText('.sidebar a[data-view="productos"] > span:nth-of-type(2)', ui.items);
+  setBusinessText('#recentOrdersTitle', `${ui.orders} recientes`);
+  setBusinessText('#addProdBtn', `Nuevo ${ui.itemSingular}`);
+  setBusinessText('#aiImportBtn', `Cargar ${ui.itemPlural.toLowerCase()} con IA`);
+  setBusinessText('#posCatalogHint', `Aquí aparecen automáticamente los ${ui.itemPlural.toLowerCase()} activos dados de alta por categoría.`);
+  setBusinessText('#chatbotShareText', `Comparte esta liga en redes sociales o WhatsApp Business. Tus clientes podrán ${ui.shareAction} y el resumen llegará directo a tu WhatsApp.`);
+  document.querySelectorAll('#orderFilter [data-st]').forEach((button) => {
+    button.textContent = button.dataset.st ? businessOrderStatusLabel(button.dataset.st) : (ui.orders === 'Pedidos' ? 'Todos' : 'Todas');
+  });
+  const aiCatalogModalTitle = $('#aiCatalogModalTitle');
+  if (aiCatalogModalTitle) aiCatalogModalTitle.innerHTML = `<i class="ph-bold ph-magic-wand"></i> Cargar ${esc(ui.itemPlural.toLowerCase())} con IA`;
+  setBusinessText('#aiCatalogModalHint', `Sube una foto o captura de tu catálogo de ${ui.itemPlural.toLowerCase()} y la IA convertirá su contenido en elementos editables.`);
+  setBusinessText('#aiCatalogPickLabel', `Selecciona el catálogo de ${ui.itemPlural.toLowerCase()} desde tu dispositivo`);
+  const aiAnalyzeButton = $('#aiAnalyzeBtn');
+  if (aiAnalyzeButton) {
+    AI_ANALYZE_BTN_IDLE_HTML = `<i class="ph-bold ph-brain"></i> Analizar ${esc(ui.itemPlural.toLowerCase())}`;
+    aiAnalyzeButton.innerHTML = AI_ANALYZE_BTN_IDLE_HTML;
+  }
+  const modifiersTab = $('#prodModifiersTab');
+  if (modifiersTab) modifiersTab.innerHTML = `<i class="ph-bold ph-sliders"></i> ${esc(catalogExample.optionLabel)}`;
+  const productImageLabel = $('#prodImageLabel');
+  if (productImageLabel) productImageLabel.innerHTML = `<i class="ph-bold ph-image"></i> Foto de ${esc(ui.itemSingular)}`;
+  if ($('#pName')) $('#pName').placeholder = catalogExample.name;
+  if ($('#pDesc')) $('#pDesc').placeholder = catalogExample.description;
+  setBusinessText('#prodVisibleHint', catalogExample.visible);
+  const variantsHint = $('#prodVariantsHint');
+  if (variantsHint) variantsHint.innerHTML = `<i class="ph-bold ph-info"></i> Usa variantes cuando el mismo ${esc(ui.itemSingular)} tenga distintas presentaciones, planes o modalidades con precios diferentes.`;
+  const modifiersHint = $('#prodModifiersHint');
+  if (modifiersHint) modifiersHint.innerHTML = `<i class="ph-bold ph-info"></i> Crea grupos de opciones para que el cliente personalice este ${esc(ui.itemSingular)} antes de agregarlo a su selección.`;
+  const productSave = $('#prodSave');
+  if (productSave) productSave.innerHTML = `<i class="ph-bold ph-check"></i> Guardar ${esc(ui.itemSingular)}`;
+
+  const productNavIcon = document.querySelector('.sidebar a[data-view="productos"] .ph-duotone');
+  if (productNavIcon) productNavIcon.className = `ph-duotone ${ui.itemIcon}`;
+  const addProductButton = $('#addProdBtn');
+  if (addProductButton) addProductButton.innerHTML = `<i class="ph-bold ph-plus-circle"></i> Nuevo ${esc(ui.itemSingular)}`;
+  const aiImportButton = $('#aiImportBtn');
+  if (aiImportButton) aiImportButton.innerHTML = `<i class="ph-bold ph-magic-wand"></i> Cargar ${esc(ui.itemPlural.toLowerCase())} con IA`;
+  const posCatalogTitle = $('#posCatalogTitle');
+  if (posCatalogTitle) posCatalogTitle.innerHTML = `<i class="ph-bold ph-storefront"></i> ${esc(ui.items)} para cobrar`;
+
+  document.querySelectorAll('[data-business-feature="restaurant"]:not(.sidebar nav a)').forEach((element) => {
+    element.hidden = !ui.supportsRestaurantOperations;
+  });
+  setChatbotSubtab(!ui.supportsRestaurantOperations && CHATBOT_SUBTAB === 'tables' ? 'flow' : CHATBOT_SUBTAB);
+
+  if (VIEW_META[CURRENT_VIEW]) {
+    const [title, sub, icon] = VIEW_META[CURRENT_VIEW];
+    $('#viewTitle').innerHTML = `<i class="ph-bold ${icon}"></i> ${esc(title)}`;
+    $('#viewSub').textContent = sub;
+  }
 }
 
 function renderBusinessModelPicker() {
@@ -10988,7 +11322,12 @@ document.addEventListener('submit', async (e) => {
     const chosen = BUSINESS_MODELS.find((m) => m.id === value);
     toast(`Modelo de negocio guardado: ${chosen ? chosen.label : value}`);
     SETTINGS = await api('/api/settings');
+    applyBusinessModelUI();
+    applyUserScopeUI();
+    renderInstructions();
     renderBusinessModelPicker();
+    renderModuleVisibility();
+    if (CURRENT_VIEW === 'kds' && !businessUi().supportsRestaurantOperations) await navigate('dashboard');
   } catch (err) {
     toast(err.message, true);
   }
@@ -11309,6 +11648,7 @@ async function boot(navigateToHash = true) {
   if (ME?.role === 'owner' || ME?.role === 'staff') setAuthScope('owner');
   POS_PRODUCT_SORT = normalizePosSortMode(SETTINGS?.pos_catalog_sort_mode || readStoredPosSortMode());
   saveStoredPosSortMode(POS_PRODUCT_SORT);
+  applyBusinessModelUI();
   applyUserScopeUI();
 
   document.documentElement.style.setProperty('--primary', ME.tenant.primaryColor || '#ff6b35');

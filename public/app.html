@@ -11,7 +11,7 @@
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/fill/style.css" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/duotone/style.css" />
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-  <link rel="stylesheet" href="/static/css/styles.css?v=20260902modulegrid" />
+  <link rel="stylesheet" href="/static/css/styles.css?v=20260906trialwelcome" />
   <link rel="icon" type="image/svg+xml" href="/static/favicon.svg" />
   <link rel="icon" type="image/png" href="/static/chatbotpro100.png" />
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
@@ -53,7 +53,7 @@
         <a href="#cancelaciones" data-view="cancelaciones" data-color="rose"><span class="nav-ic"><i class="ph-duotone ph-file-magnifying-glass"></i></span><span>Cancelaciones</span></a>
         <a href="#cortes" data-view="cortes" data-color="emerald"><span class="nav-ic"><i class="ph-duotone ph-safe"></i></span><span>Cortes</span></a>
         <div class="nav-label nav-label-operacion"><i class="ph-fill ph-monitor-play"></i> Operación</div>
-        <a href="#kds" data-view="kds" data-color="orange"><span class="nav-ic"><i class="ph-duotone ph-monitor-play"></i></span><span>Pantallas KDS</span></a>
+        <a href="#kds" data-view="kds" data-color="orange" data-business-feature="restaurant"><span class="nav-ic"><i class="ph-duotone ph-monitor-play"></i></span><span>Pantallas KDS</span></a>
         <a href="/notificaciones" target="_blank" data-color="violet" style="color:#a78bfa"><span class="nav-ic"><i class="ph-duotone ph-broadcast"></i></span><span>Pedidos en vivo</span> <span style="font-size:9px;background:#6c47ff;color:#fff;padding:2px 6px;border-radius:10px;margin-left:auto">PWA</span></a>
         <div class="nav-label nav-label-inventario"><i class="ph-fill ph-package"></i> Inventario</div>
         <a href="#productos" data-view="productos" data-color="rose"><span class="nav-ic"><i class="ph-duotone ph-cooking-pot"></i></span><span>Productos</span></a>
@@ -132,7 +132,7 @@
           <div class="card"><h3 id="dashboardTopTitle"><i class="ph-bold ph-trophy"></i> Más vendidos de hoy</h3><canvas id="topChart" height="225"></canvas></div>
         </div>
         <div class="card" style="margin-top:16px">
-          <h3><i class="ph-bold ph-clock-counter-clockwise"></i> Pedidos recientes
+          <h3><i class="ph-bold ph-clock-counter-clockwise"></i> <span id="recentOrdersTitle">Pedidos recientes</span>
             <a href="#pedidos" class="right" style="font-size:13px;font-weight:700" onclick="navigate('pedidos');return false;">Ver todos →</a>
           </h3>
           <div class="table-wrap" id="recentOrders"></div>
@@ -238,8 +238,8 @@
             <div class="card pos-catalog-card">
               <div class="pos-catalog-head" style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap;margin-bottom:16px">
                 <div>
-                  <h3 style="margin-bottom:8px"><i class="ph-bold ph-storefront"></i> Catálogo para cobrar</h3>
-                  <div class="hint">Aquí aparecen automáticamente los productos activos dados de alta por categoría.</div>
+                  <h3 id="posCatalogTitle" style="margin-bottom:8px"><i class="ph-bold ph-storefront"></i> Catálogo para cobrar</h3>
+                  <div class="hint" id="posCatalogHint">Aquí aparecen automáticamente los productos activos dados de alta por categoría.</div>
                 </div>
                 <div class="segmented pos-cat-filters" id="posCatChips"></div>
               </div>
@@ -758,7 +758,7 @@
       <section class="section" id="view-chatbot">
         <div class="card share-hero" style="margin-bottom:16px">
           <h3><i class="ph-bold ph-link"></i> Tu liga para clientes</h3>
-          <p>Compártela en redes sociales, en tu WhatsApp Business o imprime el código QR para tus mesas. Tus clientes ordenan solos y el resumen del pedido te llega directo a WhatsApp.</p>
+          <p id="chatbotShareText">Compártela en redes sociales, en tu WhatsApp Business o imprime el código QR para tus mesas. Tus clientes ordenan solos y el resumen del pedido te llega directo a WhatsApp.</p>
           <div class="share-flex">
             <div class="share-main">
               <div class="share-box">
@@ -787,7 +787,7 @@
           <button type="button" class="active" id="chatbotTabFlow"><i class="ph-bold ph-chats-circle"></i> Flujo del chatbot</button>
           <button type="button" id="chatbotTabDelivery"><i class="ph-bold ph-truck"></i> Servicio a domicilio</button>
           <button type="button" id="chatbotTabUpsell"><i class="ph-bold ph-rocket-launch"></i> Ofrecimiento inteligente</button>
-          <button type="button" id="chatbotTabTables"><i class="ph-bold ph-fork-knife"></i> Mesas</button>
+          <button type="button" id="chatbotTabTables" data-business-feature="restaurant"><i class="ph-bold ph-fork-knife"></i> Mesas</button>
         </div>
 
         <div id="chatbotFlowPanel">
@@ -855,7 +855,7 @@
                 <div class="t-info"><i class="ph-bold ph-storefront"></i><div><b>Recoger en sucursal</b><span>El cliente pasa por su pedido</span></div></div>
                 <label class="switch"><input type="checkbox" id="botPickup" /><span class="track"></span></label>
               </div>
-              <div class="toggle-row">
+              <div class="toggle-row" id="chatbotDineInOption" data-business-feature="restaurant">
                 <div class="t-info"><i class="ph-bold ph-fork-knife"></i><div><b>Comer en sucursal</b><span>El cliente elige la sucursal donde consumirá</span></div></div>
                 <label class="switch"><input type="checkbox" id="botDineIn" /><span class="track"></span></label>
               </div>
@@ -1006,7 +1006,7 @@
           </div>
         </div>
 
-        <div id="chatbotTablesPanel" hidden>
+        <div id="chatbotTablesPanel" data-business-feature="restaurant" hidden>
           <div class="card">
             <div class="table-config-head">
               <div>
@@ -1183,8 +1183,8 @@
               <span class="hint" id="bizModelCurrentLabel" style="font-weight:700"></span>
             </div>
             <div class="hint" style="margin-top:8px">
-              Elige el giro que mejor describe tu negocio. Tu chatbot usará este contexto para atender a tus clientes de forma coherente
-              (respuestas, sugerencias y guía de compra/cotización). El resto del panel — productos, punto de venta, clientes y pagos — funciona igual.
+              Elige el giro que mejor describe tu negocio. El asistente, el catálogo y los títulos operativos se adaptarán al lenguaje de tus clientes;
+              la estructura de ventas, punto de venta, clientes y pagos se conserva.
             </div>
             <form id="businessTypeForm">
               <div class="biz-model-grid" id="bizModelGrid"></div>
@@ -1727,14 +1727,88 @@
     </div>
   </div>
 
+  <!-- Identidad obligatoria para propietarios recién registrados -->
+  <div class="modal-bg initial-identity-bg" id="initialIdentityModal" role="dialog" aria-modal="true" aria-labelledby="initialIdentityTitle">
+    <div class="initial-identity-modal">
+      <header class="initial-identity-head">
+        <span class="initial-identity-icon"><i class="ph-fill ph-storefront"></i></span>
+        <div>
+          <span class="initial-identity-eyebrow">Primero, haz tuyo el sistema</span>
+          <h2 id="initialIdentityTitle">Configura la identidad de tu negocio</h2>
+          <p>Estos datos aparecerán en tu panel y asistente. También podrás modificarlos después desde Mi negocio.</p>
+        </div>
+      </header>
+      <form id="initialIdentityForm" class="initial-identity-form">
+        <div class="initial-identity-grid">
+          <section class="initial-identity-brand">
+            <div class="field">
+              <label for="initialIdentityName"><i class="ph-bold ph-storefront"></i> Nombre del negocio *</label>
+              <input type="text" id="initialIdentityName" minlength="2" maxlength="160" required autocomplete="organization" />
+            </div>
+            <div class="field">
+              <label for="initialIdentityLogo"><i class="ph-bold ph-image"></i> Logo</label>
+              <div class="initial-identity-logo-upload">
+                <div class="initial-identity-logo-preview" id="initialIdentityLogoPreview"><i class="ph ph-image"></i></div>
+                <div>
+                  <input type="file" id="initialIdentityLogo" accept="image/png,image/jpeg,image/webp" required />
+                  <small>PNG, JPG o WebP, máximo 8 MB. Se mostrará en tu panel y asistente.</small>
+                </div>
+              </div>
+            </div>
+            <div class="field">
+              <label><i class="ph-bold ph-palette"></i> Color de marca *</label>
+              <div class="initial-identity-colors" id="initialIdentityColors"></div>
+              <input type="hidden" id="initialIdentityColor" value="#ff6b35" />
+            </div>
+          </section>
+          <section class="initial-identity-region">
+            <div class="field">
+              <label for="initialIdentityCurrency"><i class="ph-bold ph-coins"></i> Moneda principal *</label>
+              <select id="initialIdentityCurrency" required></select>
+            </div>
+            <div class="field">
+              <label for="initialIdentityTimezone"><i class="ph-bold ph-clock"></i> Zona horaria *</label>
+              <select id="initialIdentityTimezone" required></select>
+              <small id="initialIdentityTimePreview"></small>
+            </div>
+            <div class="initial-identity-note"><i class="ph-fill ph-check-circle"></i><span>Tu selección se guardará automáticamente en <b>Mi negocio</b>.</span></div>
+          </section>
+        </div>
+        <section class="initial-identity-model-section">
+          <div class="initial-identity-section-head">
+            <div><span>Paso clave</span><h3>¿Qué tipo de negocio administras?</h3></div>
+            <small>Adaptaremos el asistente, catálogo y títulos del panel.</small>
+          </div>
+          <div class="initial-identity-models" id="initialIdentityModels"></div>
+          <input type="hidden" id="initialIdentityBusinessType" value="restaurant" />
+        </section>
+        <div class="initial-identity-error" id="initialIdentityError" role="alert" hidden></div>
+        <footer class="initial-identity-foot">
+          <p><i class="ph-bold ph-lock-key"></i> Completa este paso para continuar con la configuración inicial.</p>
+          <button class="btn btn-primary" id="initialIdentitySubmit" type="submit"><i class="ph-bold ph-arrow-right"></i> Guardar y continuar</button>
+        </footer>
+      </form>
+    </div>
+  </div>
+
   <!-- Aviso diario de prueba real -->
   <div class="modal-bg journey-modal-bg" id="trialWelcomeModal" role="dialog" aria-modal="true" aria-labelledby="trialWelcomeTitle">
     <div class="journey-modal trial-journey-modal">
-      <div class="journey-visual trial"><strong id="trialDaysNumber">5</strong><span id="trialDaysLabel">días disponibles</span></div>
+      <div class="journey-visual trial">
+        <div class="trial-business-logo" id="trialBusinessLogo" hidden></div>
+        <strong id="trialDaysNumber">5</strong>
+        <span id="trialDaysLabel">días disponibles</span>
+        <small id="trialBusinessName">Tu negocio</small>
+      </div>
       <div class="journey-copy">
-        <span class="journey-eyebrow">Prueba real de ChatBotPro</span>
+        <span class="journey-eyebrow" id="trialWelcomeEyebrow">Prueba real de ChatBotPro</span>
         <h2 id="trialWelcomeTitle">Tu negocio ya está listo para probar</h2>
         <p id="trialWelcomeText">Tienes 5 días para configurar tus datos y comprobar cómo ChatBotPro puede ayudarte a vender más.</p>
+        <div class="trial-tenant-summary" aria-label="Datos configurados de tu negocio">
+          <span><i class="ph-bold ph-storefront"></i><small>Modelo</small><b id="trialBusinessModel">Restaurante / cafetería</b></span>
+          <span><i class="ph-bold ph-coins"></i><small>Moneda</small><b id="trialBusinessCurrency">MXN</b></span>
+          <span><i class="ph-bold ph-clock"></i><small>Zona horaria</small><b id="trialBusinessTimezone">México · Centro</b></span>
+        </div>
         <div class="journey-features">
           <span><i class="ph-bold ph-cooking-pot"></i> Carga productos y precios</span>
           <span><i class="ph-bold ph-receipt"></i> Haz ventas y tickets reales</span>
@@ -2037,14 +2111,14 @@
         <button type="button" class="active" data-prod-tab="basic"><i class="ph-bold ph-info"></i> Info básica</button>
         <button type="button" data-prod-tab="fiscal" data-mexico-only="true"><i class="ph-bold ph-barcode"></i> Datos SAT</button>
         <button type="button" data-prod-tab="variants"><i class="ph-bold ph-stack"></i> Variantes de precio</button>
-        <button type="button" data-prod-tab="modifiers"><i class="ph-bold ph-sliders"></i> Ingredientes / Opciones</button>
+        <button type="button" data-prod-tab="modifiers" id="prodModifiersTab"><i class="ph-bold ph-sliders"></i> Ingredientes / Opciones</button>
       </div>
       <form id="prodForm">
         <input type="hidden" id="pId" />
         <!-- Pestaña: Info básica -->
         <div class="prod-tab-panel active" id="prodTabBasic">
           <div class="field">
-            <label><i class="ph-bold ph-image"></i> Foto del producto</label>
+            <label id="prodImageLabel"><i class="ph-bold ph-image"></i> Foto del producto</label>
             <div class="dropzone" id="dropzone">
               <div class="dz-empty">
                 <i class="ph ph-cloud-arrow-up"></i>
@@ -2061,7 +2135,7 @@
             <div class="field"><label><i class="ph-bold ph-folder"></i> Categoría</label><select id="pCat"><option value="">Sin categoría</option></select></div>
           </div>
           <div class="toggle-row" style="margin-bottom:0">
-            <div class="t-info"><i class="ph-bold ph-eye"></i><div><b>Visible en el chatbot</b><span>Los clientes podrán pedirlo</span></div></div>
+            <div class="t-info"><i class="ph-bold ph-eye"></i><div><b>Visible en el chatbot</b><span id="prodVisibleHint">Los clientes podrán pedirlo</span></div></div>
             <label class="switch"><input type="checkbox" id="pActive" checked /><span class="track"></span></label>
           </div>
           <!-- Ficha técnica: extras configurados -->
@@ -2082,13 +2156,13 @@
         </div>
         <!-- Pestaña: Variantes de precio -->
         <div class="prod-tab-panel" id="prodTabVariants" hidden>
-          <div class="hint" style="margin-bottom:12px"><i class="ph-bold ph-info"></i> Usa variantes cuando el mismo producto tiene distintos tamaños o cantidades con precios diferentes. Ej: <b>1 kg → $300</b> / <b>½ kg → $140</b>. Si defines variantes, el cliente elegirá una antes de agregar al carrito.</div>
+          <div class="hint" id="prodVariantsHint" style="margin-bottom:12px"><i class="ph-bold ph-info"></i> Usa variantes cuando el mismo producto tiene distintos tamaños o cantidades con precios diferentes. Ej: <b>1 kg → $300</b> / <b>½ kg → $140</b>. Si defines variantes, el cliente elegirá una antes de agregar al carrito.</div>
           <div id="variantsList" class="variants-list"></div>
           <button type="button" class="btn btn-ghost" id="addVariantBtn" style="margin-top:8px"><i class="ph-bold ph-plus-circle"></i> Agregar variante</button>
         </div>
         <!-- Pestaña: Ingredientes / Opciones -->
         <div class="prod-tab-panel" id="prodTabModifiers" hidden>
-          <div class="hint" style="margin-bottom:12px"><i class="ph-bold ph-info"></i> Crea grupos de opciones que el cliente puede elegir. Ej: <b>Mitades</b> (pepperoni / pastor), <b>Extras</b> (queso extra / jalapeño). Puedes requerir selección mínima por grupo.</div>
+          <div class="hint" id="prodModifiersHint" style="margin-bottom:12px"><i class="ph-bold ph-info"></i> Crea grupos de opciones que el cliente puede elegir. Ej: <b>Mitades</b> (pepperoni / pastor), <b>Extras</b> (queso extra / jalapeño). Puedes requerir selección mínima por grupo.</div>
           <div id="modifierGroupsList" class="modifier-groups-list"></div>
           <button type="button" class="btn btn-ghost" id="addModifierGroupBtn" style="margin-top:8px"><i class="ph-bold ph-plus-circle"></i> Agregar grupo de opciones</button>
         </div>
@@ -2164,14 +2238,14 @@
   <!-- ════════ Modal importación IA de menú ════════ -->
   <div class="modal-bg" id="aiProductModal">
     <div class="modal" style="max-width:860px">
-      <h3><i class="ph-bold ph-magic-wand"></i> Cargar productos con IA</h3>
-      <div class="hint" style="margin-bottom:12px">Sube una foto o captura de tu menú desde cualquier dispositivo y la IA convertirá ese menú en productos editables para importar en lote.</div>
+      <h3 id="aiCatalogModalTitle"><i class="ph-bold ph-magic-wand"></i> Cargar catálogo con IA</h3>
+      <div class="hint" id="aiCatalogModalHint" style="margin-bottom:12px">Sube una foto o captura de tu catálogo y la IA convertirá su contenido en elementos editables para importar en lote.</div>
       <form id="aiProductForm">
         <div class="ai-upload-shell">
           <div class="ai-upload-card" id="aiMenuUploadArea" role="button" tabindex="0" aria-label="Seleccionar imagen del menú">
             <div class="ai-upload-hero"><i class="ph-bold ph-image-square"></i></div>
             <div class="ai-upload-copy">
-              <b>Selecciona el menú desde tu dispositivo</b>
+              <b id="aiCatalogPickLabel">Selecciona el catálogo desde tu dispositivo</b>
               <span>Compatible con fotos, capturas y archivos de imagen. Tamaño máximo 8 MB.</span>
             </div>
             <button type="button" class="btn btn-ghost" id="aiMenuPickBtn"><i class="ph-bold ph-upload-simple"></i> Elegir imagen</button>
@@ -2190,7 +2264,7 @@
           </div>
         </div>
         <div class="modal-actions" style="margin-top:8px">
-          <button type="submit" class="btn btn-primary" id="aiAnalyzeBtn"><i class="ph-bold ph-brain"></i> Analizar menú</button>
+          <button type="submit" class="btn btn-primary" id="aiAnalyzeBtn"><i class="ph-bold ph-brain"></i> Analizar catálogo</button>
         </div>
         <div class="ai-analyze-progress" id="aiAnalyzeProgress" hidden aria-live="polite">
           <div class="ai-analyze-progress-head">
@@ -3093,6 +3167,6 @@
   </div>
 
 <script src="/socket.io/socket.io.js"></script>
-  <script src="/static/js/app.js?v=20260904fiscalcycle"></script>
+  <script src="/static/js/app.js?v=20260906trialwelcome"></script>
 </body>
 </html>

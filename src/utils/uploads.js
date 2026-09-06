@@ -114,5 +114,6 @@ module.exports = {
   createImageUpload,
   deleteManagedUpload,
   optimizeUploadedImage,
+  resolveManagedUploadPath,
   safeUnlink,
 };

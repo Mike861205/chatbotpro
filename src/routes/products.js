@@ -5,8 +5,9 @@ const OpenAI = require('openai');
 const sharp = require('sharp');
 const { requireAuth, requireOwner, requireModules } = require('../middleware/auth');
 const config = require('../config');
-const { getSuperAdminSetting } = require('../db');
+const { getSetting, getSuperAdminSetting } = require('../db');
 const { decrypt } = require('../utils/crypto');
+const { buildAiCatalogPrompt } = require('../utils/businessCatalog');
 const { createImageUpload, deleteManagedUpload, optimizeUploadedImage, safeUnlink } = require('../utils/uploads');
 
 const router = express.Router();
@@ -465,7 +466,7 @@ router.get('/', async (req, res, next) => {
 router.post('/ai/suggest', uploadAiMenu.single('menuImage'), async (req, res, next) => {
   try {
     if (!req.file) {
-      return res.status(400).json({ error: 'Sube una imagen del menu para analizar.' });
+      return res.status(400).json({ error: 'Sube una imagen del catálogo para analizar.' });
     }
 
     const aiCfg = await getOpenAiRuntimeConfig();
@@ -477,25 +478,12 @@ router.post('/ai/suggest', uploadAiMenu.single('menuImage'), async (req, res, ne
 
     const categories = await req.tdb.all('SELECT id, name FROM {s}.categories ORDER BY sort, name');
     const categoryNames = categories.map((c) => c.name).filter(Boolean);
+    const businessType = await getSetting(req.tdb, 'business_type', 'restaurant');
 
     const content = [
       {
         type: 'text',
-        text: [
-          'Analiza este menu de restaurante y regresa SOLO JSON valido.',
-          'Genera productos listos para cargar en el sistema POS/chatbot.',
-          'Formato JSON requerido:',
-          '{"products":[{"name":"string","description":"string","price":123.45,"categoryName":"string","variantGroup":"string opcional","variantName":"string opcional"}],"notes":["string"]}',
-          'Reglas:',
-          '- Incluye solo productos vendibles, no encabezados ni subtotales.',
-          '- price debe ser numero mayor o igual a 0.',
-          '- categoryName debe ser breve (ej. Hamburguesas, Bebidas).',
-          '- Agrega description breve del platillo en cada producto (ingredientes o preparacion).',
-          '- Si un platillo tiene tamanos/presentaciones, usa variantGroup con el nombre base y variantName con el tamano (ej. Chica, Mediana).',
-          '- Si falta precio, usa 0 y agrega una nota.',
-          '- Maximo 60 productos.',
-          `Categorias existentes del tenant: ${categoryNames.join(', ') || 'Ninguna'}`,
-        ].join('\n'),
+        text: buildAiCatalogPrompt(businessType, categoryNames),
       },
     ];
 

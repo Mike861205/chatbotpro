@@ -20,7 +20,7 @@ test('agrupa las validaciones y crea tenant y propietario atómicamente', () => 
   assert.match(auth, /const \[conflictResult, passwordHash\] = await Promise\.all/);
   assert.match(auth, /WITH new_tenant AS/);
   assert.match(auth, /new_user AS/);
-  assert.match(auth, /SELECT id, \$8, \$9, 0 FROM new_tenant/);
+  assert.match(auth, /SELECT id, \$8, \$9, 0, 0 FROM new_tenant/);
   assert.match(auth, /FROM new_tenant CROSS JOIN new_user/);
 });
 

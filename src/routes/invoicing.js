@@ -1,6 +1,7 @@
 const express = require('express');
 const multer = require('multer');
-const { X509Certificate, createPrivateKey, createPublicKey } = require('node:crypto');
+const sharp = require('sharp');
+const { X509Certificate, createHash, createPrivateKey, createPublicKey } = require('node:crypto');
 const config = require('../config');
 const { q, tdb, ensureTenantCourtesyStamps } = require('../db');
 const { encrypt, decrypt, lookupHash } = require('../utils/crypto');
@@ -24,6 +25,7 @@ const {
   createRequestKey,
 } = require('../utils/invoicing');
 const { trialState } = require('../utils/trialAccess');
+const { resolveManagedUploadPath } = require('../utils/uploads');
 
 const router = express.Router();
 const facturamaClients = createConfiguredFacturamaClients();
@@ -50,6 +52,26 @@ function issuerApiMode(environment, rfc, sandboxShared = false) {
 
 function apiModeFor(document, profile) {
   return ['web', 'multi'].includes(document?.api_mode) ? document.api_mode : (profile?.api_mode || 'multi');
+}
+
+function facturamaLogoUrl(tenant) {
+  const logo = String(tenant?.logo || '').trim();
+  if (!logo) return '';
+  if (/^https:\/\/[^?#]+\.(?:png|jpe?g)$/i.test(logo)) return logo;
+  if (!logo.startsWith('/uploads/')) return '';
+  const slug = String(tenant?.slug || '').trim().toLowerCase();
+  if (!/^[a-z0-9-]{3,40}$/.test(slug)) return '';
+  let origin;
+  try { origin = new URL(config.INVOICING_PORTAL_ORIGIN).origin; } catch { return ''; }
+  const version = createHash('sha256').update(logo).digest('hex').slice(0, 16);
+  return `${origin}/api/invoicing/public/${encodeURIComponent(slug)}/logo/${version}.png`;
+}
+
+function applyMultiIssuerPresentation(payload, tenant, profile) {
+  if (profile.api_mode === 'web') return;
+  payload.Issuer = { Rfc: profile.rfc, Name: profile.legal_name, FiscalRegime: profile.fiscal_regime };
+  const logoUrl = facturamaLogoUrl(tenant);
+  if (logoUrl) payload.LogoUrl = logoUrl;
 }
 const publicLimiter = createRateLimiter({ windowMs: 15 * 60 * 1000, max: 30, message: 'Demasiados intentos de facturación. Espera unos minutos.' });
 const csdUpload = multer({
@@ -633,7 +655,7 @@ async function issueGlobalInvoice({ tenant, tenantDb, orderIds, conceptMode = 't
     GlobalInformation: globalInformationForReceiver(receiver, `${allocated.snapshot.businessDate}T12:00:00`),
     Observations: `Factura global diaria · ${allocated.snapshot.businessDate} · ${allocated.snapshot.orderIds.length} tickets`,
   };
-  if (profile.api_mode !== 'web') payload.Issuer = { Rfc: profile.rfc, Name: profile.legal_name, FiscalRegime: profile.fiscal_regime };
+  applyMultiIssuerPresentation(payload, tenant, profile);
 
   try {
     let response = await facturama.createCfdi(payload, profile.api_mode);
@@ -799,9 +821,7 @@ async function issueSaleInvoice({ tenant, tenantDb, orderId, receiverInput, requ
   if (relation.payload) payload.Relations = relation.payload;
   const globalInformation = globalInformationForReceiver(receiver, sale.created_at);
   if (globalInformation) payload.GlobalInformation = globalInformation;
-  if (profile.api_mode !== 'web') {
-    payload.Issuer = { Rfc: profile.rfc, Name: profile.legal_name, FiscalRegime: profile.fiscal_regime };
-  }
+  applyMultiIssuerPresentation(payload, tenant, profile);
 
   try {
     let response = await facturama.createCfdi(payload, profile.api_mode);
@@ -921,7 +941,7 @@ async function issueDirectInvoice({ tenant, tenantDb, input = {}, actor = '' }) 
   if (relation.payload) payload.Relations = relation.payload;
   const globalInformation = globalInformationForReceiver(receiver, `${saleDate}T12:00:00`);
   if (globalInformation) payload.GlobalInformation = globalInformation;
-  if (profile.api_mode !== 'web') payload.Issuer = { Rfc: profile.rfc, Name: profile.legal_name, FiscalRegime: profile.fiscal_regime };
+  applyMultiIssuerPresentation(payload, tenant, profile);
 
   try {
     let response = await facturama.createCfdi(payload, profile.api_mode);
@@ -1047,7 +1067,7 @@ async function issueManualGlobalInvoice({ tenant, tenantDb, input = {}, actor = 
   const payload = { NameId:1,CfdiType:'I',Currency:'MXN',Exportation:'01',ExpeditionPlace:expeditionPlace,PaymentForm:paymentForm,
     PaymentMethod:'PUE',Serie:series,Folio:allocated.row.folio,Receiver:{Rfc:receiver.rfc,Name:receiver.name,FiscalRegime:receiver.fiscalRegime,TaxZipCode:receiver.postalCode,CfdiUse:'S01'},
     Items:items,GlobalInformation:{Periodicity:periodicity,Months:months,Year:year},Observations:`Factura global manual · ${reference}` };
-  if (profile.api_mode !== 'web') payload.Issuer = { Rfc:profile.rfc,Name:profile.legal_name,FiscalRegime:profile.fiscal_regime };
+  applyMultiIssuerPresentation(payload, tenant, profile);
   const updated = await stampStandardDocument({ tenantDb,table:'direct_invoices',stampType:'manual_global',row:allocated.row,profile,payload,actor });
   return { invoice: cfdiDocumentSummary({ ...updated,document_type:'manual_global' }) };
 }
@@ -1170,7 +1190,7 @@ async function issuePaymentComplement({ tenant, tenantDb, input = {}, actor = ''
   const payload = { NameId:14,CfdiType:'P',ExpeditionPlace:allocated.expeditionPlace,Serie:allocated.series,Folio:allocated.row.folio,
     Receiver:{Rfc:allocated.receiver.rfc,Name:allocated.receiver.name,FiscalRegime:allocated.receiver.fiscalRegime,TaxZipCode:allocated.receiver.postalCode,CfdiUse:'CP01'},
     Complemento:{Payments:[payment]},Observations:'Recibo electrónico de pago 2.0' };
-  if (allocated.profile.api_mode !== 'web') payload.Issuer = { Rfc:allocated.profile.rfc,Name:allocated.profile.legal_name,FiscalRegime:allocated.profile.fiscal_regime };
+  applyMultiIssuerPresentation(payload, tenant, allocated.profile);
   const updated = await stampStandardDocument({ tenantDb,table:'payment_complements',stampType:'payment',row:allocated.row,profile:allocated.profile,payload,actor });
   return { invoice: cfdiDocumentSummary({ ...updated,document_type:'payment',total:updated.amount }) };
 }
@@ -1216,10 +1236,29 @@ async function issueCreditNote({ tenant, tenantDb, input = {}, actor = '' }) {
   });
   const payload={NameId:2,CfdiType:'E',Currency:'MXN',Exportation:'01',ExpeditionPlace:expeditionPlace,PaymentForm:paymentForm,PaymentMethod:'PUE',Serie:series,Folio:allocated.folio,
     Receiver:{Rfc:receiver.rfc,Name:receiver.name,FiscalRegime:receiver.fiscalRegime,TaxZipCode:receiver.postalCode,CfdiUse:'G02'},Relations:{Type:'01',Cfdis:[{Uuid:source.uuid}]},Items:items,Observations:`Nota de crédito relacionada con ${source.uuid}`};
-  if(profile.api_mode!=='web')payload.Issuer={Rfc:profile.rfc,Name:profile.legal_name,FiscalRegime:profile.fiscal_regime};
+  applyMultiIssuerPresentation(payload, tenant, profile);
   const updated=await stampStandardDocument({tenantDb,table:'direct_invoices',stampType:'credit_note',row:allocated,profile,payload,actor});
   return {invoice:cfdiDocumentSummary({...updated,document_type:'credit_note'})};
 }
+
+router.get('/public/:slug/logo/:version.png', async (req, res, next) => {
+  try {
+    if (!/^[a-f0-9]{16}$/.test(String(req.params.version || ''))) return res.status(404).end();
+    const tenant = await findPublicTenant(req.params.slug);
+    if (!tenant?.logo) return res.status(404).end();
+    const expectedVersion = createHash('sha256').update(String(tenant.logo)).digest('hex').slice(0, 16);
+    if (req.params.version !== expectedVersion) return res.status(404).end();
+    const logoPath = resolveManagedUploadPath(tenant.logo);
+    if (!logoPath) return res.status(404).end();
+    const png = await sharp(logoPath, { failOn: 'none' })
+      .rotate()
+      .resize({ width: 800, height: 800, fit: 'inside', withoutEnlargement: true })
+      .png({ compressionLevel: 9 })
+      .toBuffer();
+    res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+    res.type('png').send(png);
+  } catch (error) { next(error); }
+});
 
 // Portal público de autofacturación
 router.get('/public/:slug', publicLimiter, async (req, res, next) => {
@@ -1481,6 +1520,52 @@ router.get('/documents', async (req, res, next) => {
     );
     const total = Number(rows[0]?.total_rows || 0);
     res.json({ rows: rows.map(cfdiDocumentSummary), pagination: { page, limit, total, pages: Math.max(1, Math.ceil(total / limit)) } });
+  } catch (error) { next(error); }
+});
+
+router.put('/profile-draft', requireOwner, async (req, res, next) => {
+  try {
+    const draft = {
+      rfc: String(req.body?.rfc || '').trim().toUpperCase().slice(0, 13),
+      legalName: String(req.body?.legalName || '').trim().toUpperCase().replace(/\s+/g, ' ').slice(0, 300),
+      fiscalRegime: String(req.body?.fiscalRegime || '').trim().slice(0, 3),
+      postalCode: String(req.body?.postalCode || '').trim().slice(0, 5),
+    };
+    if (draft.rfc && !/^[A-ZÑ&]{3,4}\d{6}[A-Z0-9]{3}$/.test(draft.rfc)) {
+      return res.status(400).json({ error: 'El RFC del emisor no tiene un formato válido' });
+    }
+    if (draft.legalName && draft.legalName.length < 3) {
+      return res.status(400).json({ error: 'La razón social debe tener al menos 3 caracteres' });
+    }
+    if (draft.fiscalRegime && !/^\d{3}$/.test(draft.fiscalRegime)) {
+      return res.status(400).json({ error: 'El régimen fiscal debe contener 3 dígitos' });
+    }
+    if (draft.postalCode && !/^\d{5}$/.test(draft.postalCode)) {
+      return res.status(400).json({ error: 'El código postal fiscal debe contener 5 dígitos' });
+    }
+    const environment = tenantEnvironment(req.tenant);
+    const row = await req.tdb.get(
+      `UPDATE {s}.fiscal_profiles
+       SET enabled=0,environment=$1,
+           rfc=COALESCE(NULLIF($2,''),rfc),legal_name=COALESCE(NULLIF($3,''),legal_name),
+           fiscal_regime=COALESCE(NULLIF($4,''),fiscal_regime),postal_code=COALESCE(NULLIF($5,''),postal_code),
+           csd_uploaded=CASE WHEN $2='' OR rfc=$2 THEN csd_uploaded ELSE 0 END,
+           csd_updated_at=CASE WHEN $2='' OR rfc=$2 THEN csd_updated_at ELSE NULL END,
+           updated_at=now()
+       WHERE id=1 RETURNING *`,
+      [environment, draft.rfc, draft.legalName, draft.fiscalRegime, draft.postalCode]
+    );
+    await req.tdb.run(
+      `UPDATE {s}.fiscal_emitters
+       SET enabled=0,environment=$1,
+           rfc=COALESCE(NULLIF($2,''),rfc),legal_name=COALESCE(NULLIF($3,''),legal_name),
+           fiscal_regime=COALESCE(NULLIF($4,''),fiscal_regime),postal_code=COALESCE(NULLIF($5,''),postal_code),
+           csd_uploaded=CASE WHEN $2='' OR rfc=$2 THEN csd_uploaded ELSE 0 END,
+           csd_updated_at=CASE WHEN $2='' OR rfc=$2 THEN csd_updated_at ELSE NULL END,updated_at=now()
+       WHERE id=1`,
+      [environment, draft.rfc, draft.legalName, draft.fiscalRegime, draft.postalCode]
+    );
+    res.json({ ok: true, profile: safeProfile(row), complete: profileCompleteness(row) });
   } catch (error) { next(error); }
 });
 

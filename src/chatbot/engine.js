@@ -1109,12 +1109,17 @@ const RESTAURANT_LABELS = {
   askDeliveryMode: '¿Cómo quieres recibir tu pedido?',
   deliveryButton: '🛵 A domicilio',
   pickupButton: '🏪 Recoger en sucursal',
+  dineInButton: '🍽️ Comer en sucursal',
   askAddress: '¿Cuál es tu *dirección* de entrega? 📍',
   askBranch: '¿En qué sucursal pasarás a recoger tu pedido?',
   askPayment: '¿Cómo pagarás tu pedido?',
   addressLabel: '📍 Entrega a domicilio',
   pickupLabel: '🏪 Recoger en sucursal',
   newOrderHeader: 'Nuevo pedido',
+  confirmQuestion: '¿Confirmamos tu pedido?',
+  confirmYes: '✅ Sí, confirmar',
+  editNote: '📝 Editar nota',
+  confirmBack: '❌ No, regresar',
   welcomeDefault: (biz) => `¡Hola! Bienvenido a ${biz} 👋`,
 };
 
@@ -1126,6 +1131,7 @@ const BUSINESS_MODELS = {
     domainInstructions:
       'Actúas como asistente de pedidos de un restaurante o cafetería. ' +
       'Ayudas a elegir platillos, bebidas, combos y a tomar el pedido para domicilio o recoger en sucursal.',
+    supportsDineIn: true,
     labels: {}, // usa restaurant defaults
   },
   furniture: {
@@ -1155,6 +1161,8 @@ const BUSINESS_MODELS = {
       addressLabel: '📍 Envío a domicilio',
       pickupLabel: '🏪 Recoger en tienda',
       newOrderHeader: 'Nueva solicitud de cotización',
+      confirmQuestion: '¿Enviamos tu solicitud de cotización?',
+      confirmYes: '✅ Sí, enviar solicitud',
       welcomeDefault: (biz) => `¡Hola! Bienvenido a ${biz} 🛋️ Estoy aquí para ayudarte a elegir tus muebles.`,
     },
   },
@@ -1185,6 +1193,8 @@ const BUSINESS_MODELS = {
       addressLabel: '📧 Envío a domicilio',
       pickupLabel: '🏢 Recoger en la agencia',
       newOrderHeader: 'Nueva solicitud de reservación',
+      confirmQuestion: '¿Enviamos tu solicitud de reservación?',
+      confirmYes: '✅ Sí, solicitar reservación',
       welcomeDefault: (biz) => `¡Hola! Bienvenido a ${biz} ✈️ ¿A dónde te gustaría viajar?`,
     },
   },
@@ -1215,6 +1225,8 @@ const BUSINESS_MODELS = {
       addressLabel: '📍 Servicio a domicilio',
       pickupLabel: '🏢 En la oficina',
       newOrderHeader: 'Nueva solicitud de servicio',
+      confirmQuestion: '¿Enviamos tu solicitud de servicio?',
+      confirmYes: '✅ Sí, enviar solicitud',
       welcomeDefault: (biz) => `¡Hola! Bienvenido a ${biz} 💼 ¿En qué puedo ayudarte?`,
     },
   },
@@ -1246,6 +1258,7 @@ const BUSINESS_MODELS = {
       addressLabel: '📍 Envío a domicilio',
       pickupLabel: '🏪 Recoger en el taller',
       newOrderHeader: 'Nuevo pedido de estampado',
+      confirmQuestion: '¿Confirmamos tu pedido de estampado?',
       welcomeDefault: (biz) => `¡Hola! Bienvenido a ${biz} 👕 Cotizamos tu diseño en minutos.`,
     },
   },
@@ -1277,6 +1290,8 @@ const BUSINESS_MODELS = {
       addressLabel: '📍 Envío a domicilio',
       pickupLabel: '🏪 Recoger en el taller',
       newOrderHeader: 'Nueva solicitud de cotización',
+      confirmQuestion: '¿Enviamos tu solicitud de cotización?',
+      confirmYes: '✅ Sí, enviar solicitud',
       welcomeDefault: (biz) => `¡Hola! Bienvenido a ${biz} 🪚 Cotizamos tu mueble a la medida.`,
     },
   },
@@ -1308,6 +1323,8 @@ const BUSINESS_MODELS = {
       addressLabel: '📍 Visita a domicilio',
       pickupLabel: '🏥 Acudir a la clínica',
       newOrderHeader: 'Nueva solicitud de cita',
+      confirmQuestion: '¿Enviamos tu solicitud de cita?',
+      confirmYes: '✅ Sí, solicitar cita',
       welcomeDefault: (biz) => `¡Hola! Bienvenido a ${biz} 🏥 ¿En qué podemos ayudarte hoy?`,
     },
   },
@@ -1339,6 +1356,8 @@ const BUSINESS_MODELS = {
       addressLabel: '📍 Visita a domicilio',
       pickupLabel: '🦷 Acudir al consultorio',
       newOrderHeader: 'Nueva solicitud de cita dental',
+      confirmQuestion: '¿Enviamos tu solicitud de cita dental?',
+      confirmYes: '✅ Sí, solicitar cita',
       welcomeDefault: (biz) => `¡Hola! Bienvenido a ${biz} 🦷 Con gusto te ayudamos a agendar tu cita.`,
     },
   },
@@ -1352,6 +1371,17 @@ function getBusinessModel(businessType) {
 function getLabels(businessType) {
   const model = getBusinessModel(businessType);
   return { ...RESTAURANT_LABELS, ...(model.labels || {}) };
+}
+
+function defaultReceivingModes(businessType, labels, { deliveryEnabled, pickupEnabled, dineInEnabled }) {
+  const model = getBusinessModel(businessType);
+  return [
+    ...(deliveryEnabled ? [{ id: 'domicilio', label: labels.deliveryButton, behavior: 'delivery' }] : []),
+    ...(pickupEnabled ? [{ id: 'recoger', label: labels.pickupButton, behavior: 'branch' }] : []),
+    ...(dineInEnabled && model.supportsDineIn
+      ? [{ id: 'comer_sucursal', label: labels.dineInButton, behavior: 'branch' }]
+      : []),
+  ];
 }
 
 function buildBusinessSystemPrompt(businessType, businessName, menuText) {
@@ -1433,9 +1463,7 @@ async function handleMessage(t, slug, sessionId, rawInput) {
   const labels = getLabels(businessType);
   const customReceivingModes = parseCustomReceivingModes(await getSetting(t, 'chatbot_receiving_modes_json', '[]'));
   const receivingModes = [
-    ...(deliveryEnabled ? [{ id: 'domicilio', label: labels.deliveryButton || '🛵 A domicilio', behavior: 'delivery' }] : []),
-    ...(pickupEnabled ? [{ id: 'recoger', label: labels.pickupButton || '🏪 Recoger en sucursal', behavior: 'branch' }] : []),
-    ...(dineInEnabled ? [{ id: 'comer_sucursal', label: '🍽️ Comer en sucursal', behavior: 'branch' }] : []),
+    ...defaultReceivingModes(businessType, labels, { deliveryEnabled, pickupEnabled, dineInEnabled }),
     ...customReceivingModes.filter((mode) => mode.enabled).map((mode) => ({
       ...mode,
       label: `${receivingModeIcon(mode.behavior)} ${mode.label}`,
@@ -1550,7 +1578,7 @@ async function handleMessage(t, slug, sessionId, rawInput) {
       state.customer.paymentMethod = 'cash';
       state.step = 'confirm';
       reply.messages.push(confirmText(state, businessName, currency, labels));
-      reply.options = confirmOptions();
+      reply.options = confirmOptions(labels);
       return;
     }
     state.step = 'ask_payment_method';
@@ -2670,7 +2698,7 @@ async function handleMessage(t, slug, sessionId, rawInput) {
     } else {
       reply.messages = [confirmText(state, businessName, currency, labels)];
     }
-    reply.options = confirmOptions();
+    reply.options = confirmOptions(labels);
     return finish();
   }
 
@@ -2784,7 +2812,7 @@ async function handleMessage(t, slug, sessionId, rawInput) {
       state.customer.orderNote = '';
       state.step = 'confirm';
       reply.messages = ['✅ Nota eliminada.', confirmText(state, businessName, currency, labels)];
-      reply.options = confirmOptions();
+      reply.options = confirmOptions(labels);
       return finish();
     }
     if (lower === 'confirm_no') {
@@ -2800,7 +2828,7 @@ async function handleMessage(t, slug, sessionId, rawInput) {
       state.customer.orderNote = '';
       state.step = 'confirm';
       reply.messages = ['✅ Nota eliminada.', confirmText(state, businessName, currency, labels)];
-      reply.options = confirmOptions();
+      reply.options = confirmOptions(labels);
       return finish();
     }
 
@@ -2814,7 +2842,7 @@ async function handleMessage(t, slug, sessionId, rawInput) {
     state.customer.orderNote = note.slice(0, 220);
     state.step = 'confirm';
     reply.messages = ['✅ Nota actualizada.', confirmText(state, businessName, currency, labels)];
-    reply.options = confirmOptions();
+    reply.options = confirmOptions(labels);
     return finish();
   }
 
@@ -2856,15 +2884,15 @@ function confirmText(state, businessName, currency, labels = RESTAURANT_LABELS) 
     (isAddressDelivery && c.deliveryBranchName ? `\n🏪 Atiende: Sucursal ${c.deliveryBranchName}` : '') +
     (isAddressDelivery && c.reference ? `\n📝 Referencia: ${c.reference}` : '') +
     (locationDetails ? `\n${locationDetails}` : '') +
-    '\n\n¿Confirmamos tu pedido?'
+    `\n\n${labels.confirmQuestion || RESTAURANT_LABELS.confirmQuestion}`
   );
 }
 
-function confirmOptions() {
+function confirmOptions(labels = RESTAURANT_LABELS) {
   return [
-    { label: '✅ Sí, confirmar', value: 'confirm_yes' },
-    { label: '📝 Editar nota', value: 'confirm_edit_note' },
-    { label: '❌ No, regresar', value: 'confirm_no' },
+    { label: labels.confirmYes || RESTAURANT_LABELS.confirmYes, value: 'confirm_yes' },
+    { label: labels.editNote || RESTAURANT_LABELS.editNote, value: 'confirm_edit_note' },
+    { label: labels.confirmBack || RESTAURANT_LABELS.confirmBack, value: 'confirm_no' },
   ];
 }
 
@@ -2872,4 +2900,12 @@ function newSessionId() {
   return crypto.randomUUID();
 }
 
-module.exports = { buildOrderText, handleMessage, newSessionId, toggleModifierOptionSelection };
+module.exports = {
+  buildBusinessSystemPrompt,
+  buildOrderText,
+  defaultReceivingModes,
+  getLabels,
+  handleMessage,
+  newSessionId,
+  toggleModifierOptionSelection,
+};

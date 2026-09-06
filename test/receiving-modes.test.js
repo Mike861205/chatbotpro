@@ -2,6 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
+const { defaultReceivingModes, getLabels } = require('../src/chatbot/engine');
 
 const root = path.join(__dirname, '..');
 const read = (file) => fs.readFileSync(path.join(root, file), 'utf8');
@@ -15,11 +16,13 @@ const appHtml = read('public/app.html');
 const app = read('public/js/app.js');
 const kds = read('src/routes/kds.js');
 
-test('comer en sucursal queda habilitado por defecto', () => {
+test('comer en sucursal queda habilitado por defecto solo para restaurantes', () => {
   assert.match(db, /dine_in_enabled: '1'/);
   assert.match(settings, /'dine_in_enabled'/);
   assert.match(chatbot, /getSetting\(t, 'dine_in_enabled', '1'\)/);
-  assert.match(chatbot, /id: 'comer_sucursal', label: '🍽️ Comer en sucursal', behavior: 'branch'/);
+  const flags = { deliveryEnabled: true, pickupEnabled: true, dineInEnabled: true };
+  assert.ok(defaultReceivingModes('restaurant', getLabels('restaurant'), flags).some((mode) => mode.id === 'comer_sucursal'));
+  assert.ok(!defaultReceivingModes('travel_agency', getLabels('travel_agency'), flags).some((mode) => mode.id === 'comer_sucursal'));
 });
 
 test('Mi chatbot permite activar las tres modalidades principales', () => {

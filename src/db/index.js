@@ -143,6 +143,7 @@ async function initMaster() {
       cashier_slug TEXT,
       active INTEGER DEFAULT 1,
       onboarding_completed INTEGER NOT NULL DEFAULT 1,
+      identity_completed INTEGER NOT NULL DEFAULT 1,
       job_title TEXT DEFAULT '',
       permissions_json TEXT NOT NULL DEFAULT '[]',
       created_at TIMESTAMPTZ DEFAULT now()
@@ -327,6 +328,7 @@ async function initMaster() {
   await q(`ALTER TABLE users ADD COLUMN IF NOT EXISTS cashier_slug TEXT`);
   await q(`ALTER TABLE users ADD COLUMN IF NOT EXISTS active INTEGER DEFAULT 1`);
   await q(`ALTER TABLE users ADD COLUMN IF NOT EXISTS onboarding_completed INTEGER NOT NULL DEFAULT 1`);
+  await q(`ALTER TABLE users ADD COLUMN IF NOT EXISTS identity_completed INTEGER NOT NULL DEFAULT 1`);
   await q(`CREATE UNIQUE INDEX IF NOT EXISTS idx_users_cashier_slug_unique ON users (cashier_slug) WHERE cashier_slug IS NOT NULL AND cashier_slug <> ''`);
   await q(`CREATE UNIQUE INDEX IF NOT EXISTS idx_module_usage_tenant_module ON module_usage (tenant_id, module_key) WHERE demo_lead_id IS NULL`);
   await q(`CREATE UNIQUE INDEX IF NOT EXISTS idx_module_usage_lead_module ON module_usage (demo_lead_id, module_key) WHERE demo_lead_id IS NOT NULL`);

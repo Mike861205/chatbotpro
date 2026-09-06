@@ -168,6 +168,7 @@ async function requireAuth(req, res, next) {
       cashierSlug: authUser.cashier_slug || '',
       active: Number(authUser.active || 0),
       onboardingCompleted: Number(authUser.onboarding_completed || 0) === 1,
+      identityCompleted: Number(authUser.identity_completed || 0) === 1,
       demoLeadId: Number.isInteger(Number(payload.dlid)) && Number(payload.dlid) > 0 ? Number(payload.dlid) : null,
       impersonated: payload.imp === true,
     };

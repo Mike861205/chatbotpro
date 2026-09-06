@@ -142,6 +142,18 @@ router.put('/', upload.single('logo'), async (req, res, next) => {
   try {
     if (req.user.role !== 'owner' && !(req.user.role === 'staff' && req.user.permissions.some((key) => ['config', 'chatbot'].includes(key)))) return res.status(403).json({ error: 'No tienes permiso para modificar la configuración' });
     const body = req.body || {};
+    if (body.business_name !== undefined) {
+      body.business_name = String(body.business_name || '').trim().replace(/\s+/g, ' ').slice(0, 160);
+      if (body.business_name.length < 2) return res.status(400).json({ error: 'Escribe el nombre de tu negocio' });
+    }
+    if (body.primary_color !== undefined && !/^#[0-9a-fA-F]{6}$/.test(String(body.primary_color))) {
+      return res.status(400).json({ error: 'Selecciona un color de marca válido' });
+    }
+    if (body.business_type !== undefined) {
+      body.business_type = String(body.business_type || '').trim().toLowerCase();
+      const businessTypes = new Set(['restaurant', 'furniture', 'travel_agency', 'office_services', 'screen_printing', 'carpentry', 'health', 'dentist']);
+      if (!businessTypes.has(body.business_type)) return res.status(400).json({ error: 'Selecciona un modelo de negocio válido' });
+    }
     if (body.currency !== undefined) {
       body.currency = String(body.currency || '').trim().toUpperCase();
       if (!isSupportedCurrency(body.currency)) return res.status(400).json({ error: 'Selecciona una moneda válida' });

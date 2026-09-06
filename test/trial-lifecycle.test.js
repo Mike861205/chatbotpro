@@ -41,8 +41,15 @@ test('el flujo conecta demo, prospecto, prueba, bloqueo, pago y reactivación', 
   assert.match(superadmin, /trial_status = 'expired' THEN 'unlocked'/);
   assert.match(app, /id="demoJourneyModal"/);
   assert.match(app, /id="trialWelcomeModal"/);
+  assert.match(app, /id="trialWelcomeEyebrow"/);
+  assert.match(app, /id="trialBusinessLogo"/);
+  assert.match(app, /id="trialBusinessModel"/);
+  assert.match(app, /id="trialBusinessCurrency"/);
+  assert.match(app, /id="trialBusinessTimezone"/);
   assert.match(app, /id="trialExpiredModal"/);
   const normalizeViewBody = appJs.match(/function normalizeView\(view\) \{([\s\S]*?)\n\}/)?.[1] || '';
   assert.doesNotMatch(normalizeViewBody, /\bres\b|\bdata\?\.errorCode/);
   assert.match(appJs, /res\.status === 403 && data\?\.errorCode === 'TRIAL_EXPIRED'/);
+  assert.match(appJs, /¡Felicidades por tu registro, \$\{ownerName\}!/);
+  assert.match(appJs, /\$\{businessName\} ya tiene su sistema listo/);
 });

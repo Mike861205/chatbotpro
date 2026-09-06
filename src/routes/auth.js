@@ -7,7 +7,7 @@ const { encrypt, decrypt, lookupHash } = require('../utils/crypto');
 const { signToken, setAuthCookie, clearAuthCookie, requireAuth, requireOwner } = require('../middleware/auth');
 const { createRateLimiter } = require('../middleware/security');
 const { normalizeInternationalPhone, phoneCountries } = require('../utils/phone');
-const { regionalDefaults, isSupportedTimeZone } = require('../utils/regional');
+const { regionalDefaults, isSupportedCurrency, isSupportedTimeZone } = require('../utils/regional');
 const { isMexicoIdentity, invoicingPortalUrl, isFiscalEmitterReady } = require('../utils/invoicing');
 const { sendLeadNotification, sendRegistrationNotification } = require('../utils/mailer');
 const { createConfiguredFacturamaClients } = require('../services/facturama');
@@ -261,8 +261,8 @@ router.post('/register', authAttemptLimiter, async (req, res, next) => {
          VALUES ($1, $2, $3, $4, $5, $6, $7, $10, $11, (now() AT TIME ZONE $7)::date, (now() AT TIME ZONE $7)::date + $12::int, 'active', 'potential', $13, $14, CASE WHEN $14=1 THEN now() END, CASE WHEN $14=1 THEN 'system:invoicing-registration' ELSE '' END)
          RETURNING *
        ), new_user AS (
-         INSERT INTO users (tenant_id, username, password_hash, onboarding_completed)
-         SELECT id, $8, $9, 0 FROM new_tenant
+         INSERT INTO users (tenant_id, username, password_hash, onboarding_completed, identity_completed)
+         SELECT id, $8, $9, 0, 0 FROM new_tenant
          RETURNING *
        )
        SELECT row_to_json(new_tenant) AS tenant, row_to_json(new_user) AS owner
@@ -629,8 +629,8 @@ router.post('/demo-convert', authAttemptLimiter, requireAuth, async (req, res, n
          VALUES ($1, $2, $3, $4, $5, $6, $7, $10, $11, (now() AT TIME ZONE $7)::date, (now() AT TIME ZONE $7)::date + $12::int, 'active', 'potential')
          RETURNING *
        ), new_user AS (
-         INSERT INTO users (tenant_id, username, password_hash, onboarding_completed)
-         SELECT id, $8, $9, 0 FROM new_tenant
+         INSERT INTO users (tenant_id, username, password_hash, onboarding_completed, identity_completed)
+         SELECT id, $8, $9, 0, 0 FROM new_tenant
          RETURNING *
        )
        SELECT row_to_json(new_tenant) AS tenant, row_to_json(new_user) AS owner
@@ -826,6 +826,8 @@ router.get('/me', requireAuth, async (req, res, next) => {
     cashierSlug: req.user.cashierSlug,
     onboardingCompleted: req.user.onboardingCompleted,
     onboardingRequired: req.user.role === 'owner' && !req.user.onboardingCompleted && !req.user.impersonated,
+    identityCompleted: req.user.identityCompleted,
+    identityRequired: req.user.role === 'owner' && !req.user.identityCompleted && !req.user.impersonated,
     demoSession: Boolean(req.user.demoLeadId),
     trial: trialState(req.tenant),
     tenant: {
@@ -854,6 +856,37 @@ router.get('/me', requireAuth, async (req, res, next) => {
 router.post('/onboarding/complete', requireAuth, requireOwner, async (req, res, next) => {
   try {
     await q('UPDATE users SET onboarding_completed = 1 WHERE id = $1', [req.user.uid]);
+    res.json({ ok: true });
+  } catch (e) {
+    next(e);
+  }
+});
+
+router.post('/identity/complete', requireAuth, requireOwner, async (req, res, next) => {
+  try {
+    const visualIdentityComplete = String(req.tenant.business_name || '').trim().length >= 2
+      && Boolean(req.tenant.logo)
+      && /^#[0-9a-fA-F]{6}$/.test(String(req.tenant.primary_color || ''));
+    let complete = visualIdentityComplete;
+    if (req.tenant.product_code !== 'invoicing') {
+      const rows = await req.tdb.all(
+        "SELECT key, value FROM {s}.settings WHERE key = ANY($1::text[])",
+        [['business_type', 'currency', 'timezone']]
+      );
+      const identity = Object.fromEntries(rows.map((row) => [row.key, String(row.value || '').trim()]));
+      const businessTypes = new Set(['restaurant', 'furniture', 'travel_agency', 'office_services', 'screen_printing', 'carpentry', 'health', 'dentist']);
+      complete = complete
+        && businessTypes.has(identity.business_type)
+        && isSupportedCurrency(identity.currency)
+        && isSupportedTimeZone(identity.timezone);
+    }
+    if (!complete) {
+      const requiredFields = req.tenant.product_code === 'invoicing'
+        ? 'nombre, logo y color'
+        : 'nombre, logo, color, modelo de negocio, moneda y zona horaria';
+      return res.status(400).json({ error: `Completa ${requiredFields}` });
+    }
+    await q('UPDATE users SET identity_completed = 1 WHERE id = $1', [req.user.uid]);
     res.json({ ok: true });
   } catch (e) {
     next(e);
