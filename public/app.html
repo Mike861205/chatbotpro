@@ -11,7 +11,7 @@
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/fill/style.css" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/duotone/style.css" />
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-  <link rel="stylesheet" href="/static/css/styles.css?v=20260906trialwelcome" />
+  <link rel="stylesheet" href="/static/css/styles.css?v=20260907productsmobile" />
   <link rel="icon" type="image/svg+xml" href="/static/favicon.svg" />
   <link rel="icon" type="image/png" href="/static/chatbotpro100.png" />
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
@@ -453,15 +453,15 @@
         </form>
         <div class="prod-toolbar">
           <div class="chips" id="catChips"></div>
-          <div style="display:flex;gap:10px">
+          <div class="prod-toolbar-actions">
             <div class="prod-view-switch" id="prodViewSwitch" title="Cambiar vista de productos">
               <button type="button" class="btn btn-ghost" data-prod-view="card"><i class="ph-bold ph-squares-four"></i> Tarjetas</button>
               <button type="button" class="btn btn-ghost" data-prod-view="detail"><i class="ph-bold ph-list-bullets"></i> Detalle</button>
               <button type="button" class="btn btn-ghost" data-prod-view="compact"><i class="ph-bold ph-grid-four"></i> Íconos</button>
             </div>
-            <button class="btn btn-ghost" id="addCatBtn"><i class="ph-bold ph-folder-plus"></i> Categoría</button>
-            <button class="btn btn-ghost" id="aiImportBtn"><i class="ph-bold ph-magic-wand"></i> Cargar por IA</button>
-            <button class="btn btn-primary" id="addProdBtn"><i class="ph-bold ph-plus-circle"></i> Nuevo producto</button>
+            <button type="button" class="btn btn-ghost" id="addCatBtn" aria-label="Nueva categoría"><i class="ph-bold ph-folder-plus"></i><span class="prod-action-label-full">Categoría</span><span class="prod-action-label-short" aria-hidden="true">Categoría</span></button>
+            <button type="button" class="btn btn-ghost" id="aiImportBtn" aria-label="Cargar productos por IA"><i class="ph-bold ph-magic-wand"></i><span class="prod-action-label-full">Cargar por IA</span><span class="prod-action-label-short" aria-hidden="true">Por IA</span></button>
+            <button type="button" class="btn btn-primary" id="addProdBtn" aria-label="Nuevo producto"><i class="ph-bold ph-plus-circle"></i><span class="prod-action-label-full">Nuevo producto</span><span class="prod-action-label-short" aria-hidden="true">Nuevo</span></button>
           </div>
         </div>
         <div class="prod-grid" id="prodGrid"></div>
@@ -2104,7 +2104,7 @@
   </div>
 
   <!-- ════════ Modal producto ════════ -->  <div class="modal-bg" id="prodModal">
-    <div class="modal" style="max-width:640px">
+    <div class="modal product-edit-modal" style="max-width:640px">
       <h3 id="prodModalTitle"><i class="ph-bold ph-plus-circle"></i> Nuevo producto</h3>
       <!-- Pestañas del modal -->
       <div class="prod-modal-tabs" id="prodModalTabs">
@@ -2237,7 +2237,7 @@
 
   <!-- ════════ Modal importación IA de menú ════════ -->
   <div class="modal-bg" id="aiProductModal">
-    <div class="modal" style="max-width:860px">
+    <div class="modal ai-product-modal" style="max-width:860px">
       <h3 id="aiCatalogModalTitle"><i class="ph-bold ph-magic-wand"></i> Cargar catálogo con IA</h3>
       <div class="hint" id="aiCatalogModalHint" style="margin-bottom:12px">Sube una foto o captura de tu catálogo y la IA convertirá su contenido en elementos editables para importar en lote.</div>
       <form id="aiProductForm">

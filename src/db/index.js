@@ -83,7 +83,7 @@ function tdb(slug) {
   return tenantDb;
 }
 
-async function initMaster() {
+async function initMaster(options = {}) {
   await q(`
     CREATE TABLE IF NOT EXISTS tenants (
       id SERIAL PRIMARY KEY,
@@ -342,6 +342,10 @@ async function initMaster() {
   await q(`CREATE INDEX IF NOT EXISTS idx_sales_followup_demo_lead ON sales_followup_activities (demo_lead_id, created_at DESC) WHERE demo_lead_id IS NOT NULL`);
 
   await ensureSuperAdminSeed();
+
+  // En desarrollo permite habilitar el login una vez que las tablas maestras
+  // están listas, sin esperar la migración idempotente de todos los tenants.
+  if (typeof options.onMasterReady === 'function') await options.onMasterReady();
 
   // El producto fiscal independiente nace activo y opera contra SAT real.
   await q(

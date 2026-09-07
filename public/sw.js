@@ -1,5 +1,5 @@
 // Service Worker - ChatBotPro Notificaciones
-const CACHE_NAME = 'cbp-notify-v2';
+const CACHE_NAME = 'cbp-notify-v3';
 const PRECACHE = ['/notificaciones', '/sw.js'];
 
 self.addEventListener('install', (e) => {
@@ -19,6 +19,10 @@ self.addEventListener('activate', (e) => {
 
 self.addEventListener('fetch', (e) => {
   if (e.request.method !== 'GET' || !e.request.url.startsWith(self.location.origin)) return;
+  const url = new URL(e.request.url);
+  // El worker sólo da soporte offline a Notificaciones y sus estáticos.
+  // Nunca debe servir logins ni respuestas de API desde caché.
+  if (url.pathname !== '/notificaciones' && url.pathname !== '/sw.js' && !url.pathname.startsWith('/static/')) return;
   e.respondWith(
     fetch(e.request)
       .then((res) => {

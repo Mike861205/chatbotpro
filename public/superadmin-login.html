@@ -41,15 +41,18 @@
       </div>
     </div>
   </div>
+  <script src="/static/js/auth-request.js?v=20260907-local-ready"></script>
   <script>
     document.getElementById('saLoginForm').addEventListener('submit', async (e) => {
       e.preventDefault();
       const errBox = document.getElementById('error');
       errBox.classList.remove('show');
       const btn = document.getElementById('btn');
+      const originalBtn = btn.innerHTML;
       btn.disabled = true;
+      btn.innerHTML = '<i class="ph-bold ph-spinner-gap" style="animation:spin .8s linear infinite"></i> Conectando...';
       try {
-        const res = await fetch('/api/superadmin/login', {
+        const res = await CBPAuthRequest.fetch('/api/superadmin/login', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -64,6 +67,7 @@
         document.getElementById('errorMsg').textContent = err.message;
         errBox.classList.add('show');
         btn.disabled = false;
+        btn.innerHTML = originalBtn;
       }
     });
   </script>

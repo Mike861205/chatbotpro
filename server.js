@@ -19,11 +19,42 @@ const {
 const app = express();
 app.disable('x-powered-by');
 if (process.env.NODE_ENV === 'production') app.set('trust proxy', 1);
+
+let databaseReady = false;
+let resolveDatabaseReady;
+let rejectDatabaseReady;
+const databaseReadyPromise = new Promise((resolve, reject) => {
+  resolveDatabaseReady = resolve;
+  rejectDatabaseReady = reject;
+});
+// Evita una advertencia de promesa no controlada si el arranque falla antes
+// de que llegue la primera solicitud. Los requests reciben el error abajo.
+databaseReadyPromise.catch(() => {});
+
+function markDatabaseReady() {
+  if (databaseReady) return;
+  databaseReady = true;
+  resolveDatabaseReady();
+  console.log('[startup] Autenticación y APIs habilitadas');
+}
+
 app.use(securityHeaders());
 app.use('/api', requireSameOrigin);
 app.use(express.json({ limit: '1mb' }));
 app.use(express.urlencoded({ extended: false, limit: '256kb' }));
 app.use(cookieParser());
+app.use('/api', async (req, res, next) => {
+  if (databaseReady) return next();
+  try {
+    // En desarrollo el puerto abre antes de las migraciones. La primera
+    // solicitud espera aquí y continúa en cuanto Neon queda listo.
+    await databaseReadyPromise;
+    return next();
+  } catch {
+    res.setHeader('Retry-After', '1');
+    return res.status(503).json({ error: 'El servidor está iniciando. Intenta de nuevo en un momento.', errorCode: 'SERVER_STARTING' });
+  }
+});
 
 const chatLimiter = createRateLimiter({
   windowMs: 60 * 1000,
@@ -137,8 +168,19 @@ app.use((err, req, res, next) => {
   res.status(500).json({ error: 'Error interno del servidor' });
 });
 
-initMaster()
+// Abre localhost de inmediato. initMaster puede tardar mientras Neon despierta
+// y migra los schemas; mantener el puerto cerrado hacía fallar el primer login.
+const httpServer = http.createServer(app);
+httpServer.listen(config.PORT, config.HOST, () => {
+  console.log(`\n⏳ ChatBotPro iniciando en http://localhost:${config.PORT}`);
+});
+
+initMaster({
+  onMasterReady: config.NODE_ENV === 'development' ? markDatabaseReady : undefined,
+})
   .then(async () => {
+    markDatabaseReady();
+
     try {
       const firstRefresh = await refreshTenantBillingStatuses();
       console.log(`[billing] refresco inicial -> due:${firstRefresh.movedToDue} suspended:${firstRefresh.movedToSuspended}`);
@@ -157,8 +199,7 @@ initMaster()
       }
     }, BILLING_REFRESH_INTERVAL_MS);
 
-    // HTTP server + Socket.io
-    const httpServer = http.createServer(app);
+    // Socket.io se activa una vez que las tablas y schemas están listos.
     const io = new SocketIO(httpServer, {
       cors: { origin: false },
       path: '/socket.io',
@@ -242,17 +283,16 @@ initMaster()
 
     setIo(io);
 
-    httpServer.listen(config.PORT, config.HOST, () => {
-      console.log(`\n🤖 ChatBotPro corriendo en http://localhost:${config.PORT}`);
-      console.log(`   Panel:    http://localhost:${config.PORT}/login`);
-      console.log(`   Registro: http://localhost:${config.PORT}/register`);
-      console.log(`   Notifs:   http://localhost:${config.PORT}/notificaciones\n`);
-      verifyNotificationMailer().catch((error) => {
-        console.error('[mailer] No se pudo verificar SMTP al iniciar:', error.message);
-      });
+    console.log(`\n🤖 ChatBotPro listo en http://localhost:${config.PORT}`);
+    console.log(`   Panel:    http://localhost:${config.PORT}/login`);
+    console.log(`   Registro: http://localhost:${config.PORT}/register`);
+    console.log(`   Notifs:   http://localhost:${config.PORT}/notificaciones\n`);
+    verifyNotificationMailer().catch((error) => {
+      console.error('[mailer] No se pudo verificar SMTP al iniciar:', error.message);
     });
   })
   .catch((e) => {
+    rejectDatabaseReady(e);
     console.error('[db] No se pudo conectar a Neon:', e.message);
     process.exit(1);
   });

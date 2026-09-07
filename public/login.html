@@ -154,6 +154,7 @@
     <span class="wa-txt"><b>¿Dudas para tu registro?</b><small>Te ayudo aquí</small></span>
   </a>
   <script src="/static/js/phone-input.js?v=20260811-3"></script>
+  <script src="/static/js/auth-request.js?v=20260907-local-ready"></script>
   <script>
     const form = document.getElementById('loginForm');
     const loginBtn = document.getElementById('loginBtn');
@@ -187,10 +188,12 @@
       errBox.classList.remove('show');
       waBtn.style.display = 'none';
       subscriptionBtn.style.display = 'none';
+      const originalLoginBtn = loginBtn.innerHTML;
       loginBtn.disabled = true;
       demoBtn.disabled = true;
+      loginBtn.innerHTML = '<i class="ph-bold ph-spinner-gap" style="animation:spin .8s linear infinite"></i> Conectando...';
       try {
-        const res = await fetch(endpoint, {
+        const res = await CBPAuthRequest.fetch(endpoint, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(body || {}),
@@ -217,6 +220,7 @@
         errBox.classList.add('show');
         loginBtn.disabled = false;
         demoBtn.disabled = false;
+        loginBtn.innerHTML = originalLoginBtn;
       }
     }
 
