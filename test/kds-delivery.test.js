@@ -20,7 +20,11 @@ test('el esquema y el panel permiten crear una pantalla Delivery sin asignar pro
 });
 
 test('Delivery recibe sólo domicilios y deriva la fase de todas las áreas de preparación', () => {
+  assert.match(route, /function orderIsDelivery\(order\)/);
   assert.match(route, /isDeliveryArea && !isDeliveryOrder/);
+  assert.match(route, /String\(order\?\.delivery_address \|\| ''\)\.trim\(\)/);
+  assert.match(route, /o\.channel = 'chatbot'[\s\S]+o\.service_branch_id IS NULL[\s\S]+o\.receiving_mode_behavior = 'delivery'/);
+  assert.doesNotMatch(route, /customer_location_(?:lat|lng)[\s\S]{0,120}isDeliveryOrder/);
   assert.match(route, /function deliveryPreparationStatus\(preparationProgress\)/);
   assert.match(route, /preparationProgress\.every/);
   assert.match(route, /status !== 'completed' \|\| visibleTicket\.status !== 'ready'/);
@@ -32,4 +36,11 @@ test('la pantalla Delivery muestra datos operativos y se actualiza en tiempo rea
   assert.match(screen, /preparationProgress/);
   assert.match(notifications, /emitKdsUpdate/);
   assert.match(screen, /socket\.on\('kds_update'/);
+});
+
+test('el asistente conserva la sucursal de la zona cuando sí recibe ubicación', () => {
+  const chatbot = read('src', 'chatbot', 'engine.js');
+  assert.match(chatbot, /branchId: Number\.isInteger\(Number\(props\?\.branchId/);
+  assert.match(chatbot, /branchName: String\(props\?\.branchName/);
+  assert.match(chatbot, /state\.customer\.deliveryBranchId = Number\.isFinite/);
 });

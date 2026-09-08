@@ -103,6 +103,16 @@ function deliveryPreparationStatus(preparationProgress) {
   return 'pending';
 }
 
+function orderIsDelivery(order) {
+  return order?.receiving_mode_behavior === 'delivery'
+    || order?.delivery === 'domicilio'
+    || Boolean(
+      String(order?.delivery_address || '').trim()
+      || String(order?.delivery_neighborhood || '').trim()
+      || String(order?.delivery_reference || '').trim()
+    );
+}
+
 async function buildKdsPayload(tenant, tenantDb, area) {
   const isDeliveryArea = area.area_type === 'delivery';
   const [categoryAssignments, productAssignments, orderRows, tableRoundRows, settingsRows, preparationStateRows] = await Promise.all([
@@ -119,9 +129,26 @@ async function buildKdsPayload(tenant, tenantDb, area) {
          AND NOT (o.channel = 'kiosk' AND o.status = 'pendiente_cobro')
          AND o.table_account_id IS NULL
          AND (o.created_at AT TIME ZONE '${tenant.timezone}')::date = (now() AT TIME ZONE '${tenant.timezone}')::date
-         AND ($2::int IS NULL OR o.service_branch_id = $2 OR o.pickup_branch_id = $2)
+         AND (
+           $2::int IS NULL
+           OR o.service_branch_id = $2
+           OR o.pickup_branch_id = $2
+           OR (
+             $3::boolean = TRUE
+             AND o.channel = 'chatbot'
+             AND o.service_branch_id IS NULL
+             AND o.pickup_branch_id IS NULL
+             AND (
+               o.receiving_mode_behavior = 'delivery'
+               OR o.delivery = 'domicilio'
+               OR NULLIF(BTRIM(o.delivery_address), '') IS NOT NULL
+               OR NULLIF(BTRIM(o.delivery_neighborhood), '') IS NOT NULL
+               OR NULLIF(BTRIM(o.delivery_reference), '') IS NOT NULL
+             )
+           )
+         )
        ORDER BY o.created_at ASC`,
-      [area.id, area.branch_id || null]
+      [area.id, area.branch_id || null, isDeliveryArea]
     ),
     tenantDb.all(
             `SELECT (-tr.id) AS id, NULL::int AS customer_id, tr.items, tr.subtotal::float AS total, 'pendiente' AS order_status,
@@ -195,7 +222,7 @@ async function buildKdsPayload(tenant, tenantDb, area) {
 
   const tickets = [];
   for (const order of parsedOrders) {
-    const isDeliveryOrder = order.receiving_mode_behavior === 'delivery' || order.delivery === 'domicilio';
+    const isDeliveryOrder = orderIsDelivery(order);
     if (isDeliveryArea && !isDeliveryOrder) continue;
     const areaItems = isDeliveryArea
       ? order.parsedItems

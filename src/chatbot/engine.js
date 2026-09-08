@@ -161,6 +161,10 @@ function parseDeliveryZones(raw) {
           name,
           fee,
           color: String(props?.color || zone?.color || '#0ea5e9'),
+          branchId: Number.isInteger(Number(props?.branchId ?? zone?.branchId)) && Number(props?.branchId ?? zone?.branchId) > 0
+            ? Number(props?.branchId ?? zone?.branchId)
+            : null,
+          branchName: String(props?.branchName || zone?.branchName || '').trim(),
           points,
           active: props?.active !== false,
         };
