@@ -41,11 +41,14 @@ test('compartir ubicación no sustituye la calle y número del domicilio', () =>
   assert.doesNotMatch(chatbot, /state\.customer\.address = state\.customer\.locationText/);
 });
 
-test('el punto de venta exige domicilio y colonia para una entrega', () => {
-  assert.match(pos, /isDelivery && \(!deliveryAddress \|\| !deliveryNeighborhood\)/);
+test('el punto de venta permite cobrar una entrega con datos parciales o vacíos', () => {
+  assert.doesNotMatch(pos, /isDelivery && \(!deliveryAddress \|\| !deliveryNeighborhood\)/);
   assert.match(app, /id="posDeliveryAddress"/);
   assert.match(app, /id="posDeliveryNeighborhood"/);
   assert.match(app, /id="posDeliveryReference"/);
+  assert.doesNotMatch(app, /id="posDeliveryAddress"[^>]*\brequired\b/);
+  assert.doesNotMatch(app, /id="posDeliveryNeighborhood"[^>]*\brequired\b/);
+  assert.match(app, /El cajero puede cobrar aunque deje vacíos estos datos/);
 });
 
 test('tickets y comandas imprimen los datos de domicilio disponibles', () => {

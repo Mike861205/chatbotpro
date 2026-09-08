@@ -409,6 +409,7 @@ async function persistTenantPosSortMode(mode) {
 }
 
 function toast(msg, isErr = false) {
+  if (isErr && $('#trialExpiredModal')?.classList.contains('show')) return;
   const t = $('#toast');
   $('#toastMsg').textContent = msg;
   t.querySelector('i').className = isErr ? 'ph-fill ph-x-circle' : 'ph-fill ph-check-circle';
@@ -631,9 +632,13 @@ function showTrialExpiredModal(data = {}) {
   const modal = $('#trialExpiredModal');
   if (!modal) return;
   document.body.classList.add('trial-expired');
-  if (data.error) $('#trialExpiredText').textContent = data.error;
   if (data.whatsappUrl) $('#trialExpiredWhatsapp').href = data.whatsappUrl;
+  if (data.supportPhone) {
+    const digits = String(data.supportPhone).replace(/\D/g, '');
+    $('#trialExpiredCopyPhone').dataset.phone = `+${digits}`;
+  }
   modal.classList.add('show');
+  setTimeout(() => $('#trialExpiredWhatsapp')?.focus(), 80);
 }
 
 async function api(path, opts = {}) {
@@ -1226,6 +1231,29 @@ $('#trialViewPlans')?.addEventListener('click', async () => {
 $('#trialExpiredPlans')?.addEventListener('click', async () => {
   $('#trialExpiredModal')?.classList.remove('show');
   await navigate('suscripciones');
+});
+$('#trialExpiredCopyPhone')?.addEventListener('click', async (event) => {
+  const button = event.currentTarget;
+  const phone = button.dataset.phone || '+526241370820';
+  const label = $('#trialExpiredPhoneLabel');
+  try {
+    await navigator.clipboard.writeText(phone);
+  } catch {
+    const temporary = document.createElement('textarea');
+    temporary.value = phone;
+    temporary.style.position = 'fixed';
+    temporary.style.opacity = '0';
+    document.body.append(temporary);
+    temporary.select();
+    document.execCommand('copy');
+    temporary.remove();
+  }
+  label.textContent = '¡Número copiado!';
+  button.classList.add('copied');
+  setTimeout(() => {
+    label.textContent = '+52 624 137 0820';
+    button.classList.remove('copied');
+  }, 2200);
 });
 $('#onboardingIntro')?.addEventListener('click', (event) => {
   if (event.target?.id === 'onboardingIntro') closeOnboardingIntro().catch((error) => toast(error.message, true));
@@ -5585,17 +5613,18 @@ function renderPosCart() {
           <div class="hint">Se suma al total y suma al turno en el rubro domicilios.</div>
         </div>
         <div class="field">
-          <label><i class="ph-bold ph-map-pin"></i> Domicilio *</label>
-          <textarea id="posDeliveryAddress" rows="2" maxlength="300" required placeholder="Calle, número exterior/interior">${esc(POS_PAYMENT_FORM.deliveryAddress || '')}</textarea>
+          <label><i class="ph-bold ph-map-pin"></i> Domicilio <small>(opcional)</small></label>
+          <textarea id="posDeliveryAddress" rows="2" maxlength="300" placeholder="Calle, número exterior/interior">${esc(POS_PAYMENT_FORM.deliveryAddress || '')}</textarea>
         </div>
         <div class="field">
-          <label><i class="ph-bold ph-map-trifold"></i> Urbanización / colonia / barrio / sector *</label>
-          <input id="posDeliveryNeighborhood" maxlength="160" required value="${esc(POS_PAYMENT_FORM.deliveryNeighborhood || '')}" placeholder="Nombre de la urbanización, colonia, barrio o sector" />
+          <label><i class="ph-bold ph-map-trifold"></i> Urbanización / colonia / barrio / sector <small>(opcional)</small></label>
+          <input id="posDeliveryNeighborhood" maxlength="160" value="${esc(POS_PAYMENT_FORM.deliveryNeighborhood || '')}" placeholder="Nombre de la urbanización, colonia, barrio o sector" />
         </div>
         <div class="field">
-          <label><i class="ph-bold ph-signpost"></i> Referencias de entrega</label>
+          <label><i class="ph-bold ph-signpost"></i> Referencias de entrega <small>(opcional)</small></label>
           <textarea id="posDeliveryReference" rows="2" maxlength="240" placeholder="Color de casa, portón, esquina, negocio cercano...">${esc(POS_PAYMENT_FORM.deliveryReference || '')}</textarea>
-        </div>` : ''}
+        </div>
+        <div class="hint"><i class="ph-bold ph-info"></i> El cajero puede cobrar aunque deje vacíos estos datos o capture solamente los que necesite.</div>` : ''}
         <div class="field">
           <label><i class="ph-bold ph-note"></i> ${tableAccount ? 'Nota de la ronda' : 'Nota de venta'}</label>
           <textarea id="posSaleNotes" rows="2" placeholder="${tableAccount ? 'Ej. Sin cebolla, término medio...' : POS_IS_DELIVERY ? 'Indicaciones de preparación: sin cebolla, salsa aparte...' : 'Mesa 4, venta rápida, pedido interno...'}">${esc(POS_PAYMENT_FORM.notes || '')}</textarea>

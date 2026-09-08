@@ -47,6 +47,12 @@ test('el flujo conecta demo, prospecto, prueba, bloqueo, pago y reactivación', 
   assert.match(app, /id="trialBusinessCurrency"/);
   assert.match(app, /id="trialBusinessTimezone"/);
   assert.match(app, /id="trialExpiredModal"/);
+  assert.match(app, /Tu prueba real del sistema ha finalizado/);
+  assert.match(app, /id="trialExpiredWhatsapp"[^>]+wa\.me\/526241370820/);
+  assert.match(app, /id="trialExpiredCopyPhone"[^>]+data-phone="\+526241370820"/);
+  assert.match(app, /id="trialExpiredPlans"/);
+  assert.match(appJs, /navigator\.clipboard\.writeText\(phone\)/);
+  assert.match(appJs, /isErr && \$\('#trialExpiredModal'\)\?\.classList\.contains\('show'\)/);
   const normalizeViewBody = appJs.match(/function normalizeView\(view\) \{([\s\S]*?)\n\}/)?.[1] || '';
   assert.doesNotMatch(normalizeViewBody, /\bres\b|\bdata\?\.errorCode/);
   assert.match(appJs, /res\.status === 403 && data\?\.errorCode === 'TRIAL_EXPIRED'/);

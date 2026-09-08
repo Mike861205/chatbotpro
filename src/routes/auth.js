@@ -22,6 +22,7 @@ const USERNAME_RE = /^[a-z0-9._-]{3,60}$/;
 const RESERVED = new Set(['api', 'app', 'login', 'register', 'admin', 'superadmin', 'resellers', 'uploads', 'c', 'static']);
 const SUPPORT_WHATSAPP = '526241370820';
 const SUPPORT_MESSAGE = 'tengo suspendiedo mi servicio y quiero realizar mi pago para activarlo';
+const TRIAL_SUPPORT_MESSAGE = 'Terminó mi prueba de ChatBotPro y quiero activar mi suscripción';
 const authAttemptLimiter = createRateLimiter({
   windowMs: 15 * 60 * 1000,
   max: 12,
@@ -51,6 +52,10 @@ const TRACKABLE_MODULES = new Set([
 
 function supportWhatsappUrl() {
   return `https://wa.me/${SUPPORT_WHATSAPP}?text=${encodeURIComponent(SUPPORT_MESSAGE)}`;
+}
+
+function trialSupportWhatsappUrl() {
+  return `https://wa.me/${SUPPORT_WHATSAPP}?text=${encodeURIComponent(TRIAL_SUPPORT_MESSAGE)}`;
 }
 
 function normalizeLeadText(raw, maxLength = 120) {
@@ -366,7 +371,7 @@ router.post('/login', authAttemptLimiter, async (req, res, next) => {
         error: 'Tu prueba real de 5 días terminó. Tus datos siguen guardados; contrata una suscripción o contacta al administrador para reactivar tu cuenta.',
         errorCode: 'TRIAL_EXPIRED',
         supportPhone: SUPPORT_WHATSAPP,
-        whatsappUrl: supportWhatsappUrl(),
+        whatsappUrl: trialSupportWhatsappUrl(),
         subscriptionUrl: '/app#suscripciones',
       });
     }

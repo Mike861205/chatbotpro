@@ -1832,9 +1832,6 @@ async function createPosSale(req, res, next) {
     const deliveryAddress = isDelivery ? String(req.body?.deliveryAddress || '').trim().replace(/\s+/g, ' ').slice(0, 300) : '';
     const deliveryNeighborhood = isDelivery ? String(req.body?.deliveryNeighborhood || '').trim().replace(/\s+/g, ' ').slice(0, 160) : '';
     const deliveryReference = isDelivery ? String(req.body?.deliveryReference || '').trim().replace(/\s+/g, ' ').slice(0, 240) : '';
-    if (isDelivery && (!deliveryAddress || !deliveryNeighborhood)) {
-      throw badRequest('Captura el domicilio y la urbanización, colonia, barrio o sector para la entrega');
-    }
     const result = await req.tdb.tx(async (tx) => {
       const session = await getOpenSession(tx, userSessionContext(req.user, req));
       if (!session) throw badRequest('Abre una caja antes de registrar una venta');

@@ -11,10 +11,15 @@ const CASHIER_COOKIE_NAME = 'cbp_cashier_token';
 const AUTH_SCOPE_HEADER = 'x-cbp-auth-scope';
 const SUPPORT_WHATSAPP = '526241370820';
 const SUPPORT_MESSAGE = 'tengo suspendiedo mi servicio y quiero realizar mi pago para activarlo';
+const TRIAL_SUPPORT_MESSAGE = 'Terminó mi prueba de ChatBotPro y quiero activar mi suscripción';
 const SUBSCRIPTION_URL = '/app#suscripciones';
 
 function supportWhatsappUrl() {
   return `https://wa.me/${SUPPORT_WHATSAPP}?text=${encodeURIComponent(SUPPORT_MESSAGE)}`;
+}
+
+function trialSupportWhatsappUrl() {
+  return `https://wa.me/${SUPPORT_WHATSAPP}?text=${encodeURIComponent(TRIAL_SUPPORT_MESSAGE)}`;
 }
 
 function signToken(user, tenant, scope = 'owner', context = {}) {
@@ -128,7 +133,7 @@ async function requireAuth(req, res, next) {
           error: 'Tu prueba real de 5 días terminó. Tus datos siguen guardados; elige una suscripción o contacta al administrador para reactivar tu cuenta.',
           errorCode: 'TRIAL_EXPIRED',
           supportPhone: SUPPORT_WHATSAPP,
-          whatsappUrl: supportWhatsappUrl(),
+          whatsappUrl: trialSupportWhatsappUrl(),
           subscriptionUrl: SUBSCRIPTION_URL,
         });
       }

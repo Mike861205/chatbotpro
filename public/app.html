@@ -11,7 +11,7 @@
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/fill/style.css" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/duotone/style.css" />
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-  <link rel="stylesheet" href="/static/css/styles.css?v=20260907productsmobile" />
+  <link rel="stylesheet" href="/static/css/styles.css?v=20260908-trial-expired" />
   <link rel="icon" type="image/svg+xml" href="/static/favicon.svg" />
   <link rel="icon" type="image/png" href="/static/chatbotpro100.png" />
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
@@ -1826,17 +1826,35 @@
 
   <!-- Bloqueo al terminar la prueba; no se cierra para impedir operar -->
   <div class="modal-bg journey-modal-bg trial-expired-bg" id="trialExpiredModal" role="dialog" aria-modal="true" aria-labelledby="trialExpiredTitle">
-    <div class="journey-modal trial-expired-modal">
-      <div class="journey-visual expired"><i class="ph-fill ph-lock-key"></i><span>Prueba finalizada</span></div>
-      <div class="journey-copy">
-        <span class="journey-eyebrow">Tu información está segura</span>
-        <h2 id="trialExpiredTitle">Terminó tu periodo de prueba</h2>
-        <p id="trialExpiredText">El sistema quedó bloqueado, pero tus productos, ventas y configuraciones siguen guardados.</p>
-        <div class="journey-note success"><i class="ph-fill ph-check-circle"></i><span>Activa una suscripción o pide al super administrador que habilite tu cuenta para continuar donde te quedaste.</span></div>
-        <div class="journey-actions">
-          <a class="btn btn-ghost" id="trialExpiredWhatsapp" href="https://wa.me/526241370820" target="_blank" rel="noopener noreferrer"><i class="ph-bold ph-whatsapp-logo"></i> Hablar con el administrador</a>
-          <button type="button" class="btn btn-primary" id="trialExpiredPlans"><i class="ph-bold ph-seal-check"></i> Ver suscripciones</button>
+    <div class="trial-expired-card">
+      <div class="trial-expired-visual" aria-hidden="true">
+        <span class="trial-expired-glow trial-expired-glow--one"></span>
+        <span class="trial-expired-glow trial-expired-glow--two"></span>
+        <img src="/static/chatbotpro100.png" alt="" />
+        <div class="trial-expired-seal"><i class="ph-fill ph-hourglass-high"></i></div>
+        <span>5 días completados</span>
+        <strong>Tu información sigue segura</strong>
+      </div>
+      <div class="trial-expired-copy">
+        <span class="trial-expired-eyebrow"><i class="ph-fill ph-confetti"></i> Gracias por probar ChatBotPro</span>
+        <h2 id="trialExpiredTitle">Tu prueba real del sistema ha finalizado</h2>
+        <p id="trialExpiredText">Tus productos, imágenes, pedidos, ventas y configuraciones permanecen guardados. Activa un plan para continuar exactamente donde te quedaste.</p>
+        <div class="trial-expired-saved">
+          <i class="ph-fill ph-database"></i>
+          <div><b>No perderás tu trabajo</b><span>Todo estará disponible nuevamente al activar tu cuenta.</span></div>
         </div>
+        <div class="trial-expired-actions">
+          <a class="trial-expired-whatsapp" id="trialExpiredWhatsapp" href="https://wa.me/526241370820?text=Termin%C3%B3%20mi%20prueba%20de%20ChatBotPro%20y%20quiero%20activar%20mi%20suscripci%C3%B3n" target="_blank" rel="noopener noreferrer">
+            <i class="ph-fill ph-whatsapp-logo"></i><span><small>Atención directa</small>Escribir por WhatsApp</span>
+          </a>
+          <button class="trial-expired-copy-phone" id="trialExpiredCopyPhone" type="button" data-phone="+526241370820">
+            <i class="ph-bold ph-copy"></i><span><small>También puedes copiar</small><b id="trialExpiredPhoneLabel">+52 624 137 0820</b></span>
+          </button>
+          <button type="button" class="trial-expired-plans" id="trialExpiredPlans">
+            <span><small>Activa el sistema ahora</small>Ver suscripciones y elegir mi plan</span><i class="ph-bold ph-arrow-right"></i>
+          </button>
+        </div>
+        <small class="trial-expired-foot"><i class="ph-fill ph-shield-check"></i> Elige tu plan y vuelve a usar todas las funciones del sistema.</small>
       </div>
     </div>
   </div>
@@ -3167,6 +3185,6 @@
   </div>
 
 <script src="/socket.io/socket.io.js"></script>
-  <script src="/static/js/app.js?v=20260906trialwelcome"></script>
+  <script src="/static/js/app.js?v=20260908-pos-delivery-optional"></script>
 </body>
 </html>
