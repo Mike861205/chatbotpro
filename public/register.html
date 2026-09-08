@@ -76,7 +76,7 @@
               <input type="text" id="ownerName" required />
             </div>
             <div class="field">
-              <label for="phoneCountry"><i class="ph-bold ph-magnifying-glass"></i> Buscar país o lada *</label>
+              <label for="phoneCountry"><i class="ph-bold ph-magnifying-glass"></i> Escribe tu país para seleccionar tu lada *</label>
               <select id="phoneCountry" required><option value="">Cargando países…</option></select>
             </div>
           </div>
@@ -120,7 +120,7 @@
     <i class="ph-fill ph-whatsapp-logo"></i>
     <span class="wa-txt"><b>¿Dudas para tu registro?</b><small>Te ayudo aquí</small></span>
   </a>
-  <script src="/static/js/phone-input.js?v=20260811-3"></script>
+  <script src="/static/js/phone-input.js?v=20260908-1"></script>
   <script>
     const resellerRef = new URLSearchParams(location.search).get('reseller') || '';
     const phoneSetupPromise = CBPPhoneInput.setup({ countryId: 'phoneCountry', callingCodeId: 'phoneCallingCode', phoneId: 'phone' })

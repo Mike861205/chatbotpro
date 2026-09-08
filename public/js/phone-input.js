@@ -25,7 +25,7 @@
     return matches.length === 1 ? matches[0] : null;
   }
 
-  function filterCountries(countries, value, limit = 8) {
+  function filterCountries(countries, value, limit = countries.length) {
     const query = normalizeSearch(value).replace(/^\+/, '');
     if (!query) return countries.slice(0, limit);
     return countries
@@ -156,7 +156,7 @@
     };
 
     const renderSuggestions = (query = search.value) => {
-      visibleCountries = filterCountries(countries, query, 10);
+      visibleCountries = filterCountries(countries, query);
       activeIndex = -1;
       suggestions.replaceChildren();
       if (!visibleCountries.length) {

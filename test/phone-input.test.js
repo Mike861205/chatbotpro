@@ -37,3 +37,10 @@ test('sugiere países mientras se escriben las primeras letras o la lada', () =>
   assert.deepEqual(Array.from(filterCountries(countries, 'est')).map((item) => item.code), ['US']);
   assert.equal(filterCountries(countries, 'AR')[0]?.code, 'AR');
 });
+
+test('muestra el catálogo completo cuando la búsqueda está vacía', () => {
+  assert.deepEqual(
+    Array.from(filterCountries(countries, '')).map((item) => item.code),
+    ['MX', 'AR', 'US', 'CA'],
+  );
+});

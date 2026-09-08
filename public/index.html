@@ -8,7 +8,7 @@
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/regular/style.css" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/bold/style.css" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/fill/style.css" />
-  <link rel="stylesheet" href="/static/css/styles.css?v=20260811-6" />
+  <link rel="stylesheet" href="/static/css/styles.css?v=20260908-1" />
   <link rel="icon" type="image/svg+xml" href="/static/favicon.svg" />
   <link rel="icon" type="image/png" href="/static/chatbotpro100.png" />
 </head>
@@ -84,6 +84,44 @@
       </div>
     </div>
   </div>
+  <div class="signup-promo-bg" id="signupPromoModal" role="dialog" aria-modal="true" aria-labelledby="signupPromoTitle" hidden>
+    <section class="signup-promo-card">
+      <button class="signup-promo-close" id="signupPromoClose" type="button" aria-label="Cerrar invitación">
+        <i class="ph-bold ph-x"></i>
+      </button>
+      <div class="signup-promo-visual" aria-hidden="true">
+        <span class="signup-promo-orb signup-promo-orb--one"></span>
+        <span class="signup-promo-orb signup-promo-orb--two"></span>
+        <img src="/static/chatbotpro100.png" alt="" />
+        <span class="signup-promo-free"><i class="ph-fill ph-gift"></i> Registro gratis</span>
+        <strong>5</strong>
+        <b>días para probarlo todo</b>
+        <small>Sin imaginarlo: pruébalo con tu negocio.</small>
+      </div>
+      <div class="signup-promo-copy">
+        <span class="signup-promo-eyebrow"><i class="ph-fill ph-sparkle"></i> Haz una prueba real</span>
+        <h2 id="signupPromoTitle">Regístrate <em>GRATIS</em> y descubre lo que funciona para tu negocio</h2>
+        <p>Configura tu negocio y prueba durante <b>5 días</b> las herramientas que usarías todos los días.</p>
+        <div class="signup-promo-features" aria-label="Funciones que puedes probar">
+          <span><i class="ph-bold ph-package"></i> Productos</span>
+          <span><i class="ph-bold ph-image"></i> Imágenes</span>
+          <span><i class="ph-bold ph-receipt"></i> Pedidos</span>
+          <span><i class="ph-bold ph-chart-line-up"></i> Ventas</span>
+          <span><i class="ph-bold ph-printer"></i> Impresiones</span>
+        </div>
+        <div class="signup-promo-message">
+          <i class="ph-fill ph-lightbulb"></i>
+          <p><b>Aquí pagas por lo que sí te funciona.</b><br />INNOVAR es parte del éxito de tu negocio.</p>
+        </div>
+        <a class="signup-promo-cta" id="signupPromoRegister" href="/register">
+          <span>Adelante, quiero registrarme gratis</span>
+          <i class="ph-bold ph-arrow-right"></i>
+        </a>
+        <button class="signup-promo-later" id="signupPromoLater" type="button">Quiero conocer primero el sistema</button>
+        <small class="signup-promo-trust"><i class="ph-fill ph-shield-check"></i> Tus datos y la información de tu negocio están protegidos.</small>
+      </div>
+    </section>
+  </div>
   <div class="modal-bg" id="demoLeadModal" hidden>
     <div class="modal" style="max-width:520px">
       <h3><i class="ph-bold ph-rocket-launch"></i> Acceso a la demo</h3>
@@ -124,12 +162,40 @@
     <i class="ph-fill ph-whatsapp-logo"></i>
     <span class="wa-txt"><b>¿Dudas para tu registro?</b><small>Te ayudo aquí</small></span>
   </a>
-  <script src="/static/js/phone-input.js?v=20260811-3"></script>
+  <script src="/static/js/phone-input.js?v=20260908-1"></script>
   <script>
     const resellerRef = new URLSearchParams(location.search).get('reseller') || '';
     if (/^[a-z0-9][a-z0-9-]{1,38}[a-z0-9]$/.test(resellerRef)) {
       document.getElementById('registerLink').href = `/register?reseller=${encodeURIComponent(resellerRef)}`;
+      document.getElementById('signupPromoRegister').href = `/register?reseller=${encodeURIComponent(resellerRef)}`;
     }
+    const signupPromoModal = document.getElementById('signupPromoModal');
+    const signupPromoClose = document.getElementById('signupPromoClose');
+    const signupPromoLater = document.getElementById('signupPromoLater');
+
+    function openSignupPromo() {
+      signupPromoModal.hidden = false;
+      signupPromoModal.classList.add('show');
+      document.body.classList.add('signup-promo-open');
+      document.getElementById('signupPromoRegister').focus();
+    }
+
+    function closeSignupPromo() {
+      signupPromoModal.classList.remove('show');
+      signupPromoModal.hidden = true;
+      document.body.classList.remove('signup-promo-open');
+    }
+
+    signupPromoClose.addEventListener('click', closeSignupPromo);
+    signupPromoLater.addEventListener('click', closeSignupPromo);
+    signupPromoModal.addEventListener('click', (event) => {
+      if (event.target === signupPromoModal) closeSignupPromo();
+    });
+    document.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape' && !signupPromoModal.hidden) closeSignupPromo();
+    });
+    openSignupPromo();
+
     const demoBtn = document.getElementById('demoBtn');
     demoBtn.hidden = true;
     fetch('/api/auth/demo-status')

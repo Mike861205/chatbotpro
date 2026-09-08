@@ -774,6 +774,201 @@ label { display: flex; align-items: center; gap: 6px; font-size: 12.5px; font-we
   margin-bottom: 12px;
   justify-content: center;
 }
+
+/* Invitación de registro al ingresar a la landing */
+.signup-promo-bg {
+  position: fixed;
+  inset: 0;
+  z-index: 2200;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  padding: 22px;
+  overflow-y: auto;
+  background:
+    radial-gradient(circle at 15% 18%, rgba(34, 211, 238, .28), transparent 27%),
+    radial-gradient(circle at 88% 82%, rgba(249, 115, 22, .3), transparent 28%),
+    rgba(8, 15, 35, .78);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+}
+.signup-promo-bg.show { display: flex; animation: fadeIn .25s ease-out; }
+body.signup-promo-open { overflow: hidden; }
+.signup-promo-card {
+  position: relative;
+  width: min(850px, 100%);
+  display: grid;
+  grid-template-columns: minmax(245px, .72fr) minmax(0, 1.28fr);
+  overflow: hidden;
+  border: 1px solid rgba(255,255,255,.82);
+  border-radius: 30px;
+  background: #fff;
+  box-shadow: 0 36px 110px rgba(2, 8, 23, .52), 0 0 55px rgba(84, 221, 255, .15);
+  animation: signupPromoIn .38s var(--ease);
+}
+@keyframes signupPromoIn {
+  from { opacity: 0; transform: translateY(26px) scale(.96); }
+}
+.signup-promo-close {
+  position: absolute;
+  z-index: 4;
+  top: 16px;
+  right: 16px;
+  width: 38px;
+  height: 38px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 1px solid #e5eaf3;
+  border-radius: 50%;
+  color: #667085;
+  background: rgba(255,255,255,.9);
+  box-shadow: 0 7px 18px rgba(15, 23, 42, .1);
+  transition: transform .18s, color .18s, border-color .18s;
+}
+.signup-promo-close:hover { transform: rotate(8deg) scale(1.06); color: var(--primary); border-color: #fdba74; }
+.signup-promo-visual {
+  position: relative;
+  min-height: 510px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 34px 24px;
+  overflow: hidden;
+  color: #fff;
+  text-align: center;
+  background:
+    linear-gradient(155deg, rgba(13, 34, 67, .32), rgba(75, 29, 84, .16)),
+    linear-gradient(145deg, #083344 0%, #155e75 45%, #7c3aed 100%);
+}
+.signup-promo-visual::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  opacity: .3;
+  background-image: radial-gradient(rgba(255,255,255,.8) .8px, transparent .8px);
+  background-size: 20px 20px;
+}
+.signup-promo-orb { position: absolute; border-radius: 50%; filter: blur(2px); }
+.signup-promo-orb--one { width: 230px; height: 230px; top: -90px; left: -100px; background: rgba(34,211,238,.35); }
+.signup-promo-orb--two { width: 210px; height: 210px; right: -105px; bottom: -65px; background: rgba(251,146,60,.38); }
+.signup-promo-visual img {
+  position: relative;
+  z-index: 1;
+  width: 92px;
+  height: 92px;
+  object-fit: contain;
+  margin-bottom: 4px;
+  filter: drop-shadow(0 12px 20px rgba(0,0,0,.35));
+}
+.signup-promo-free {
+  position: relative;
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 13px;
+  padding: 7px 11px;
+  border: 1px solid rgba(255,255,255,.36);
+  border-radius: 999px;
+  color: #fff7cc;
+  background: rgba(255,255,255,.13);
+  font-size: 10px;
+  font-weight: 900;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.24);
+}
+.signup-promo-visual strong {
+  position: relative;
+  z-index: 1;
+  font-size: 128px;
+  font-weight: 900;
+  line-height: .78;
+  letter-spacing: -10px;
+  background: linear-gradient(150deg, #fff 10%, #8ff6ff 45%, #ffe36e 82%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  filter: drop-shadow(0 7px 0 rgba(4, 15, 38, .4)) drop-shadow(0 0 22px rgba(115,239,255,.4));
+}
+.signup-promo-visual b { position: relative; z-index: 1; margin-top: 18px; font-size: 19px; line-height: 1.2; }
+.signup-promo-visual small { position: relative; z-index: 1; max-width: 220px; margin-top: 10px; color: rgba(255,255,255,.78); font-size: 11px; font-weight: 650; line-height: 1.5; }
+.signup-promo-copy { padding: 42px 46px 32px; }
+.signup-promo-eyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  color: #c2410c;
+  background: #ffedd5;
+  font-size: 10px;
+  font-weight: 900;
+  letter-spacing: .09em;
+  text-transform: uppercase;
+}
+.signup-promo-copy h2 { margin: 13px 0 10px; color: #111827; font-size: clamp(28px, 3.1vw, 38px); line-height: 1.08; letter-spacing: -1.3px; }
+.signup-promo-copy h2 em { font-style: normal; background: linear-gradient(120deg, #f97316, #ec4899 55%, #7c3aed); -webkit-background-clip: text; background-clip: text; color: transparent; }
+.signup-promo-copy > p { margin: 0; color: #5c677d; font-size: 14px; font-weight: 600; line-height: 1.6; }
+.signup-promo-copy > p b { color: #ea580c; }
+.signup-promo-features { display: flex; flex-wrap: wrap; gap: 7px; margin: 18px 0 14px; }
+.signup-promo-features span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 10px;
+  border: 1px solid #dfe7f2;
+  border-radius: 10px;
+  color: #2f3b52;
+  background: linear-gradient(135deg, #f8fbff, #fff8f1);
+  font-size: 10px;
+  font-weight: 850;
+  box-shadow: 0 4px 12px rgba(15,23,42,.04);
+}
+.signup-promo-features i { color: #f97316; font-size: 15px; }
+.signup-promo-message { display: flex; align-items: center; gap: 11px; padding: 12px 13px; border: 1px solid #fde68a; border-radius: 13px; color: #713f12; background: linear-gradient(135deg, #fffbeb, #fff7ed); }
+.signup-promo-message > i { flex: 0 0 auto; color: #f59e0b; font-size: 25px; filter: drop-shadow(0 3px 7px rgba(245,158,11,.25)); }
+.signup-promo-message p { margin: 0; font-size: 11px; line-height: 1.5; }
+.signup-promo-cta {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  min-height: 52px;
+  margin-top: 16px;
+  padding: 13px 18px;
+  border-radius: 14px;
+  color: #fff;
+  background: linear-gradient(115deg, #ff6b35, #ec4899 55%, #7c3aed);
+  box-shadow: 0 15px 30px rgba(236, 72, 153, .26), inset 0 1px 0 rgba(255,255,255,.35);
+  font-size: 13px;
+  font-weight: 900;
+  text-align: center;
+  transition: transform .2s var(--ease), box-shadow .2s;
+}
+.signup-promo-cta:hover { color: #fff; transform: translateY(-2px); box-shadow: 0 20px 38px rgba(124,58,237,.3), inset 0 1px 0 rgba(255,255,255,.4); }
+.signup-promo-cta i { font-size: 18px; }
+.signup-promo-later { width: 100%; margin-top: 8px; padding: 7px; border: 0; color: #7b8496; background: transparent; font-size: 10px; font-weight: 750; }
+.signup-promo-later:hover { color: var(--primary); }
+.signup-promo-trust { display: flex; align-items: center; justify-content: center; gap: 5px; margin-top: 7px; color: #8a94a7; font-size: 9px; font-weight: 650; text-align: center; }
+.signup-promo-trust i { color: #16a34a; font-size: 13px; }
+@media (max-width: 700px) {
+  .signup-promo-bg { align-items: flex-end; padding: 0; }
+  .signup-promo-card { grid-template-columns: 1fr; max-height: 100dvh; overflow-y: auto; border-radius: 25px 25px 0 0; }
+  .signup-promo-visual { min-height: 145px; padding: 20px 58px 19px 18px; display: grid; grid-template-columns: 74px minmax(0,1fr); grid-template-rows: auto auto auto; column-gap: 13px; text-align: left; }
+  .signup-promo-visual img { grid-row: 1 / 4; width: 72px; height: 72px; margin: 0; }
+  .signup-promo-free { justify-self: start; margin: 0 0 5px; padding: 5px 8px; font-size: 8px; }
+  .signup-promo-visual strong { display: none; }
+  .signup-promo-visual b { margin: 0; font-size: 18px; }
+  .signup-promo-visual small { margin: 4px 0 0; font-size: 9px; }
+  .signup-promo-copy { padding: 23px 18px calc(18px + env(safe-area-inset-bottom)); }
+  .signup-promo-copy h2 { margin-top: 10px; font-size: 27px; }
+  .signup-promo-features { margin: 14px 0 12px; gap: 5px; }
+  .signup-promo-features span { padding: 7px 8px; font-size: 9px; }
+  .signup-promo-cta { min-height: 50px; }
+}
 .error-box {
   display: none; align-items: center; gap: 9px; background: var(--red-soft); color: var(--red);
   border-radius: 12px; padding: 12px 15px; font-size: 13.5px; font-weight: 600; margin-bottom: 18px;
