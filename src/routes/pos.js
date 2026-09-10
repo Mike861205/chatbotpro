@@ -13,6 +13,7 @@ const { ensureBranchStockSchema, initializeBranchStock, applyBranchSaleStock, re
 const { emitNewOrder, emitSelfServiceStatus } = require('../notifications');
 const { parseCustomPaymentMethods, isCustomPaymentMethod } = require('../utils/paymentMethods');
 const { loadProductTaxConfig, effectiveProductPrice, productTaxLineSnapshot, applyProductTaxToCatalogProduct } = require('../utils/productTax');
+const { applyPromotionsToItems, getActivePromotions, decorateCatalogProducts } = require('../utils/promotions');
 
 const router = express.Router();
 router.use(requireAuth);
@@ -817,14 +818,14 @@ async function normalizePosItems(t, inputItems) {
   );
   const taxConfig = await loadProductTaxConfig(t);
   const byId = new Map(rows.map((row) => [Number(row.id), row]));
-  return items.map((item) => {
+  const normalized = items.map((item) => {
     const product = byId.get(Number(item.productId ?? item.id));
     const qty = Number(item.qty);
     if (!product || !product.active) throw badRequest('Uno de los productos ya no está disponible');
     if (!Number.isInteger(qty) || qty <= 0) throw badRequest('La cantidad de un producto es inválida');
 
     const requestedName = String(item.name || '').trim();
-    const requestedPrice = Number(item.price);
+    const requestedPrice = Number(item.originalUnitPrice ?? item.listPrice ?? item.price);
     const hasCustomLine = Boolean(item.cartKey || item._cartKey || item.variantId || item.modifiersLabel || Array.isArray(item.modifiers));
     const unitCost = preciseCost(product.unit_cost);
     const effectivePrice = hasCustomLine && Number.isFinite(requestedPrice) && requestedPrice >= 0
@@ -832,6 +833,7 @@ async function normalizePosItems(t, inputItems) {
       : effectiveProductPrice(product.price, taxConfig);
     return {
       id: product.id,
+      categoryId: Number(product.category_id || 0),
       name: hasCustomLine ? (requestedName || product.name) : product.name,
       price: effectivePrice,
       qty,
@@ -846,6 +848,7 @@ async function normalizePosItems(t, inputItems) {
       _cartKey: item.cartKey || item._cartKey ? String(item.cartKey || item._cartKey) : null,
     };
   });
+  return applyPromotionsToItems(t, normalized, 'pos');
 }
 
 async function attachCostsToExistingItems(t, inputItems) {
@@ -1194,7 +1197,8 @@ router.post('/table-accounts/:id/checkout', async (req, res, next) => {
       );
       if (!account) throw Object.assign(new Error('La cuenta de mesa ya no está abierta'), { statusCode: 409 });
       if (Number(account.branch_id || 0) !== Number(session.branch_id || 0)) throw Object.assign(new Error('La cuenta pertenece a otra sucursal'), { statusCode: 409 });
-      const items = await attachCostsToExistingItems(tx, account.items);
+      const costedItems = await attachCostsToExistingItems(tx, account.items);
+      const items = await applyPromotionsToItems(tx, costedItems, 'pos');
       if (!items.length) throw badRequest('La mesa no tiene productos para cobrar');
       const subtotal = n(items.reduce((sum, item) => sum + n(item.price) * Number(item.qty), 0));
       const paymentMethod = String(req.body?.paymentMethod || '').trim();
@@ -1308,6 +1312,10 @@ router.get('/overview', async (req, res, next) => {
       variants: variantsMap.get(p.id) || [],
       modifierGroups: groupsMap.get(p.id) || [],
     }, taxConfig)));
+    const productsWithPromotions = decorateCatalogProducts(
+      productsWithExtras,
+      await getActivePromotions(req.tdb, 'pos')
+    );
     const ctx = userSessionContext(req.user, req);
     const session = await getOpenSession(req.tdb, ctx);
     const sessionTotals = session ? await getSessionTotals(req.tdb, session.id) : null;
@@ -1330,7 +1338,7 @@ router.get('/overview', async (req, res, next) => {
     res.json({
       categories,
       branches,
-      products: productsWithExtras,
+      products: productsWithPromotions,
       productTax: taxConfig,
       activeSession,
       lastClosedSession,

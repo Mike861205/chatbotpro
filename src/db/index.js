@@ -456,6 +456,41 @@ async function createTenantSchema(slug) {
       active INTEGER DEFAULT 1,
       created_at TIMESTAMPTZ DEFAULT now()
     );
+    CREATE TABLE IF NOT EXISTS "${s}".promotions (
+      id SERIAL PRIMARY KEY,
+      name TEXT NOT NULL,
+      description TEXT DEFAULT '',
+      type TEXT NOT NULL,
+      value NUMERIC(12,2) NOT NULL DEFAULT 0,
+      buy_qty INTEGER NOT NULL DEFAULT 0,
+      pay_qty INTEGER NOT NULL DEFAULT 0,
+      all_products INTEGER NOT NULL DEFAULT 0,
+      days_of_week TEXT NOT NULL DEFAULT '[]',
+      starts_on DATE,
+      ends_on DATE,
+      start_time TIME NOT NULL DEFAULT '00:00',
+      end_time TIME NOT NULL DEFAULT '23:59',
+      pos_enabled INTEGER NOT NULL DEFAULT 1,
+      chatbot_enabled INTEGER NOT NULL DEFAULT 1,
+      active INTEGER NOT NULL DEFAULT 1,
+      priority INTEGER NOT NULL DEFAULT 0,
+      created_by TEXT DEFAULT '',
+      created_at TIMESTAMPTZ DEFAULT now(),
+      updated_at TIMESTAMPTZ DEFAULT now()
+    );
+    CREATE TABLE IF NOT EXISTS "${s}".promotion_products (
+      promotion_id INTEGER NOT NULL,
+      product_id INTEGER NOT NULL,
+      PRIMARY KEY (promotion_id, product_id)
+    );
+    CREATE TABLE IF NOT EXISTS "${s}".promotion_categories (
+      promotion_id INTEGER NOT NULL,
+      category_id INTEGER NOT NULL,
+      PRIMARY KEY (promotion_id, category_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_${s}_promotions_active ON "${s}".promotions(active, starts_on, ends_on);
+    CREATE INDEX IF NOT EXISTS idx_${s}_promotion_products_product ON "${s}".promotion_products(product_id);
+    CREATE INDEX IF NOT EXISTS idx_${s}_promotion_categories_category ON "${s}".promotion_categories(category_id);
     CREATE TABLE IF NOT EXISTS "${s}".customers (
       id SERIAL PRIMARY KEY,
       name_enc TEXT,

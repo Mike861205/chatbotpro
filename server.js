@@ -82,6 +82,7 @@ app.get('/sw.js', (req, res) => {
 app.use('/api', apiNoStore);
 app.use('/api/auth', require('./src/routes/auth'));
 app.use('/api/products', require('./src/routes/products'));
+app.use('/api/promotions', require('./src/routes/promotions'));
 app.use('/api/orders', require('./src/routes/orders'));
 app.use('/api/customers', require('./src/routes/customers'));
 app.use('/api/dashboard', require('./src/routes/dashboard'));

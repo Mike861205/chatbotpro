@@ -31,6 +31,7 @@ const MODULE_LABELS = {
   kds: 'Pantalla de cocina (KDS)',
   ventas: 'Reporte de ventas',
   productos: 'Catálogo de productos',
+  promociones: 'Promociones',
   costos: 'Costeo de recetas',
   inventarios: 'Control de inventario',
   'stock-sucursales': 'Stock sucursales',

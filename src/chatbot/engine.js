@@ -11,6 +11,7 @@ const { ensureBranchStockSchema, initializeBranchStock, applyBranchSaleStock } =
 const { parseCustomPaymentMethods } = require('../utils/paymentMethods');
 const { resolveCurrencyConversion, convertedMoney, formatCurrencyAmount, conversionRateLabel } = require('../utils/currencyConversion');
 const { loadProductTaxConfig, applyProductTaxToCatalogProduct, productTaxLineSnapshot } = require('../utils/productTax');
+const { applyPromotions, getActivePromotions, decorateCatalogProducts } = require('../utils/promotions');
 
 let aiConfigCache = { expiresAt: 0, value: null };
 const aiClientCache = new Map();
@@ -88,7 +89,9 @@ function buildAiMenuText(products, maxChars = 4200) {
   const lines = [];
   let used = 0;
   for (const p of products) {
-    const line = `- ${p.name} (${p.category || 'General'}): ${money(p.price, 'MXN')}. ${String(p.description || '').trim()}`;
+    const price = p.promotionalPrice ?? p.price;
+    const promo = p.activePromotion ? ` Promoción: ${p.activePromotion.label || p.activePromotion.name}.` : '';
+    const line = `- ${p.name} (${p.category || 'General'}): ${money(price, 'MXN')}.${promo} ${String(p.description || '').trim()}`;
     if (used + line.length > maxChars) break;
     lines.push(line);
     used += line.length + 1;
@@ -428,30 +431,71 @@ async function saveState(t, sessionId, state) {
   );
 }
 
-async function activeProducts(t) {
+async function activeProducts(t, promotions = null) {
   const taxConfig = await loadProductTaxConfig(t);
   const rows = await t.all(
-    `SELECT p.id, p.name, p.description, p.price::float AS price, p.image, c.name AS category
+    `SELECT p.id, p.category_id, p.name, p.description, p.price::float AS price, p.image, c.name AS category
      FROM {s}.products p LEFT JOIN {s}.categories c ON c.id = p.category_id
      WHERE p.active = 1 ORDER BY c.sort, c.name, p.name`
   );
-  return rows.map((p) => applyProductTaxToCatalogProduct({
+  const catalog = rows.map((p) => applyProductTaxToCatalogProduct({
     ...p,
+    categoryId: Number(p.category_id || 0),
     image: String(p.image || '').trim()
       ? (String(p.image).startsWith('/') ? String(p.image) : `/${String(p.image).replace(/^\/+/, '')}`)
       : '',
   }, taxConfig));
+  const applicablePromotions = Array.isArray(promotions) ? promotions : await getActivePromotions(t, 'chatbot');
+  return decorateCatalogProducts(catalog, applicablePromotions);
 }
 
 function cartTotal(cart) {
-  return cart.reduce((s, it) => s + it.price * it.qty, 0);
+  return cart.reduce((sum, item) => sum + cartLineTotal(item), 0);
+}
+
+function cartLineTotal(item) {
+  const qty = Math.max(1, Number(item.qty || 1));
+  const original = Number(item.originalUnitPrice ?? item.listPrice ?? item.price ?? 0);
+  const extras = Math.min(original, Math.max(0, Number(item.modifiersExtraPrice || 0)));
+  const base = Math.max(0, original - extras);
+  const originalTotal = original * qty;
+  const promotions = Array.isArray(item.activePromotions) && item.activePromotions.length
+    ? item.activePromotions
+    : (item.promotion ? [item.promotion] : []);
+  let bestTotal = originalTotal;
+  let bestPriority = -1;
+  for (const promo of promotions) {
+    let candidate = originalTotal;
+    if (promo.type === 'percentage') candidate = (base * (1 - Number(promo.value || 0) / 100) + extras) * qty;
+    if (promo.type === 'fixed_amount') candidate = (Math.max(0, base - Number(promo.value || 0)) + extras) * qty;
+    if (promo.type === 'fixed_price') candidate = (Math.min(base, Number(promo.value || 0)) + extras) * qty;
+    if (promo.type === 'buy_x_pay_y') {
+      const buy = Math.max(2, Number(promo.buyQty || 2));
+      const pay = Math.max(1, Math.min(buy - 1, Number(promo.payQty || buy - 1)));
+      candidate = originalTotal - base * Math.floor(qty / buy) * (buy - pay);
+    }
+    if (candidate < bestTotal || (candidate === bestTotal && Number(promo.priority || 0) > bestPriority)) {
+      bestTotal = candidate;
+      bestPriority = Number(promo.priority || 0);
+    }
+  }
+  return bestTotal;
+}
+
+function promotionLineSnapshot(product) {
+  return {
+    categoryId: Number(product.categoryId ?? product.category_id ?? 0),
+    originalUnitPrice: Number(product.originalPrice ?? product.price ?? 0),
+    ...(product.activePromotion ? { promotion: product.activePromotion } : {}),
+    activePromotions: Array.isArray(product.activePromotions) ? product.activePromotions : [],
+  };
 }
 
 function cartSummary(cart, currency, labels = RESTAURANT_LABELS) {
   if (!cart.length) return labels.emptyCart || 'Tu carrito está vacío 🛒';
   const lines = cart.map((it) => {
     const modNote = it.modifiersLabel ? `\n  _${it.modifiersLabel}_` : '';
-    return `• ${it.qty}x ${it.name}${it.variantName ? ` (${it.variantName})` : ''}${modNote} — ${money(it.price * it.qty, currency)}`;
+    return `• ${it.qty}x ${it.name}${it.variantName ? ` (${it.variantName})` : ''}${modNote} — ${money(cartLineTotal(it), currency)}`;
   });
   const title = labels.cartTitle || '🛒 *Tu pedido:*';
   const total = cartTotal(cart);
@@ -567,7 +611,7 @@ function pricingSummary(state, currency, labels = RESTAURANT_LABELS) {
       : false;
     const variantLabel = it.variantName && !hasVariantInName ? ` (${it.variantName})` : '';
     const modifiersText = it.modifiersLabel ? `\n  Opciones: ${it.modifiersLabel}` : '';
-    return `• ${it.qty}x ${it.name}${variantLabel}${modifiersText} — ${money(it.price * it.qty, currency)}`;
+    return `• ${it.qty}x ${it.name}${variantLabel}${modifiersText} — ${money(cartLineTotal(it), currency)}`;
   });
   return [
     labels.cartTitle || '🛒 *Tu pedido:*',
@@ -604,6 +648,7 @@ function normalizeWhatsappNumber(raw) {
 
 function mainOptions(cart, infoOptions = [], labels = RESTAURANT_LABELS) {
   const opts = [{ label: labels.browseButton || '📋 Ver menú', value: 'menu' }];
+  if (labels.promotionsAvailable) opts.push({ label: '🔥 Promociones', value: 'promotions' });
   (infoOptions || []).forEach((item) => {
     if (!item?.label || !item?.id) return;
     opts.push({ label: item.label, value: `info_${item.id}` });
@@ -680,9 +725,9 @@ async function findReturningCustomerByPhone(t, phoneRaw) {
   };
 }
 
-async function showMenu(t, state, labels = RESTAURANT_LABELS) {
+async function showMenu(t, state, labels = RESTAURANT_LABELS, activePromotions = null) {
   const cats = await t.all('SELECT * FROM {s}.categories ORDER BY sort, name');
-  const products = await activeProducts(t);
+  const products = await activeProducts(t, activePromotions);
   if (!products.length) {
     return { messages: [labels.emptyCatalog || 'Por ahora no tenemos productos en el menú. ¡Vuelve pronto! 🙏'], options: [] };
   }
@@ -694,31 +739,62 @@ async function showMenu(t, state, labels = RESTAURANT_LABELS) {
       options: catsWithProducts.map((c) => ({ label: c.name, value: `cat_${c.id}` })),
     };
   }
-  return showProducts(t, state, null, labels);
+  return showProducts(t, state, null, labels, { catalogProducts: products });
 }
 
-async function showProducts(t, state, categoryId, labels = RESTAURANT_LABELS) {
-  let products = await activeProducts(t);
+async function showPromotions(t, state, labels = RESTAURANT_LABELS, activePromotions = null) {
+  const promotedProducts = (await activeProducts(t, activePromotions)).filter((product) => (product.activePromotions || []).length);
+  if (!promotedProducts.length) {
+    state.step = 'start';
+    return {
+      messages: ['Por ahora no hay promociones vigentes. Puedes consultar el menú completo.'],
+      options: mainOptions(state.cart, [], labels),
+    };
+  }
+  const cats = await t.all('SELECT * FROM {s}.categories ORDER BY sort, name');
+  const catsWithPromotions = cats.filter((category) => promotedProducts.some((product) => Number(product.categoryId) === Number(category.id)));
+  if (catsWithPromotions.length > 1) {
+    state.step = 'choosing_promotion_category';
+    state.currentCategoryId = null;
+    return {
+      messages: ['🔥 Estas categorías tienen promociones vigentes. ¿Cuál quieres ver?'],
+      options: [
+        { label: 'Todas las promociones', value: 'promo_cat_all' },
+        ...catsWithPromotions.map((category) => ({ label: category.name, value: `promo_cat_${category.id}` })),
+        { label: '⬅️ Volver', value: 'start' },
+      ],
+    };
+  }
+  return showProducts(t, state, catsWithPromotions[0]?.id || null, labels, { promotionsOnly: true, catalogProducts: promotedProducts });
+}
+
+async function showProducts(t, state, categoryId, labels = RESTAURANT_LABELS, { promotionsOnly = false, activePromotions = null, catalogProducts = null } = {}) {
+  let products = Array.isArray(catalogProducts) ? catalogProducts : await activeProducts(t, activePromotions);
+  if (promotionsOnly) products = products.filter((product) => (product.activePromotions || []).length);
   state.currentCategoryId = Number.isFinite(Number(categoryId)) ? Number(categoryId) : null;
   if (categoryId) {
     const cat = await t.get('SELECT name FROM {s}.categories WHERE id = $1', [categoryId]);
     if (cat) products = products.filter((p) => p.category === cat.name);
   }
   state.step = 'choosing_product';
+  state.browseMode = promotionsOnly ? 'promotions' : 'menu';
   const currency = state.currency;
   const qtyById = new Map((state.cart || []).map((it) => [Number(it.id), Number(it.qty || 0)]));
   return {
-    messages: [labels.browseTitle || 'Elige un producto para agregarlo a tu pedido:'],
+    messages: [promotionsOnly ? '🔥 Elige una promoción para agregarla a tu pedido:' : (labels.browseTitle || 'Elige un producto para agregarlo a tu pedido:')],
     products: products.map((p) => ({
       id: p.id,
       name: p.name,
       description: p.description,
-      price: p.price,
-      priceLabel: money(p.price, currency),
+      price: p.promotionalPrice ?? p.price,
+      originalPrice: p.originalPrice,
+      priceLabel: money(p.promotionalPrice ?? p.price, currency),
+      originalPriceLabel: p.activePromotion && Number(p.promotionalPrice) < Number(p.originalPrice) ? money(p.originalPrice, currency) : '',
+      promotion: p.activePromotion,
       image: p.image,
       qty: qtyById.get(Number(p.id)) || 0,
     })),
-    options: [{ label: '⬅️ Volver', value: state.currentCategoryId ? 'menu' : 'start' }, ...(state.cart.length ? mainOptions(state.cart, [], labels).slice(1) : [])],
+    options: [{ label: '⬅️ Volver', value: promotionsOnly ? (state.currentCategoryId ? 'promotions' : 'start') : (state.currentCategoryId ? 'menu' : 'start') }, ...(state.cart.length ? mainOptions(state.cart, [], labels).slice(1) : [])],
   };
 }
 
@@ -763,6 +839,8 @@ function addPendingProductToCart(state) {
       modifiers: modifiersDetail,
       modifiersLabel,
       modifiersExtraPrice: modifiersExtra,
+      ...promotionLineSnapshot(prod),
+      originalUnitPrice: finalPrice,
     });
   }
 
@@ -777,7 +855,7 @@ function addPendingProductToCart(state) {
 
 async function loadProductConfig(t, productId) {
   const taxConfig = await loadProductTaxConfig(t);
-  const prod = await t.get('SELECT id, name, price::float AS price FROM {s}.products WHERE id = $1 AND active = 1', [Number(productId)]);
+  const prod = await t.get('SELECT id, category_id, name, price::float AS price FROM {s}.products WHERE id = $1 AND active = 1', [Number(productId)]);
   if (!prod) return null;
   const variants = await t.all(
     'SELECT id, name, price::float AS price FROM {s}.product_variants WHERE product_id = $1 AND active = 1 ORDER BY sort, id',
@@ -793,13 +871,15 @@ async function loadProductConfig(t, productId) {
       [g.id]
     );
   }
-  return applyProductTaxToCatalogProduct({
+  const catalogProduct = applyProductTaxToCatalogProduct({
     ...prod,
+    categoryId: Number(prod.category_id || 0),
     variants,
     groups,
     hasVariants: variants.length > 1,
     hasModifiers: groups.length > 0,
   }, taxConfig);
+  return decorateCatalogProducts([catalogProduct], await getActivePromotions(t, 'chatbot'))[0];
 }
 
 function parseCustomReceivingModes(raw) {
@@ -832,11 +912,15 @@ function receivingModeIcon(behavior) {
 function setPendingProductConfiguration(state, cfg, qty = 1) {
   state.pendingProduct = {
     id: cfg.id,
+    categoryId: Number(cfg.categoryId ?? cfg.category_id ?? 0),
     name: cfg.name,
     price: cfg.price,
     taxEnabled: cfg.taxEnabled,
     taxMode: cfg.taxMode,
     taxRate: cfg.taxRate,
+    originalPrice: cfg.originalPrice,
+    activePromotion: cfg.activePromotion,
+    activePromotions: cfg.activePromotions,
     variants: cfg.variants,
     groups: cfg.groups,
   };
@@ -1074,7 +1158,7 @@ function buildOrderText(businessName, cart, customer, delivery, currency, labels
     ...cart.map((it) => {
       const varLine = it.variantName ? ` (${it.variantName})` : '';
       const modLine = it.modifiersLabel ? `\n  Opciones: ${it.modifiersLabel}` : '';
-      return `• ${it.qty}x ${it.name}${varLine}${modLine} — ${money(it.price * it.qty, currency)}`;
+      return `• ${it.qty}x ${it.name}${varLine}${modLine} — ${money(cartLineTotal(it), currency)}`;
     }),
     '',
     `*Subtotal: ${money(subtotal, currency)}*`,
@@ -1464,7 +1548,7 @@ async function handleMessage(t, slug, sessionId, rawInput) {
   const pickupEnabled = (await getSetting(t, 'pickup_enabled', '1')) === '1';
   const dineInEnabled = (await getSetting(t, 'dine_in_enabled', '1')) !== '0';
   const locationEnabled = (await getSetting(t, 'location_enabled', '1')) === '1';
-  const labels = getLabels(businessType);
+  let labels = getLabels(businessType);
   const customReceivingModes = parseCustomReceivingModes(await getSetting(t, 'chatbot_receiving_modes_json', '[]'));
   const receivingModes = [
     ...defaultReceivingModes(businessType, labels, { deliveryEnabled, pickupEnabled, dineInEnabled }),
@@ -1513,10 +1597,14 @@ async function handleMessage(t, slug, sessionId, rawInput) {
     })
     .filter(Boolean);
 
+  const activeChatbotPromotions = await getActivePromotions(t, 'chatbot');
+  labels = { ...labels, promotionsAvailable: activeChatbotPromotions.length > 0 };
   let state = (await getState(t, sessionId)) || { step: 'start', cart: [], customer: {}, currency, aiHistory: [] };
   if (!Array.isArray(state.aiHistory)) state.aiHistory = [];
   state.currency = currency;
   state.currencyConversion = currencyConversion?.enabled ? currencyConversion : null;
+  state.cart.currencyConversion = state.currencyConversion;
+  state.cart = applyPromotions(state.cart, activeChatbotPromotions);
   state.cart.currencyConversion = state.currencyConversion;
 
   const reply = { messages: [], options: [], products: null, cart: null, order: null, bankAccounts: null, bankAccountTitle: null, modifierGroup: null };
@@ -1545,6 +1633,8 @@ async function handleMessage(t, slug, sessionId, rawInput) {
   };
 
   const finish = async () => {
+    state.cart = applyPromotions(state.cart, activeChatbotPromotions);
+    state.cart.currencyConversion = state.currencyConversion;
     await saveState(t, sessionId, state);
     reply.cart = {
       items: state.cart,
@@ -1760,7 +1850,12 @@ async function handleMessage(t, slug, sessionId, rawInput) {
   }
   if (lower === 'menu' || lower === 'menú') {
     cancelPendingProductConfiguration(state);
-    Object.assign(reply, await showMenu(t, state, labels));
+    Object.assign(reply, await showMenu(t, state, labels, activeChatbotPromotions));
+    return finish();
+  }
+  if (lower === 'promotions' || lower === 'promociones' || lower === 'promoción' || lower === 'promocion') {
+    cancelPendingProductConfiguration(state);
+    Object.assign(reply, await showPromotions(t, state, labels, activeChatbotPromotions));
     return finish();
   }
   if (lower === 'cart' || lower === 'carrito') {
@@ -1786,7 +1881,12 @@ async function handleMessage(t, slug, sessionId, rawInput) {
 
   // Selección de categoría
   if (lower.startsWith('cat_')) {
-    Object.assign(reply, await showProducts(t, state, Number(lower.slice(4)), labels));
+    Object.assign(reply, await showProducts(t, state, Number(lower.slice(4)), labels, { activePromotions: activeChatbotPromotions }));
+    return finish();
+  }
+  if (lower.startsWith('promo_cat_')) {
+    const selectedCategory = lower.slice('promo_cat_'.length);
+    Object.assign(reply, await showProducts(t, state, selectedCategory === 'all' ? null : Number(selectedCategory), labels, { promotionsOnly: true, activePromotions: activeChatbotPromotions }));
     return finish();
   }
 
@@ -1820,8 +1920,8 @@ async function handleMessage(t, slug, sessionId, rawInput) {
           lines.push(`• Quitado: *${cfg.name}*`);
         } else if (!cfg.hasVariants && !cfg.hasModifiers) {
           if (existing) existing.qty = item.qty;
-          else state.cart.push({ id: cfg.id, name: cfg.name, price: cfg.price, qty: item.qty, ...productTaxLineSnapshot(cfg.price, cfg) });
-          lines.push(`• *${item.qty}x ${cfg.name}* = *${money(item.qty * Number(cfg.price || 0), currency)}*`);
+          else state.cart.push({ id: cfg.id, name: cfg.name, price: cfg.price, qty: item.qty, ...productTaxLineSnapshot(cfg.price, cfg), ...promotionLineSnapshot(cfg) });
+          lines.push(`• *${item.qty}x ${cfg.name}* = *${money(cartLineTotal({ ...cfg, qty: item.qty, ...promotionLineSnapshot(cfg) }), currency)}*`);
         }
       }
 
@@ -1878,13 +1978,13 @@ async function handleMessage(t, slug, sessionId, rawInput) {
         } else if (existing) {
           existing.qty = finalQty;
         } else {
-          state.cart.push({ id: prod.id, name: prod.name, price: prod.price, qty: finalQty, ...productTaxLineSnapshot(prod.price, prod) });
+          state.cart.push({ id: prod.id, name: prod.name, price: prod.price, qty: finalQty, ...productTaxLineSnapshot(prod.price, prod), ...promotionLineSnapshot(prod) });
         }
 
         resetUpsellProgress();
 
         state.step = 'start';
-        const lineTotal = money(finalQty * Number(prod.price || 0), currency);
+        const lineTotal = money(cartLineTotal({ ...prod, qty: Math.max(1, finalQty), ...promotionLineSnapshot(prod) }), currency);
         if (finalQty <= 0) {
           reply.messages = [`🗑️ Quité *${prod.name}* de tu pedido.`, cartSummary(state.cart, currency, labels)];
           showPostSendOptions();
@@ -1953,7 +2053,10 @@ async function handleMessage(t, slug, sessionId, rawInput) {
       }
       resetUpsellProgress();
       state.step = 'choosing_product';
-      Object.assign(reply, await showProducts(t, state, state.currentCategoryId, labels));
+      Object.assign(reply, await showProducts(t, state, state.currentCategoryId, labels, {
+        promotionsOnly: state.browseMode === 'promotions',
+        activePromotions: activeChatbotPromotions,
+      }));
       return finish();
     }
   }
@@ -1982,7 +2085,7 @@ async function handleMessage(t, slug, sessionId, rawInput) {
 
       const existing = state.cart.find((it) => it.id === prod.id && !it._cartKey);
       if (existing) existing.qty += 1;
-      else state.cart.push({ id: prod.id, name: prod.name, price: prod.price, qty: 1, ...productTaxLineSnapshot(prod.price, prod) });
+      else state.cart.push({ id: prod.id, name: prod.name, price: prod.price, qty: 1, ...productTaxLineSnapshot(prod.price, prod), ...promotionLineSnapshot(prod) });
       resetUpsellProgress();
 
       const currentQty = state.cart.find((it) => it.id === prod.id && !it._cartKey)?.qty || 0;
@@ -2107,7 +2210,7 @@ async function handleMessage(t, slug, sessionId, rawInput) {
     if (qty > 0 && qty <= 50 && state.pendingProduct) {
       const existing = state.cart.find((it) => it.id === state.pendingProduct.id);
       if (existing) existing.qty += qty;
-      else state.cart.push({ ...state.pendingProduct, qty, ...productTaxLineSnapshot(state.pendingProduct.price, state.pendingProduct) });
+      else state.cart.push({ ...state.pendingProduct, qty, ...productTaxLineSnapshot(state.pendingProduct.price, state.pendingProduct), ...promotionLineSnapshot(state.pendingProduct) });
       resetUpsellProgress();
       const name = state.pendingProduct.name;
       state.pendingProduct = null;
@@ -2371,7 +2474,7 @@ async function handleMessage(t, slug, sessionId, rawInput) {
 
       const existing = state.cart.find((item) => Number(item.id) === Number(product.id));
       if (existing) existing.qty += 1;
-      else state.cart.push({ id: product.id, name: product.name, price: product.price, qty: 1, ...productTaxLineSnapshot(product.price, product) });
+      else state.cart.push({ id: product.id, name: product.name, price: product.price, qty: 1, ...productTaxLineSnapshot(product.price, product), ...promotionLineSnapshot(product) });
 
       reply.messages = [
         `✅ Excelente elección: agregué *${product.name}* a tu pedido.`,
@@ -2726,6 +2829,7 @@ async function handleMessage(t, slug, sessionId, rawInput) {
           [encrypt(state.customer.name), encrypt(state.customer.phone), encrypt(state.customer.address || ''), customer.id]
         );
       }
+      state.cart = applyPromotions(state.cart, activeChatbotPromotions);
       const subtotal = cartTotal(state.cart);
       const deliveryFee = Number(state.customer.deliveryFee || 0);
       const total = subtotal + deliveryFee;
@@ -2856,7 +2960,7 @@ async function handleMessage(t, slug, sessionId, rawInput) {
   if (match) {
     const existing = state.cart.find((it) => it.id === match.id);
     if (existing) existing.qty += 1;
-    else state.cart.push({ id: match.id, name: match.name, price: match.price, qty: 1, ...productTaxLineSnapshot(match.price, match) });
+    else state.cart.push({ id: match.id, name: match.name, price: match.price, qty: 1, ...productTaxLineSnapshot(match.price, match), ...promotionLineSnapshot(match) });
     resetUpsellProgress();
     reply.messages = [`¡Agregado! 1x *${match.name}* 🎉\n\n${cartSummary(state.cart, currency, labels)}`];
     showPostSendOptions();

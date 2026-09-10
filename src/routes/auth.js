@@ -39,6 +39,7 @@ const TRACKABLE_MODULES = new Set([
   'kds',
   'ventas',
   'productos',
+  'promociones',
   'costos',
   'inventarios',
   'stock-sucursales',

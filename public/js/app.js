@@ -108,6 +108,11 @@ let POS_CHATBOT_TOTAL_PAGES = 1;
 const POS_CHATBOT_IMPORTING = new Set();
 let POS_CHATBOT_TABLE_ORDER_ID = null;
 let POS_TABLE_ACCOUNT = null;
+let PROMOTIONS_CACHE = [];
+let PROMOTION_PRODUCTS = [];
+let PROMOTION_CATEGORIES = [];
+let PROMOTION_FILTER = 'all';
+let PROMOTION_SEARCH = '';
 let TABLES_CONFIG = [];
 let TABLES_CONFIG_BRANCHES = [];
 let TABLES_CONFIG_SELECTED_ID = null;
@@ -961,6 +966,7 @@ const VIEW_META = {
   cancelaciones: ['Cancelaciones', 'Auditoría de ventas y correcciones', 'ph-file-magnifying-glass'],
   cortes: ['Cortes', 'Aperturas, cierres y diferencias de caja', 'ph-safe'],
   productos: ['Productos', 'Tu menú visible en el chatbot', 'ph-hamburger'],
+  promociones: ['Promociones', 'Ofertas programadas para POS y asistente virtual', 'ph-tag'],
   costos: ['Costo de ventas', 'Costos, precios, márgenes y gastos por sucursal', 'ph-coins'],
   inventarios: ['Inventarios', 'Control de stock, entradas, mermas y conteo físico', 'ph-package'],
   'stock-sucursales': ['Stock por sucursal', 'Existencias reales y consolidadas por ubicación', 'ph-buildings'],
@@ -984,6 +990,7 @@ const VIEW_LOADERS = {
   cancelaciones: () => loadAuditLog(1),
   cortes: () => loadCutsHistory(1),
   productos: loadProducts,
+  promociones: loadPromotions,
   costos: loadCosting,
   inventarios: loadInventarios,
   'stock-sucursales': loadBranchStock,
@@ -3803,7 +3810,54 @@ function moneyNum(value) {
 }
 
 function posCartTotal() {
+  POS_CART.forEach(applyClientPromotionToLine);
   return moneyNum(POS_CART.reduce((sum, item) => sum + item.price * item.qty, 0));
+}
+
+function applyClientPromotionToLine(item) {
+  const qty = Math.max(1, Number(item.qty || 1));
+  const original = moneyNum(item.originalUnitPrice ?? item.listPrice ?? item.price);
+  item.originalUnitPrice = original;
+  const originalTotal = moneyNum(original * qty);
+  let total = originalTotal;
+  let promo = null;
+  const promotions = Array.isArray(item.activePromotions) && item.activePromotions.length
+    ? item.activePromotions
+    : (item.activePromotion ? [item.activePromotion] : []);
+  for (const candidate of promotions) {
+    const extras = Math.min(original, moneyNum(item.modifiersExtraPrice || 0));
+    const base = moneyNum(original - extras);
+    let candidateTotal = originalTotal;
+    if (candidate.type === 'percentage') candidateTotal = moneyNum((base * (1 - Number(candidate.value || 0) / 100) + extras) * qty);
+    if (candidate.type === 'fixed_amount') candidateTotal = moneyNum((Math.max(0, base - Number(candidate.value || 0)) + extras) * qty);
+    if (candidate.type === 'fixed_price') candidateTotal = moneyNum((Math.min(base, Number(candidate.value || 0)) + extras) * qty);
+    if (candidate.type === 'buy_x_pay_y') {
+      const buy = Math.max(2, Number(candidate.buyQty || 2));
+      const pay = Math.max(1, Math.min(buy - 1, Number(candidate.payQty || buy - 1)));
+      candidateTotal = moneyNum(originalTotal - base * Math.floor(qty / buy) * (buy - pay));
+    }
+    const candidatePriority = Number(candidate.priority || 0);
+    const currentPriority = Number(promo?.priority || 0);
+    const candidateUpdated = Date.parse(candidate.updatedAt || candidate.createdAt || '') || 0;
+    const currentUpdated = Date.parse(promo?.updatedAt || promo?.createdAt || '') || 0;
+    const winsTie = candidateTotal === total && (
+      candidatePriority > currentPriority
+      || (candidatePriority === currentPriority && candidateUpdated > currentUpdated)
+      || (candidatePriority === currentPriority && candidateUpdated === currentUpdated && Number(candidate.id || 0) > Number(promo?.id || 0))
+    );
+    if (candidateTotal < total || winsTie) {
+      total = candidateTotal;
+      promo = candidate;
+    }
+  }
+  item.discountAmount = moneyNum(original * qty - total);
+  item.price = Number((total / qty).toFixed(6));
+  item.promotion = item.discountAmount > 0 && promo ? promo : null;
+  if (item.taxEnabled === true && Number.isFinite(Number(item.taxRate))) {
+    item.taxBasePrice = moneyNum(item.price / (1 + Number(item.taxRate)));
+    item.taxAmount = moneyNum(item.price - item.taxBasePrice);
+  }
+  return item;
 }
 
 function productTaxSummary(items = []) {
@@ -4024,12 +4078,16 @@ function syncPosCartFromCatalog() {
       return {
         ...item,
         image: product.image,
+        activePromotion: product.activePromotion || null,
+        activePromotions: product.activePromotions || [],
       };
     }
     return {
       ...item,
       name: product.name,
       price: Number(product.price),
+      originalUnitPrice: Number(product.price),
+      activePromotion: product.activePromotion || null,
       image: product.image,
     };
   });
@@ -4739,7 +4797,7 @@ function addPosProduct(productId) {
   if (existing) {
     existing.qty += 1;
   } else {
-    POS_CART.push({ id: Number(product.id), name: product.name, price: Number(product.price), image: product.image, qty: 1, taxEnabled: product.taxEnabled, taxMode: product.taxMode, taxRate: product.taxRate });
+    POS_CART.push({ id: Number(product.id), name: product.name, price: Number(product.price), originalUnitPrice: Number(product.price), activePromotion: product.activePromotion || null, activePromotions: product.activePromotions || [], image: product.image, qty: 1, taxEnabled: product.taxEnabled, taxMode: product.taxMode, taxRate: product.taxRate });
   }
   setPosPaymentDefaults();
   renderPosCart();
@@ -4765,7 +4823,7 @@ function renderPosProductConfigBody() {
   if (!product) return;
   const hasVariants = Array.isArray(product.variants) && product.variants.length > 1;
   const hasModifiers = Array.isArray(product.modifierGroups) && product.modifierGroups.length > 0;
-  let html = '';
+  let html = product.activePromotion ? `<div class="pos-config-promo"><i class="ph-fill ph-tag"></i><span><b>PROMOCIÓN</b><small>${esc(product.activePromotion.label || product.activePromotion.name)}</small></span></div>` : '';
 
   if (hasVariants) {
     html += `<div class="pos-config-section"><div class="pos-config-label"><i class="ph-bold ph-stack"></i> Elige una opción</div><div class="pos-config-variants">`;
@@ -4876,6 +4934,9 @@ $('#posProductConfigAdd')?.addEventListener('click', () => {
       id: Number(product.id),
       name: displayName,
       price: finalPrice,
+      originalUnitPrice: finalPrice,
+      activePromotion: product.activePromotion || null,
+      activePromotions: product.activePromotions || [],
       image: product.image,
       qty: 1,
       _cartKey: cartKey,
@@ -4922,6 +4983,7 @@ function posCartPayload() {
     qty: item.qty,
     name: item.name,
     price: Number(item.price),
+    originalUnitPrice: Number(item.originalUnitPrice ?? item.price),
     cartKey: item._cartKey || null,
     variantId: item.variantId || null,
     variantName: item.variantName || null,
@@ -5483,14 +5545,15 @@ function renderPosCatalog() {
   $('#posProductGrid').innerHTML = products.length
     ? products
         .map(
-          (product) => `<button class="pos-prod" type="button" data-pos-product="${product.id}">
+          (product) => `<button class="pos-prod ${product.activePromotion ? 'has-promotion' : ''}" type="button" data-pos-product="${product.id}">
             <div class="pos-prod-media">${product.image ? `<img src="${esc(product.image)}" alt="" />` : '<i class="ph ph-fork-knife"></i>'}</div>
             <div class="pos-prod-body">
               <span class="pos-prod-cat">${esc(product.category_name || 'Sin categoría')}</span>
               <b>${esc(product.name)}</b>
+              ${product.activePromotion ? `<span class="pos-promo-subtitle"><span class="pos-promo-kicker"><i class="ph-fill ph-lightning"></i> PROMOCIÓN</span><span class="pos-promo-kind">${esc(product.activePromotion.label || product.activePromotion.name)}</span></span>` : ''}
               <small>${esc(product.description || 'Producto listo para venta mostrador')}</small>
             </div>
-            <span class="pos-prod-price">${fmtMoney(product.price)}</span>
+            <span class="pos-prod-price">${product.activePromotion && Number(product.promotionalPrice) < Number(product.originalPrice) ? `<del>${fmtMoney(product.originalPrice)}</del>` : ''}<strong>${fmtMoney(product.promotionalPrice ?? product.price)}</strong></span>
           </button>`
         )
         .join('')
@@ -5578,7 +5641,7 @@ function renderPosCart() {
           <div class="pos-cart-item">
             <div>
               <b>${esc(item.name)}</b>
-              <small>${fmtMoney(item.price)} c/u</small>
+              <small>${item.discountAmount > 0 ? `<del>${fmtMoney(item.originalUnitPrice)}</del> ` : ''}${fmtMoney(item.price)} c/u ${item.promotion ? `<span class="pos-line-promo"><i class="ph-bold ph-tag"></i>${esc(item.promotion.label || item.promotion.name)}</span>` : ''}</small>
             </div>
             <div class="pos-cart-actions">
               <button type="button" class="btn btn-ghost btn-icon pos-dec-btn" data-pid="${item.id}" ${ck}><i class="ph-bold ph-minus"></i></button>
@@ -7258,6 +7321,252 @@ $('#posCloseFormModal')?.addEventListener('submit', async (e) => {
   } catch (err) {
     toast(err.message, true);
   }
+});
+
+/* ===== Promociones ===== */
+const PROMO_TYPE_META = {
+  percentage: { label: 'Descuento porcentual', icon: 'ph-percent' },
+  buy_x_pay_y: { label: 'Compra X, paga Y', icon: 'ph-gift' },
+  fixed_amount: { label: 'Monto de descuento', icon: 'ph-minus-circle' },
+  fixed_price: { label: 'Precio especial', icon: 'ph-tag' },
+};
+
+function promoProductNames(promo) {
+  if (promo.allProducts) return ['Todo el catálogo'];
+  const ids = new Set((promo.productIds || []).map(Number));
+  return PROMOTION_PRODUCTS.filter((product) => ids.has(Number(product.id))).map((product) => product.name);
+}
+
+function promoCategoryNames(promo) {
+  if (promo.allProducts) return [];
+  const ids = new Set((promo.categoryIds || []).map(Number));
+  return PROMOTION_CATEGORIES.filter((category) => ids.has(Number(category.id))).map((category) => category.name);
+}
+
+function promoScopeNames(promo) {
+  if (promo.allProducts) return ['Todo el catálogo'];
+  return [
+    ...promoCategoryNames(promo).map((name) => `Categoría: ${name}`),
+    ...promoProductNames(promo),
+  ];
+}
+
+function promoScheduleLabel(promo) {
+  const dayNames = ['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb'];
+  const days = (promo.daysOfWeek || []).length === 7 || !(promo.daysOfWeek || []).length
+    ? 'Todos los días'
+    : promo.daysOfWeek.map((day) => dayNames[day]).join(', ');
+  const dates = promo.startsOn || promo.endsOn
+    ? `${promo.startsOn || 'Ahora'} → ${promo.endsOn || 'Sin límite'}`
+    : 'Sin límite de fechas';
+  return `${days} · ${promo.startTime || '00:00'}–${promo.endTime || '23:59'} · ${dates}`;
+}
+
+function promotionStatus(promo) {
+  if (!promo.active) return { key: 'off', label: 'Apagada', icon: 'ph-power' };
+  if (promo.running) return { key: 'running', label: 'En curso', icon: 'ph-broadcast' };
+  return { key: 'scheduled', label: 'Programada', icon: 'ph-clock' };
+}
+
+function renderPromotionStats() {
+  const running = PROMOTIONS_CACHE.filter((promo) => promo.running).length;
+  const scheduled = PROMOTIONS_CACHE.filter((promo) => promo.active && !promo.running).length;
+  const orders = PROMOTIONS_CACHE.reduce((sum, promo) => sum + Number(promo.orderCount || 0), 0);
+  const savings = PROMOTIONS_CACHE.reduce((sum, promo) => sum + Number(promo.discountTotal || 0), 0);
+  $('#promoStats').innerHTML = `
+    <div class="promo-stat promo-stat-live"><i class="ph-bold ph-broadcast"></i><span><b>${running}</b><small>En curso ahora</small></span></div>
+    <div class="promo-stat promo-stat-calendar"><i class="ph-bold ph-calendar-check"></i><span><b>${scheduled}</b><small>Programadas</small></span></div>
+    <div class="promo-stat promo-stat-products"><i class="ph-bold ph-receipt"></i><span><b>${orders}</b><small>Tickets con promoción</small></span></div>
+    <div class="promo-stat promo-stat-total"><i class="ph-bold ph-hand-coins"></i><span><b>${fmtMoney(savings)}</b><small>Ahorro entregado</small></span></div>`;
+}
+
+function renderPromotions() {
+  renderPromotionStats();
+  const query = PROMOTION_SEARCH.trim().toLocaleLowerCase('es');
+  const rows = PROMOTIONS_CACHE.filter((promo) => {
+    const status = promotionStatus(promo).key;
+    if (PROMOTION_FILTER !== 'all' && status !== PROMOTION_FILTER) return false;
+    if (!query) return true;
+    return `${promo.name} ${promo.description} ${promoScopeNames(promo).join(' ')}`.toLocaleLowerCase('es').includes(query);
+  });
+  const host = $('#promoGrid');
+  if (!rows.length) {
+    host.innerHTML = `<div class="promo-empty"><i class="ph-duotone ph-tag"></i><h3>${PROMOTIONS_CACHE.length ? 'No hay coincidencias' : 'Crea tu primera promoción'}</h3><p>${PROMOTIONS_CACHE.length ? 'Cambia la búsqueda o el filtro.' : 'Programa una oferta y decide exactamente dónde y cuándo se aplicará.'}</p>${PROMOTIONS_CACHE.length ? '' : '<button class="btn btn-primary" type="button" data-promo-empty-add><i class="ph-bold ph-plus-circle"></i> Nueva promoción</button>'}</div>`;
+    $('[data-promo-empty-add]')?.addEventListener('click', () => openPromotionModal());
+    return;
+  }
+  host.innerHTML = rows.map((promo) => {
+    const meta = PROMO_TYPE_META[promo.type] || PROMO_TYPE_META.percentage;
+    const status = promotionStatus(promo);
+    const names = promoScopeNames(promo);
+    const categoryCount = (promo.categoryIds || []).length;
+    const productCount = (promo.productIds || []).length;
+    const productText = names.length > 3 ? `${names.slice(0, 3).join(', ')} y ${names.length - 3} más` : names.join(', ');
+    const scopeTitle = promo.allProducts
+      ? 'Todo el catálogo'
+      : [categoryCount ? `${categoryCount} categoría${categoryCount === 1 ? '' : 's'}` : '', productCount ? `${productCount} producto${productCount === 1 ? '' : 's'}` : ''].filter(Boolean).join(' + ');
+    return `<article class="promo-card promo-${status.key}">
+      <div class="promo-card-top"><span class="promo-type-icon"><i class="ph-bold ${meta.icon}"></i></span><div class="promo-card-heading"><span>${esc(meta.label)}</span><h3>${esc(promo.name)}</h3></div><span class="promo-status"><i class="ph-fill ${status.icon}"></i>${status.label}</span></div>
+      <p>${esc(promo.description || 'Promoción lista para impulsar tus ventas.')}</p>
+      <div class="promo-offer-value">${esc(promo.label)}</div>
+      <div class="promo-card-detail"><i class="ph-bold ph-package"></i><span><b>${esc(scopeTitle)}</b><small>${esc(productText || 'Sin alcance')}</small></span></div>
+      <div class="promo-card-detail"><i class="ph-bold ph-calendar-dots"></i><span><b>Horario</b><small>${esc(promoScheduleLabel(promo))}</small></span></div>
+      <div class="promo-channels"><span class="${promo.posEnabled ? 'on' : ''}"><i class="ph-bold ph-cash-register"></i> POS</span><span class="${promo.chatbotEnabled ? 'on' : ''}"><i class="ph-bold ph-robot"></i> Asistente</span></div>
+      <div class="promo-usage"><span><b>${Number(promo.orderCount || 0)}</b> tickets</span><span><b>${fmtMoney(promo.discountTotal || 0)}</b> ahorrado</span></div>
+      <div class="promo-card-actions"><label class="switch promo-card-switch" title="Encender o apagar"><input type="checkbox" data-promo-toggle="${promo.id}" ${promo.active ? 'checked' : ''}><span class="track"></span></label><button class="btn btn-ghost" type="button" data-promo-edit="${promo.id}"><i class="ph-bold ph-pencil-simple"></i> Editar</button><button class="btn btn-danger btn-icon" type="button" data-promo-delete="${promo.id}" title="Eliminar"><i class="ph-bold ph-trash"></i></button></div>
+    </article>`;
+  }).join('');
+  document.querySelectorAll('[data-promo-toggle]').forEach((input) => input.addEventListener('change', async () => {
+    input.disabled = true;
+    try { await api(`/api/promotions/${input.dataset.promoToggle}/toggle`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ active: input.checked }) }); await loadPromotions(); toast(input.checked ? 'Promoción encendida' : 'Promoción apagada'); }
+    catch (error) { input.checked = !input.checked; input.disabled = false; toast(error.message, true); }
+  }));
+  document.querySelectorAll('[data-promo-edit]').forEach((button) => button.addEventListener('click', () => openPromotionModal(PROMOTIONS_CACHE.find((promo) => promo.id === Number(button.dataset.promoEdit)))));
+  document.querySelectorAll('[data-promo-delete]').forEach((button) => button.addEventListener('click', async () => {
+    const promo = PROMOTIONS_CACHE.find((item) => item.id === Number(button.dataset.promoDelete));
+    if (!(await askConfirm('¿Eliminar promoción?', `Se eliminará “${promo?.name || 'esta promoción'}”. Los tickets anteriores conservarán su descuento.`))) return;
+    await api(`/api/promotions/${button.dataset.promoDelete}`, { method: 'DELETE' });
+    toast('Promoción eliminada');
+    await loadPromotions();
+  }));
+}
+
+async function loadPromotions() {
+  const data = await api('/api/promotions');
+  PROMOTIONS_CACHE = data.promotions || [];
+  PROMOTION_PRODUCTS = data.products || [];
+  PROMOTION_CATEGORIES = data.categories || [];
+  renderPromotions();
+}
+
+function renderPromotionValuePanel(promo = null) {
+  const type = $('#promoType').value;
+  const value = promo?.value ?? 10;
+  if (type === 'buy_x_pay_y') {
+    $('#promoValuePanel').innerHTML = `<div class="promo-formula"><div class="field"><label>Compra</label><input type="number" id="promoBuyQty" min="2" max="99" step="1" value="${Number(promo?.buyQty || 2)}" required></div><i class="ph-bold ph-arrow-right"></i><div class="field"><label>Paga</label><input type="number" id="promoPayQty" min="1" max="98" step="1" value="${Number(promo?.payQty || 1)}" required></div></div><small>Ejemplos: compra 2 y paga 1 = 2x1; compra 3 y paga 2 = 3x2.</small>`;
+    return;
+  }
+  const config = type === 'percentage'
+    ? { label: 'Porcentaje de descuento', suffix: '%', min: '0.01', max: '100', example: 'El sistema calcula el descuento sobre el producto automáticamente.' }
+    : type === 'fixed_amount'
+      ? { label: 'Monto que se descuenta por unidad', suffix: '', min: '0.01', max: '', example: 'Nunca hará que el precio quede por debajo de cero.' }
+      : { label: 'Nuevo precio por unidad', suffix: '', min: '0', max: '', example: 'Si el precio normal ya es menor, se respeta el precio más bajo.' };
+  $('#promoValuePanel').innerHTML = `<div class="field promo-value-field"><label>${config.label}</label><div><input type="number" id="promoValue" min="${config.min}" ${config.max ? `max="${config.max}"` : ''} step="0.01" value="${Number(value)}" required><span>${config.suffix || '$'}</span></div><small>${config.example}</small></div>`;
+}
+
+function renderPromotionProductPicker() {
+  const host = $('#promoProductPicker');
+  const all = $('#promoAllProducts').checked;
+  const query = String($('#promoProductSearch').value || '').trim().toLocaleLowerCase('es');
+  host.classList.toggle('disabled', all);
+  $('#promoProductSearch').disabled = all;
+  const products = PROMOTION_PRODUCTS.filter((product) => !query || `${product.name} ${product.category_name || ''}`.toLocaleLowerCase('es').includes(query));
+  host.innerHTML = products.length ? products.map((product) => `<label class="promo-product-option"><input type="checkbox" value="${product.id}" ${all ? 'disabled' : ''}><span><b>${esc(product.name)}</b><small>${esc(product.category_name || 'Sin categoría')} · ${fmtMoney(product.price)}</small></span><i class="ph-bold ph-check"></i></label>`).join('') : '<div class="promo-picker-empty">No encontramos productos con esa búsqueda.</div>';
+  const selected = new Set((host.dataset.selected || '').split(',').filter(Boolean));
+  host.querySelectorAll('input').forEach((input) => { input.checked = selected.has(input.value); input.addEventListener('change', () => { const next = new Set((host.dataset.selected || '').split(',').filter(Boolean)); input.checked ? next.add(input.value) : next.delete(input.value); host.dataset.selected = [...next].join(','); syncPromotionSelectedSummary(); }); });
+  syncPromotionSelectedSummary();
+}
+
+function renderPromotionCategoryPicker() {
+  const host = $('#promoCategoryPicker');
+  const all = $('#promoAllProducts').checked;
+  host.classList.toggle('disabled', all);
+  host.innerHTML = PROMOTION_CATEGORIES.length
+    ? PROMOTION_CATEGORIES.map((category) => `<label class="promo-category-option"><input type="checkbox" value="${category.id}" ${all ? 'disabled' : ''}><span><b>${esc(category.name)}</b><small>${Number(category.product_count || 0)} producto${Number(category.product_count || 0) === 1 ? '' : 's'} actuales</small></span><i class="ph-bold ph-check"></i></label>`).join('')
+    : '<div class="promo-picker-empty">Todavía no tienes categorías registradas.</div>';
+  const selected = new Set((host.dataset.selected || '').split(',').filter(Boolean));
+  host.querySelectorAll('input').forEach((input) => {
+    input.checked = selected.has(input.value);
+    input.addEventListener('change', () => {
+      const next = new Set((host.dataset.selected || '').split(',').filter(Boolean));
+      input.checked ? next.add(input.value) : next.delete(input.value);
+      host.dataset.selected = [...next].join(',');
+      syncPromotionSelectedSummary();
+    });
+  });
+}
+
+function syncPromotionSelectedSummary() {
+  const all = $('#promoAllProducts').checked;
+  const productIds = new Set(($('#promoProductPicker').dataset.selected || '').split(',').filter(Boolean).map(Number));
+  const categoryIds = new Set(($('#promoCategoryPicker').dataset.selected || '').split(',').filter(Boolean).map(Number));
+  const coveredProducts = PROMOTION_PRODUCTS.filter((product) => productIds.has(Number(product.id)) || categoryIds.has(Number(product.category_id))).length;
+  $('#promoSelectedSummary').textContent = all
+    ? `Todo el catálogo · ${PROMOTION_PRODUCTS.length} productos actuales`
+    : `${categoryIds.size} categoría${categoryIds.size === 1 ? '' : 's'} + ${productIds.size} producto${productIds.size === 1 ? '' : 's'} individual${productIds.size === 1 ? '' : 'es'} · ${coveredProducts} productos actuales cubiertos`;
+}
+
+function openPromotionModal(promo = null) {
+  $('#promotionForm').reset();
+  $('#promoId').value = promo?.id || '';
+  $('#promoModalTitle').textContent = promo ? 'Editar promoción' : 'Nueva promoción';
+  $('#promoName').value = promo?.name || '';
+  $('#promoDescription').value = promo?.description || '';
+  $('#promoType').value = promo?.type || 'percentage';
+  $('#promoAllProducts').checked = Boolean(promo?.allProducts);
+  $('#promoStartsOn').value = promo?.startsOn || '';
+  $('#promoEndsOn').value = promo?.endsOn || '';
+  $('#promoStartTime').value = promo?.startTime || '00:00';
+  $('#promoEndTime').value = promo?.endTime || '23:59';
+  $('#promoPosEnabled').checked = promo ? promo.posEnabled : true;
+  $('#promoChatbotEnabled').checked = promo ? promo.chatbotEnabled : true;
+  $('#promoActive').checked = promo ? promo.active : true;
+  $('#promoPriority').value = promo?.priority || 0;
+  document.querySelectorAll('#promoDays input').forEach((input) => { input.checked = (promo?.daysOfWeek || []).includes(Number(input.value)); });
+  $('#promoProductSearch').value = '';
+  $('#promoProductPicker').dataset.selected = (promo?.productIds || []).join(',');
+  $('#promoCategoryPicker').dataset.selected = (promo?.categoryIds || []).join(',');
+  renderPromotionValuePanel(promo);
+  renderPromotionCategoryPicker();
+  renderPromotionProductPicker();
+  $('#promotionModal').classList.add('show');
+}
+
+$('#promoAddBtn')?.addEventListener('click', () => openPromotionModal());
+$('#promoModalClose')?.addEventListener('click', () => $('#promotionModal').classList.remove('show'));
+$('#promoCancelBtn')?.addEventListener('click', () => $('#promotionModal').classList.remove('show'));
+$('#promoType')?.addEventListener('change', () => renderPromotionValuePanel());
+$('#promoAllProducts')?.addEventListener('change', () => { renderPromotionCategoryPicker(); renderPromotionProductPicker(); });
+$('#promoProductSearch')?.addEventListener('input', renderPromotionProductPicker);
+$('#promoSearch')?.addEventListener('input', (event) => { PROMOTION_SEARCH = event.target.value; renderPromotions(); });
+$('#promoStatusFilter')?.addEventListener('click', (event) => { const button = event.target.closest('[data-promo-filter]'); if (!button) return; PROMOTION_FILTER = button.dataset.promoFilter; document.querySelectorAll('[data-promo-filter]').forEach((item) => item.classList.toggle('on', item === button)); renderPromotions(); });
+$('#promotionForm')?.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const id = $('#promoId').value;
+  const allProducts = $('#promoAllProducts').checked;
+  const productIds = [...new Set(($('#promoProductPicker').dataset.selected || '').split(',').map(Number).filter(Boolean))];
+  const categoryIds = [...new Set(($('#promoCategoryPicker').dataset.selected || '').split(',').map(Number).filter(Boolean))];
+  const payload = {
+    name: $('#promoName').value,
+    description: $('#promoDescription').value,
+    type: $('#promoType').value,
+    value: Number($('#promoValue')?.value || 0),
+    buyQty: Number($('#promoBuyQty')?.value || 0),
+    payQty: Number($('#promoPayQty')?.value || 0),
+    allProducts,
+    productIds,
+    categoryIds,
+    daysOfWeek: [...document.querySelectorAll('#promoDays input:checked')].map((input) => Number(input.value)),
+    startsOn: $('#promoStartsOn').value,
+    endsOn: $('#promoEndsOn').value,
+    startTime: $('#promoStartTime').value,
+    endTime: $('#promoEndTime').value,
+    posEnabled: $('#promoPosEnabled').checked,
+    chatbotEnabled: $('#promoChatbotEnabled').checked,
+    active: $('#promoActive').checked,
+    priority: Number($('#promoPriority').value || 0),
+  };
+  if (!allProducts && !productIds.length && !categoryIds.length) return toast('Selecciona al menos una categoría o un producto', true);
+  if (!payload.posEnabled && !payload.chatbotEnabled) return toast('Activa al menos un canal', true);
+  const button = $('#promoSaveBtn');
+  button.disabled = true;
+  try {
+    await api(id ? `/api/promotions/${id}` : '/api/promotions', { method: id ? 'PUT' : 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+    $('#promotionModal').classList.remove('show');
+    toast(id ? 'Promoción actualizada' : 'Promoción creada');
+    await loadPromotions();
+  } catch (error) { toast(error.message, true); }
+  finally { button.disabled = false; }
 });
 
 /* ===== Productos ===== */

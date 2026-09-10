@@ -245,10 +245,19 @@
     }
     .prod .pimg img { width: 100%; height: 100%; object-fit: cover; }
     .prod .pinfo { flex: 1; min-width: 0; }
-    .prod .pname { font-weight: 800; font-size: 14px; letter-spacing: -0.1px; }
+    .prod .pname { overflow-wrap:anywhere;font-weight: 800; font-size: 14px; line-height:1.28;letter-spacing: -0.1px; }
     .prod .pdesc { font-size: 12px; color: #8b91a6; overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; margin-top: 2px; }
     .prod .pright { display: flex; flex-direction: column; align-items: flex-end; gap: 7px; flex-shrink: 0; }
     .prod .pprice { font-weight: 800; color: var(--primary); font-size: 14.5px; }
+    .prod .pprice-old { color: #94a3b8; font-size: 10px; font-weight: 700; text-decoration: line-through; }
+    .prod .price-stack { display:flex;align-items:flex-end;flex-direction:column;gap:1px; }
+    .prod.has-promotion { position:relative;overflow:hidden;border-color:#34d399;background:linear-gradient(145deg,#fff 55%,#ecfdf5);box-shadow:0 0 0 1px rgba(52,211,153,.18),0 7px 22px rgba(16,185,129,.18);animation:chatPromoNeon 3.2s ease-in-out infinite; }
+    .prod.has-promotion::before { content:"";position:absolute;inset:0 auto 0 0;width:3px;background:linear-gradient(180deg,#5eead4,#22c55e,#a3e635);box-shadow:0 0 10px #34d399; }
+    .prod .promo-subtitle { display:flex;min-width:0;max-width:100%;flex-direction:column;align-items:flex-start;gap:2px;margin-top:6px;padding:6px 8px;border:1px solid rgba(52,211,153,.75);border-radius:9px;background:linear-gradient(135deg,#062d29,#064e3b);color:#fff;line-height:1.2;box-shadow:inset 0 0 12px rgba(45,212,191,.14),0 0 10px rgba(16,185,129,.2); }
+    .prod .promo-kicker { display:inline-flex;align-items:center;gap:4px;color:#99f6e4;font-size:8px;font-weight:950;letter-spacing:.11em;text-shadow:0 0 5px rgba(94,234,212,.9); }
+    .prod .promo-kind { max-width:100%;color:#ecfccb;font-size:10px;font-weight:850;overflow-wrap:anywhere;text-shadow:0 0 6px rgba(163,230,53,.55); }
+    @keyframes chatPromoNeon { 0%,100% { box-shadow:0 0 0 1px rgba(52,211,153,.16),0 6px 18px rgba(16,185,129,.12); } 50% { box-shadow:0 0 0 1px rgba(45,212,191,.3),0 9px 26px rgba(16,185,129,.24); } }
+    @media (prefers-reduced-motion: reduce) { .prod.has-promotion { animation:none; } }
     .prod .qty-ctl {
       display: inline-flex;
       align-items: center;
@@ -366,6 +375,8 @@
     }
     .opt:hover::after { opacity: 1; }
     .opt:active { transform: scale(0.96); }
+    .opt.opt-promotions { color:#9a3412;border-color:#fdba74;background:linear-gradient(135deg,#fff7ed,#ffedd5);text-shadow:none;box-shadow:0 5px 16px rgba(249,115,22,.15); }
+    .opt.opt-promotions:hover { color:#7c2d12;border-color:#fb923c;background:linear-gradient(135deg,#ffedd5,#fed7aa); }
     .modifier-picker { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     .modifier-picker-status {
       grid-column: 1 / -1;
@@ -391,6 +402,13 @@
     @media (max-width: 430px) {
       .options { grid-template-columns: 1fr 1fr; }
       .opt { font-size: 12.5px; padding: 9px 12px; }
+      .prod { display:grid;grid-template-columns:52px minmax(0,1fr);align-items:start;gap:9px;padding:10px 11px; }
+      .prod .pimg { width:52px;height:52px;border-radius:13px;font-size:23px; }
+      .prod .pname { font-size:13px; }
+      .prod .pdesc { font-size:11px;-webkit-line-clamp:1; }
+      .prod .pright { grid-column:1/-1;display:flex;width:100%;flex-direction:row;align-items:center;justify-content:space-between;gap:9px;padding-top:2px; }
+      .prod .price-stack { align-items:flex-start; }
+      .prod .promo-subtitle { width:100%; }
     }
     /* ── WhatsApp CTA ── */
     .wa-btn {
@@ -784,13 +802,13 @@
 
         data.products.forEach((p) => {
           const card = document.createElement('div');
-          card.className = 'prod';
+          card.className = p.promotion ? 'prod has-promotion' : 'prod';
           const serverQty = Number(p.qty || 0);
           card.innerHTML = `
             <div class="pimg">${p.image ? `<img src="${esc(p.image)}" alt="" loading="lazy">` : '<i class="ph ph-fork-knife"></i>'}</div>
-            <div class="pinfo"><div class="pname">${esc(p.name)}</div><div class="pdesc">${esc(p.description || '')}</div></div>
+            <div class="pinfo"><div class="pname">${esc(p.name)}</div>${p.promotion ? `<div class="promo-subtitle"><span class="promo-kicker"><i class="ph-fill ph-lightning"></i> PROMOCIÓN</span><span class="promo-kind">${esc(p.promotion.label || p.promotion.name)}</span></div>` : ''}<div class="pdesc">${esc(p.description || '')}</div></div>
             <div class="pright">
-              <span class="pprice">${esc(p.priceLabel)}</span>
+              <div class="price-stack">${p.originalPriceLabel ? `<span class="pprice-old">${esc(p.originalPriceLabel)}</span>` : ''}<span class="pprice">${esc(p.priceLabel)}</span></div>
               <div class="qty-ctl" data-qty-wrap>
                 <button class="qty-btn minus" type="button" data-dec="${p.id}" ${serverQty <= 0 ? 'disabled' : ''}><i class="ph-bold ph-minus"></i></button>
                 <span class="qty-val">${serverQty}</span>
@@ -876,15 +894,17 @@
         };
         optionsRaw.forEach((o) => {
           const value = String(o?.value || '');
-          if (value === 'menu') grouped.primary.push(o);
-          else if (value.startsWith('cat_')) grouped.categories.push(o);
+          if (value === 'menu' || value === 'promotions') grouped.primary.push(o);
+          else if (value.startsWith('cat_') || value.startsWith('promo_cat_')) grouped.categories.push(o);
           else if (value === 'cart') grouped.cart.push(o);
           else if (value === 'checkout') grouped.checkout.push(o);
           else grouped.rest.push(o);
         });
-        grouped.categories.sort((a, b) =>
-          String(a?.label || '').localeCompare(String(b?.label || ''), 'es', { sensitivity: 'base' })
-        );
+        grouped.categories.sort((a, b) => {
+          if (a?.value === 'promo_cat_all') return -1;
+          if (b?.value === 'promo_cat_all') return 1;
+          return String(a?.label || '').localeCompare(String(b?.label || ''), 'es', { sensitivity: 'base' });
+        });
         const optionsOrdered = [
           ...grouped.primary,
           ...grouped.categories,
@@ -897,7 +917,7 @@
         wrap.className = 'options';
         optionsOrdered.forEach((o) => {
           const b = document.createElement('button');
-          b.className = 'opt';
+          b.className = String(o?.value || '') === 'promotions' ? 'opt opt-promotions' : 'opt';
           b.textContent = o.label;
           b.addEventListener('click', () => onOption(o, b));
           wrap.appendChild(b);

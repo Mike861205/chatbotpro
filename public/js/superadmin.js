@@ -46,6 +46,7 @@ const SA_MODULE_LABELS = {
   kds: 'Pantallas KDS',
   ventas: 'Ventas',
   productos: 'Productos',
+  promociones: 'Promociones',
   costos: 'Costo de ventas',
   inventarios: 'Inventarios',
   'stock-sucursales': 'Stock por sucursal',

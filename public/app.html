@@ -11,7 +11,7 @@
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/fill/style.css" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/duotone/style.css" />
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-  <link rel="stylesheet" href="/static/css/styles.css?v=20260908-trial-expired" />
+  <link rel="stylesheet" href="/static/css/styles.css?v=20260909-promo-neon" />
   <link rel="icon" type="image/svg+xml" href="/static/favicon.svg" />
   <link rel="icon" type="image/png" href="/static/chatbotpro100.png" />
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
@@ -57,6 +57,7 @@
         <a href="/notificaciones" target="_blank" data-color="violet" style="color:#a78bfa"><span class="nav-ic"><i class="ph-duotone ph-broadcast"></i></span><span>Pedidos en vivo</span> <span style="font-size:9px;background:#6c47ff;color:#fff;padding:2px 6px;border-radius:10px;margin-left:auto">PWA</span></a>
         <div class="nav-label nav-label-inventario"><i class="ph-fill ph-package"></i> Inventario</div>
         <a href="#productos" data-view="productos" data-color="rose"><span class="nav-ic"><i class="ph-duotone ph-cooking-pot"></i></span><span>Productos</span></a>
+        <a href="#promociones" data-view="promociones" data-color="emerald"><span class="nav-ic"><i class="ph-duotone ph-tag"></i></span><span>Promociones</span></a>
         <a href="#costos" data-view="costos" data-color="amber"><span class="nav-ic"><i class="ph-duotone ph-chart-pie-slice"></i></span><span>Costo de ventas</span></a>
         <a href="#inventarios" data-view="inventarios" data-color="teal"><span class="nav-ic"><i class="ph-duotone ph-package"></i></span><span>Inventarios</span></a>
         <a href="#stock-sucursales" data-view="stock-sucursales" data-color="cyan"><span class="nav-ic"><i class="ph-duotone ph-warehouse"></i></span><span>Stock por sucursal</span></a>
@@ -424,6 +425,28 @@
           <div class="table-wrap" id="cutsHistoryTable"></div>
           <div class="orders-pagination" id="cutsPagination"></div>
         </div>
+      </section>
+
+      <section class="section" id="view-promociones">
+        <div class="promo-hero">
+          <div class="promo-hero-copy">
+            <span><i class="ph-bold ph-sparkle"></i> Motor de promociones</span>
+            <h2>Convierte productos en oportunidades de venta</h2>
+            <p>Crea descuentos y ofertas por producto, programa días y horarios, y decide si aplican en Punto de venta, Asistente virtual o ambos.</p>
+          </div>
+          <button class="btn promo-create-btn" type="button" id="promoAddBtn"><i class="ph-bold ph-plus-circle"></i> Nueva promoción</button>
+        </div>
+        <div class="promo-stats" id="promoStats"></div>
+        <div class="promo-toolbar card">
+          <label class="promo-search"><i class="ph-bold ph-magnifying-glass"></i><input type="search" id="promoSearch" placeholder="Buscar promoción o producto…" autocomplete="off" /></label>
+          <div class="segmented" id="promoStatusFilter">
+            <button type="button" class="on" data-promo-filter="all">Todas</button>
+            <button type="button" data-promo-filter="running">En curso</button>
+            <button type="button" data-promo-filter="scheduled">Programadas</button>
+            <button type="button" data-promo-filter="off">Apagadas</button>
+          </div>
+        </div>
+        <div class="promo-grid" id="promoGrid"></div>
       </section>
 
       <section class="section" id="view-productos">
@@ -3184,7 +3207,57 @@
     </div>
   </div>
 
+  <div class="modal-bg" id="promotionModal">
+    <div class="modal promo-modal">
+      <div class="promo-modal-head">
+        <div><span><i class="ph-bold ph-tag"></i> Configuración comercial</span><h3 id="promoModalTitle">Nueva promoción</h3></div>
+        <button type="button" class="modal-close" id="promoModalClose" aria-label="Cerrar"><i class="ph-bold ph-x"></i></button>
+      </div>
+      <form id="promotionForm">
+        <input type="hidden" id="promoId" />
+        <div class="promo-form-scroll">
+          <div class="promo-form-section">
+            <div class="promo-section-title"><i class="ph-bold ph-pencil-simple"></i><div><b>Oferta</b><small>Nombre y mecánica que verá tu equipo</small></div></div>
+            <div class="row-2">
+              <div class="field"><label for="promoName">Nombre *</label><input id="promoName" maxlength="120" required placeholder="Ej. Martes de 2x1" /></div>
+              <div class="field"><label for="promoType">Tipo *</label><select id="promoType"><option value="percentage">Descuento porcentual</option><option value="buy_x_pay_y">Compra X, paga Y</option><option value="fixed_amount">Descuento de monto fijo</option><option value="fixed_price">Precio especial</option></select></div>
+            </div>
+            <div class="field"><label for="promoDescription">Descripción</label><input id="promoDescription" maxlength="300" placeholder="Ej. Válida en hamburguesas seleccionadas" /></div>
+            <div class="promo-value-panel" id="promoValuePanel"></div>
+          </div>
+          <div class="promo-form-section">
+            <div class="promo-section-title"><i class="ph-bold ph-package"></i><div><b>Alcance de la promoción</b><small>Selecciona categorías completas, productos individuales o ambos</small></div></div>
+            <label class="promo-all-products"><input type="checkbox" id="promoAllProducts" /><span><b>Aplicar a todos los productos</b><small>También incluirá productos nuevos mientras esté activa</small></span></label>
+            <div class="promo-scope-label"><i class="ph-bold ph-folders"></i><span><b>Categorías completas</b><small>Los productos nuevos de una categoría se incluirán automáticamente</small></span></div>
+            <div class="promo-category-picker" id="promoCategoryPicker"></div>
+            <div class="promo-scope-label"><i class="ph-bold ph-cube"></i><span><b>Productos individuales</b><small>Puedes combinarlos con las categorías seleccionadas</small></span></div>
+            <label class="promo-product-search"><i class="ph-bold ph-magnifying-glass"></i><input type="search" id="promoProductSearch" placeholder="Buscar en productos…" /></label>
+            <div class="promo-product-picker" id="promoProductPicker"></div>
+            <div class="promo-selected-summary" id="promoSelectedSummary">0 productos seleccionados</div>
+          </div>
+          <div class="promo-form-section">
+            <div class="promo-section-title"><i class="ph-bold ph-calendar-dots"></i><div><b>Calendario</b><small>Vacío significa todos los días y sin fecha límite</small></div></div>
+            <div class="promo-days" id="promoDays">
+              <label><input type="checkbox" value="1"><span>Lun</span></label><label><input type="checkbox" value="2"><span>Mar</span></label><label><input type="checkbox" value="3"><span>Mié</span></label><label><input type="checkbox" value="4"><span>Jue</span></label><label><input type="checkbox" value="5"><span>Vie</span></label><label><input type="checkbox" value="6"><span>Sáb</span></label><label><input type="checkbox" value="0"><span>Dom</span></label>
+            </div>
+            <div class="row-2"><div class="field"><label>Desde</label><input type="date" id="promoStartsOn" /></div><div class="field"><label>Hasta</label><input type="date" id="promoEndsOn" /></div></div>
+            <div class="row-2"><div class="field"><label>Hora inicial</label><input type="time" id="promoStartTime" value="00:00" required /></div><div class="field"><label>Hora final</label><input type="time" id="promoEndTime" value="23:59" required /></div></div>
+          </div>
+          <div class="promo-form-section">
+            <div class="promo-section-title"><i class="ph-bold ph-broadcast"></i><div><b>Canales y control</b><small>Enciende sólo donde te convenga</small></div></div>
+            <div class="promo-channel-grid">
+              <label class="promo-channel"><input type="checkbox" id="promoPosEnabled" checked><i class="ph-bold ph-cash-register"></i><span><b>Punto de venta</b><small>Aplica al cobrar y en mesas</small></span></label>
+              <label class="promo-channel"><input type="checkbox" id="promoChatbotEnabled" checked><i class="ph-bold ph-robot"></i><span><b>Asistente virtual</b><small>Se muestra y aplica en pedidos</small></span></label>
+            </div>
+            <div class="row-2 promo-control-row"><label class="promo-active-control"><input type="checkbox" id="promoActive" checked><span><b>Promoción encendida</b><small>Puedes apagarla en cualquier momento</small></span></label><div class="field promo-priority-field"><label for="promoPriority">Desempate: número mayor gana</label><input type="number" id="promoPriority" min="0" max="999" step="1" value="0" /><small>Primero se aplica siempre el mayor ahorro. Este número sólo decide si dos promociones dejan exactamente el mismo total; si también coincide, gana la actualizada más recientemente.</small></div></div>
+          </div>
+        </div>
+        <div class="modal-actions promo-modal-actions"><button type="button" class="btn btn-ghost" id="promoCancelBtn">Cancelar</button><button class="btn btn-primary" type="submit" id="promoSaveBtn"><i class="ph-bold ph-floppy-disk"></i> Guardar promoción</button></div>
+      </form>
+    </div>
+  </div>
+
 <script src="/socket.io/socket.io.js"></script>
-  <script src="/static/js/app.js?v=20260908-pos-delivery-optional"></script>
+  <script src="/static/js/app.js?v=20260909-promo-neon"></script>
 </body>
 </html>
