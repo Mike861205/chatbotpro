@@ -215,8 +215,6 @@ initMaster({
           const tenantResult = await q(
             `SELECT slug FROM tenants
              WHERE slug = $1 AND account_status = 'active' AND billing_status <> 'suspended'
-               AND NOT (trial_status IN ('active', 'expired') AND customer_since IS NULL
-                 AND trial_ends_on IS NOT NULL AND trial_ends_on <= (now() AT TIME ZONE timezone)::date)
              LIMIT 1`,
             [kdsSlug]
           );
@@ -252,9 +250,7 @@ initMaster({
         if (!tenantSlug || decoded.typ !== scope) return next(new Error('auth'));
         const [{ rows: tRows }, { rows: uRows }] = await Promise.all([
           q(`SELECT slug FROM tenants
-             WHERE slug = $1 AND account_status = $2 AND billing_status <> 'suspended'
-               AND NOT (trial_status IN ('active', 'expired') AND customer_since IS NULL
-                 AND trial_ends_on IS NOT NULL AND trial_ends_on <= (now() AT TIME ZONE timezone)::date)`, [tenantSlug, 'active']),
+             WHERE slug = $1 AND account_status = $2 AND billing_status <> 'suspended'`, [tenantSlug, 'active']),
           q('SELECT role, permissions_json FROM users WHERE id = $1 AND active = 1', [decoded.uid]),
         ]);
         if (!tRows[0]) return next(new Error('auth'));

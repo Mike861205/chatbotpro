@@ -17,7 +17,6 @@ const {
   validateWebhookSignature,
 } = require('../utils/mercadoPagoPoint');
 const { finalizeSelfServiceOrder, getOpenBranchSession } = require('../utils/selfServiceCheckout');
-const { trialState } = require('../utils/trialAccess');
 const { loadProductTaxConfig, effectiveProductPrice, productTaxLineSnapshot, applyProductTaxToCatalogProduct } = require('../utils/productTax');
 
 const router = express.Router();
@@ -80,7 +79,7 @@ async function resolveDevice(slug, token) {
     [cleanSlug(slug)]
   );
   const tenant = found.rows[0];
-  if (!tenant || tenant.account_status !== 'active' || tenant.billing_status === 'suspended' || trialState(tenant).isExpired) return null;
+  if (!tenant || tenant.account_status !== 'active' || tenant.billing_status === 'suspended') return null;
   const tenantDb = tdb(tenant.slug);
   tenant.timezone = normalizeTimeZone(tenant.timezone);
   tenantDb.timezone = tenant.timezone;

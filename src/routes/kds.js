@@ -6,7 +6,6 @@ const { decrypt } = require('../utils/crypto');
 const { operationalOrderNote } = require('../utils/orderNotes');
 const { emitKdsUpdate } = require('../notifications');
 const { normalizeTimeZone } = require('../utils/regional');
-const { trialState } = require('../utils/trialAccess');
 
 const router = express.Router();
 const KDS_STATUSES = new Set(['pending', 'preparing', 'ready', 'completed']);
@@ -60,7 +59,7 @@ async function resolvePublicArea(slug, token) {
     [cleanSlug(slug)]
   );
   const tenant = tenantResult.rows[0];
-  if (!tenant || tenant.account_status !== 'active' || tenant.billing_status === 'suspended' || trialState(tenant).isExpired) return null;
+  if (!tenant || tenant.account_status !== 'active' || tenant.billing_status === 'suspended') return null;
   const tenantDb = tdb(tenant.slug);
   tenant.timezone = normalizeTimeZone(tenant.timezone);
   tenantDb.timezone = tenant.timezone;

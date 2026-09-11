@@ -367,14 +367,8 @@ router.post('/login', authAttemptLimiter, async (req, res, next) => {
     }
     const loginTrial = trialState(tenant);
     if (loginTrial.isExpired) {
-      await q("UPDATE tenants SET trial_status = 'expired', account_status = 'inactive' WHERE id = $1 AND trial_status = 'active'", [tenant.id]);
-      return res.status(403).json({
-        error: 'Tu prueba real de 5 días terminó. Tus datos siguen guardados; contrata una suscripción o contacta al administrador para reactivar tu cuenta.',
-        errorCode: 'TRIAL_EXPIRED',
-        supportPhone: SUPPORT_WHATSAPP,
-        whatsappUrl: trialSupportWhatsappUrl(),
-        subscriptionUrl: '/app#suscripciones',
-      });
+      await q("UPDATE tenants SET trial_status = 'expired' WHERE id = $1 AND trial_status = 'active'", [tenant.id]);
+      tenant.trial_status = 'expired';
     }
     if (tenant.account_status !== 'active') {
       return res.status(403).json({ error: 'La cuenta del negocio está inactiva. Contacta al administrador.' });
@@ -835,7 +829,12 @@ router.get('/me', requireAuth, async (req, res, next) => {
     identityCompleted: req.user.identityCompleted,
     identityRequired: req.user.role === 'owner' && !req.user.identityCompleted && !req.user.impersonated,
     demoSession: Boolean(req.user.demoLeadId),
-    trial: trialState(req.tenant),
+    trial: {
+      ...trialState(req.tenant),
+      supportName: 'Super Admin ChatBotPro',
+      supportPhone: SUPPORT_WHATSAPP,
+      whatsappUrl: trialSupportWhatsappUrl(),
+    },
     tenant: {
       slug: req.tenant.slug,
       businessName: req.tenant.business_name,

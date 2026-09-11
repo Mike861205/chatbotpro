@@ -636,14 +636,35 @@ function showSuspensionModal(message, whatsappUrl) {
 function showTrialExpiredModal(data = {}) {
   const modal = $('#trialExpiredModal');
   if (!modal) return;
-  document.body.classList.add('trial-expired');
-  if (data.whatsappUrl) $('#trialExpiredWhatsapp').href = data.whatsappUrl;
-  if (data.supportPhone) {
-    const digits = String(data.supportPhone).replace(/\D/g, '');
-    $('#trialExpiredCopyPhone').dataset.phone = `+${digits}`;
-  }
+  const supportName = String(data.supportName || ME?.trial?.supportName || 'Super Admin ChatBotPro').trim();
+  const whatsappUrl = String(data.whatsappUrl || ME?.trial?.whatsappUrl || '').trim();
+  const supportPhone = String(data.supportPhone || ME?.trial?.supportPhone || '526241370820');
+  const digits = supportPhone.replace(/\D/g, '');
+  const phoneLabel = digits.startsWith('52') && digits.length === 12
+    ? `+52 ${digits.slice(2, 5)} ${digits.slice(5, 8)} ${digits.slice(8)}`
+    : `+${digits}`;
+  $('#trialExpiredSupportName').textContent = supportName;
+  $('#trialExpiredSupportPhone').textContent = `${phoneLabel} · Atención por WhatsApp`;
+  if (whatsappUrl) $('#trialExpiredWhatsapp').href = whatsappUrl;
+  $('#trialExpiredCopyPhone').dataset.phone = `+${digits}`;
+  $('#trialExpiredCopyPhone').dataset.phoneLabel = phoneLabel;
+  $('#trialExpiredPhoneLabel').textContent = phoneLabel;
   modal.classList.add('show');
-  setTimeout(() => $('#trialExpiredWhatsapp')?.focus(), 80);
+  setTimeout(() => $('#trialExpiredContinue')?.focus(), 80);
+}
+
+function trialExpiredNoticeKey() {
+  return `cbp_trial_expired_notice_${ME?.tenant?.slug || 'tenant'}`;
+}
+
+function acknowledgeExpiredTrialNotice() {
+  try { localStorage.setItem(trialExpiredNoticeKey(), businessIsoDate()); } catch {}
+}
+
+function closeTrialExpiredModal({ remember = true, continueSetup = true } = {}) {
+  if (remember) acknowledgeExpiredTrialNotice();
+  $('#trialExpiredModal')?.classList.remove('show');
+  if (continueSetup) setTimeout(openNextInitialSetup, 100);
 }
 
 async function api(path, opts = {}) {
@@ -661,13 +682,6 @@ async function api(path, opts = {}) {
   if (res.status === 403 && data?.errorCode === 'BILLING_SUSPENDED') {
     showSuspensionModal(data.error, data.whatsappUrl);
     throw new Error(data.error || 'Servicio suspendido por falta de pago');
-  }
-  if (res.status === 403 && data?.errorCode === 'TRIAL_EXPIRED') {
-    showTrialExpiredModal(data);
-    const err = new Error(data.error || 'El periodo de prueba terminó');
-    err.status = res.status;
-    err.data = data;
-    throw err;
   }
   if (!res.ok) {
     const err = new Error(data.error || 'Error de servidor');
@@ -888,11 +902,12 @@ function presentStartupJourney() {
     return;
   }
   if (ME?.trial?.isExpired) {
-    showTrialExpiredModal({
-      error: 'Tu prueba real de 5 días terminó. Tus productos, ventas y configuraciones siguen guardados.',
-      whatsappUrl: 'https://wa.me/526241370820?text=' + encodeURIComponent('Terminó mi prueba de ChatBotPro y quiero activar mi suscripción'),
-    });
-    return;
+    let alreadyShown = false;
+    try { alreadyShown = localStorage.getItem(trialExpiredNoticeKey()) === businessIsoDate(); } catch {}
+    if (!alreadyShown) {
+      showTrialExpiredModal(ME.trial);
+      return;
+    }
   }
   if (ME?.identityRequired) {
     setTimeout(openInitialIdentitySetup, 180);
@@ -922,7 +937,7 @@ function presentStartupJourney() {
       $('#trialWelcomeText').textContent = days === 5
         ? `Preparamos ChatBotPro con la identidad de ${businessName}. Ahora tienes 5 días para cargar información real y comprobar todo el sistema.`
         : days === 1
-        ? 'Aprovecha hoy para terminar tus pruebas. Mañana el sistema se bloqueará hasta activar una suscripción.'
+        ? 'Aprovecha hoy para terminar tus pruebas. Mañana verás un aviso para conocer los planes; el sistema seguirá disponible.'
         : `Usa estos ${days} días para cargar tus productos, registrar ventas y comprobar pedidos desde tu chatbot.`;
       $('#trialBusinessModel').textContent = businessModel?.label || 'Restaurante / cafetería';
       $('#trialBusinessCurrency').textContent = currency ? `${currency.flag} ${currency.code}` : (SETTINGS?.currency || 'MXN');
@@ -1236,8 +1251,13 @@ $('#trialViewPlans')?.addEventListener('click', async () => {
   await navigate('suscripciones');
 });
 $('#trialExpiredPlans')?.addEventListener('click', async () => {
-  $('#trialExpiredModal')?.classList.remove('show');
+  closeTrialExpiredModal({ continueSetup: false });
   await navigate('suscripciones');
+});
+$('#trialExpiredClose')?.addEventListener('click', () => closeTrialExpiredModal());
+$('#trialExpiredContinue')?.addEventListener('click', () => closeTrialExpiredModal());
+$('#trialExpiredModal')?.addEventListener('click', (event) => {
+  if (event.target?.id === 'trialExpiredModal') closeTrialExpiredModal();
 });
 $('#trialExpiredCopyPhone')?.addEventListener('click', async (event) => {
   const button = event.currentTarget;
@@ -1258,7 +1278,7 @@ $('#trialExpiredCopyPhone')?.addEventListener('click', async (event) => {
   label.textContent = '¡Número copiado!';
   button.classList.add('copied');
   setTimeout(() => {
-    label.textContent = '+52 624 137 0820';
+    label.textContent = button.dataset.phoneLabel || '+52 624 137 0820';
     button.classList.remove('copied');
   }, 2200);
 });
@@ -1266,6 +1286,10 @@ $('#onboardingIntro')?.addEventListener('click', (event) => {
   if (event.target?.id === 'onboardingIntro') closeOnboardingIntro().catch((error) => toast(error.message, true));
 });
 document.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape' && $('#trialExpiredModal')?.classList.contains('show')) {
+    closeTrialExpiredModal();
+    return;
+  }
   if (event.key === 'Escape' && $('#onboardingIntro')?.classList.contains('show')) {
     closeOnboardingIntro().catch((error) => toast(error.message, true));
   }
@@ -11978,7 +12002,7 @@ async function boot(navigateToHash = true) {
   }
   [ME, SETTINGS] = await Promise.all([
     Promise.resolve(ME),
-    ME?.trial?.isExpired ? Promise.resolve({}) : api('/api/settings'),
+    api('/api/settings'),
   ]);
   loadCustomPaymentMethodsFromSettings();
   syncPosCustomPaymentMethods();
@@ -12007,12 +12031,12 @@ async function boot(navigateToHash = true) {
   renderInstructions();
   loadOrderSoundPreference();
   syncOrdersSoundToggleUI();
-  if (!ME?.trial?.isExpired && (ME.role !== 'staff' || ME.permissions?.some((key) => ['pedidos', 'pos', 'cortes', 'cancelaciones'].includes(key)))) startOrdersRealtimeMonitor();
+  if (ME.role !== 'staff' || ME.permissions?.some((key) => ['pedidos', 'pos', 'cortes', 'cancelaciones'].includes(key))) startOrdersRealtimeMonitor();
 
   if (navigateToHash) {
-    const fallbackView = ME?.trial?.isExpired ? 'suscripciones' : (cashier ? 'pos' : 'dashboard');
+    const fallbackView = cashier ? 'pos' : 'dashboard';
     const hashView = (location.hash || '').slice(1);
-    const view = ME?.trial?.isExpired ? 'suscripciones' : normalizeView(hashView || fallbackView);
+    const view = normalizeView(hashView || fallbackView);
     document.body.setAttribute('data-current-view', view);
     navigate(view);
   }

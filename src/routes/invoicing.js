@@ -24,7 +24,6 @@ const {
   extractFacturamaIdentity,
   createRequestKey,
 } = require('../utils/invoicing');
-const { trialState } = require('../utils/trialAccess');
 const { resolveManagedUploadPath } = require('../utils/uploads');
 
 const router = express.Router();
@@ -338,7 +337,7 @@ async function findPublicTenant(slug) {
     [String(slug || '').trim().toLowerCase()]
   );
   const tenant = found.rows[0];
-  if (!tenant || tenant.account_status !== 'active' || tenant.billing_status === 'suspended' || trialState(tenant).isExpired) return null;
+  if (!tenant || tenant.account_status !== 'active' || tenant.billing_status === 'suspended') return null;
   const isDemoTenant = tenant.slug === config.DEMO_TENANT_SLUG;
   if (!isMexicoIdentity(tenant) && !isDemoTenant && !Number(tenant.invoicing_enabled)) return null;
   if (!isDemoTenant && !Number(tenant.invoicing_enabled)) return null;

@@ -237,6 +237,23 @@ async function initMaster(options = {}) {
   await q(`ALTER TABLE tenants ADD COLUMN IF NOT EXISTS trial_started_on DATE`);
   await q(`ALTER TABLE tenants ADD COLUMN IF NOT EXISTS trial_ends_on DATE`);
   await q(`ALTER TABLE tenants ADD COLUMN IF NOT EXISTS trial_status TEXT NOT NULL DEFAULT 'not_applicable'`);
+  // Migración única: versiones anteriores confundían el fin de la prueba con
+  // una suspensión operativa. Recupera esas cuentas sin tocar suspensiones de pago.
+  await q(`
+    WITH migration AS (
+      INSERT INTO superadmin_settings (key, value, updated_at)
+      VALUES ('migration_trial_expiration_is_advisory_v1', 'done', now())
+      ON CONFLICT (key) DO NOTHING
+      RETURNING key
+    )
+    UPDATE tenants
+    SET account_status = 'active'
+    WHERE EXISTS (SELECT 1 FROM migration)
+      AND trial_status = 'expired'
+      AND customer_since IS NULL
+      AND account_status = 'inactive'
+      AND billing_status <> 'suspended'
+  `);
   await q(`ALTER TABLE tenants ADD COLUMN IF NOT EXISTS hidden_modules_json TEXT NOT NULL DEFAULT '[]'`);
   await q(`ALTER TABLE tenants ADD COLUMN IF NOT EXISTS reseller_id INTEGER REFERENCES resellers(id) ON DELETE SET NULL`);
   await q(`ALTER TABLE tenants ADD COLUMN IF NOT EXISTS phone_country TEXT DEFAULT ''`);
@@ -1576,7 +1593,7 @@ async function setSuperAdminSetting(key, value) {
 async function refreshTenantBillingStatuses() {
   const trialExpired = await q(
     `UPDATE tenants
-     SET trial_status = 'expired', account_status = 'inactive'
+     SET trial_status = 'expired'
      WHERE trial_status = 'active'
        AND customer_since IS NULL
        AND trial_ends_on IS NOT NULL

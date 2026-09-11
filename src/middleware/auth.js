@@ -11,15 +11,9 @@ const CASHIER_COOKIE_NAME = 'cbp_cashier_token';
 const AUTH_SCOPE_HEADER = 'x-cbp-auth-scope';
 const SUPPORT_WHATSAPP = '526241370820';
 const SUPPORT_MESSAGE = 'tengo suspendiedo mi servicio y quiero realizar mi pago para activarlo';
-const TRIAL_SUPPORT_MESSAGE = 'Terminó mi prueba de ChatBotPro y quiero activar mi suscripción';
-const SUBSCRIPTION_URL = '/app#suscripciones';
 
 function supportWhatsappUrl() {
   return `https://wa.me/${SUPPORT_WHATSAPP}?text=${encodeURIComponent(SUPPORT_MESSAGE)}`;
-}
-
-function trialSupportWhatsappUrl() {
-  return `https://wa.me/${SUPPORT_WHATSAPP}?text=${encodeURIComponent(TRIAL_SUPPORT_MESSAGE)}`;
 }
 
 function signToken(user, tenant, scope = 'owner', context = {}) {
@@ -119,26 +113,13 @@ async function requireAuth(req, res, next) {
     }
     if (!tenant) return res.status(401).json({ error: 'Tenant no encontrado' });
     const trial = trialState(tenant);
-    let allowExpiredProfile = false;
     if (trial.isExpired && !payload.imp) {
       if (tenant.trial_status !== 'expired') {
-        await q("UPDATE tenants SET trial_status = 'expired', account_status = 'inactive' WHERE id = $1 AND trial_status = 'active'", [tenant.id]);
+        await q("UPDATE tenants SET trial_status = 'expired' WHERE id = $1 AND trial_status = 'active'", [tenant.id]);
         tenant.trial_status = 'expired';
-        tenant.account_status = 'inactive';
-      }
-      const isOwnProfile = req.baseUrl === '/api/auth' && req.path === '/me';
-      allowExpiredProfile = isOwnProfile;
-      if (!isOwnProfile) {
-        return res.status(403).json({
-          error: 'Tu prueba real de 5 días terminó. Tus datos siguen guardados; elige una suscripción o contacta al administrador para reactivar tu cuenta.',
-          errorCode: 'TRIAL_EXPIRED',
-          supportPhone: SUPPORT_WHATSAPP,
-          whatsappUrl: trialSupportWhatsappUrl(),
-          subscriptionUrl: SUBSCRIPTION_URL,
-        });
       }
     }
-    if (tenant.account_status !== 'active' && !allowExpiredProfile) {
+    if (tenant.account_status !== 'active') {
       return res.status(403).json({ error: 'La cuenta del negocio está inactiva. Contacta al administrador.' });
     }
     if (tenant.billing_status === 'suspended') {

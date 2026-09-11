@@ -11,7 +11,7 @@
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/fill/style.css" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/duotone/style.css" />
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-  <link rel="stylesheet" href="/static/css/styles.css?v=20260909-promo-neon" />
+  <link rel="stylesheet" href="/static/css/styles.css?v=20260910-trial-advisory" />
   <link rel="icon" type="image/svg+xml" href="/static/favicon.svg" />
   <link rel="icon" type="image/png" href="/static/chatbotpro100.png" />
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
@@ -1847,8 +1847,8 @@
     </div>
   </div>
 
-  <!-- Bloqueo al terminar la prueba; no se cierra para impedir operar -->
-  <div class="modal-bg journey-modal-bg trial-expired-bg" id="trialExpiredModal" role="dialog" aria-modal="true" aria-labelledby="trialExpiredTitle">
+  <!-- Aviso comercial al terminar la prueba; se puede cerrar para seguir operando -->
+  <div class="modal-bg journey-modal-bg trial-expired-bg" id="trialExpiredModal" role="dialog" aria-modal="true" aria-labelledby="trialExpiredTitle" aria-describedby="trialExpiredText">
     <div class="trial-expired-card">
       <div class="trial-expired-visual" aria-hidden="true">
         <span class="trial-expired-glow trial-expired-glow--one"></span>
@@ -1856,15 +1856,20 @@
         <img src="/static/chatbotpro100.png" alt="" />
         <div class="trial-expired-seal"><i class="ph-fill ph-hourglass-high"></i></div>
         <span>5 días completados</span>
-        <strong>Tu información sigue segura</strong>
+        <strong>Tu sistema continúa disponible</strong>
       </div>
       <div class="trial-expired-copy">
+        <button type="button" class="trial-expired-close" id="trialExpiredClose" aria-label="Cerrar aviso y continuar"><i class="ph-bold ph-x"></i></button>
         <span class="trial-expired-eyebrow"><i class="ph-fill ph-confetti"></i> Gracias por probar ChatBotPro</span>
-        <h2 id="trialExpiredTitle">Tu prueba real del sistema ha finalizado</h2>
-        <p id="trialExpiredText">Tus productos, imágenes, pedidos, ventas y configuraciones permanecen guardados. Activa un plan para continuar exactamente donde te quedaste.</p>
+        <h2 id="trialExpiredTitle">Tu periodo de prueba de 5 días ha finalizado</h2>
+        <p id="trialExpiredText">Esperamos que hayas disfrutado la experiencia. Tu sistema permanece activo y puedes seguir navegando con normalidad.</p>
         <div class="trial-expired-saved">
-          <i class="ph-fill ph-database"></i>
-          <div><b>No perderás tu trabajo</b><span>Todo estará disponible nuevamente al activar tu cuenta.</span></div>
+          <i class="ph-fill ph-check-circle"></i>
+          <div><b>No bloqueamos tu operación</b><span>Tus productos, imágenes, pedidos, ventas y configuraciones siguen disponibles.</span></div>
+        </div>
+        <div class="trial-expired-contact">
+          <span class="trial-expired-contact-icon"><i class="ph-fill ph-headset"></i></span>
+          <div><small>Para contratar o resolver tus dudas</small><b id="trialExpiredSupportName">Super Admin ChatBotPro</b><span id="trialExpiredSupportPhone">+52 624 137 0820 · Atención por WhatsApp</span></div>
         </div>
         <div class="trial-expired-actions">
           <a class="trial-expired-whatsapp" id="trialExpiredWhatsapp" href="https://wa.me/526241370820?text=Termin%C3%B3%20mi%20prueba%20de%20ChatBotPro%20y%20quiero%20activar%20mi%20suscripci%C3%B3n" target="_blank" rel="noopener noreferrer">
@@ -1874,10 +1879,11 @@
             <i class="ph-bold ph-copy"></i><span><small>También puedes copiar</small><b id="trialExpiredPhoneLabel">+52 624 137 0820</b></span>
           </button>
           <button type="button" class="trial-expired-plans" id="trialExpiredPlans">
-            <span><small>Activa el sistema ahora</small>Ver suscripciones y elegir mi plan</span><i class="ph-bold ph-arrow-right"></i>
+            <span><small>Conoce las opciones disponibles</small>Ver suscripciones y elegir mi plan</span><i class="ph-bold ph-arrow-right"></i>
           </button>
+          <button type="button" class="trial-expired-continue" id="trialExpiredContinue"><i class="ph-bold ph-arrow-circle-right"></i> Continuar navegando</button>
         </div>
-        <small class="trial-expired-foot"><i class="ph-fill ph-shield-check"></i> Elige tu plan y vuelve a usar todas las funciones del sistema.</small>
+        <small class="trial-expired-foot"><i class="ph-fill ph-shield-check"></i> Este aviso es informativo y no limita las funciones del sistema.</small>
       </div>
     </div>
   </div>
@@ -3258,6 +3264,6 @@
   </div>
 
 <script src="/socket.io/socket.io.js"></script>
-  <script src="/static/js/app.js?v=20260909-promo-neon"></script>
+  <script src="/static/js/app.js?v=20260910-trial-advisory"></script>
 </body>
 </html>
