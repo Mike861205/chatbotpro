@@ -481,6 +481,7 @@ async function createTenantSchema(slug) {
       value NUMERIC(12,2) NOT NULL DEFAULT 0,
       buy_qty INTEGER NOT NULL DEFAULT 0,
       pay_qty INTEGER NOT NULL DEFAULT 0,
+      buy_pay_rule TEXT NOT NULL DEFAULT 'same_product',
       all_products INTEGER NOT NULL DEFAULT 0,
       days_of_week TEXT NOT NULL DEFAULT '[]',
       starts_on DATE,
@@ -508,6 +509,7 @@ async function createTenantSchema(slug) {
     CREATE INDEX IF NOT EXISTS idx_${s}_promotions_active ON "${s}".promotions(active, starts_on, ends_on);
     CREATE INDEX IF NOT EXISTS idx_${s}_promotion_products_product ON "${s}".promotion_products(product_id);
     CREATE INDEX IF NOT EXISTS idx_${s}_promotion_categories_category ON "${s}".promotion_categories(category_id);
+    ALTER TABLE "${s}".promotions ADD COLUMN IF NOT EXISTS buy_pay_rule TEXT NOT NULL DEFAULT 'same_product';
     CREATE TABLE IF NOT EXISTS "${s}".customers (
       id SERIAL PRIMARY KEY,
       name_enc TEXT,

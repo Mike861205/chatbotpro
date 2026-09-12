@@ -2284,30 +2284,30 @@
 
   <!-- ════════ Modal importación IA de menú ════════ -->
   <div class="modal-bg" id="aiProductModal">
-    <div class="modal ai-product-modal" style="max-width:860px">
+    <div class="modal ai-product-modal" style="max-width:1180px">
       <h3 id="aiCatalogModalTitle"><i class="ph-bold ph-magic-wand"></i> Cargar catálogo con IA</h3>
       <div class="hint" id="aiCatalogModalHint" style="margin-bottom:12px">Sube una foto o captura de tu catálogo y la IA convertirá su contenido en elementos editables para importar en lote.</div>
       <form id="aiProductForm">
         <div class="ai-upload-shell">
-          <div class="ai-upload-card" id="aiMenuUploadArea" role="button" tabindex="0" aria-label="Seleccionar imagen del menú">
+          <div class="ai-upload-card" id="aiMenuUploadArea" role="button" tabindex="0" aria-label="Seleccionar imágenes del menú">
             <div class="ai-upload-hero"><i class="ph-bold ph-image-square"></i></div>
             <div class="ai-upload-copy">
-              <b id="aiCatalogPickLabel">Selecciona el catálogo desde tu dispositivo</b>
-              <span>Compatible con fotos, capturas y archivos de imagen. Tamaño máximo 8 MB.</span>
+              <b id="aiCatalogPickLabel">Selecciona el menú desde tu dispositivo</b>
+              <span>Puedes subir hasta 8 páginas o fotos, máximo 8 MB cada una.</span>
             </div>
-            <button type="button" class="btn btn-ghost" id="aiMenuPickBtn"><i class="ph-bold ph-upload-simple"></i> Elegir imagen</button>
-            <input type="file" id="aiMenuImage" accept="image/*" />
+            <button type="button" class="btn btn-ghost" id="aiMenuPickBtn"><i class="ph-bold ph-upload-simple"></i> Elegir imágenes</button>
+            <input type="file" id="aiMenuImage" accept="image/*" multiple />
           </div>
 
           <div class="ai-upload-tips">
             <span><i class="ph-bold ph-check-circle"></i> Asegúrate que el texto se vea claro</span>
             <span><i class="ph-bold ph-check-circle"></i> Incluye nombre y precio en la foto</span>
-            <span><i class="ph-bold ph-check-circle"></i> Puedes editar resultados antes de importar</span>
+            <span><i class="ph-bold ph-check-circle"></i> Revisa variantes, ingredientes y fotos antes de importar</span>
           </div>
 
           <div class="hint" id="aiMenuImageHint" style="margin-top:2px">Aún no has seleccionado imagen.</div>
           <div id="aiMenuImagePreview" class="ai-image-preview" hidden>
-            <img id="aiMenuImagePreviewImg" alt="Vista previa del menú" />
+            <div id="aiMenuImagePreviewList" class="ai-image-preview-list"></div>
           </div>
         </div>
         <div class="modal-actions" style="margin-top:8px">
@@ -2332,8 +2332,9 @@
               <tr>
                 <th>Producto</th>
                 <th>Descripción</th>
-                <th>Precio</th>
+                <th>Precio base</th>
                 <th>Categoría</th>
+                <th>Foto y configuración</th>
                 <th></th>
               </tr>
             </thead>

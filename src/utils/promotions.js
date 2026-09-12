@@ -1,5 +1,6 @@
 const PROMOTION_TYPES = new Set(['percentage', 'fixed_amount', 'fixed_price', 'buy_x_pay_y']);
 const PROMOTION_CHANNELS = new Set(['pos', 'chatbot']);
+const BUY_PAY_RULES = new Set(['same_product', 'lowest_price_free', 'highest_price_free']);
 
 function money(value) {
   const number = Number(value);
@@ -66,11 +67,19 @@ function promotionLabel(promotion) {
   if (type === 'percentage') return `${money(promotion.value)}% de descuento`;
   if (type === 'fixed_amount') return `$${money(promotion.value).toFixed(2)} de descuento`;
   if (type === 'fixed_price') return `Precio especial $${money(promotion.value).toFixed(2)}`;
-  if (type === 'buy_x_pay_y') return `${Number(promotion.buy_qty)}x${Number(promotion.pay_qty)}`;
+  if (type === 'buy_x_pay_y') {
+    const base = `${Number(promotion.buy_qty ?? promotion.buyQty)}x${Number(promotion.pay_qty ?? promotion.payQty)}`;
+    const rule = String(promotion.buy_pay_rule ?? promotion.buyPayRule ?? 'same_product');
+    if (rule === 'lowest_price_free') return `${base} · bonifica el de menor precio`;
+    if (rule === 'highest_price_free') return `${base} · bonifica el de mayor precio`;
+    return base;
+  }
   return 'Promoción';
 }
 
 function normalizePromotion(row, productIds = [], categoryIds = []) {
+  const requestedBuyPayRule = String(row.buy_pay_rule ?? row.buyPayRule ?? 'same_product').trim();
+  const buyPayRule = BUY_PAY_RULES.has(requestedBuyPayRule) ? requestedBuyPayRule : 'same_product';
   return {
     id: Number(row.id),
     name: String(row.name || '').trim(),
@@ -79,6 +88,7 @@ function normalizePromotion(row, productIds = [], categoryIds = []) {
     value: money(row.value),
     buyQty: Number(row.buy_qty || row.buyQty || 0),
     payQty: Number(row.pay_qty || row.payQty || 0),
+    buyPayRule,
     allProducts: Boolean(Number(row.all_products ?? row.allProducts)),
     productIds: parseIds(productIds.length ? productIds : row.product_ids),
     categoryIds: parseIds(categoryIds.length ? categoryIds : row.category_ids),
@@ -93,6 +103,7 @@ function normalizePromotion(row, productIds = [], categoryIds = []) {
     priority: Number(row.priority || 0),
     label: promotionLabel({
       type: row.type, value: row.value, buy_qty: row.buy_qty ?? row.buyQty, pay_qty: row.pay_qty ?? row.payQty,
+      buy_pay_rule: buyPayRule,
     }),
     createdAt: row.created_at || row.createdAt || '',
     updatedAt: row.updated_at || row.updatedAt || '',
@@ -138,7 +149,7 @@ function winsPromotionTie(candidate, current) {
   return false;
 }
 
-function candidateFor(item, promotion) {
+function candidateFor(item, promotion, allocatedFreeUnits = null) {
   const qty = Math.max(1, Number(item.qty || item.quantity || 1));
   const originalUnitPrice = money(item.originalUnitPrice ?? item.listPrice ?? item.originalPrice ?? item.price);
   const extras = Math.min(originalUnitPrice, money(item.modifiersExtraPrice || 0));
@@ -151,31 +162,133 @@ function candidateFor(item, promotion) {
   if (promotion.type === 'buy_x_pay_y') {
     const buy = Math.max(2, Number(promotion.buyQty || 2));
     const pay = Math.max(1, Math.min(buy - 1, Number(promotion.payQty || buy - 1)));
-    const freeUnits = Math.floor(qty / buy) * (buy - pay);
+    const freeUnits = allocatedFreeUnits === null
+      ? Math.floor(qty / buy) * (buy - pay)
+      : Math.max(0, Math.min(qty, Number(allocatedFreeUnits) || 0));
     total = money(originalTotal - (baseUnit * freeUnits));
   }
   return { originalUnitPrice, originalTotal, total, discount: money(originalTotal - total) };
 }
 
+function isMixedBuyPay(promotion) {
+  return promotion.type === 'buy_x_pay_y' && promotion.buyPayRule !== 'same_product';
+}
+
+function allocateMixedBuyPay(items, promotion) {
+  const eligible = [];
+  let totalUnits = 0;
+  items.forEach((item, index) => {
+    const productId = Number(item.productId ?? item.id);
+    const categoryId = Number(item.categoryId ?? item.category_id ?? 0);
+    if (!appliesToProduct(promotion, productId, categoryId)) return;
+    const qty = Math.max(1, Math.floor(Number(item.qty || item.quantity || 1)));
+    const originalUnitPrice = money(item.originalUnitPrice ?? item.listPrice ?? item.originalPrice ?? item.price);
+    const extras = Math.min(originalUnitPrice, money(item.modifiersExtraPrice || 0));
+    eligible.push({ index, qty, baseUnit: money(originalUnitPrice - extras) });
+    totalUnits += qty;
+  });
+  const buy = Math.max(2, Number(promotion.buyQty || 2));
+  const pay = Math.max(1, Math.min(buy - 1, Number(promotion.payQty || buy - 1)));
+  let remainingFree = Math.floor(totalUnits / buy) * (buy - pay);
+  const descending = promotion.buyPayRule === 'highest_price_free';
+  eligible.sort((a, b) => descending ? b.baseUnit - a.baseUnit : a.baseUnit - b.baseUnit);
+  const allocations = new Map();
+  for (const line of eligible) {
+    if (remainingFree <= 0) break;
+    const freeUnits = Math.min(line.qty, remainingFree);
+    allocations.set(line.index, freeUnits);
+    remainingFree -= freeUnits;
+  }
+  return { allocations, eligibleIndices: new Set(eligible.map((line) => line.index)) };
+}
+
+function setsOverlap(left, right) {
+  for (const value of left) if (right.has(value)) return true;
+  return false;
+}
+
 function applyPromotions(items = [], promotions = []) {
-  return items.map((rawItem) => {
+  const prepared = items.map((rawItem) => {
     const item = { ...rawItem };
     const productId = Number(item.productId ?? item.id);
     const categoryId = Number(item.categoryId ?? item.category_id ?? 0);
     const eligible = promotions.filter((promotion) => appliesToProduct(promotion, productId, categoryId));
     item.activePromotions = eligible.map((promotion) => ({
       id: promotion.id, name: promotion.name, type: promotion.type, value: promotion.value,
-      buyQty: promotion.buyQty, payQty: promotion.payQty, priority: promotion.priority, label: promotion.label,
+      buyQty: promotion.buyQty, payQty: promotion.payQty, buyPayRule: promotion.buyPayRule,
+      priority: promotion.priority, label: promotion.label,
       createdAt: promotion.createdAt, updatedAt: promotion.updatedAt,
     }));
+    return { item, eligible };
+  });
+
+  // Primero obtiene el mayor ahorro por línea, conservando la lógica histórica.
+  // Las reglas que mezclan productos se evalúan después como escenarios completos
+  // para impedir que una misma unidad acumule dos promociones.
+  const selected = prepared.map(({ item, eligible }) => {
     let best = null;
-    for (const promotion of eligible) {
+    for (const promotion of eligible.filter((candidate) => !isMixedBuyPay(candidate))) {
       const candidate = candidateFor(item, promotion);
       if (candidate.discount <= 0) continue;
       if (!best || candidate.discount > best.discount || (candidate.discount === best.discount && winsPromotionTie(promotion, best.promotion))) {
         best = { ...candidate, promotion };
       }
     }
+    return best;
+  });
+
+  const mixedEntries = promotions.filter(isMixedBuyPay).map((promotion) => {
+    const allocation = allocateMixedBuyPay(prepared.map(({ item }) => item), promotion);
+    return { promotion, ...allocation };
+  }).filter((entry) => entry.allocations.size > 0);
+
+  const components = [];
+  for (const entry of mixedEntries) {
+    const touching = components.filter((component) => setsOverlap(component.indices, entry.eligibleIndices));
+    if (!touching.length) {
+      components.push({ entries: [entry], indices: new Set(entry.eligibleIndices) });
+      continue;
+    }
+    const merged = touching[0];
+    merged.entries.push(entry);
+    entry.eligibleIndices.forEach((index) => merged.indices.add(index));
+    for (const extra of touching.slice(1)) {
+      extra.entries.forEach((candidate) => merged.entries.push(candidate));
+      extra.indices.forEach((index) => merged.indices.add(index));
+      components.splice(components.indexOf(extra), 1);
+    }
+  }
+
+  for (const component of components) {
+    const baselineDiscount = [...component.indices].reduce((total, index) => total + Number(selected[index]?.discount || 0), 0);
+    let winning = null;
+    for (const entry of component.entries) {
+      let scenarioDiscount = 0;
+      for (const index of component.indices) {
+        if (entry.eligibleIndices.has(index)) {
+          scenarioDiscount += candidateFor(prepared[index].item, entry.promotion, entry.allocations.get(index) || 0).discount;
+        } else {
+          scenarioDiscount += Number(selected[index]?.discount || 0);
+        }
+      }
+      if (scenarioDiscount > baselineDiscount
+          && (!winning || scenarioDiscount > winning.discount
+            || (scenarioDiscount === winning.discount && winsPromotionTie(entry.promotion, winning.entry.promotion)))) {
+        winning = { entry, discount: scenarioDiscount };
+      }
+    }
+    if (winning) {
+      for (const index of winning.entry.eligibleIndices) {
+        selected[index] = {
+          ...candidateFor(prepared[index].item, winning.entry.promotion, winning.entry.allocations.get(index) || 0),
+          promotion: winning.entry.promotion,
+        };
+      }
+    }
+  }
+
+  return prepared.map(({ item }, index) => {
+    const best = selected[index];
     const originalUnitPrice = money(item.originalUnitPrice ?? item.listPrice ?? item.originalPrice ?? item.price);
     const qty = Math.max(1, Number(item.qty || item.quantity || 1));
     delete item.promotion;
@@ -189,11 +302,12 @@ function applyPromotions(items = [], promotions = []) {
       item.taxBasePrice = unitMoney(item.price / (1 + Number(item.taxRate)));
       item.taxAmount = unitMoney(item.price - item.taxBasePrice);
     }
-    if (best) {
+    if (best && (best.discount > 0 || isMixedBuyPay(best.promotion))) {
       item.promotion = {
         id: best.promotion.id, name: best.promotion.name, type: best.promotion.type,
         value: best.promotion.value, buyQty: best.promotion.buyQty, payQty: best.promotion.payQty,
-        priority: best.promotion.priority, label: best.promotion.label,
+        buyPayRule: best.promotion.buyPayRule, priority: best.promotion.priority, label: best.promotion.label,
+        allocatedDiscount: best.discount, appliedQty: qty,
       };
     }
     return item;
@@ -227,6 +341,7 @@ function decorateCatalogProducts(products = [], promotions = []) {
 module.exports = {
   PROMOTION_TYPES,
   PROMOTION_CHANNELS,
+  BUY_PAY_RULES,
   money,
   parseDays,
   parseIds,

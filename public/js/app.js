@@ -3834,53 +3834,133 @@ function moneyNum(value) {
 }
 
 function posCartTotal() {
-  POS_CART.forEach(applyClientPromotionToLine);
+  applyClientPromotions(POS_CART);
   return moneyNum(POS_CART.reduce((sum, item) => sum + item.price * item.qty, 0));
 }
 
-function applyClientPromotionToLine(item) {
+function clientPromotionCandidate(item, candidate, allocatedFreeUnits = null) {
   const qty = Math.max(1, Number(item.qty || 1));
   const original = moneyNum(item.originalUnitPrice ?? item.listPrice ?? item.price);
-  item.originalUnitPrice = original;
   const originalTotal = moneyNum(original * qty);
+  const extras = Math.min(original, moneyNum(item.modifiersExtraPrice || 0));
+  const base = moneyNum(original - extras);
   let total = originalTotal;
-  let promo = null;
-  const promotions = Array.isArray(item.activePromotions) && item.activePromotions.length
+  if (candidate.type === 'percentage') total = moneyNum((base * (1 - Number(candidate.value || 0) / 100) + extras) * qty);
+  if (candidate.type === 'fixed_amount') total = moneyNum((Math.max(0, base - Number(candidate.value || 0)) + extras) * qty);
+  if (candidate.type === 'fixed_price') total = moneyNum((Math.min(base, Number(candidate.value || 0)) + extras) * qty);
+  if (candidate.type === 'buy_x_pay_y') {
+    const buy = Math.max(2, Number(candidate.buyQty || 2));
+    const pay = Math.max(1, Math.min(buy - 1, Number(candidate.payQty || buy - 1)));
+    const freeUnits = allocatedFreeUnits === null
+      ? Math.floor(qty / buy) * (buy - pay)
+      : Math.max(0, Math.min(qty, Number(allocatedFreeUnits) || 0));
+    total = moneyNum(originalTotal - base * freeUnits);
+  }
+  return { total, discount: moneyNum(originalTotal - total), promotion: candidate };
+}
+
+function clientPromotionWinsTie(candidate, current) {
+  const candidatePriority = Number(candidate?.priority || 0);
+  const currentPriority = Number(current?.priority || 0);
+  if (candidatePriority !== currentPriority) return candidatePriority > currentPriority;
+  const candidateUpdated = Date.parse(candidate?.updatedAt || candidate?.createdAt || '') || 0;
+  const currentUpdated = Date.parse(current?.updatedAt || current?.createdAt || '') || 0;
+  if (candidateUpdated !== currentUpdated) return candidateUpdated > currentUpdated;
+  return Number(candidate?.id || 0) > Number(current?.id || 0);
+}
+
+function applyClientPromotions(items) {
+  const promotionsByLine = items.map((item) => Array.isArray(item.activePromotions) && item.activePromotions.length
     ? item.activePromotions
-    : (item.activePromotion ? [item.activePromotion] : []);
-  for (const candidate of promotions) {
-    const extras = Math.min(original, moneyNum(item.modifiersExtraPrice || 0));
-    const base = moneyNum(original - extras);
-    let candidateTotal = originalTotal;
-    if (candidate.type === 'percentage') candidateTotal = moneyNum((base * (1 - Number(candidate.value || 0) / 100) + extras) * qty);
-    if (candidate.type === 'fixed_amount') candidateTotal = moneyNum((Math.max(0, base - Number(candidate.value || 0)) + extras) * qty);
-    if (candidate.type === 'fixed_price') candidateTotal = moneyNum((Math.min(base, Number(candidate.value || 0)) + extras) * qty);
-    if (candidate.type === 'buy_x_pay_y') {
-      const buy = Math.max(2, Number(candidate.buyQty || 2));
-      const pay = Math.max(1, Math.min(buy - 1, Number(candidate.payQty || buy - 1)));
-      candidateTotal = moneyNum(originalTotal - base * Math.floor(qty / buy) * (buy - pay));
+    : (item.activePromotion ? [item.activePromotion] : []));
+  const isMixed = (promotion) => promotion?.type === 'buy_x_pay_y'
+    && promotion.buyPayRule && promotion.buyPayRule !== 'same_product';
+  const selected = items.map((item, index) => {
+    let best = null;
+    for (const promotion of promotionsByLine[index].filter((candidate) => !isMixed(candidate))) {
+      const result = clientPromotionCandidate(item, promotion);
+      if (result.discount <= 0) continue;
+      if (!best || result.discount > best.discount
+          || (result.discount === best.discount && clientPromotionWinsTie(promotion, best.promotion))) best = result;
     }
-    const candidatePriority = Number(candidate.priority || 0);
-    const currentPriority = Number(promo?.priority || 0);
-    const candidateUpdated = Date.parse(candidate.updatedAt || candidate.createdAt || '') || 0;
-    const currentUpdated = Date.parse(promo?.updatedAt || promo?.createdAt || '') || 0;
-    const winsTie = candidateTotal === total && (
-      candidatePriority > currentPriority
-      || (candidatePriority === currentPriority && candidateUpdated > currentUpdated)
-      || (candidatePriority === currentPriority && candidateUpdated === currentUpdated && Number(candidate.id || 0) > Number(promo?.id || 0))
-    );
-    if (candidateTotal < total || winsTie) {
-      total = candidateTotal;
-      promo = candidate;
+    return best;
+  });
+  const mixedPromotions = new Map();
+  promotionsByLine.flat().filter(isMixed).forEach((promotion) => mixedPromotions.set(Number(promotion.id), promotion));
+  const entries = [...mixedPromotions.values()].map((promotion) => {
+    const eligibleIndices = new Set();
+    const lines = [];
+    let totalUnits = 0;
+    items.forEach((item, index) => {
+      if (!promotionsByLine[index].some((candidate) => Number(candidate.id) === Number(promotion.id))) return;
+      const qty = Math.max(1, Math.floor(Number(item.qty || 1)));
+      const original = moneyNum(item.originalUnitPrice ?? item.listPrice ?? item.price);
+      const extras = Math.min(original, moneyNum(item.modifiersExtraPrice || 0));
+      eligibleIndices.add(index);
+      lines.push({ index, qty, base: moneyNum(original - extras) });
+      totalUnits += qty;
+    });
+    const buy = Math.max(2, Number(promotion.buyQty || 2));
+    const pay = Math.max(1, Math.min(buy - 1, Number(promotion.payQty || buy - 1)));
+    let remaining = Math.floor(totalUnits / buy) * (buy - pay);
+    lines.sort((a, b) => promotion.buyPayRule === 'highest_price_free' ? b.base - a.base : a.base - b.base);
+    const allocations = new Map();
+    lines.forEach((line) => {
+      if (remaining <= 0) return;
+      const free = Math.min(line.qty, remaining);
+      allocations.set(line.index, free);
+      remaining -= free;
+    });
+    return { promotion, eligibleIndices, allocations };
+  }).filter((entry) => entry.allocations.size);
+  const components = [];
+  const overlaps = (left, right) => [...left].some((value) => right.has(value));
+  entries.forEach((entry) => {
+    const touching = components.filter((component) => overlaps(component.indices, entry.eligibleIndices));
+    if (!touching.length) return components.push({ entries: [entry], indices: new Set(entry.eligibleIndices) });
+    const merged = touching[0];
+    merged.entries.push(entry);
+    entry.eligibleIndices.forEach((index) => merged.indices.add(index));
+    touching.slice(1).forEach((extra) => {
+      merged.entries.push(...extra.entries);
+      extra.indices.forEach((index) => merged.indices.add(index));
+      components.splice(components.indexOf(extra), 1);
+    });
+  });
+  components.forEach((component) => {
+    const baseline = [...component.indices].reduce((sum, index) => sum + Number(selected[index]?.discount || 0), 0);
+    let winner = null;
+    component.entries.forEach((entry) => {
+      const discount = [...component.indices].reduce((sum, index) => sum + (entry.eligibleIndices.has(index)
+        ? clientPromotionCandidate(items[index], entry.promotion, entry.allocations.get(index) || 0).discount
+        : Number(selected[index]?.discount || 0)), 0);
+      if (discount > baseline && (!winner || discount > winner.discount
+          || (discount === winner.discount && clientPromotionWinsTie(entry.promotion, winner.entry.promotion)))) winner = { entry, discount };
+    });
+    if (winner) winner.entry.eligibleIndices.forEach((index) => {
+      selected[index] = clientPromotionCandidate(items[index], winner.entry.promotion, winner.entry.allocations.get(index) || 0);
+    });
+  });
+  items.forEach((item, index) => {
+    const qty = Math.max(1, Number(item.qty || 1));
+    const original = moneyNum(item.originalUnitPrice ?? item.listPrice ?? item.price);
+    const best = selected[index];
+    item.originalUnitPrice = original;
+    item.lineSubtotal = moneyNum(original * qty);
+    item.discountAmount = best?.discount || 0;
+    item.lineTotal = best?.total ?? item.lineSubtotal;
+    item.price = Number((item.lineTotal / qty).toFixed(6));
+    item.promotion = best && (best.discount > 0 || isMixed(best.promotion)) ? best.promotion : null;
+    if (item.taxEnabled === true && Number.isFinite(Number(item.taxRate))) {
+      item.taxBasePrice = moneyNum(item.price / (1 + Number(item.taxRate)));
+      item.taxAmount = moneyNum(item.price - item.taxBasePrice);
     }
-  }
-  item.discountAmount = moneyNum(original * qty - total);
-  item.price = Number((total / qty).toFixed(6));
-  item.promotion = item.discountAmount > 0 && promo ? promo : null;
-  if (item.taxEnabled === true && Number.isFinite(Number(item.taxRate))) {
-    item.taxBasePrice = moneyNum(item.price / (1 + Number(item.taxRate)));
-    item.taxAmount = moneyNum(item.price - item.taxBasePrice);
-  }
+  });
+  return items;
+}
+
+function applyClientPromotionToLine(item) {
+  applyClientPromotions([item]);
   return item;
 }
 
@@ -7467,7 +7547,19 @@ function renderPromotionValuePanel(promo = null) {
   const type = $('#promoType').value;
   const value = promo?.value ?? 10;
   if (type === 'buy_x_pay_y') {
-    $('#promoValuePanel').innerHTML = `<div class="promo-formula"><div class="field"><label>Compra</label><input type="number" id="promoBuyQty" min="2" max="99" step="1" value="${Number(promo?.buyQty || 2)}" required></div><i class="ph-bold ph-arrow-right"></i><div class="field"><label>Paga</label><input type="number" id="promoPayQty" min="1" max="98" step="1" value="${Number(promo?.payQty || 1)}" required></div></div><small>Ejemplos: compra 2 y paga 1 = 2x1; compra 3 y paga 2 = 3x2.</small>`;
+    const selectedRule = promo?.buyPayRule || 'lowest_price_free';
+    const rules = [
+      { value: 'lowest_price_free', icon: 'ph-trend-up', title: 'Cobra el de mayor precio', description: 'Bonifica el producto más económico del grupo. Recomendado para proteger el margen.' },
+      { value: 'highest_price_free', icon: 'ph-gift', title: 'Cobra el de menor precio', description: 'Bonifica el producto más caro del grupo. Es el beneficio más agresivo para el cliente.' },
+      { value: 'same_product', icon: 'ph-equals', title: 'Por producto individual', description: 'Forma grupos únicamente con unidades del mismo producto, como funcionaba anteriormente.' },
+    ];
+    $('#promoValuePanel').innerHTML = `
+      <div class="promo-formula"><div class="field"><label>Compra</label><input type="number" id="promoBuyQty" min="2" max="99" step="1" value="${Number(promo?.buyQty || 2)}" required></div><i class="ph-bold ph-arrow-right"></i><div class="field"><label>Paga</label><input type="number" id="promoPayQty" min="1" max="98" step="1" value="${Number(promo?.payQty || 1)}" required></div></div>
+      <small>Ejemplos: compra 2 y paga 1 = 2x1; compra 3 y paga 2 = 3x2.</small>
+      <div class="promo-buy-pay-heading"><b>¿Qué productos se cobran?</b><span>La regla se aplica sólo entre productos incluidos en el alcance de esta promoción.</span></div>
+      <div class="promo-buy-pay-rules" id="promoBuyPayRules">
+        ${rules.map((rule) => `<label class="promo-buy-pay-rule"><input type="radio" name="promoBuyPayRule" value="${rule.value}" ${selectedRule === rule.value ? 'checked' : ''}><i class="ph-bold ${rule.icon}"></i><span><b>${rule.title}${rule.value === 'lowest_price_free' ? ' · Recomendado' : ''}</b><small>${rule.description}</small></span><i class="ph-bold ph-check-circle"></i></label>`).join('')}
+      </div>`;
     return;
   }
   const config = type === 'percentage'
@@ -7567,6 +7659,7 @@ $('#promotionForm')?.addEventListener('submit', async (event) => {
     value: Number($('#promoValue')?.value || 0),
     buyQty: Number($('#promoBuyQty')?.value || 0),
     payQty: Number($('#promoPayQty')?.value || 0),
+    buyPayRule: document.querySelector('input[name="promoBuyPayRule"]:checked')?.value || 'same_product',
     allProducts,
     productIds,
     categoryIds,
@@ -8028,19 +8121,68 @@ function renderAiDraftRows() {
   const rows = $('#aiProductRows');
   if (!rows) return;
   if (!AI_PRODUCTS_DRAFT.length) {
-    rows.innerHTML = '<tr><td colspan="5"><span class="hint">No hay productos detectados.</span></td></tr>';
+    rows.innerHTML = '<tr><td colspan="6"><span class="hint">No hay productos detectados.</span></td></tr>';
     $('#aiProductImport').disabled = true;
     return;
   }
 
-  rows.innerHTML = AI_PRODUCTS_DRAFT.map((item, idx) => `
-    <tr data-ai-row="${idx}">
-      <td><input type="text" class="ai-name" value="${esc(item.name || '')}" placeholder="Nombre" /></td>
-      <td><input type="text" class="ai-desc" value="${esc(item.description || '')}" placeholder="Descripción" /></td>
-      <td><input type="number" class="ai-price" value="${Number(item.price || 0)}" min="0" step="0.01" /></td>
-      <td><input type="text" class="ai-cat" value="${esc(item.categoryName || '')}" placeholder="Categoría" /></td>
-      <td><button type="button" class="btn btn-danger btn-icon ai-del" title="Quitar"><i class="ph-bold ph-trash"></i></button></td>
-    </tr>`).join('');
+  rows.innerHTML = AI_PRODUCTS_DRAFT.map((item, idx) => {
+    item.variants = Array.isArray(item.variants) ? item.variants : [];
+    item.modifierGroups = Array.isArray(item.modifierGroups) ? item.modifierGroups : [];
+    const optionCount = item.modifierGroups.reduce((total, group) => total + (group.options || []).length, 0);
+    const warnings = Array.isArray(item.warnings) ? item.warnings : [];
+    const configRows = `
+      <div class="ai-draft-config">
+        <section>
+          <div class="ai-config-title"><b><i class="ph-bold ph-stack"></i> Variantes de precio</b><button type="button" class="btn btn-ghost ai-add-variant"><i class="ph-bold ph-plus"></i> Agregar</button></div>
+          <div class="ai-config-list">
+            ${item.variants.length ? item.variants.map((variant, vi) => `
+              <div class="ai-config-row" data-ai-variant="${vi}">
+                <input class="ai-variant-name" type="text" value="${esc(variant.name || '')}" placeholder="Ej. Grande" />
+                <input class="ai-variant-price" type="number" min="0" step="0.01" value="${Number(variant.price || 0)}" aria-label="Precio de variante" />
+                <button type="button" class="btn btn-danger btn-icon ai-del-variant" title="Quitar variante"><i class="ph-bold ph-x"></i></button>
+              </div>`).join('') : '<span class="hint">Sin variantes: se usará el precio base.</span>'}
+          </div>
+        </section>
+        <section>
+          <div class="ai-config-title"><b><i class="ph-bold ph-sliders"></i> Ingredientes / Opciones</b><button type="button" class="btn btn-ghost ai-add-group"><i class="ph-bold ph-plus"></i> Agregar grupo</button></div>
+          <div class="ai-modifier-list">
+            ${item.modifierGroups.length ? item.modifierGroups.map((group, gi) => `
+              <div class="ai-modifier-card" data-ai-group="${gi}">
+                <div class="ai-modifier-head">
+                  <input class="ai-group-name" type="text" value="${esc(group.name || '')}" placeholder="Ej. Elige tu salsa" />
+                  <label>Mín. <input class="ai-group-min" type="number" min="0" max="30" value="${Number(group.minSelections || 0)}" /></label>
+                  <label>Máx. <input class="ai-group-max" type="number" min="1" max="30" value="${Number(group.maxSelections || 1)}" /></label>
+                  <button type="button" class="btn btn-danger btn-icon ai-del-group" title="Quitar grupo"><i class="ph-bold ph-trash"></i></button>
+                </div>
+                ${(group.options || []).map((option, oi) => `
+                  <div class="ai-config-row" data-ai-option="${oi}">
+                    <input class="ai-option-name" type="text" value="${esc(option.name || '')}" placeholder="Opción o ingrediente" />
+                    <input class="ai-option-price" type="number" min="0" step="0.01" value="${Number(option.extraPrice || 0)}" aria-label="Costo extra" />
+                    <button type="button" class="btn btn-danger btn-icon ai-del-option" title="Quitar opción"><i class="ph-bold ph-x"></i></button>
+                  </div>`).join('')}
+                <button type="button" class="btn btn-ghost ai-add-option"><i class="ph-bold ph-plus"></i> Agregar opción</button>
+              </div>`).join('') : '<span class="hint">Sin opciones personalizables.</span>'}
+          </div>
+        </section>
+      </div>`;
+    return `
+      <tr data-ai-row="${idx}">
+        <td><input type="text" class="ai-name" value="${esc(item.name || '')}" placeholder="Nombre" />${warnings.length ? `<div class="ai-warning"><i class="ph-bold ph-warning"></i> ${esc(warnings.join(' · '))}</div>` : ''}</td>
+        <td><textarea class="ai-desc" rows="2" placeholder="Descripción e ingredientes incluidos">${esc(item.description || '')}</textarea></td>
+        <td><input type="number" class="ai-price" value="${Number(item.price || 0)}" min="0" step="0.01" /></td>
+        <td><input type="text" class="ai-cat" value="${esc(item.categoryName || '')}" placeholder="Categoría" /></td>
+        <td>
+          <div class="ai-config-summary">
+            ${item.imagePreviewUrl ? `<img class="ai-product-thumb" src="${esc(item.imagePreviewUrl)}" alt="" />` : ''}
+            <label class="btn btn-ghost ai-photo-label"><i class="ph-bold ph-camera"></i> ${item.imageFile ? 'Cambiar foto' : 'Agregar foto'}<input class="ai-image" type="file" accept="image/*" /></label>
+            <button type="button" class="btn btn-ghost ai-toggle-config"><i class="ph-bold ph-${item._expanded ? 'caret-up' : 'caret-down'}"></i> ${item.variants.length} variantes · ${optionCount} opciones</button>
+          </div>
+        </td>
+        <td><button type="button" class="btn btn-danger btn-icon ai-del" title="Quitar"><i class="ph-bold ph-trash"></i></button></td>
+      </tr>
+      <tr class="ai-config-detail" data-ai-detail="${idx}" ${item._expanded ? '' : 'hidden'}><td colspan="6">${configRows}</td></tr>`;
+  }).join('');
 
   rows.querySelectorAll('.ai-name').forEach((input) => {
     input.addEventListener('input', (e) => {
@@ -8069,18 +8211,99 @@ function renderAiDraftRows() {
   rows.querySelectorAll('.ai-del').forEach((btn) => {
     btn.addEventListener('click', (e) => {
       const i = Number(e.target.closest('[data-ai-row]').dataset.aiRow);
+      if (AI_PRODUCTS_DRAFT[i]?.imagePreviewUrl) URL.revokeObjectURL(AI_PRODUCTS_DRAFT[i].imagePreviewUrl);
       AI_PRODUCTS_DRAFT.splice(i, 1);
       renderAiDraftRows();
     });
   });
 
+  rows.querySelectorAll('.ai-toggle-config').forEach((btn) => btn.addEventListener('click', (e) => {
+    const i = Number(e.target.closest('[data-ai-row]').dataset.aiRow);
+    AI_PRODUCTS_DRAFT[i]._expanded = !AI_PRODUCTS_DRAFT[i]._expanded;
+    renderAiDraftRows();
+  }));
+  rows.querySelectorAll('.ai-image').forEach((input) => input.addEventListener('change', (e) => {
+    const i = Number(e.target.closest('[data-ai-row]').dataset.aiRow);
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (file.size > 8 * 1024 * 1024) {
+      toast('La foto del producto supera 8 MB', true);
+      return;
+    }
+    if (AI_PRODUCTS_DRAFT[i].imagePreviewUrl) URL.revokeObjectURL(AI_PRODUCTS_DRAFT[i].imagePreviewUrl);
+    AI_PRODUCTS_DRAFT[i].imageFile = file;
+    AI_PRODUCTS_DRAFT[i].imagePreviewUrl = URL.createObjectURL(file);
+    renderAiDraftRows();
+  }));
+  rows.querySelectorAll('.ai-add-variant').forEach((btn) => btn.addEventListener('click', (e) => {
+    const i = Number(e.target.closest('[data-ai-detail]').dataset.aiDetail);
+    AI_PRODUCTS_DRAFT[i].variants.push({ name: '', price: Number(AI_PRODUCTS_DRAFT[i].price || 0) });
+    renderAiDraftRows();
+  }));
+  rows.querySelectorAll('.ai-variant-name, .ai-variant-price').forEach((input) => input.addEventListener('input', (e) => {
+    const i = Number(e.target.closest('[data-ai-detail]').dataset.aiDetail);
+    const vi = Number(e.target.closest('[data-ai-variant]').dataset.aiVariant);
+    if (e.target.classList.contains('ai-variant-name')) AI_PRODUCTS_DRAFT[i].variants[vi].name = e.target.value;
+    else AI_PRODUCTS_DRAFT[i].variants[vi].price = Number(e.target.value) || 0;
+  }));
+  rows.querySelectorAll('.ai-del-variant').forEach((btn) => btn.addEventListener('click', (e) => {
+    const i = Number(e.target.closest('[data-ai-detail]').dataset.aiDetail);
+    const vi = Number(e.target.closest('[data-ai-variant]').dataset.aiVariant);
+    AI_PRODUCTS_DRAFT[i].variants.splice(vi, 1);
+    renderAiDraftRows();
+  }));
+  rows.querySelectorAll('.ai-add-group').forEach((btn) => btn.addEventListener('click', (e) => {
+    const i = Number(e.target.closest('[data-ai-detail]').dataset.aiDetail);
+    AI_PRODUCTS_DRAFT[i].modifierGroups.push({ name: '', minSelections: 0, maxSelections: 1, options: [] });
+    renderAiDraftRows();
+  }));
+  rows.querySelectorAll('.ai-group-name, .ai-group-min, .ai-group-max').forEach((input) => input.addEventListener('input', (e) => {
+    const i = Number(e.target.closest('[data-ai-detail]').dataset.aiDetail);
+    const gi = Number(e.target.closest('[data-ai-group]').dataset.aiGroup);
+    const group = AI_PRODUCTS_DRAFT[i].modifierGroups[gi];
+    if (e.target.classList.contains('ai-group-name')) group.name = e.target.value;
+    else if (e.target.classList.contains('ai-group-min')) group.minSelections = Number(e.target.value) || 0;
+    else group.maxSelections = Math.max(1, Number(e.target.value) || 1);
+  }));
+  rows.querySelectorAll('.ai-del-group').forEach((btn) => btn.addEventListener('click', (e) => {
+    const i = Number(e.target.closest('[data-ai-detail]').dataset.aiDetail);
+    const gi = Number(e.target.closest('[data-ai-group]').dataset.aiGroup);
+    AI_PRODUCTS_DRAFT[i].modifierGroups.splice(gi, 1);
+    renderAiDraftRows();
+  }));
+  rows.querySelectorAll('.ai-add-option').forEach((btn) => btn.addEventListener('click', (e) => {
+    const i = Number(e.target.closest('[data-ai-detail]').dataset.aiDetail);
+    const gi = Number(e.target.closest('[data-ai-group]').dataset.aiGroup);
+    AI_PRODUCTS_DRAFT[i].modifierGroups[gi].options ||= [];
+    AI_PRODUCTS_DRAFT[i].modifierGroups[gi].options.push({ name: '', extraPrice: 0 });
+    renderAiDraftRows();
+  }));
+  rows.querySelectorAll('.ai-option-name, .ai-option-price').forEach((input) => input.addEventListener('input', (e) => {
+    const i = Number(e.target.closest('[data-ai-detail]').dataset.aiDetail);
+    const gi = Number(e.target.closest('[data-ai-group]').dataset.aiGroup);
+    const oi = Number(e.target.closest('[data-ai-option]').dataset.aiOption);
+    const option = AI_PRODUCTS_DRAFT[i].modifierGroups[gi].options[oi];
+    if (e.target.classList.contains('ai-option-name')) option.name = e.target.value;
+    else option.extraPrice = Number(e.target.value) || 0;
+  }));
+  rows.querySelectorAll('.ai-del-option').forEach((btn) => btn.addEventListener('click', (e) => {
+    const i = Number(e.target.closest('[data-ai-detail]').dataset.aiDetail);
+    const gi = Number(e.target.closest('[data-ai-group]').dataset.aiGroup);
+    const oi = Number(e.target.closest('[data-ai-option]').dataset.aiOption);
+    AI_PRODUCTS_DRAFT[i].modifierGroups[gi].options.splice(oi, 1);
+    renderAiDraftRows();
+  }));
+
   $('#aiProductImport').disabled = false;
 }
 
 function openAiImportModal() {
+  AI_PRODUCTS_DRAFT.forEach((item) => item.imagePreviewUrl && URL.revokeObjectURL(item.imagePreviewUrl));
+  AI_MENU_PREVIEW_URLS.forEach((url) => URL.revokeObjectURL(url));
+  AI_MENU_PREVIEW_URLS = [];
   $('#aiMenuImage').value = '';
   $('#aiMenuImagePreview').hidden = true;
-  $('#aiMenuImagePreviewImg').src = '';
+  if ($('#aiMenuImagePreviewList')) $('#aiMenuImagePreviewList').innerHTML = '';
   $('#aiMenuImageHint').textContent = 'Aún no has seleccionado imagen.';
   resetAiImportState();
   $('#aiProductModal').classList.add('show');
@@ -8472,6 +8695,7 @@ $('#aiProductCancel')?.addEventListener('click', () => $('#aiProductModal').clas
 const aiUploadArea = $('#aiMenuUploadArea');
 const aiMenuInput = $('#aiMenuImage');
 const aiPickBtn = $('#aiMenuPickBtn');
+let AI_MENU_PREVIEW_URLS = [];
 
 function openAiMenuPicker() {
   aiMenuInput?.click();
@@ -8503,25 +8727,28 @@ aiUploadArea?.addEventListener('keydown', (e) => {
 });
 
 $('#aiMenuImage')?.addEventListener('change', () => {
-  const file = $('#aiMenuImage').files?.[0];
+  const files = [...($('#aiMenuImage').files || [])];
   const preview = $('#aiMenuImagePreview');
-  const img = $('#aiMenuImagePreviewImg');
-  if (!file) {
+  const list = $('#aiMenuImagePreviewList');
+  AI_MENU_PREVIEW_URLS.forEach((url) => URL.revokeObjectURL(url));
+  AI_MENU_PREVIEW_URLS = [];
+  if (!files.length) {
     preview.hidden = true;
-    img.src = '';
+    list.innerHTML = '';
     $('#aiMenuImageHint').textContent = 'Aún no has seleccionado imagen.';
     return;
   }
-  if (file.size > 8 * 1024 * 1024) {
-    toast('La imagen supera 8 MB, elige una más ligera', true);
+  if (files.length > 8 || files.some((file) => file.size > 8 * 1024 * 1024)) {
+    toast(files.length > 8 ? 'Puedes analizar hasta 8 imágenes por carga' : 'Una imagen supera 8 MB; elige archivos más ligeros', true);
     $('#aiMenuImage').value = '';
     preview.hidden = true;
-    img.src = '';
+    list.innerHTML = '';
     return;
   }
-  img.src = URL.createObjectURL(file);
+  AI_MENU_PREVIEW_URLS = files.map((file) => URL.createObjectURL(file));
+  list.innerHTML = files.map((file, index) => `<figure><img src="${esc(AI_MENU_PREVIEW_URLS[index])}" alt="Página ${index + 1}" /><figcaption>${esc(file.name)}</figcaption></figure>`).join('');
   preview.hidden = false;
-  $('#aiMenuImageHint').textContent = `${file.name} (${Math.ceil(file.size / 1024)} KB)`;
+  $('#aiMenuImageHint').textContent = `${files.length} ${files.length === 1 ? 'imagen seleccionada' : 'imágenes seleccionadas'} · ${Math.ceil(files.reduce((total, file) => total + file.size, 0) / 1024)} KB`;
 });
 
 $('#aiProductForm')?.addEventListener('submit', async (e) => {
@@ -8531,9 +8758,9 @@ $('#aiProductForm')?.addEventListener('submit', async (e) => {
     toast(`Espera ${remaining}s para volver a analizar`, true);
     return;
   }
-  const file = $('#aiMenuImage').files?.[0] || null;
-  if (!file) {
-    toast('Selecciona una imagen del catálogo para analizar', true);
+  const files = [...($('#aiMenuImage').files || [])];
+  if (!files.length) {
+    toast('Selecciona al menos una imagen del catálogo para analizar', true);
     return;
   }
 
@@ -8543,7 +8770,7 @@ $('#aiProductForm')?.addEventListener('submit', async (e) => {
   startAiAnalyzeProgress();
   try {
     const fd = new FormData();
-    fd.append('menuImage', file);
+    files.forEach((file) => fd.append('menuImages', file));
     const out = await api('/api/products/ai/suggest', { method: 'POST', body: fd });
     setAiAnalyzeProgress(96, 'Catálogo leído. Preparando tabla para editar...');
     AI_PRODUCTS_DRAFT = Array.isArray(out.products) ? out.products : [];
@@ -8557,6 +8784,9 @@ $('#aiProductForm')?.addEventListener('submit', async (e) => {
     }
     if (Array.isArray(out.variantGroupsDetected) && out.variantGroupsDetected.length) {
       notes.push(`Se detectaron variantes para: ${out.variantGroupsDetected.join(', ')}`);
+    }
+    if (Array.isArray(out.modifierGroupsDetected) && out.modifierGroupsDetected.length) {
+      notes.push(`Se detectaron ingredientes/opciones para: ${out.modifierGroupsDetected.join(', ')}`);
     }
     const ui = businessUi();
     $('#aiProductNotes').textContent = notes.join(' · ') || `Se detectaron ${AI_PRODUCTS_DRAFT.length} ${ui.itemPlural.toLowerCase()}. Puedes editar antes de importar.`;
@@ -8582,15 +8812,35 @@ $('#aiProductForm')?.addEventListener('submit', async (e) => {
 });
 
 $('#aiProductImport')?.addEventListener('click', async () => {
+  const imageFiles = [];
   const cleanProducts = AI_PRODUCTS_DRAFT
-    .map((p) => ({
+    .map((p) => {
+      const imageIndex = p.imageFile ? imageFiles.push(p.imageFile) - 1 : null;
+      return {
       name: String(p.name || '').trim(),
       description: String(p.description || '').trim(),
       price: Number(p.price) || 0,
       categoryName: String(p.categoryName || '').trim(),
-      variantGroup: String(p.variantGroup || '').trim(),
-      variantName: String(p.variantName || '').trim(),
-    }))
+      variants: (p.variants || []).map((variant) => ({
+        name: String(variant.name || '').trim(),
+        price: Number(variant.price) || 0,
+      })).filter((variant) => variant.name),
+      modifierGroups: (p.modifierGroups || []).map((group) => {
+        const options = (group.options || []).map((option) => ({
+          name: String(option.name || '').trim(),
+          extraPrice: Number(option.extraPrice) || 0,
+        })).filter((option) => option.name);
+        const maxSelections = Math.max(1, Math.min(options.length || 1, Number(group.maxSelections) || 1));
+        return {
+          name: String(group.name || '').trim(),
+          minSelections: Math.max(0, Math.min(maxSelections, Number(group.minSelections) || 0)),
+          maxSelections,
+          options,
+        };
+      }).filter((group) => group.name && group.options.length),
+      imageIndex,
+    };
+    })
     .filter((p) => p.name);
 
   if (!cleanProducts.length) {
@@ -8601,16 +8851,22 @@ $('#aiProductImport')?.addEventListener('click', async () => {
   const btn = $('#aiProductImport');
   btn.disabled = true;
   try {
+    const fd = new FormData();
+    fd.append('products', JSON.stringify(cleanProducts));
+    fd.append('createMissingCategories', 'true');
+    fd.append('defaultActive', 'true');
+    fd.append('skipExisting', 'true');
+    imageFiles.forEach((file) => fd.append('productImages', file));
     const out = await api('/api/products/ai/import', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        products: cleanProducts,
-        createMissingCategories: true,
-        defaultActive: true,
-      }),
+      body: fd,
     });
-    toast(`Importación completada: ${out.created} productos`);
+    const extras = [
+      out.createdVariants ? `${out.createdVariants} variantes` : '',
+      out.createdModifierOptions ? `${out.createdModifierOptions} opciones` : '',
+      out.skippedCount ? `${out.skippedCount} duplicados omitidos` : '',
+    ].filter(Boolean).join(' · ');
+    toast(`Importación completada: ${out.created} productos${extras ? ` · ${extras}` : ''}`);
     $('#aiProductModal').classList.remove('show');
     await loadProducts();
   } catch (err) {

@@ -17,6 +17,7 @@ function promo(overrides = {}) {
     value: 10,
     buy_qty: 0,
     pay_qty: 0,
+    buy_pay_rule: 'same_product',
     all_products: 0,
     days_of_week: '[]',
     start_time: '00:00',
@@ -60,6 +61,66 @@ test('2x1 y 3x2 descuentan sólo grupos completos y conservan snapshot auditable
   )[0];
   assert.equal(threeForTwo.discountAmount, 30);
   assert.equal(threeForTwo.lineTotal, 90);
+});
+
+test('compra X paga Y puede cobrar el mayor y bonificar el menor entre productos distintos', () => {
+  const promotion = promo({
+    type: 'buy_x_pay_y', buy_qty: 2, pay_qty: 1,
+    buy_pay_rule: 'lowest_price_free', productIds: [7, 8],
+  });
+  const result = applyPromotions([
+    { id: 7, name: 'Premium', price: 120, qty: 1 },
+    { id: 8, name: 'Clásico', price: 70, qty: 1 },
+  ], [promotion]);
+  assert.equal(result.reduce((sum, item) => sum + item.lineTotal, 0), 120);
+  assert.equal(result[0].discountAmount, 0);
+  assert.equal(result[1].discountAmount, 70);
+  assert.equal(result[1].promotion.buyPayRule, 'lowest_price_free');
+  assert.match(result[1].promotion.label, /menor precio/);
+});
+
+test('compra X paga Y permite bonificar el mayor como beneficio agresivo', () => {
+  const promotion = promo({
+    type: 'buy_x_pay_y', buy_qty: 2, pay_qty: 1,
+    buy_pay_rule: 'highest_price_free', productIds: [7, 8],
+  });
+  const result = applyPromotions([
+    { id: 7, price: 120, qty: 1 },
+    { id: 8, price: 70, qty: 1 },
+  ], [promotion]);
+  assert.equal(result.reduce((sum, item) => sum + item.lineTotal, 0), 70);
+  assert.equal(result[0].discountAmount, 120);
+  assert.equal(result[1].discountAmount, 0);
+});
+
+test('las reglas mixtas cobran extras y no se acumulan con otra promoción', () => {
+  const mixed = promo({
+    id: 10, type: 'buy_x_pay_y', buy_qty: 2, pay_qty: 1,
+    buy_pay_rule: 'lowest_price_free', productIds: [7, 8],
+  });
+  const percentage = promo({ id: 11, value: 20, productIds: [7, 8] });
+  const result = applyPromotions([
+    { id: 7, price: 120, qty: 1 },
+    { id: 8, price: 70, modifiersExtraPrice: 20, qty: 1 },
+  ], [mixed, percentage]);
+  assert.equal(result.reduce((sum, item) => sum + item.lineTotal, 0), 140);
+  assert.equal(result[0].discountAmount, 0);
+  assert.equal(result[1].discountAmount, 50);
+  assert.equal(result[0].promotion.id, 10);
+  assert.equal(result[1].promotion.id, 10);
+});
+
+test('la opción histórica conserva grupos separados por producto', () => {
+  const promotion = promo({
+    type: 'buy_x_pay_y', buy_qty: 2, pay_qty: 1,
+    buy_pay_rule: 'same_product', productIds: [7, 8],
+  });
+  const result = applyPromotions([
+    { id: 7, price: 120, qty: 1 },
+    { id: 8, price: 70, qty: 1 },
+  ], [promotion]);
+  assert.equal(result.reduce((sum, item) => sum + item.lineTotal, 0), 190);
+  assert.equal(result.some((item) => item.promotion), false);
 });
 
 test('si coinciden promociones aplica automáticamente la de mayor ahorro', () => {
@@ -124,6 +185,7 @@ test('el módulo está montado, es responsivo y aparece en permisos y navegació
   const appJs = fs.readFileSync(path.join(root, 'public', 'js', 'app.js'), 'utf8');
   const css = fs.readFileSync(path.join(root, 'public', 'css', 'styles.css'), 'utf8');
   const modules = fs.readFileSync(path.join(root, 'src', 'utils', 'modules.js'), 'utf8');
+  const promotionRoute = fs.readFileSync(path.join(root, 'src', 'routes', 'promotions.js'), 'utf8');
   assert.match(server, /app\.use\('\/api\/promotions'/);
   assert.match(html, /data-view="promociones"/);
   assert.match(html, /id="view-promociones"/);
@@ -138,6 +200,8 @@ test('el módulo está montado, es responsivo y aparece en permisos y navegació
   assert.match(appJs, /pos-promo-subtitle[\s\S]*PROMOCIÓN/);
   assert.match(appJs, /pos-prod \$\{product\.activePromotion \? 'has-promotion'/);
   assert.match(appJs, /categoryIds/);
+  assert.match(appJs, /name="promoBuyPayRule"/);
+  assert.match(appJs, /Cobra el de mayor precio/);
   const engine = fs.readFileSync(path.join(root, 'src', 'chatbot', 'engine.js'), 'utf8');
   assert.match(engine, /🔥 Promociones[\s\S]*value: 'promotions'/);
   assert.match(engine, /showPromotions/);
@@ -145,4 +209,8 @@ test('el módulo está montado, es responsivo y aparece en permisos y navegació
   assert.match(css, /posPromoNeon/);
   assert.match(css, /@media\(max-width:480px\).*\.pos-promo-kind/s);
   assert.match(modules, /\['promociones', 'Promociones'\]/);
+  const schema = fs.readFileSync(path.join(root, 'src', 'db', 'index.js'), 'utf8');
+  assert.match(schema, /buy_pay_rule TEXT NOT NULL DEFAULT 'same_product'/);
+  assert.match(promotionRoute, /buy_pay_rule/);
+  assert.match(promotionRoute, /BUY_PAY_RULES/);
 });

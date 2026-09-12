@@ -459,6 +459,13 @@ function cartLineTotal(item) {
   const extras = Math.min(original, Math.max(0, Number(item.modifiersExtraPrice || 0)));
   const base = Math.max(0, original - extras);
   const originalTotal = original * qty;
+  const appliedPromotion = item.promotion || null;
+  if (appliedPromotion?.type === 'buy_x_pay_y'
+      && appliedPromotion.buyPayRule && appliedPromotion.buyPayRule !== 'same_product'
+      && Number(appliedPromotion.appliedQty) === qty
+      && Number.isFinite(Number(item.lineTotal))) {
+    return Number(item.lineTotal);
+  }
   const promotions = Array.isArray(item.activePromotions) && item.activePromotions.length
     ? item.activePromotions
     : (item.promotion ? [item.promotion] : []);
@@ -470,6 +477,7 @@ function cartLineTotal(item) {
     if (promo.type === 'fixed_amount') candidate = (Math.max(0, base - Number(promo.value || 0)) + extras) * qty;
     if (promo.type === 'fixed_price') candidate = (Math.min(base, Number(promo.value || 0)) + extras) * qty;
     if (promo.type === 'buy_x_pay_y') {
+      if (promo.buyPayRule && promo.buyPayRule !== 'same_product') continue;
       const buy = Math.max(2, Number(promo.buyQty || 2));
       const pay = Math.max(1, Math.min(buy - 1, Number(promo.payQty || buy - 1)));
       candidate = originalTotal - base * Math.floor(qty / buy) * (buy - pay);

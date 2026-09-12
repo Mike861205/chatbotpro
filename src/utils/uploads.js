@@ -21,7 +21,7 @@ function ensureScopedUploadsDir(scope) {
   return dir;
 }
 
-function createImageUpload({ scopeResolver, allowedMimePattern, tempPrefix }) {
+function createImageUpload({ scopeResolver, allowedMimePattern, tempPrefix, maxFiles = 1, maxFields = 50, fieldSize = 512 * 1024 }) {
   const storage = multer.diskStorage({
     destination: (req, file, cb) => {
       try {
@@ -39,10 +39,10 @@ function createImageUpload({ scopeResolver, allowedMimePattern, tempPrefix }) {
     storage,
     limits: {
       fileSize: 8 * 1024 * 1024,
-      files: 1,
-      fields: 50,
-      parts: 51,
-      fieldSize: 512 * 1024,
+      files: maxFiles,
+      fields: maxFields,
+      parts: maxFiles + maxFields,
+      fieldSize,
     },
     fileFilter: (req, file, cb) => {
       if (allowedMimePattern.test(String(file.mimetype || ''))) return cb(null, true);

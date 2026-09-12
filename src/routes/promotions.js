@@ -1,6 +1,6 @@
 const express = require('express');
 const { requireAuth, requireOwner, requireModules } = require('../middleware/auth');
-const { PROMOTION_TYPES, listPromotions, isPromotionActive, parseDays, parseIds } = require('../utils/promotions');
+const { PROMOTION_TYPES, BUY_PAY_RULES, listPromotions, isPromotionActive, parseDays, parseIds } = require('../utils/promotions');
 
 const router = express.Router();
 router.use(requireAuth);
@@ -18,6 +18,7 @@ function cleanPromotion(body = {}) {
   const value = Number(body.value || 0);
   const buyQty = Number(body.buyQty || 0);
   const payQty = Number(body.payQty || 0);
+  const buyPayRule = String(body.buyPayRule || 'same_product').trim();
   const allProducts = body.allProducts === true || body.allProducts === 1 || body.allProducts === '1';
   const productIds = parseIds(body.productIds);
   const categoryIds = parseIds(body.categoryIds);
@@ -34,12 +35,13 @@ function cleanPromotion(body = {}) {
   if (type === 'buy_x_pay_y' && (!Number.isInteger(buyQty) || !Number.isInteger(payQty) || buyQty < 2 || payQty < 1 || payQty >= buyQty)) {
     throw badRequest('En compra X paga Y, X debe ser mayor que Y y ambos deben ser enteros');
   }
+  if (type === 'buy_x_pay_y' && !BUY_PAY_RULES.has(buyPayRule)) throw badRequest('La regla de cobro de compra X paga Y no es válida');
   if (startsOn && !/^\d{4}-\d{2}-\d{2}$/.test(startsOn)) throw badRequest('La fecha inicial no es válida');
   if (endsOn && !/^\d{4}-\d{2}-\d{2}$/.test(endsOn)) throw badRequest('La fecha final no es válida');
   if (startsOn && endsOn && startsOn > endsOn) throw badRequest('La fecha final debe ser posterior a la inicial');
   if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(startTime) || !/^([01]\d|2[0-3]):[0-5]\d$/.test(endTime)) throw badRequest('El horario no es válido');
   return {
-    name, description, type, value: Number.isFinite(value) ? value : 0, buyQty, payQty, allProducts,
+    name, description, type, value: Number.isFinite(value) ? value : 0, buyQty, payQty, buyPayRule, allProducts,
     productIds, categoryIds, daysOfWeek, startsOn: startsOn || null, endsOn: endsOn || null, startTime, endTime,
     posEnabled: body.posEnabled !== false && body.posEnabled !== 0 && body.posEnabled !== '0',
     chatbotEnabled: body.chatbotEnabled !== false && body.chatbotEnabled !== 0 && body.chatbotEnabled !== '0',
@@ -118,9 +120,9 @@ router.post('/', async (req, res, next) => {
     const row = await req.tdb.tx(async (tx) => {
       const created = await tx.get(
         `INSERT INTO {s}.promotions
-         (name,description,type,value,buy_qty,pay_qty,all_products,days_of_week,starts_on,ends_on,start_time,end_time,pos_enabled,chatbot_enabled,active,priority,created_by)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17) RETURNING id`,
-        [p.name,p.description,p.type,p.value,p.buyQty,p.payQty,p.allProducts?1:0,JSON.stringify(p.daysOfWeek),p.startsOn,p.endsOn,p.startTime,p.endTime,p.posEnabled?1:0,p.chatbotEnabled?1:0,p.active?1:0,p.priority,req.user.username]
+         (name,description,type,value,buy_qty,pay_qty,buy_pay_rule,all_products,days_of_week,starts_on,ends_on,start_time,end_time,pos_enabled,chatbot_enabled,active,priority,created_by)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18) RETURNING id`,
+        [p.name,p.description,p.type,p.value,p.buyQty,p.payQty,p.buyPayRule,p.allProducts?1:0,JSON.stringify(p.daysOfWeek),p.startsOn,p.endsOn,p.startTime,p.endTime,p.posEnabled?1:0,p.chatbotEnabled?1:0,p.active?1:0,p.priority,req.user.username]
       );
       await saveScope(tx, created.id, p);
       return created;
@@ -138,10 +140,10 @@ router.put('/:id', async (req, res, next) => {
     await validateProducts(req.tdb, p);
     await req.tdb.tx(async (tx) => {
       await tx.run(
-        `UPDATE {s}.promotions SET name=$1,description=$2,type=$3,value=$4,buy_qty=$5,pay_qty=$6,all_products=$7,
-         days_of_week=$8,starts_on=$9,ends_on=$10,start_time=$11,end_time=$12,pos_enabled=$13,chatbot_enabled=$14,
-         active=$15,priority=$16,updated_at=now() WHERE id=$17`,
-        [p.name,p.description,p.type,p.value,p.buyQty,p.payQty,p.allProducts?1:0,JSON.stringify(p.daysOfWeek),p.startsOn,p.endsOn,p.startTime,p.endTime,p.posEnabled?1:0,p.chatbotEnabled?1:0,p.active?1:0,p.priority,id]
+        `UPDATE {s}.promotions SET name=$1,description=$2,type=$3,value=$4,buy_qty=$5,pay_qty=$6,buy_pay_rule=$7,all_products=$8,
+         days_of_week=$9,starts_on=$10,ends_on=$11,start_time=$12,end_time=$13,pos_enabled=$14,chatbot_enabled=$15,
+         active=$16,priority=$17,updated_at=now() WHERE id=$18`,
+        [p.name,p.description,p.type,p.value,p.buyQty,p.payQty,p.buyPayRule,p.allProducts?1:0,JSON.stringify(p.daysOfWeek),p.startsOn,p.endsOn,p.startTime,p.endTime,p.posEnabled?1:0,p.chatbotEnabled?1:0,p.active?1:0,p.priority,id]
       );
       await saveScope(tx, id, p);
     });

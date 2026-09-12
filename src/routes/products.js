@@ -7,7 +7,7 @@ const { requireAuth, requireOwner, requireModules } = require('../middleware/aut
 const config = require('../config');
 const { getSetting, getSuperAdminSetting } = require('../db');
 const { decrypt } = require('../utils/crypto');
-const { buildAiCatalogPrompt } = require('../utils/businessCatalog');
+const { buildAiCatalogPrompt, normalizeAiCatalogProducts } = require('../utils/businessCatalog');
 const { createImageUpload, deleteManagedUpload, optimizeUploadedImage, safeUnlink } = require('../utils/uploads');
 
 const router = express.Router();
@@ -25,6 +25,17 @@ const uploadAiMenu = createImageUpload({
   scopeResolver: (req) => req.tenant.slug,
   allowedMimePattern: /^image\/(png|jpe?g|webp|gif)$/,
   tempPrefix: 'prod-ai',
+  maxFiles: 8,
+  maxFields: 10,
+});
+
+const uploadAiProductImages = createImageUpload({
+  scopeResolver: (req) => req.tenant.slug,
+  allowedMimePattern: /^image\/(png|jpe?g|webp|gif)$/,
+  tempPrefix: 'prod-ai-image',
+  maxFiles: 60,
+  maxFields: 10,
+  fieldSize: 2 * 1024 * 1024,
 });
 
 const aiClientCache = new Map();
@@ -75,48 +86,6 @@ function pickExistingCategory(categoryMap, rawName) {
     if (target.includes(loose) || loose.includes(target)) return cat;
   }
   return null;
-}
-
-function detectVariantMeta(row) {
-  const rawName = String(row?.name || '').trim();
-  if (!rawName) return { baseName: '', variantName: '' };
-
-  const explicitBase = String(row?.variantGroup || '').trim();
-  const explicitVariant = String(row?.variantName || '').trim();
-  if (explicitBase && explicitVariant) {
-    return { baseName: explicitBase, variantName: explicitVariant };
-  }
-
-  const paren = rawName.match(/^(.+?)\s*\(([^)]+)\)\s*$/);
-  if (paren) {
-    return { baseName: paren[1].trim(), variantName: paren[2].trim() };
-  }
-
-  const suffix = rawName.match(/^(.+?)\s+(chica|mediana|grande|jumbo|familiar|personal|individual|doble|triple|litro|2 litros|500ml|1l|1 kg|1\/2 kg|medio kilo|kilo|combo [0-9]+)$/i);
-  if (suffix) {
-    return { baseName: suffix[1].trim(), variantName: suffix[2].trim() };
-  }
-
-  const hyphen = rawName.match(/^(.+?)\s*[-:]\s*(chica|mediana|grande|jumbo|familiar|personal|individual|doble|triple|litro|2 litros|500ml|1l|1 kg|1\/2 kg|medio kilo|kilo)$/i);
-  if (hyphen) {
-    return { baseName: hyphen[1].trim(), variantName: hyphen[2].trim() };
-  }
-
-  return { baseName: rawName, variantName: explicitVariant };
-}
-
-function buildVariantLabel(rowName, baseName, fallback) {
-  const fromRow = String(rowName || '').trim();
-  const fromBase = String(baseName || '').trim();
-  if (fromRow && fromBase) {
-    const rowNorm = normalizeLooseText(fromRow);
-    const baseNorm = normalizeLooseText(fromBase);
-    if (rowNorm.startsWith(baseNorm)) {
-      const rest = fromRow.slice(fromBase.length).replace(/^\s*[-:()\s]+/, '').trim();
-      if (rest) return rest;
-    }
-  }
-  return String(fallback || 'Presentacion').trim() || 'Presentacion';
 }
 
 function buildAiClient(apiKey, baseUrl) {
@@ -300,9 +269,10 @@ function shouldRetrySameModel(aiErr) {
 
 async function createMenuSuggestionCompletion(client, content, model) {
   let lastNormalizedError = null;
+  let useJsonResponseFormat = true;
   for (let attempt = 1; attempt <= 3; attempt += 1) {
     try {
-      const completion = await client.chat.completions.create({
+      const request = {
         model,
         temperature: 0.15,
         messages: [
@@ -313,11 +283,19 @@ async function createMenuSuggestionCompletion(client, content, model) {
           },
           { role: 'user', content },
         ],
-      });
+      };
+      if (useJsonResponseFormat) request.response_format = { type: 'json_object' };
+      const completion = await client.chat.completions.create(request);
       return { completion, model, attempts: attempt };
     } catch (err) {
       const aiErr = normalizeAiProviderError(err);
       lastNormalizedError = aiErr;
+      const message = String(aiErr.message || '').toLowerCase();
+      if (useJsonResponseFormat && aiErr.status === 400
+          && (message.includes('response_format') || message.includes('json mode'))) {
+        useJsonResponseFormat = false;
+        continue;
+      }
       if (!shouldRetrySameModel(aiErr) || attempt >= 3) break;
       const waitSec = aiErr.retryAfterSec > 0 ? Math.min(aiErr.retryAfterSec, 12) : attempt * 2;
       await sleep(waitSec * 1000);
@@ -463,10 +441,11 @@ router.get('/', async (req, res, next) => {
   } catch (e) { next(e); }
 });
 
-router.post('/ai/suggest', uploadAiMenu.single('menuImage'), async (req, res, next) => {
+router.post('/ai/suggest', uploadAiMenu.array('menuImages', 8), async (req, res, next) => {
   try {
-    if (!req.file) {
-      return res.status(400).json({ error: 'Sube una imagen del catálogo para analizar.' });
+    const menuFiles = Array.isArray(req.files) ? req.files : [];
+    if (!menuFiles.length) {
+      return res.status(400).json({ error: 'Sube al menos una imagen del catálogo para analizar.' });
     }
 
     const aiCfg = await getOpenAiRuntimeConfig();
@@ -487,11 +466,12 @@ router.post('/ai/suggest', uploadAiMenu.single('menuImage'), async (req, res, ne
       },
     ];
 
-    const imagePayload = await buildAiImageDataUrl(req.file);
-    content.push({
-      type: 'image_url',
-      image_url: { url: imagePayload.dataUrl },
-    });
+    const imagePayloads = [];
+    for (const file of menuFiles) {
+      const payload = await buildAiImageDataUrl(file);
+      imagePayloads.push(payload);
+      content.push({ type: 'image_url', image_url: { url: payload.dataUrl, detail: 'high' } });
+    }
 
     let completion;
     let usedModel;
@@ -510,7 +490,7 @@ router.post('/ai/suggest', uploadAiMenu.single('menuImage'), async (req, res, ne
         message: aiErr.message,
         retryAfterSec: aiErr.retryAfterSec,
         model: aiCfg.model,
-        imageBytes: imagePayload.bytes,
+        imageBytes: imagePayloads.reduce((total, image) => total + image.bytes, 0),
       });
       if (mapped.status === 429 && mapped.retryAfterSec) {
         res.setHeader('Retry-After', String(mapped.retryAfterSec));
@@ -527,25 +507,12 @@ router.post('/ai/suggest', uploadAiMenu.single('menuImage'), async (req, res, ne
       return res.status(422).json({ error: 'No se pudo interpretar una lista de productos valida desde IA.' });
     }
 
-    const products = parsed.products
-      .slice(0, 60)
-      .map((row) => ({
-        name: String(row?.name || '').trim(),
-        description: String(row?.description || '').trim(),
-        price: Number(row?.price),
-        categoryName: String(row?.categoryName || '').trim(),
-        variantGroup: String(row?.variantGroup || '').trim(),
-        variantName: String(row?.variantName || '').trim(),
-      }))
-      .filter((row) => row.name)
-      .map((row) => ({
-        ...row,
-        price: Number.isFinite(row.price) && row.price >= 0 ? Number(row.price.toFixed(2)) : 0,
-      }));
+    const products = normalizeAiCatalogProducts(parsed.products);
 
     const normalizedExisting = new Set(categoryNames.map(normalizeCategoryName).filter(Boolean));
     const suggestedCategories = [...new Set(products.map((p) => p.categoryName).filter(Boolean))];
-    const variantGroupsDetected = [...new Set(products.map((p) => String(p.variantGroup || '').trim()).filter(Boolean))];
+    const variantGroupsDetected = products.filter((p) => p.variants.length).map((p) => p.name);
+    const modifierGroupsDetected = products.filter((p) => p.modifierGroups.length).map((p) => p.name);
 
     res.json({
       products,
@@ -555,141 +522,171 @@ router.post('/ai/suggest', uploadAiMenu.single('menuImage'), async (req, res, ne
         exists: normalizedExisting.has(normalizeCategoryName(name)),
       })),
       variantGroupsDetected,
+      modifierGroupsDetected,
+      imageCount: menuFiles.length,
       model: usedModel,
       retries: Math.max(0, Number(usedAttempts || 1) - 1),
     });
   } catch (e) {
     next(e);
   } finally {
-    if (req.file?.path) {
-      try { await safeUnlink(req.file.path); } catch {}
+    for (const file of (Array.isArray(req.files) ? req.files : [])) {
+      if (file?.path) {
+        try { await safeUnlink(file.path); } catch {}
+      }
     }
   }
 });
 
-router.post('/ai/import', async (req, res, next) => {
+router.post('/ai/import', uploadAiProductImages.array('productImages', 60), async (req, res, next) => {
+  const optimizedImages = new Map();
   try {
     const body = req.body || {};
-    const inputProducts = Array.isArray(body.products) ? body.products : [];
-    if (!inputProducts.length) {
-      return res.status(400).json({ error: 'No hay productos para importar.' });
+    let inputProducts = body.products;
+    if (typeof inputProducts === 'string') {
+      try { inputProducts = JSON.parse(inputProducts); } catch { inputProducts = []; }
+    }
+    const products = normalizeAiCatalogProducts(inputProducts);
+    if (!products.length) return res.status(400).json({ error: 'No hay productos válidos para importar.' });
+
+    const createMissingCategories = body.createMissingCategories !== false && body.createMissingCategories !== 'false';
+    const defaultActive = body.defaultActive === false || body.defaultActive === 'false' ? 0 : 1;
+    const skipExisting = body.skipExisting !== false && body.skipExisting !== 'false';
+    const files = Array.isArray(req.files) ? req.files : [];
+
+    for (let index = 0; index < files.length; index += 1) {
+      const image = await optimizeUploadedImage(files[index], {
+        scope: req.tenant.slug,
+        outputPrefix: 'prod',
+        maxWidth: 1600,
+        quality: 80,
+      });
+      optimizedImages.set(index, image);
     }
 
-    const createMissingCategories = body.createMissingCategories !== false;
-    const defaultActive = body.defaultActive === false ? 0 : 1;
+    const result = await req.tdb.tx(async (tx) => {
+      const categories = await tx.all('SELECT id, name FROM {s}.categories ORDER BY sort, name');
+      const categoryMap = new Map(
+        categories.map((cat) => [categoryMatchKey(cat.name), { id: cat.id, name: cat.name }]).filter((entry) => entry[0])
+      );
+      const existingRows = await tx.all('SELECT id, name, category_id FROM {s}.products');
+      const existingKeys = new Set(existingRows.map((row) => `${Number(row.category_id) || 0}::${normalizeLooseText(row.name)}`));
+      const createdProducts = [];
+      const skipped = [];
+      const usedImages = new Set();
+      let createdCategories = 0;
+      let createdVariants = 0;
+      let createdModifierGroups = 0;
+      let createdModifierOptions = 0;
 
-    const categories = await req.tdb.all('SELECT id, name FROM {s}.categories ORDER BY sort, name');
-    const categoryMap = new Map(
-      categories.map((cat) => [categoryMatchKey(cat.name), { id: cat.id, name: cat.name }]).filter((entry) => entry[0])
-    );
+      for (const product of products) {
+        let categoryId = null;
+        if (product.categoryName) {
+          const existingCat = pickExistingCategory(categoryMap, product.categoryName);
+          if (existingCat) categoryId = existingCat.id;
+          else if (createMissingCategories) {
+            const createdCat = await tx.get(
+              'INSERT INTO {s}.categories (name, sort) VALUES ($1, 0) RETURNING id, name',
+              [product.categoryName]
+            );
+            categoryId = createdCat.id;
+            categoryMap.set(categoryMatchKey(createdCat.name), createdCat);
+            createdCategories += 1;
+          }
+        }
 
-    const createdProducts = [];
-    const skipped = [];
-    let createdCategories = 0;
+        const duplicateKey = `${Number(categoryId) || 0}::${normalizeLooseText(product.name)}`;
+        if (skipExisting && existingKeys.has(duplicateKey)) {
+          skipped.push({ reason: 'already_exists', name: product.name, categoryName: product.categoryName });
+          continue;
+        }
 
-    const normalizedRows = inputProducts.slice(0, 200).map((raw) => {
-      const name = String(raw?.name || '').trim();
-      const description = String(raw?.description || '').trim();
-      const priceVal = Number(raw?.price);
-      const price = Number.isFinite(priceVal) && priceVal >= 0 ? Number(priceVal.toFixed(2)) : 0;
-      const categoryName = String(raw?.categoryName || '').trim();
-      const detected = detectVariantMeta(raw);
+        const variantPrices = product.variants.map((variant) => Number(variant.price)).filter((price) => price >= 0);
+        const basePrice = product.price > 0 || !variantPrices.length ? product.price : Math.min(...variantPrices);
+        const image = optimizedImages.get(product.imageIndex) || null;
+        if (image) usedImages.add(image);
+
+        const inserted = await tx.get(
+          'INSERT INTO {s}.products (name, description, price, category_id, image, active) VALUES ($1,$2,$3,$4,$5,$6) RETURNING id',
+          [product.name, product.description, basePrice, categoryId, image, defaultActive]
+        );
+
+        for (let index = 0; index < product.variants.length; index += 1) {
+          const variant = product.variants[index];
+          await tx.run(
+            'INSERT INTO {s}.product_variants (product_id, name, price, sort, active) VALUES ($1,$2,$3,$4,1)',
+            [inserted.id, variant.name, variant.price, index]
+          );
+          createdVariants += 1;
+        }
+
+        for (let groupIndex = 0; groupIndex < product.modifierGroups.length; groupIndex += 1) {
+          const group = product.modifierGroups[groupIndex];
+          const insertedGroup = await tx.get(
+            'INSERT INTO {s}.modifier_groups (product_id, name, min_selections, max_selections, sort) VALUES ($1,$2,$3,$4,$5) RETURNING id',
+            [inserted.id, group.name, group.minSelections, group.maxSelections, groupIndex]
+          );
+          createdModifierGroups += 1;
+          for (let optionIndex = 0; optionIndex < group.options.length; optionIndex += 1) {
+            const option = group.options[optionIndex];
+            await tx.run(
+              'INSERT INTO {s}.modifier_options (group_id, name, extra_price, sort, active) VALUES ($1,$2,$3,$4,1)',
+              [insertedGroup.id, option.name, option.extraPrice, optionIndex]
+            );
+            createdModifierOptions += 1;
+          }
+        }
+
+        existingKeys.add(duplicateKey);
+        createdProducts.push({
+          id: inserted.id,
+          name: product.name,
+          price: basePrice,
+          categoryId,
+          variants: product.variants.length,
+          modifierGroups: product.modifierGroups.length,
+          modifierOptions: product.modifierGroups.reduce((total, group) => total + group.options.length, 0),
+          image: Boolean(image),
+        });
+      }
+
       return {
-        raw,
-        name,
-        description,
-        price,
-        categoryName,
-        baseName: detected.baseName || name,
-        variantName: detected.variantName || '',
+        createdProducts,
+        createdCategories,
+        createdVariants,
+        createdModifierGroups,
+        createdModifierOptions,
+        skipped,
+        usedImages,
       };
     });
 
-    const grouped = new Map();
-    for (const row of normalizedRows) {
-      if (!row.name) {
-        skipped.push({ reason: 'name_missing', item: row.raw });
-        continue;
-      }
-      const key = `${categoryMatchKey(row.categoryName)}::${normalizeLooseText(row.baseName)}`;
-      if (!grouped.has(key)) grouped.set(key, []);
-      grouped.get(key).push(row);
-    }
-
-    for (const rows of grouped.values()) {
-      if (!rows.length) continue;
-      const sample = rows[0];
-      const categoryCandidate = sample.categoryName;
-
-      let categoryId = null;
-      if (categoryCandidate) {
-        const existingCat = pickExistingCategory(categoryMap, categoryCandidate);
-        if (existingCat) {
-          categoryId = existingCat.id;
-        } else if (createMissingCategories) {
-          const createdCat = await req.tdb.get(
-            'INSERT INTO {s}.categories (name, sort) VALUES ($1, 0) RETURNING id, name',
-            [categoryCandidate]
-          );
-          categoryId = createdCat.id;
-          categoryMap.set(categoryMatchKey(createdCat.name), createdCat);
-          createdCategories += 1;
-        }
-      }
-
-      const hasVariantSignal = rows.some((r) => r.variantName) || rows.length > 1;
-      if (!hasVariantSignal) {
-        const only = rows[0];
-        const insertedSingle = await req.tdb.get(
-          'INSERT INTO {s}.products (name, description, price, category_id, image, active) VALUES ($1,$2,$3,$4,$5,$6) RETURNING id',
-          [only.name, only.description, only.price, categoryId, null, defaultActive]
-        );
-        createdProducts.push({ id: insertedSingle.id, name: only.name, price: only.price, categoryId, variants: 0 });
-        continue;
-      }
-
-      const baseName = sample.baseName || sample.name;
-      const mergedDescription = rows
-        .map((r) => String(r.description || '').trim())
-        .sort((a, b) => b.length - a.length)[0] || '';
-      const basePrice = Math.min(...rows.map((r) => Number(r.price) || 0));
-
-      const inserted = await req.tdb.get(
-        'INSERT INTO {s}.products (name, description, price, category_id, image, active) VALUES ($1,$2,$3,$4,$5,$6) RETURNING id',
-        [baseName, mergedDescription, basePrice, categoryId, null, defaultActive]
-      );
-
-      const usedLabels = new Set();
-      let variantSort = 0;
-      for (const row of rows) {
-        let label = row.variantName || buildVariantLabel(row.name, baseName, 'Presentacion');
-        if (!label) label = `Presentacion ${variantSort + 1}`;
-        let uniqueLabel = label;
-        let seq = 2;
-        while (usedLabels.has(normalizeLooseText(uniqueLabel))) {
-          uniqueLabel = `${label} ${seq++}`;
-        }
-        usedLabels.add(normalizeLooseText(uniqueLabel));
-
-        await req.tdb.run(
-          'INSERT INTO {s}.product_variants (product_id, name, price, sort, active) VALUES ($1,$2,$3,$4,1)',
-          [inserted.id, uniqueLabel, row.price, variantSort++]
-        );
-      }
-
-      createdProducts.push({ id: inserted.id, name: baseName, price: basePrice, categoryId, variants: rows.length });
+    for (const image of optimizedImages.values()) {
+      if (!result.usedImages.has(image)) await deleteManagedUpload(image);
     }
 
     res.json({
       ok: true,
-      created: createdProducts.length,
-      createdCategories,
-      skippedCount: skipped.length,
-      skipped,
-      products: createdProducts,
+      created: result.createdProducts.length,
+      createdCategories: result.createdCategories,
+      createdVariants: result.createdVariants,
+      createdModifierGroups: result.createdModifierGroups,
+      createdModifierOptions: result.createdModifierOptions,
+      skippedCount: result.skipped.length,
+      skipped: result.skipped,
+      products: result.createdProducts,
     });
   } catch (e) {
+    for (const image of optimizedImages.values()) {
+      try { await deleteManagedUpload(image); } catch {}
+    }
     next(e);
+  } finally {
+    for (const file of (Array.isArray(req.files) ? req.files : [])) {
+      if (file?.path) {
+        try { await safeUnlink(file.path); } catch {}
+      }
+    }
   }
 });
 
