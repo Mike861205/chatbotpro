@@ -121,6 +121,7 @@
     <span class="wa-txt"><b>¿Dudas para tu registro?</b><small>Te ayudo aquí</small></span>
   </a>
   <script src="/static/js/phone-input.js?v=20260908-1"></script>
+  <script src="/static/js/auth-request.js?v=20260907-local-ready"></script>
   <script>
     const resellerRef = new URLSearchParams(location.search).get('reseller') || '';
     const phoneSetupPromise = CBPPhoneInput.setup({ countryId: 'phoneCountry', callingCodeId: 'phoneCallingCode', phoneId: 'phone' })
@@ -172,7 +173,11 @@
       btn.setAttribute('aria-busy', 'true');
       try {
         const phoneData = CBPPhoneInput.values({ countryId: 'phoneCountry', phoneId: 'phone' });
-        const res = await fetch('/api/auth/register', {
+        // Espera a que el servidor responda antes de enviar el alta: nunca
+        // reintentamos a ciegas el POST, porque podría duplicar un registro.
+        const ready = await CBPAuthRequest.fetch('/api/auth/register-ready', { cache: 'no-store' }, { attempts: 8 });
+        if (!ready.ok) throw new Error('El servidor no está listo. Inténtalo de nuevo en un momento.');
+        const res = await CBPAuthRequest.fetch('/api/auth/register', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -186,13 +191,16 @@
             timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || '',
             reseller: resellerRef,
           }),
-        });
+        }, { attempts: 3, baseDelayMs: 500 });
         const data = await res.json();
-        if (!res.ok) throw new Error(data.error || 'Error');
+        if (!res.ok) throw new Error(data.error || 'No se pudo completar el registro');
+        if (data.slug) slugInput.value = data.slug;
         try { sessionStorage.setItem('cbp_auth_scope', 'owner'); } catch {}
         location.replace('/app');
       } catch (err) {
-        document.getElementById('errorMsg').textContent = err.message;
+        document.getElementById('errorMsg').textContent = err instanceof TypeError
+          ? 'Se perdió la conexión con el servidor. Revisa si recibiste el acceso antes de volver a enviar el registro.'
+          : err.message;
         errBox.classList.add('show');
         btn.disabled = false;
         btn.innerHTML = defaultButtonMarkup;

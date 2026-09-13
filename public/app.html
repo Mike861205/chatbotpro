@@ -11,7 +11,7 @@
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/fill/style.css" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/duotone/style.css" />
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-  <link rel="stylesheet" href="/static/css/styles.css?v=20260910-trial-advisory" />
+  <link rel="stylesheet" href="/static/css/styles.css?v=20260913-ai-draft-review" />
   <link rel="icon" type="image/svg+xml" href="/static/favicon.svg" />
   <link rel="icon" type="image/png" href="/static/chatbotpro100.png" />
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
@@ -1750,48 +1750,48 @@
     </div>
   </div>
 
-  <!-- Identidad obligatoria para propietarios recién registrados -->
+  <!-- Personalización opcional para propietarios recién registrados -->
   <div class="modal-bg initial-identity-bg" id="initialIdentityModal" role="dialog" aria-modal="true" aria-labelledby="initialIdentityTitle">
     <div class="initial-identity-modal">
       <header class="initial-identity-head">
         <span class="initial-identity-icon"><i class="ph-fill ph-storefront"></i></span>
         <div>
-          <span class="initial-identity-eyebrow">Primero, haz tuyo el sistema</span>
-          <h2 id="initialIdentityTitle">Configura la identidad de tu negocio</h2>
-          <p>Estos datos aparecerán en tu panel y asistente. También podrás modificarlos después desde Mi negocio.</p>
+          <span class="initial-identity-eyebrow">Haz tuyo el sistema cuando quieras</span>
+          <h2 id="initialIdentityTitle">Personaliza tu negocio</h2>
+          <p>Este paso es opcional. Puedes continuar con los datos del registro y completar lo demás después en Mi negocio.</p>
         </div>
       </header>
       <form id="initialIdentityForm" class="initial-identity-form">
         <div class="initial-identity-grid">
           <section class="initial-identity-brand">
             <div class="field">
-              <label for="initialIdentityName"><i class="ph-bold ph-storefront"></i> Nombre del negocio *</label>
-              <input type="text" id="initialIdentityName" minlength="2" maxlength="160" required autocomplete="organization" />
+              <label for="initialIdentityName"><i class="ph-bold ph-storefront"></i> Nombre del negocio</label>
+              <input type="text" id="initialIdentityName" minlength="2" maxlength="160" autocomplete="organization" />
             </div>
             <div class="field">
               <label for="initialIdentityLogo"><i class="ph-bold ph-image"></i> Logo</label>
               <div class="initial-identity-logo-upload">
                 <div class="initial-identity-logo-preview" id="initialIdentityLogoPreview"><i class="ph ph-image"></i></div>
                 <div>
-                  <input type="file" id="initialIdentityLogo" accept="image/png,image/jpeg,image/webp" required />
-                  <small>PNG, JPG o WebP, máximo 8 MB. Se mostrará en tu panel y asistente.</small>
+                  <input type="file" id="initialIdentityLogo" accept="image/png,image/jpeg,image/webp" />
+                  <small>Opcional · PNG, JPG o WebP, máximo 8 MB. Puedes subirlo más tarde.</small>
                 </div>
               </div>
             </div>
             <div class="field">
-              <label><i class="ph-bold ph-palette"></i> Color de marca *</label>
+              <label><i class="ph-bold ph-palette"></i> Color de marca</label>
               <div class="initial-identity-colors" id="initialIdentityColors"></div>
               <input type="hidden" id="initialIdentityColor" value="#ff6b35" />
             </div>
           </section>
           <section class="initial-identity-region">
             <div class="field">
-              <label for="initialIdentityCurrency"><i class="ph-bold ph-coins"></i> Moneda principal *</label>
-              <select id="initialIdentityCurrency" required></select>
+              <label for="initialIdentityCurrency"><i class="ph-bold ph-coins"></i> Moneda principal</label>
+              <select id="initialIdentityCurrency"></select>
             </div>
             <div class="field">
-              <label for="initialIdentityTimezone"><i class="ph-bold ph-clock"></i> Zona horaria *</label>
-              <select id="initialIdentityTimezone" required></select>
+              <label for="initialIdentityTimezone"><i class="ph-bold ph-clock"></i> Zona horaria</label>
+              <select id="initialIdentityTimezone"></select>
               <small id="initialIdentityTimePreview"></small>
             </div>
             <div class="initial-identity-note"><i class="ph-fill ph-check-circle"></i><span>Tu selección se guardará automáticamente en <b>Mi negocio</b>.</span></div>
@@ -1807,10 +1807,56 @@
         </section>
         <div class="initial-identity-error" id="initialIdentityError" role="alert" hidden></div>
         <footer class="initial-identity-foot">
-          <p><i class="ph-bold ph-lock-key"></i> Completa este paso para continuar con la configuración inicial.</p>
-          <button class="btn btn-primary" id="initialIdentitySubmit" type="submit"><i class="ph-bold ph-arrow-right"></i> Guardar y continuar</button>
+          <p><i class="ph-bold ph-info"></i> Lo que falte podrás configurarlo después en Mi negocio.</p>
+          <div class="initial-identity-foot-actions">
+            <button class="btn btn-ghost" id="initialIdentitySkip" type="button">Continuar por ahora</button>
+            <button class="btn btn-primary" id="initialIdentitySubmit" type="submit"><i class="ph-bold ph-arrow-right"></i> Guardar y continuar</button>
+          </div>
         </footer>
       </form>
+    </div>
+  </div>
+
+  <!-- Activación del catálogo: reaparece en cada ingreso mientras no existan productos -->
+  <div class="modal-bg empty-catalog-ai-bg" id="emptyCatalogAiModal" role="dialog" aria-modal="true" aria-labelledby="emptyCatalogAiTitle" aria-describedby="emptyCatalogAiText">
+    <div class="empty-catalog-ai-modal">
+      <button type="button" class="modal-close empty-catalog-ai-close" id="emptyCatalogAiClose" aria-label="Cerrar y entrar al panel"><i class="ph-bold ph-x"></i></button>
+      <section class="empty-catalog-ai-visual" aria-hidden="true">
+        <span class="empty-catalog-ai-orbit orbit-one"><i class="ph-fill ph-hamburger"></i></span>
+        <span class="empty-catalog-ai-orbit orbit-two"><i class="ph-fill ph-fork-knife"></i></span>
+        <span class="empty-catalog-ai-orbit orbit-three"><i class="ph-fill ph-cooking-pot"></i></span>
+        <div class="empty-catalog-ai-scan">
+          <i class="ph-fill ph-image-square"></i>
+          <span></span>
+        </div>
+        <div class="empty-catalog-ai-arrow"><i class="ph-bold ph-arrow-right"></i></div>
+        <div class="empty-catalog-ai-products">
+          <i class="ph-fill ph-sparkle"></i>
+          <strong>IA</strong>
+          <small>Productos listos</small>
+        </div>
+      </section>
+      <section class="empty-catalog-ai-copy">
+        <span class="empty-catalog-ai-eyebrow"><i class="ph-fill ph-sparkle"></i> Tu catálogo en minutos</span>
+        <h2 id="emptyCatalogAiTitle">Sube una foto de tu menú y deja que la IA haga el trabajo</h2>
+        <p id="emptyCatalogAiText">Detectaremos productos, precios, categorías, variantes, ingredientes y opciones para que sólo tengas que revisar y aceptar.</p>
+        <div class="empty-catalog-ai-benefits">
+          <span><i class="ph-bold ph-camera"></i><b>1. Sube tu menú</b><small>Foto, captura o varias páginas</small></span>
+          <span><i class="ph-bold ph-brain"></i><b>2. La IA lo interpreta</b><small>Incluso textos pequeños</small></span>
+          <span><i class="ph-bold ph-check-circle"></i><b>3. Revisa e importa</b><small>Tú conservas el control</small></span>
+        </div>
+        <label class="empty-catalog-ai-drop" id="emptyCatalogAiDrop" for="emptyCatalogMenuImage" role="button" tabindex="0" aria-label="Elegir fotos del menú o catálogo para analizarlas con IA">
+          <i class="ph-bold ph-cloud-arrow-up"></i>
+          <span><b id="emptyCatalogAiUploadLabel">Sube aquí la foto o imagen de tu menú</b><small>Hasta 8 imágenes · máximo 8 MB cada una</small></span>
+          <em>Elegir imágenes</em>
+          <input type="file" id="emptyCatalogMenuImage" accept="image/*" multiple />
+        </label>
+        <div class="empty-catalog-ai-actions">
+          <button type="button" class="btn btn-ghost" id="emptyCatalogAiLater">Ahora no, entrar al panel</button>
+          <button type="button" class="btn btn-primary" id="emptyCatalogAiExplore"><i class="ph-bold ph-magic-wand"></i> Abrir carga inteligente</button>
+        </div>
+        <small class="empty-catalog-ai-trust"><i class="ph-fill ph-shield-check"></i> Nada se publica automáticamente: podrás editar todo antes de guardarlo.</small>
+      </section>
     </div>
   </div>
 
@@ -2326,13 +2372,29 @@
       </form>
       <div id="aiProductResult" hidden>
         <div class="hint" id="aiProductNotes" style="margin:8px 0 10px"></div>
+        <div class="ai-image-workflow">
+          <div class="ai-image-workflow-copy">
+            <b><i class="ph-bold ph-image-square"></i> Imágenes de productos</b>
+            <span id="aiImageWorkflowStatus">La IA aprovechará fotos claras del menú y podrás generar únicamente las faltantes.</span>
+          </div>
+          <label class="ai-image-style-field">Estilo
+            <select id="aiImageStyle">
+              <option value="clean">Estudio limpio</option>
+              <option value="bright">Claro y fresco</option>
+              <option value="dark">Restaurante oscuro</option>
+              <option value="rustic">Artesanal</option>
+            </select>
+          </label>
+          <button type="button" class="btn btn-ghost" id="aiAcceptSuggestedImages"><i class="ph-bold ph-check-circle"></i> Aceptar sugeridas</button>
+          <button type="button" class="btn btn-primary" id="aiGenerateMissingImages"><i class="ph-bold ph-sparkle"></i> Generar faltantes</button>
+        </div>
         <div class="table-wrap ai-product-table-wrap">
           <table class="ai-product-table">
             <thead>
               <tr>
                 <th>Producto</th>
                 <th>Descripción</th>
-                <th>Precio base</th>
+                <th>Precio / variantes</th>
                 <th>Categoría</th>
                 <th>Foto y configuración</th>
                 <th></th>
@@ -3265,6 +3327,6 @@
   </div>
 
 <script src="/socket.io/socket.io.js"></script>
-  <script src="/static/js/app.js?v=20260910-trial-advisory"></script>
+  <script src="/static/js/app.js?v=20260913-ai-accept-local"></script>
 </body>
 </html>

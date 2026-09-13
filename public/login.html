@@ -103,6 +103,10 @@
             <label for="password"><i class="ph-bold ph-lock-key"></i> Contraseña</label>
             <input type="password" id="password" autocomplete="current-password" required />
           </div>
+          <div class="field" id="businessSlugField" hidden>
+            <label for="businessSlug"><i class="ph-bold ph-storefront"></i> Liga de tu negocio</label>
+            <input type="text" id="businessSlug" autocomplete="off" placeholder="ej. tacos-el-guero" />
+          </div>
           <button class="btn btn-primary btn-block" type="submit" id="loginBtn"><i class="ph-bold ph-sign-in"></i> Entrar</button>
           <button class="btn btn-demo btn-block" type="button" id="demoBtn"><i class="ph-bold ph-rocket-launch"></i> Ver demo del panel</button>
         </form>
@@ -195,6 +199,10 @@
         });
         const data = await res.json();
         if (!res.ok) {
+          if (data && data.errorCode === 'BUSINESS_SLUG_REQUIRED') {
+            document.getElementById('businessSlugField').hidden = false;
+            document.getElementById('businessSlug').focus();
+          }
           if (res.status === 403 && data && data.errorCode === 'BILLING_SUSPENDED' && data.whatsappUrl) {
             waBtn.href = data.whatsappUrl;
             waBtn.style.display = 'inline-flex';
@@ -219,6 +227,7 @@
       await doLogin('/api/auth/login', {
         username: document.getElementById('username').value,
         password: document.getElementById('password').value,
+        businessSlug: document.getElementById('businessSlug').value,
         productCode: 'chatbotpro',
       });
     });

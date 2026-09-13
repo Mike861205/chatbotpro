@@ -8,6 +8,8 @@ const config = require('../config');
 const { getSetting, getSuperAdminSetting } = require('../db');
 const { decrypt } = require('../utils/crypto');
 const { buildAiCatalogPrompt, normalizeAiCatalogProducts } = require('../utils/businessCatalog');
+const { cropAiMenuProductImage, prepareAiMenuImage } = require('../utils/aiMenuImages');
+const { buildProductImagePrompt, normalizeImageStyle } = require('../utils/productImageGeneration');
 const { createImageUpload, deleteManagedUpload, optimizeUploadedImage, safeUnlink } = require('../utils/uploads');
 
 const router = express.Router();
@@ -118,29 +120,20 @@ function parseJsonFromModel(raw) {
   return null;
 }
 
-async function buildAiImageDataUrl(file) {
+async function buildAiImagePayload(file, detailTiles = 0) {
   const bytes = await fs.readFile(file.path);
   const originalMime = String(file?.mimetype || '').trim().toLowerCase() || 'image/jpeg';
-  let outMime = originalMime;
-  let outBytes = bytes;
-
-  // Reducimos peso/dimensiones para evitar rechazos del proveedor IA por payloads grandes.
   try {
-    outBytes = await sharp(bytes, { failOn: 'none' })
-      .rotate()
-      .resize({ width: 1600, height: 1600, fit: 'inside', withoutEnlargement: true })
-      .jpeg({ quality: 72, mozjpeg: true })
-      .toBuffer();
-    outMime = 'image/jpeg';
+    return await prepareAiMenuImage(bytes, { detailTiles });
   } catch {
-    outBytes = bytes;
-    outMime = originalMime;
+    return {
+      overview: {
+        dataUrl: `data:${originalMime};base64,${bytes.toString('base64')}`,
+        bytes: bytes.length,
+      },
+      details: [],
+    };
   }
-
-  return {
-    dataUrl: `data:${outMime};base64,${outBytes.toString('base64')}`,
-    bytes: outBytes.length,
-  };
 }
 
 function normalizeAiProviderError(err) {
@@ -203,16 +196,18 @@ function mapAiProviderErrorToClient(aiErr) {
 }
 
 async function getOpenAiRuntimeConfig() {
-  const [modelRaw, baseUrlRaw, keyEncRaw] = await Promise.all([
+  const [modelRaw, imageModelRaw, baseUrlRaw, keyEncRaw] = await Promise.all([
     getSuperAdminSetting('openai_model', 'gpt-4o-mini'),
+    getSuperAdminSetting('openai_image_model', process.env.OPENAI_IMAGE_MODEL || 'gpt-image-2.5-flare'),
     getSuperAdminSetting('openai_base_url', ''),
     getSuperAdminSetting('openai_api_key_enc', ''),
   ]);
   const keyFromSuperAdmin = decrypt(keyEncRaw || '') || '';
   const key = keyFromSuperAdmin || config.OPENAI_API_KEY || '';
   const model = String(modelRaw || 'gpt-4o-mini').trim() || 'gpt-4o-mini';
+  const imageModel = String(imageModelRaw || process.env.OPENAI_IMAGE_MODEL || 'gpt-image-2.5-flare').trim() || 'gpt-image-2.5-flare';
   const baseUrl = String(baseUrlRaw || '').trim();
-  return { key, model, baseUrl };
+  return { key, model, imageModel, baseUrl };
 }
 
 function normalizePublicMediaPath(raw) {
@@ -279,7 +274,7 @@ async function createMenuSuggestionCompletion(client, content, model) {
           {
             role: 'system',
             content:
-              'Eres un asistente experto en estructurar menus de comida para sistemas de catalogo. Responde estrictamente en JSON.',
+              'Eres un analista visual experto en catálogos. Lee también la tipografía pequeña, respeta columnas y proximidad espacial, y responde estrictamente en JSON.',
           },
           { role: 'user', content },
         ],
@@ -325,6 +320,105 @@ async function requestAiMenuSuggestion(aiCfg, content) {
   const finalErr = new Error(lastErr?.message || 'AI provider error');
   finalErr.normalized = lastErr || normalizeAiProviderError(finalErr);
   throw finalErr;
+}
+
+function buildAiImageModelCandidates(primaryModel) {
+  const configured = String(process.env.OPENAI_IMAGE_MODEL_FALLBACKS || '')
+    .split(',')
+    .map((model) => model.trim())
+    .filter(Boolean);
+  return [...new Set([
+    String(primaryModel || '').trim(),
+    ...configured,
+    'gpt-image-2.5-flare',
+    'gpt-image-2',
+    'gpt-image-1.5',
+    'gpt-image-1',
+  ].filter(Boolean))];
+}
+
+function shouldTryNextImageModel(aiErr) {
+  const message = String(aiErr?.message || '').toLowerCase();
+  return aiErr?.status === 404
+    || message.includes('model')
+    || message.includes('not found')
+    || message.includes('does not exist')
+    || message.includes('unsupported');
+}
+
+async function requestGeneratedProductImage(aiCfg, product, options = {}) {
+  const client = buildAiClient(aiCfg.key, aiCfg.baseUrl);
+  const prompt = buildProductImagePrompt(product, options);
+  let lastError = null;
+
+  for (const model of buildAiImageModelCandidates(aiCfg.imageModel)) {
+    try {
+      const result = await client.images.generate({
+        model,
+        prompt,
+        n: 1,
+        size: '1024x1024',
+        quality: 'medium',
+        output_format: 'webp',
+        output_compression: 86,
+      });
+      const base64 = String(result?.data?.[0]?.b64_json || '').trim();
+      if (!base64) throw Object.assign(new Error('El proveedor no devolvió una imagen utilizable'), { status: 502 });
+      const generated = Buffer.from(base64, 'base64');
+      const optimized = await sharpGeneratedProductImage(generated);
+      return {
+        dataUrl: `data:image/webp;base64,${optimized.toString('base64')}`,
+        bytes: optimized.length,
+        model,
+      };
+    } catch (error) {
+      lastError = normalizeAiProviderError(error);
+      if (lastError.status === 429) {
+        const waitSec = lastError.retryAfterSec > 0 ? Math.min(lastError.retryAfterSec, 12) : 3;
+        await sleep(waitSec * 1000);
+        continue;
+      }
+      if (shouldTryNextImageModel(lastError)) continue;
+      break;
+    }
+  }
+
+  const error = new Error(lastError?.message || 'No se pudo generar la imagen');
+  error.normalized = lastError || normalizeAiProviderError(error);
+  throw error;
+}
+
+async function sharpGeneratedProductImage(bytes) {
+  return sharp(bytes, { failOn: 'none' })
+    .rotate()
+    .resize({ width: 900, height: 900, fit: 'cover', position: 'centre' })
+    .webp({ quality: 84, effort: 4 })
+    .toBuffer();
+}
+
+async function attachMenuImageCandidates(products, menuFiles) {
+  const sourceCache = new Map();
+  let attached = 0;
+  for (const product of products) {
+    const region = product.imageRegion;
+    if (!region || Number(region.confidence || 0) < 0.65 || attached >= 12) continue;
+    const imageIndex = Number(region.imageIndex);
+    const sourceFile = menuFiles[imageIndex];
+    if (!sourceFile?.path) continue;
+    try {
+      if (!sourceCache.has(imageIndex)) sourceCache.set(imageIndex, await fs.readFile(sourceFile.path));
+      const cropped = await cropAiMenuProductImage(sourceCache.get(imageIndex), region);
+      product.imageCandidate = {
+        dataUrl: cropped.dataUrl,
+        source: 'menu_crop',
+        confidence: Number(region.confidence || 0),
+      };
+      attached += 1;
+    } catch {
+      product.warnings = [...new Set([...(product.warnings || []), 'Se detectó una foto cercana, pero no fue posible preparar un recorte seguro.'])];
+    }
+  }
+  return attached;
 }
 
 // ---- Categorías ----
@@ -441,6 +535,71 @@ router.get('/', async (req, res, next) => {
   } catch (e) { next(e); }
 });
 
+// Consulta ligera para decidir si el propietario necesita iniciar su catálogo.
+// Evita descargar productos, variantes e imágenes durante cada arranque del panel.
+router.get('/catalog-status', async (req, res, next) => {
+  try {
+    const row = await req.tdb.get('SELECT COUNT(*)::int AS total FROM {s}.products');
+    const total = Math.max(0, Number(row?.total || 0));
+    res.json({ total, hasProducts: total > 0 });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post('/ai/images/generate', async (req, res, next) => {
+  try {
+    const inputProducts = Array.isArray(req.body?.products) ? req.body.products.slice(0, 8) : [];
+    if (!inputProducts.length) {
+      return res.status(400).json({ error: 'Selecciona al menos un producto sin imagen.' });
+    }
+
+    const products = inputProducts.map((product, index) => ({
+      id: String(product?.id ?? index).slice(0, 80),
+      name: String(product?.name || '').trim().slice(0, 160),
+      description: String(product?.description || '').trim().slice(0, 1000),
+      categoryName: String(product?.categoryName || '').trim().slice(0, 120),
+      imageInstruction: String(product?.imageInstruction || '').trim().slice(0, 300),
+    })).filter((product) => product.name);
+    if (!products.length) return res.status(400).json({ error: 'Los productos seleccionados necesitan un nombre.' });
+
+    const aiCfg = await getOpenAiRuntimeConfig();
+    if (!aiCfg.key) {
+      return res.status(400).json({ error: 'No hay API key de OpenAI configurada para generar imágenes.' });
+    }
+    const businessType = await getSetting(req.tdb, 'business_type', 'restaurant');
+    const style = normalizeImageStyle(req.body?.style);
+    const images = [];
+    const errors = [];
+
+    for (const product of products) {
+      try {
+        const generated = await requestGeneratedProductImage(aiCfg, product, { businessType, style });
+        images.push({
+          id: product.id,
+          dataUrl: generated.dataUrl,
+          source: 'ai_generated',
+          model: generated.model,
+        });
+      } catch (error) {
+        const aiErr = error?.normalized || normalizeAiProviderError(error);
+        const mapped = mapAiProviderErrorToClient(aiErr);
+        errors.push({ id: product.id, name: product.name, error: mapped.error });
+      }
+    }
+
+    if (!images.length) {
+      return res.status(502).json({
+        error: errors[0]?.error || 'No se pudieron generar las imágenes en este momento.',
+        errors,
+      });
+    }
+    return res.json({ images, errors, style });
+  } catch (error) {
+    next(error);
+  }
+});
+
 router.post('/ai/suggest', uploadAiMenu.array('menuImages', 8), async (req, res, next) => {
   try {
     const menuFiles = Array.isArray(req.files) ? req.files : [];
@@ -467,10 +626,21 @@ router.post('/ai/suggest', uploadAiMenu.array('menuImages', 8), async (req, res,
     ];
 
     const imagePayloads = [];
-    for (const file of menuFiles) {
-      const payload = await buildAiImageDataUrl(file);
-      imagePayloads.push(payload);
-      content.push({ type: 'image_url', image_url: { url: payload.dataUrl, detail: 'high' } });
+    const detailTilesPerPage = Math.max(1, Math.min(4, Math.floor(8 / menuFiles.length)));
+    for (let imageIndex = 0; imageIndex < menuFiles.length; imageIndex += 1) {
+      const pageNumber = imageIndex + 1;
+      const payload = await buildAiImagePayload(menuFiles[imageIndex], detailTilesPerPage);
+      imagePayloads.push(payload.overview, ...payload.details);
+      content.push({ type: 'text', text: `Página ${pageNumber}: vista completa. Úsala para entender columnas, títulos y relaciones espaciales.` });
+      content.push({ type: 'image_url', image_url: { url: payload.overview.dataUrl, detail: 'high' } });
+      for (let detailIndex = 0; detailIndex < payload.details.length; detailIndex += 1) {
+        const detail = payload.details[detailIndex];
+        content.push({
+          type: 'text',
+          text: `Página ${pageNumber}: recorte ampliado ${detailIndex + 1}/${payload.details.length}. Es la misma página; úsalo para leer texto pequeño y NO dupliques productos.`,
+        });
+        content.push({ type: 'image_url', image_url: { url: detail.dataUrl, detail: 'high' } });
+      }
     }
 
     let completion;
@@ -507,7 +677,8 @@ router.post('/ai/suggest', uploadAiMenu.array('menuImages', 8), async (req, res,
       return res.status(422).json({ error: 'No se pudo interpretar una lista de productos valida desde IA.' });
     }
 
-    const products = normalizeAiCatalogProducts(parsed.products);
+    const products = normalizeAiCatalogProducts(parsed.products, { inferCategories: true });
+    const croppedImageCount = await attachMenuImageCandidates(products, menuFiles);
 
     const normalizedExisting = new Set(categoryNames.map(normalizeCategoryName).filter(Boolean));
     const suggestedCategories = [...new Set(products.map((p) => p.categoryName).filter(Boolean))];
@@ -524,6 +695,8 @@ router.post('/ai/suggest', uploadAiMenu.array('menuImages', 8), async (req, res,
       variantGroupsDetected,
       modifierGroupsDetected,
       imageCount: menuFiles.length,
+      detailViewCount: imagePayloads.length - menuFiles.length,
+      croppedImageCount,
       model: usedModel,
       retries: Math.max(0, Number(usedAttempts || 1) - 1),
     });

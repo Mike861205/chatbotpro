@@ -119,6 +119,7 @@ a { color: inherit; }
 .iv-form { display: grid; gap: 15px; }
 .iv-form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 13px; }
 .iv-field { min-width: 0; display: grid; gap: 6px; }
+.iv-field[hidden] { display: none; }
 .iv-field label { color: #42514d; font-size: 10px; font-weight: 800; }
 .iv-input { position: relative; display: flex; align-items: center; }
 .iv-input > i { position: absolute; left: 13px; color: #899692; font-size: 16px; pointer-events: none; }

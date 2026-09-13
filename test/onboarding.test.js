@@ -29,7 +29,8 @@ test('el estado se guarda al cerrar o comenzar la capacitación', () => {
 
 test('la identidad inicial se completa por separado antes de la capacitación', () => {
   assert.match(auth, /router\.post\('\/identity\/complete', requireAuth, requireOwner/);
-  assert.match(auth, /'nombre, logo, color, modelo de negocio, moneda y zona horaria'/);
+  assert.match(auth, /if \(req\.tenant\.product_code === 'invoicing'\)/);
+  assert.match(auth, /'Completa nombre, logo y color'/);
   assert.match(auth, /UPDATE users SET identity_completed = 1 WHERE id = \$1/);
   assert.match(html, /id="initialIdentityModal"/);
   assert.match(html, /id="initialIdentityForm"/);
@@ -40,6 +41,16 @@ test('la identidad inicial se completa por separado antes de la capacitación', 
   assert.match(script, /function presentStartupJourney\(\)[\s\S]*ME\?\.identityRequired[\s\S]*openInitialIdentitySetup[\s\S]*ME\?\.trial\?\.isActive/);
   assert.match(script, /fd\.append\('business_name'[\s\S]*fd\.append\('primary_color'[\s\S]*fd\.append\('business_type'[\s\S]*fd\.append\('currency'[\s\S]*fd\.append\('timezone'/);
   assert.match(script, /api\('\/api\/settings', \{ method: 'PUT', body: fd \}\)[\s\S]*api\('\/api\/auth\/identity\/complete'/);
+});
+
+test('ChatBotPro permite omitir la personalización sin logo ni otros datos adicionales', () => {
+  assert.match(html, /id="initialIdentitySkip" type="button"/);
+  assert.doesNotMatch(html, /id="initialIdentityLogo"[^>]*required/);
+  assert.doesNotMatch(html, /id="initialIdentityName"[^>]*required/);
+  assert.match(script, /completeInitialIdentitySetup\(\{ save = false \} = \{\}\)/);
+  assert.match(script, /if \(save\) \{[\s\S]*api\('\/api\/settings', \{ method: 'PUT', body: fd \}\)/);
+  assert.match(script, /initialIdentitySkip'\)\?\.addEventListener\('click', \(\) => completeInitialIdentitySetup\(\)\)/);
+  assert.match(auth, /if \(req\.tenant\.product_code === 'invoicing'\)[\s\S]*UPDATE users SET identity_completed = 1/);
 });
 
 test('el panel incluye el módulo permanente debajo de Pedidos en vivo y los seis pasos', () => {

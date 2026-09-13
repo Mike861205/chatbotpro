@@ -1588,6 +1588,7 @@ async function loadIntegrations() {
   const cfg = await api('/api/superadmin/integrations');
   $('#saOpenAiEnabled').value = cfg.openaiEnabled ? '1' : '0';
   applyOpenAiModelSelection(cfg.openaiModel || 'gpt-4o-mini');
+  $('#saOpenAiImageModel').value = cfg.openaiImageModel || 'gpt-image-2.5-flare';
   $('#saOpenAiBaseUrl').value = cfg.openaiBaseUrl || '';
   $('#saWebhookUrl').value = cfg.webhookUrl || '';
   $('#saOpenAiKey').value = '';
@@ -1616,6 +1617,7 @@ async function saveIntegrations(e) {
     body: JSON.stringify({
       openaiEnabled: $('#saOpenAiEnabled').value === '1',
       openaiModel: getSelectedOpenAiModel(),
+      openaiImageModel: ($('#saOpenAiImageModel').value || '').trim() || 'gpt-image-2.5-flare',
       openaiBaseUrl: $('#saOpenAiBaseUrl').value,
       webhookUrl: $('#saWebhookUrl').value,
       openaiApiKey: $('#saOpenAiKey').value || undefined,

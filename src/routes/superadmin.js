@@ -512,6 +512,7 @@ router.get('/integrations', requireSuperAdmin, async (req, res, next) => {
   try {
     const enabled = await getSuperAdminSetting('openai_enabled', '0');
     const model = await getSuperAdminSetting('openai_model', 'gpt-4o-mini');
+    const imageModel = await getSuperAdminSetting('openai_image_model', process.env.OPENAI_IMAGE_MODEL || 'gpt-image-2.5-flare');
     const baseUrl = await getSuperAdminSetting('openai_base_url', '');
     const enc = await getSuperAdminSetting('openai_api_key_enc', '');
     const decryptedKey = decrypt(enc || '');
@@ -520,6 +521,7 @@ router.get('/integrations', requireSuperAdmin, async (req, res, next) => {
     res.json({
       openaiEnabled: enabled === '1',
       openaiModel: model,
+      openaiImageModel: imageModel,
       openaiBaseUrl: baseUrl,
       webhookUrl,
       superadminLogoUrl,
@@ -541,6 +543,9 @@ router.put('/integrations', requireSuperAdmin, async (req, res, next) => {
     }
     if (body.openaiModel !== undefined) {
       await setSuperAdminSetting('openai_model', String(body.openaiModel || 'gpt-4o-mini').trim() || 'gpt-4o-mini');
+    }
+    if (body.openaiImageModel !== undefined) {
+      await setSuperAdminSetting('openai_image_model', String(body.openaiImageModel || 'gpt-image-2.5-flare').trim() || 'gpt-image-2.5-flare');
     }
     if (body.openaiBaseUrl !== undefined) {
       await setSuperAdminSetting('openai_base_url', String(body.openaiBaseUrl || '').trim());

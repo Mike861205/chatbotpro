@@ -1,6 +1,10 @@
 /* ===== ChatBotPro — lógica del panel v2 ===== */
 let ME = null;
 let SETTINGS = null;
+let PRODUCT_CATALOG_TOTAL = null;
+let EMPTY_CATALOG_PROMPT_DISMISSED = false;
+let EMPTY_CATALOG_LAUNCHING = false;
+let EMPTY_CATALOG_AI_FLOW_ACTIVE = false;
 let salesChart = null;
 let topChart = null;
 let SALES_REPORT_DATA = null;
@@ -782,10 +786,10 @@ const ONBOARDING_STEPS = [
     number: 3,
     icon: 'ph-cooking-pot',
     title: 'Da de alta categorías y productos',
-    description: 'Construye el catálogo que tus clientes verán al abrir el chatbot.',
-    details: ['Crea primero las categorías del menú', 'Agrega nombre, descripción, precio e imagen', 'Configura variantes e ingredientes cuando los necesites'],
+    description: 'Sube una foto de tu menú: la IA preparará el catálogo que verán tus clientes.',
+    details: ['Detecta categorías, productos y precios', 'Reconoce variantes, ingredientes y opciones', 'Revisa y acepta las imágenes antes de importar'],
     action: 'productos',
-    actionLabel: 'Agregar productos',
+    actionLabel: 'Subir menú con IA',
   },
   {
     number: 4,
@@ -840,9 +844,9 @@ function renderInstructions() {
   };
   steps[2] = {
     ...steps[2], icon: ui.itemIcon, title: `Da de alta ${ui.items.toLowerCase()}`,
-    description: `Construye el catálogo de ${ui.itemPlural.toLowerCase()} que verán tus clientes.`,
-    details: ['Crea categorías claras para tu catálogo', `Agrega nombre, descripción, precio e imagen a cada ${ui.itemSingular}`, 'Configura variantes u opciones cuando las necesites'],
-    actionLabel: `Agregar ${ui.itemPlural.toLowerCase()}`,
+    description: `Sube una foto de tu catálogo: la IA preparará los ${ui.itemPlural.toLowerCase()} que verán tus clientes.`,
+    details: ['Detecta categorías, nombres y precios', `Prepara imágenes y variantes para cada ${ui.itemSingular}`, 'Revisa y ajusta todo antes de importar'],
+    actionLabel: `Subir ${ui.itemPlural.toLowerCase()} con IA`,
   };
   steps[3] = {
     ...steps[3], title: `Haz ${ui.orderArticle} ${ui.orderSingular} real en tu chatbot`,
@@ -875,6 +879,57 @@ function openOnboardingIntro() {
   document.body.classList.add('onboarding-open');
 }
 
+function shouldOfferEmptyCatalogAi() {
+  return ME?.role === 'owner'
+    && !ME?.impersonated
+    && !ME?.demoSession
+    && PRODUCT_CATALOG_TOTAL === 0
+    && !ME?.identityRequired
+    && !ME?.tenant?.hiddenModules?.includes('productos')
+    && !EMPTY_CATALOG_PROMPT_DISMISSED;
+}
+
+function openEmptyCatalogAiWelcome() {
+  if (!shouldOfferEmptyCatalogAi()) return false;
+  if (CURRENT_VIEW !== 'productos') navigate('productos').catch((error) => toast(error.message, true));
+  const ui = businessUi();
+  const title = $('#emptyCatalogAiTitle');
+  const text = $('#emptyCatalogAiText');
+  const catalogWord = ui.supportsRestaurantOperations ? 'menú' : 'catálogo';
+  if (title) title.textContent = `Sube una foto de tu ${catalogWord} y crea tus ${ui.itemPlural.toLowerCase()} con IA`;
+  if (text) {
+    text.textContent = `Detectaremos ${ui.itemPlural.toLowerCase()}, precios, categorías, variantes, ingredientes y opciones para que sólo tengas que revisar y aceptar.`;
+  }
+  const uploadLabel = $('#emptyCatalogAiUploadLabel');
+  if (uploadLabel) uploadLabel.textContent = `Sube aquí la foto o imagen de tu ${catalogWord}`;
+  $('#emptyCatalogAiModal')?.classList.add('show');
+  document.body.classList.add('empty-catalog-ai-open');
+  setTimeout(() => $('#emptyCatalogAiDrop')?.focus(), 80);
+  return true;
+}
+
+function closeEmptyCatalogAiWelcome({ continueJourney = true } = {}) {
+  EMPTY_CATALOG_PROMPT_DISMISSED = true;
+  $('#emptyCatalogAiModal')?.classList.remove('show');
+  document.body.classList.remove('empty-catalog-ai-open');
+  const input = $('#emptyCatalogMenuImage');
+  if (input) input.value = '';
+  if (continueJourney) setTimeout(presentStartupJourney, 100);
+}
+
+async function launchEmptyCatalogAi(files = []) {
+  if (EMPTY_CATALOG_LAUNCHING) return;
+  EMPTY_CATALOG_LAUNCHING = true;
+  closeEmptyCatalogAiWelcome({ continueJourney: false });
+  try {
+    if (CURRENT_VIEW !== 'productos') await navigate('productos');
+    openAiImportModal(files);
+    EMPTY_CATALOG_AI_FLOW_ACTIVE = true;
+  } finally {
+    EMPTY_CATALOG_LAUNCHING = false;
+  }
+}
+
 function acknowledgeTrialDay() {
   const days = Number(ME?.trial?.daysRemaining || 0);
   try {
@@ -893,12 +948,21 @@ function openNextInitialSetup() {
     openInitialIdentitySetup();
     return;
   }
+  if (openEmptyCatalogAiWelcome()) return;
   if (ME?.onboardingRequired) openOnboardingIntro();
 }
 
 function presentStartupJourney() {
   if (ME?.demoSession) {
     $('#demoJourneyModal')?.classList.add('show');
+    return;
+  }
+  if (ME?.identityRequired) {
+    setTimeout(openInitialIdentitySetup, 180);
+    return;
+  }
+  if (shouldOfferEmptyCatalogAi()) {
+    setTimeout(openEmptyCatalogAiWelcome, 180);
     return;
   }
   if (ME?.trial?.isExpired) {
@@ -908,10 +972,6 @@ function presentStartupJourney() {
       showTrialExpiredModal(ME.trial);
       return;
     }
-  }
-  if (ME?.identityRequired) {
-    setTimeout(openInitialIdentitySetup, 180);
-    return;
   }
   if (ME?.trial?.isActive) {
     const days = Math.max(1, Number(ME.trial.daysRemaining || 1));
@@ -960,6 +1020,11 @@ async function closeOnboardingIntro() {
 
 async function runOnboardingAction(action, fromIntro = false) {
   if (fromIntro) await closeOnboardingIntro();
+  if (action === 'productos') {
+    await navigate('productos');
+    openAiImportModal();
+    return;
+  }
   if (action === 'chatbot-preview') {
     trackModuleUsage('chatbot');
     const url = $('#openChatLink')?.href || `/${ME?.tenant?.slug || ''}`;
@@ -1245,6 +1310,41 @@ $('#demoConversionForm')?.addEventListener('submit', async (event) => {
   }
 });
 $('#trialStartTesting')?.addEventListener('click', continueAfterTrialNotice);
+$('#emptyCatalogAiClose')?.addEventListener('click', () => closeEmptyCatalogAiWelcome());
+$('#emptyCatalogAiLater')?.addEventListener('click', () => closeEmptyCatalogAiWelcome());
+$('#emptyCatalogAiModal')?.addEventListener('click', (event) => {
+  if (event.target?.id === 'emptyCatalogAiModal') closeEmptyCatalogAiWelcome();
+});
+$('#emptyCatalogAiExplore')?.addEventListener('click', () => {
+  launchEmptyCatalogAi().catch((error) => toast(error.message || 'No se pudo abrir la carga con IA', true));
+});
+$('#emptyCatalogAiDrop')?.addEventListener('keydown', (event) => {
+  if (event.key === 'Enter' || event.key === ' ') {
+    event.preventDefault();
+    $('#emptyCatalogMenuImage')?.click();
+  }
+});
+$('#emptyCatalogMenuImage')?.addEventListener('change', (event) => {
+  const files = [...(event.target.files || [])];
+  if (!files.length) return;
+  if (files.length > 8 || files.some((file) => file.size > 8 * 1024 * 1024)) {
+    event.target.value = '';
+    toast(files.length > 8 ? 'Puedes subir hasta 8 imágenes por carga' : 'Cada imagen debe pesar máximo 8 MB', true);
+    return;
+  }
+  launchEmptyCatalogAi(files).catch((error) => toast(error.message || 'No se pudo abrir la carga con IA', true));
+});
+['dragover', 'dragleave', 'drop'].forEach((type) => {
+  $('#emptyCatalogAiDrop')?.addEventListener(type, (event) => {
+    event.preventDefault();
+    event.currentTarget.classList.toggle('drag', type === 'dragover');
+    if (type === 'drop' && event.dataTransfer?.files?.length) {
+      const input = $('#emptyCatalogMenuImage');
+      input.files = event.dataTransfer.files;
+      input.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+  });
+});
 $('#trialViewPlans')?.addEventListener('click', async () => {
   acknowledgeTrialDay();
   $('#trialWelcomeModal')?.classList.remove('show');
@@ -1286,6 +1386,10 @@ $('#onboardingIntro')?.addEventListener('click', (event) => {
   if (event.target?.id === 'onboardingIntro') closeOnboardingIntro().catch((error) => toast(error.message, true));
 });
 document.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape' && $('#emptyCatalogAiModal')?.classList.contains('show')) {
+    closeEmptyCatalogAiWelcome();
+    return;
+  }
   if (event.key === 'Escape' && $('#trialExpiredModal')?.classList.contains('show')) {
     closeTrialExpiredModal();
     return;
@@ -7693,6 +7797,9 @@ let PRODUCT_CAT_FILTER = 'all';
 let PRODUCT_VIEW_MODE = 'card';
 let PRODUCT_VIEW_SWITCH_BOUND = false;
 let AI_PRODUCTS_DRAFT = [];
+let AI_IMAGE_BULK_RUNNING = false;
+let AI_IMAGE_BULK_PROGRESS = null;
+let AI_IMAGE_GENERATE_REST_QUEUED = false;
 
 const PRODUCT_VIEW_MODES = new Set(['card', 'detail', 'compact']);
 
@@ -7930,6 +8037,7 @@ async function loadProducts() {
   fillProductTaxForm();
   CATS = await api('/api/products/categories');
   PRODUCTS_CACHE = await api('/api/products');
+  PRODUCT_CATALOG_TOTAL = PRODUCTS_CACHE.length;
 
   $('#pCat').innerHTML = '<option value="">Sin categoría</option>' + CATS.map((c) => `<option value="${c.id}">${esc(c.name)}</option>`).join('');
 
@@ -7943,6 +8051,7 @@ async function loadProducts() {
 }
 
 function resetAiImportState() {
+  AI_PRODUCTS_DRAFT.forEach(releaseAiDraftImage);
   AI_PRODUCTS_DRAFT = [];
   const rows = $('#aiProductRows');
   const notes = $('#aiProductNotes');
@@ -7952,6 +8061,193 @@ function resetAiImportState() {
   if (result) result.hidden = true;
   if ($('#aiProductImport')) $('#aiProductImport').disabled = true;
   resetAiAnalyzeProgress();
+}
+
+function releaseAiDraftImage(item) {
+  const url = String(item?.imagePreviewUrl || '');
+  if (url.startsWith('blob:')) URL.revokeObjectURL(url);
+}
+
+function aiDraftId(index) {
+  if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
+  return `draft-${Date.now()}-${index}-${Math.random().toString(36).slice(2, 9)}`;
+}
+
+function initializeAiDraftImages(products) {
+  return products.map((item, index) => {
+    const candidate = item?.imageCandidate || null;
+    return {
+      ...item,
+      _expanded: Boolean(item?.variants?.length || item?.modifierGroups?.length),
+      _draftId: item?._draftId || aiDraftId(index),
+      imagePreviewUrl: candidate?.dataUrl || '',
+      imageSource: candidate?.source || '',
+      imageStatus: candidate?.dataUrl ? 'suggested' : 'none',
+      imageInstruction: '',
+      imageFile: null,
+    };
+  });
+}
+
+async function aiDataUrlToFile(dataUrl, productName) {
+  const match = /^data:(image\/(?:webp|png|jpeg));base64,([a-z0-9+/=\s]+)$/i.exec(String(dataUrl || ''));
+  if (!match) throw new Error('La imagen sugerida no tiene un formato válido. Puedes subir otra foto o regenerarla.');
+  const mimeType = match[1].toLowerCase();
+  let binary;
+  try {
+    binary = atob(match[2].replace(/\s/g, ''));
+  } catch {
+    throw new Error('No se pudo leer la imagen sugerida. Puedes subir otra foto o regenerarla.');
+  }
+  if (!binary.length || binary.length > 8 * 1024 * 1024) {
+    throw new Error('La imagen sugerida está vacía o supera 8 MB. Puedes subir otra foto o regenerarla.');
+  }
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
+  const ext = mimeType === 'image/png' ? 'png' : mimeType === 'image/jpeg' ? 'jpg' : 'webp';
+  const safeName = String(productName || 'producto').normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '').slice(0, 70) || 'producto';
+  return new File([bytes], `${safeName}.${ext}`, { type: mimeType });
+}
+
+async function acceptAiDraftImage(item) {
+  if (!item?.imagePreviewUrl) return false;
+  if (!item.imageFile) item.imageFile = await aiDataUrlToFile(item.imagePreviewUrl, item.name);
+  item.imageStatus = 'accepted';
+  return true;
+}
+
+function aiImageStateMeta(item) {
+  if (item.imageStatus === 'generating') return { label: 'Generando…', icon: 'ph-spinner-gap', tone: 'generating' };
+  if (item.imageStatus === 'error') return { label: 'No se pudo generar', icon: 'ph-warning', tone: 'error' };
+  if (item.imageStatus === 'accepted') {
+    if (item.imageSource === 'menu_crop') return { label: 'Recorte aceptado', icon: 'ph-check', tone: 'accepted' };
+    if (item.imageSource === 'ai_generated') return { label: 'Imagen IA aceptada', icon: 'ph-check', tone: 'accepted' };
+    return { label: 'Foto propia', icon: 'ph-check', tone: 'accepted' };
+  }
+  if (item.imageStatus === 'suggested') {
+    return item.imageSource === 'menu_crop'
+      ? { label: 'Recorte del menú · revisar', icon: 'ph-crop', tone: 'suggested' }
+      : { label: 'Generada con IA · revisar', icon: 'ph-sparkle', tone: 'suggested' };
+  }
+  return { label: 'Sin imagen', icon: 'ph-image-broken', tone: '' };
+}
+
+function renderAiImageReview(item) {
+  const meta = aiImageStateMeta(item);
+  const busy = item.imageStatus === 'generating';
+  const preview = item.imagePreviewUrl
+    ? `<img class="ai-product-thumb" src="${esc(item.imagePreviewUrl)}" alt="Vista previa de ${esc(item.name || 'producto')}" />`
+    : '';
+  return `<div class="ai-image-review-card ${preview ? '' : 'no-image'}">
+    ${preview}
+    <div class="ai-image-review-meta">
+      <span class="ai-image-state ${meta.tone}"><i class="ph-bold ${meta.icon}"${busy ? ' style="animation:spin .8s linear infinite"' : ''}></i>${meta.label}</span>
+      <div class="ai-image-actions">
+        ${item.imageStatus === 'suggested' ? '<button type="button" class="btn btn-ghost ai-accept-image"><i class="ph-bold ph-check"></i>Aceptar</button>' : ''}
+        <button type="button" class="btn btn-ghost ai-generate-image" ${busy ? 'disabled' : ''}><i class="ph-bold ph-sparkle"></i>${item.imagePreviewUrl ? 'Regenerar' : 'Generar'}</button>
+        ${item.imagePreviewUrl ? '<button type="button" class="btn btn-ghost ai-remove-image" title="Quitar imagen"><i class="ph-bold ph-trash"></i></button>' : ''}
+        <label class="btn btn-ghost ai-photo-label"><i class="ph-bold ph-upload-simple"></i>Subir<input class="ai-image" type="file" accept="image/*" /></label>
+      </div>
+    </div>
+    <textarea class="ai-image-instruction" rows="1" maxlength="300" placeholder="Opcional: fondo oscuro, plato blanco, vista superior…">${esc(item.imageInstruction || '')}</textarea>
+  </div>`;
+}
+
+function updateAiImageWorkflowStatus() {
+  const status = $('#aiImageWorkflowStatus');
+  if (!status) return;
+  const accepted = AI_PRODUCTS_DRAFT.filter((item) => item.imageStatus === 'accepted').length;
+  const suggested = AI_PRODUCTS_DRAFT.filter((item) => item.imageStatus === 'suggested').length;
+  const missing = AI_PRODUCTS_DRAFT.filter((item) => !item.imagePreviewUrl).length;
+  const readyToGenerate = AI_PRODUCTS_DRAFT.filter((item) => !item.imagePreviewUrl && item.imageStatus !== 'generating').length;
+  const progress = AI_IMAGE_BULK_PROGRESS;
+  status.textContent = `${accepted} aceptadas · ${suggested} pendientes de revisar · ${missing} sin imagen${progress ? ` · Generando ${progress.done} de ${progress.total}` : ''}${AI_IMAGE_GENERATE_REST_QUEUED ? ' · Restantes en cola' : ''}. Sólo las aceptadas se importarán.`;
+  const acceptButton = $('#aiAcceptSuggestedImages');
+  const generateButton = $('#aiGenerateMissingImages');
+  const importButton = $('#aiProductImport');
+  const closeButton = $('#aiProductCancel');
+  if (acceptButton) acceptButton.disabled = !suggested || AI_IMAGE_BULK_RUNNING;
+  if (generateButton) {
+    const canQueueAfterSingle = AI_IMAGE_BULK_RUNNING && progress?.total === 1 && readyToGenerate > 0;
+    generateButton.disabled = (!readyToGenerate && !AI_IMAGE_BULK_RUNNING) || (AI_IMAGE_BULK_RUNNING && !canQueueAfterSingle) || AI_IMAGE_GENERATE_REST_QUEUED;
+    generateButton.innerHTML = `<i class="ph-bold ph-sparkle"></i> ${AI_IMAGE_GENERATE_REST_QUEUED ? 'Restantes en cola' : canQueueAfterSingle ? `Generar ${readyToGenerate} restantes` : progress ? `Generando ${progress.done}/${progress.total}...` : missing ? `Generar ${missing} faltantes` : 'Generar faltantes'}`;
+  }
+  if (importButton) importButton.disabled = !AI_PRODUCTS_DRAFT.length || AI_IMAGE_BULK_RUNNING;
+  if (closeButton) closeButton.disabled = AI_IMAGE_BULK_RUNNING;
+}
+
+async function generateAiDraftImages(items) {
+  const selected = [...new Set(items.filter(Boolean))];
+  if (!selected.length || AI_IMAGE_BULK_RUNNING) return;
+  AI_IMAGE_BULK_RUNNING = true;
+  AI_IMAGE_BULK_PROGRESS = { done: 0, total: selected.length };
+  selected.forEach((item) => {
+    item._imageStatusBeforeGenerate = item.imageStatus;
+    item.imageStatus = 'generating';
+  });
+  renderAiDraftRows();
+  let generatedCount = 0;
+  let failedCount = 0;
+  let nextIndex = 0;
+  try {
+    const style = $('#aiImageStyle')?.value || 'clean';
+    const worker = async () => {
+      while (nextIndex < selected.length) {
+        const item = selected[nextIndex++];
+        try {
+          const out = await api('/api/products/ai/images/generate', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              style,
+              products: [{
+                id: item._draftId,
+                name: item.name,
+                description: item.description,
+                categoryName: item.categoryName,
+                imageInstruction: item.imageInstruction,
+              }],
+            }),
+          });
+          const image = (out.images || []).find((entry) => String(entry.id) === String(item._draftId));
+          if (!image?.dataUrl) throw new Error(out.errors?.[0]?.error || 'La IA no devolvió la imagen.');
+          releaseAiDraftImage(item);
+          item.imagePreviewUrl = image.dataUrl;
+          item.imageSource = 'ai_generated';
+          item.imageStatus = 'suggested';
+          item.imageFile = null;
+          generatedCount += 1;
+        } catch (error) {
+          failedCount += 1;
+          item.imageStatus = item.imagePreviewUrl ? (item._imageStatusBeforeGenerate || 'suggested') : 'error';
+          item.warnings = [...new Set([...(item.warnings || []), error?.message || 'No se pudo generar la imagen'])];
+        } finally {
+          delete item._imageStatusBeforeGenerate;
+          AI_IMAGE_BULK_PROGRESS.done += 1;
+          updateAiImageWorkflowStatus();
+        }
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(2, selected.length) }, () => worker()));
+    toast(`${generatedCount} de ${selected.length} ${selected.length === 1 ? 'imagen generada' : 'imágenes generadas'} para revisar${failedCount ? ` · ${failedCount} sin generar` : ''}`, failedCount > 0);
+  } catch (error) {
+    selected.forEach((item) => {
+      item.imageStatus = item.imagePreviewUrl ? (item._imageStatusBeforeGenerate || 'suggested') : 'error';
+      delete item._imageStatusBeforeGenerate;
+    });
+    toast(error.message || 'No se pudieron generar las imágenes', true);
+  } finally {
+    const generateQueuedRest = AI_IMAGE_GENERATE_REST_QUEUED;
+    AI_IMAGE_GENERATE_REST_QUEUED = false;
+    AI_IMAGE_BULK_RUNNING = false;
+    AI_IMAGE_BULK_PROGRESS = null;
+    renderAiDraftRows();
+    if (generateQueuedRest) {
+      const remaining = AI_PRODUCTS_DRAFT.filter((item) => !item.imagePreviewUrl && item.imageStatus !== 'generating');
+      if (remaining.length) generateAiDraftImages(remaining);
+    }
+  }
 }
 
 let AI_ANALYZE_PROGRESS_TIMER = null;
@@ -8123,6 +8419,7 @@ function renderAiDraftRows() {
   if (!AI_PRODUCTS_DRAFT.length) {
     rows.innerHTML = '<tr><td colspan="6"><span class="hint">No hay productos detectados.</span></td></tr>';
     $('#aiProductImport').disabled = true;
+    updateAiImageWorkflowStatus();
     return;
   }
 
@@ -8130,6 +8427,8 @@ function renderAiDraftRows() {
     item.variants = Array.isArray(item.variants) ? item.variants : [];
     item.modifierGroups = Array.isArray(item.modifierGroups) ? item.modifierGroups : [];
     const optionCount = item.modifierGroups.reduce((total, group) => total + (group.options || []).length, 0);
+    const variantPrices = item.variants.map((variant) => `
+      <span class="ai-variant-price-chip"><span>${esc(variant.name || 'Variante')}</span><b>${esc(formatCurrencyValue(variant.price, null, { minimumFractionDigits: 0, maximumFractionDigits: 2 }))}</b></span>`).join('');
     const warnings = Array.isArray(item.warnings) ? item.warnings : [];
     const configRows = `
       <div class="ai-draft-config">
@@ -8170,18 +8469,21 @@ function renderAiDraftRows() {
       <tr data-ai-row="${idx}">
         <td><input type="text" class="ai-name" value="${esc(item.name || '')}" placeholder="Nombre" />${warnings.length ? `<div class="ai-warning"><i class="ph-bold ph-warning"></i> ${esc(warnings.join(' · '))}</div>` : ''}</td>
         <td><textarea class="ai-desc" rows="2" placeholder="Descripción e ingredientes incluidos">${esc(item.description || '')}</textarea></td>
-        <td><input type="number" class="ai-price" value="${Number(item.price || 0)}" min="0" step="0.01" /></td>
+        <td class="ai-price-cell">
+          <label class="ai-price-label" for="ai-draft-price-${idx}">${item.variants.length ? 'Precio de referencia' : 'Precio único'}</label>
+          <input id="ai-draft-price-${idx}" type="number" class="ai-price" value="${Number(item.price || 0)}" min="0" step="0.01" />
+          ${item.variants.length ? `<div class="ai-variant-price-list" aria-label="Precios por variante">${variantPrices}</div><small class="ai-price-explanation">Al vender se cobra la variante elegida.</small>` : ''}
+        </td>
         <td><input type="text" class="ai-cat" value="${esc(item.categoryName || '')}" placeholder="Categoría" /></td>
         <td>
           <div class="ai-config-summary">
-            ${item.imagePreviewUrl ? `<img class="ai-product-thumb" src="${esc(item.imagePreviewUrl)}" alt="" />` : ''}
-            <label class="btn btn-ghost ai-photo-label"><i class="ph-bold ph-camera"></i> ${item.imageFile ? 'Cambiar foto' : 'Agregar foto'}<input class="ai-image" type="file" accept="image/*" /></label>
-            <button type="button" class="btn btn-ghost ai-toggle-config"><i class="ph-bold ph-${item._expanded ? 'caret-up' : 'caret-down'}"></i> ${item.variants.length} variantes · ${optionCount} opciones</button>
+            ${renderAiImageReview(item)}
+            <button type="button" class="btn btn-ghost ai-toggle-config" aria-expanded="${Boolean(item._expanded)}" aria-controls="ai-draft-detail-${idx}"><i class="ph-bold ph-${item._expanded ? 'caret-up' : 'caret-down'}"></i> ${item.variants.length} variantes · ${optionCount} opciones</button>
           </div>
         </td>
         <td><button type="button" class="btn btn-danger btn-icon ai-del" title="Quitar"><i class="ph-bold ph-trash"></i></button></td>
       </tr>
-      <tr class="ai-config-detail" data-ai-detail="${idx}" ${item._expanded ? '' : 'hidden'}><td colspan="6">${configRows}</td></tr>`;
+      <tr id="ai-draft-detail-${idx}" class="ai-config-detail" data-ai-detail="${idx}" ${item._expanded ? '' : 'hidden'}><td colspan="6">${configRows}</td></tr>`;
   }).join('');
 
   rows.querySelectorAll('.ai-name').forEach((input) => {
@@ -8211,7 +8513,7 @@ function renderAiDraftRows() {
   rows.querySelectorAll('.ai-del').forEach((btn) => {
     btn.addEventListener('click', (e) => {
       const i = Number(e.target.closest('[data-ai-row]').dataset.aiRow);
-      if (AI_PRODUCTS_DRAFT[i]?.imagePreviewUrl) URL.revokeObjectURL(AI_PRODUCTS_DRAFT[i].imagePreviewUrl);
+      releaseAiDraftImage(AI_PRODUCTS_DRAFT[i]);
       AI_PRODUCTS_DRAFT.splice(i, 1);
       renderAiDraftRows();
     });
@@ -8230,9 +8532,39 @@ function renderAiDraftRows() {
       toast('La foto del producto supera 8 MB', true);
       return;
     }
-    if (AI_PRODUCTS_DRAFT[i].imagePreviewUrl) URL.revokeObjectURL(AI_PRODUCTS_DRAFT[i].imagePreviewUrl);
+    releaseAiDraftImage(AI_PRODUCTS_DRAFT[i]);
     AI_PRODUCTS_DRAFT[i].imageFile = file;
     AI_PRODUCTS_DRAFT[i].imagePreviewUrl = URL.createObjectURL(file);
+    AI_PRODUCTS_DRAFT[i].imageSource = 'manual';
+    AI_PRODUCTS_DRAFT[i].imageStatus = 'accepted';
+    renderAiDraftRows();
+  }));
+  rows.querySelectorAll('.ai-image-instruction').forEach((input) => input.addEventListener('input', (e) => {
+    const i = Number(e.target.closest('[data-ai-row]').dataset.aiRow);
+    AI_PRODUCTS_DRAFT[i].imageInstruction = e.target.value;
+  }));
+  rows.querySelectorAll('.ai-accept-image').forEach((button) => button.addEventListener('click', async (e) => {
+    const i = Number(e.target.closest('[data-ai-row]').dataset.aiRow);
+    button.disabled = true;
+    try {
+      await acceptAiDraftImage(AI_PRODUCTS_DRAFT[i]);
+      renderAiDraftRows();
+    } catch (error) {
+      toast(error.message, true);
+      button.disabled = false;
+    }
+  }));
+  rows.querySelectorAll('.ai-generate-image').forEach((button) => button.addEventListener('click', (e) => {
+    const i = Number(e.target.closest('[data-ai-row]').dataset.aiRow);
+    generateAiDraftImages([AI_PRODUCTS_DRAFT[i]]);
+  }));
+  rows.querySelectorAll('.ai-remove-image').forEach((button) => button.addEventListener('click', (e) => {
+    const i = Number(e.target.closest('[data-ai-row]').dataset.aiRow);
+    releaseAiDraftImage(AI_PRODUCTS_DRAFT[i]);
+    AI_PRODUCTS_DRAFT[i].imageFile = null;
+    AI_PRODUCTS_DRAFT[i].imagePreviewUrl = '';
+    AI_PRODUCTS_DRAFT[i].imageSource = '';
+    AI_PRODUCTS_DRAFT[i].imageStatus = 'none';
     renderAiDraftRows();
   }));
   rows.querySelectorAll('.ai-add-variant').forEach((btn) => btn.addEventListener('click', (e) => {
@@ -8245,6 +8577,9 @@ function renderAiDraftRows() {
     const vi = Number(e.target.closest('[data-ai-variant]').dataset.aiVariant);
     if (e.target.classList.contains('ai-variant-name')) AI_PRODUCTS_DRAFT[i].variants[vi].name = e.target.value;
     else AI_PRODUCTS_DRAFT[i].variants[vi].price = Number(e.target.value) || 0;
+    const summary = rows.querySelector(`[data-ai-row="${i}"] .ai-variant-price-list`);
+    if (summary) summary.innerHTML = AI_PRODUCTS_DRAFT[i].variants.map((variant) => `
+      <span class="ai-variant-price-chip"><span>${esc(variant.name || 'Variante')}</span><b>${esc(formatCurrencyValue(variant.price, null, { minimumFractionDigits: 0, maximumFractionDigits: 2 }))}</b></span>`).join('');
   }));
   rows.querySelectorAll('.ai-del-variant').forEach((btn) => btn.addEventListener('click', (e) => {
     const i = Number(e.target.closest('[data-ai-detail]').dataset.aiDetail);
@@ -8294,11 +8629,12 @@ function renderAiDraftRows() {
     renderAiDraftRows();
   }));
 
-  $('#aiProductImport').disabled = false;
+  $('#aiProductImport').disabled = AI_IMAGE_BULK_RUNNING;
+  updateAiImageWorkflowStatus();
 }
 
-function openAiImportModal() {
-  AI_PRODUCTS_DRAFT.forEach((item) => item.imagePreviewUrl && URL.revokeObjectURL(item.imagePreviewUrl));
+function openAiImportModal(files = []) {
+  AI_PRODUCTS_DRAFT.forEach(releaseAiDraftImage);
   AI_MENU_PREVIEW_URLS.forEach((url) => URL.revokeObjectURL(url));
   AI_MENU_PREVIEW_URLS = [];
   $('#aiMenuImage').value = '';
@@ -8307,6 +8643,25 @@ function openAiImportModal() {
   $('#aiMenuImageHint').textContent = 'Aún no has seleccionado imagen.';
   resetAiImportState();
   $('#aiProductModal').classList.add('show');
+  if (files.length) {
+    const transfer = new DataTransfer();
+    files.forEach((file) => transfer.items.add(file));
+    $('#aiMenuImage').files = transfer.files;
+    $('#aiMenuImage').dispatchEvent(new Event('change', { bubbles: true }));
+    $('#aiProductForm').requestSubmit();
+  }
+}
+
+function closeAiImportModal() {
+  if (AI_IMAGE_BULK_RUNNING) {
+    toast('Espera a que termine la generación de imágenes antes de cerrar.', true);
+    return;
+  }
+  $('#aiProductModal')?.classList.remove('show');
+  if (EMPTY_CATALOG_AI_FLOW_ACTIVE) {
+    EMPTY_CATALOG_AI_FLOW_ACTIVE = false;
+    setTimeout(presentStartupJourney, 100);
+  }
 }
 
 /* — Modal categoría — */
@@ -8690,7 +9045,37 @@ async function saveProductExtras(productId) {
 $('#addProdBtn').addEventListener('click', () => openProdModal());
 $('#aiImportBtn')?.addEventListener('click', () => openAiImportModal());
 $('#prodCancel').addEventListener('click', () => $('#prodModal').classList.remove('show'));
-$('#aiProductCancel')?.addEventListener('click', () => $('#aiProductModal').classList.remove('show'));
+$('#aiProductCancel')?.addEventListener('click', closeAiImportModal);
+$('#aiAcceptSuggestedImages')?.addEventListener('click', async () => {
+  const suggested = AI_PRODUCTS_DRAFT.filter((item) => item.imageStatus === 'suggested');
+  if (!suggested.length || AI_IMAGE_BULK_RUNNING) return;
+  AI_IMAGE_BULK_RUNNING = true;
+  updateAiImageWorkflowStatus();
+  try {
+    const results = await Promise.allSettled(suggested.map(acceptAiDraftImage));
+    const accepted = results.filter((result) => result.status === 'fulfilled' && result.value).length;
+    const failed = results.length - accepted;
+    results.forEach((result, index) => {
+      if (result.status !== 'rejected') return;
+      suggested[index].warnings = [...new Set([...(suggested[index].warnings || []), result.reason?.message || 'No se pudo preparar esta imagen'])];
+    });
+    toast(`${accepted} ${accepted === 1 ? 'imagen aceptada' : 'imágenes aceptadas'}${failed ? ` · ${failed} requieren revisión` : ''}`, failed > 0);
+  } catch (error) {
+    toast(error.message || 'No se pudieron aceptar las imágenes', true);
+  } finally {
+    AI_IMAGE_BULK_RUNNING = false;
+    renderAiDraftRows();
+  }
+});
+$('#aiGenerateMissingImages')?.addEventListener('click', () => {
+  if (AI_IMAGE_BULK_RUNNING && AI_IMAGE_BULK_PROGRESS?.total === 1) {
+    AI_IMAGE_GENERATE_REST_QUEUED = true;
+    updateAiImageWorkflowStatus();
+    return;
+  }
+  const missing = AI_PRODUCTS_DRAFT.filter((item) => !item.imagePreviewUrl && item.imageStatus !== 'generating');
+  generateAiDraftImages(missing);
+});
 
 const aiUploadArea = $('#aiMenuUploadArea');
 const aiMenuInput = $('#aiMenuImage');
@@ -8753,6 +9138,10 @@ $('#aiMenuImage')?.addEventListener('change', () => {
 
 $('#aiProductForm')?.addEventListener('submit', async (e) => {
   e.preventDefault();
+  if (AI_IMAGE_BULK_RUNNING) {
+    toast('Espera a que termine la generación de imágenes.', true);
+    return;
+  }
   if (isAiAnalyzeCooldownActive()) {
     const remaining = Math.max(1, Math.ceil((AI_ANALYZE_COOLDOWN_UNTIL - Date.now()) / 1000));
     toast(`Espera ${remaining}s para volver a analizar`, true);
@@ -8773,7 +9162,7 @@ $('#aiProductForm')?.addEventListener('submit', async (e) => {
     files.forEach((file) => fd.append('menuImages', file));
     const out = await api('/api/products/ai/suggest', { method: 'POST', body: fd });
     setAiAnalyzeProgress(96, 'Catálogo leído. Preparando tabla para editar...');
-    AI_PRODUCTS_DRAFT = Array.isArray(out.products) ? out.products : [];
+    AI_PRODUCTS_DRAFT = initializeAiDraftImages(Array.isArray(out.products) ? out.products : []);
     $('#aiProductResult').hidden = false;
 
     const notes = [];
@@ -8787,6 +9176,9 @@ $('#aiProductForm')?.addEventListener('submit', async (e) => {
     }
     if (Array.isArray(out.modifierGroupsDetected) && out.modifierGroupsDetected.length) {
       notes.push(`Se detectaron ingredientes/opciones para: ${out.modifierGroupsDetected.join(', ')}`);
+    }
+    if (AI_PRODUCTS_DRAFT.some((item) => item._expanded)) {
+      notes.push('Las variantes e ingredientes detectados se muestran abiertos para revisarlos antes de importar');
     }
     const ui = businessUi();
     $('#aiProductNotes').textContent = notes.join(' · ') || `Se detectaron ${AI_PRODUCTS_DRAFT.length} ${ui.itemPlural.toLowerCase()}. Puedes editar antes de importar.`;
@@ -8812,6 +9204,11 @@ $('#aiProductForm')?.addEventListener('submit', async (e) => {
 });
 
 $('#aiProductImport')?.addEventListener('click', async () => {
+  const pendingImages = AI_PRODUCTS_DRAFT.filter((item) => item.imageStatus === 'suggested').length;
+  if (pendingImages && !(await askConfirm(
+    'Hay imágenes pendientes de aceptar',
+    `${pendingImages} ${pendingImages === 1 ? 'imagen sugerida no se importará' : 'imágenes sugeridas no se importarán'}. ¿Deseas continuar sólo con las fotos ya aceptadas?`
+  ))) return;
   const imageFiles = [];
   const cleanProducts = AI_PRODUCTS_DRAFT
     .map((p) => {
@@ -8867,8 +9264,8 @@ $('#aiProductImport')?.addEventListener('click', async () => {
       out.skippedCount ? `${out.skippedCount} duplicados omitidos` : '',
     ].filter(Boolean).join(' · ');
     toast(`Importación completada: ${out.created} productos${extras ? ` · ${extras}` : ''}`);
-    $('#aiProductModal').classList.remove('show');
     await loadProducts();
+    closeAiImportModal();
   } catch (err) {
     toast(err.message, true);
   } finally {
@@ -8878,7 +9275,9 @@ $('#aiProductImport')?.addEventListener('click', async () => {
 
 [$('#prodModal'), $('#aiProductModal'), $('#catModal'), $('#confirmModal'), $('#branchModal'), $('#cashierModal'), $('#posTablesModal'), $('#posTableOpenModal'), $('#posMovementModal'), $('#posCloseModal'), $('#posSalesHistoryModal'), $('#posPaymentEditModal'), $('#orderCancelReasonModal'), $('#posProductConfigModal')].forEach((m) =>
   m && m.addEventListener('click', (e) => {
-    if (e.target === m) m.classList.remove('show');
+    if (e.target !== m) return;
+    if (m.id === 'aiProductModal') closeAiImportModal();
+    else m.classList.remove('show');
   })
 );
 
@@ -11686,7 +12085,6 @@ function openInitialIdentitySetup() {
   const logo = String(SETTINGS.logo || ME?.tenant?.logo || '').trim();
   $('#initialIdentityLogoPreview').innerHTML = logo ? `<img src="${esc(logo)}" alt="Logo actual" />` : '<i class="ph ph-image"></i>';
   $('#initialIdentityLogo').value = '';
-  $('#initialIdentityLogo').required = !logo;
   $('#initialIdentityError').hidden = true;
   renderInitialIdentityColors();
   renderInitialIdentityModels();
@@ -11708,27 +12106,37 @@ $('#initialIdentityLogo')?.addEventListener('change', (event) => {
 
 $('#initialIdentityTimezone')?.addEventListener('change', updateInitialIdentityTimePreview);
 
-$('#initialIdentityForm')?.addEventListener('submit', async (event) => {
-  event.preventDefault();
+async function completeInitialIdentitySetup({ save = false } = {}) {
   const submit = $('#initialIdentitySubmit');
+  const skip = $('#initialIdentitySkip');
   const error = $('#initialIdentityError');
-  const businessName = String($('#initialIdentityName').value || '').trim();
-  if (businessName.length < 2) return $('#initialIdentityName').focus();
-  const fd = new FormData();
-  fd.append('business_name', businessName);
-  fd.append('primary_color', $('#initialIdentityColor').value);
-  fd.append('business_type', $('#initialIdentityBusinessType').value);
-  fd.append('currency', $('#initialIdentityCurrency').value);
-  fd.append('timezone', $('#initialIdentityTimezone').value);
-  const logo = $('#initialIdentityLogo').files?.[0];
-  if (logo) fd.append('logo', logo);
   submit.disabled = true;
-  submit.innerHTML = '<i class="ph-bold ph-spinner-gap" style="animation:spin .8s linear infinite"></i> Guardando identidad...';
+  skip.disabled = true;
+  submit.innerHTML = `<i class="ph-bold ph-spinner-gap" style="animation:spin .8s linear infinite"></i> ${save ? 'Guardando datos...' : 'Continuando...'}`;
   error.hidden = true;
   try {
-    await api('/api/settings', { method: 'PUT', body: fd });
+    if (save) {
+      const businessName = String($('#initialIdentityName').value || '').trim();
+      if (businessName && businessName.length < 2) {
+        $('#initialIdentityName').focus();
+        throw new Error('El nombre del negocio debe tener al menos 2 caracteres o dejarse vacío.');
+      }
+      const fd = new FormData();
+      if (businessName) fd.append('business_name', businessName);
+      const color = $('#initialIdentityColor').value;
+      const businessType = $('#initialIdentityBusinessType').value;
+      const currency = $('#initialIdentityCurrency').value;
+      const timezone = $('#initialIdentityTimezone').value;
+      if (color) fd.append('primary_color', color);
+      if (businessType) fd.append('business_type', businessType);
+      if (currency) fd.append('currency', currency);
+      if (timezone) fd.append('timezone', timezone);
+      const logo = $('#initialIdentityLogo').files?.[0];
+      if (logo) fd.append('logo', logo);
+      await api('/api/settings', { method: 'PUT', body: fd });
+      SETTINGS = await api('/api/settings');
+    }
     await api('/api/auth/identity/complete', { method: 'POST' });
-    SETTINGS = await api('/api/settings');
     ME.identityCompleted = true;
     ME.identityRequired = false;
     ME.tenant.businessName = SETTINGS.business_name;
@@ -11745,16 +12153,25 @@ $('#initialIdentityForm')?.addEventListener('submit', async (event) => {
     renderInstructions();
     $('#initialIdentityModal').classList.remove('show');
     document.body.classList.remove('initial-identity-open');
-    toast('Identidad de tu negocio guardada');
+    toast(save ? 'Datos de tu negocio guardados' : 'Podrás personalizar tu negocio más tarde');
     setTimeout(presentStartupJourney, 140);
   } catch (err) {
-    error.textContent = err.message || 'No se pudo guardar la identidad. Inténtalo de nuevo.';
+    error.textContent = err instanceof TypeError && /fetch/i.test(err.message)
+      ? 'No hay conexión con el servidor local. Tus datos no se perdieron; vuelve a intentarlo cuando esté disponible.'
+      : (err.message || 'No se pudo continuar. Inténtalo de nuevo.');
     error.hidden = false;
   } finally {
     submit.disabled = false;
+    skip.disabled = false;
     submit.innerHTML = '<i class="ph-bold ph-arrow-right"></i> Guardar y continuar';
   }
+}
+
+$('#initialIdentityForm')?.addEventListener('submit', (event) => {
+  event.preventDefault();
+  completeInitialIdentitySetup({ save: true });
 });
+$('#initialIdentitySkip')?.addEventListener('click', () => completeInitialIdentitySetup());
 
 const BUSINESS_UI = {
   restaurant: {
@@ -12256,10 +12673,18 @@ async function boot(navigateToHash = true) {
     location.replace('/facturacion/panel');
     return;
   }
+  const catalogStatusPromise = ME?.role === 'owner' && !ME?.impersonated && !ME?.demoSession
+    ? api('/api/products/catalog-status').catch((error) => {
+        console.warn('[catalog] No se pudo consultar el estado del catálogo:', error.message);
+        return null;
+      })
+    : Promise.resolve(null);
   [ME, SETTINGS] = await Promise.all([
     Promise.resolve(ME),
     api('/api/settings'),
   ]);
+  const catalogStatus = await catalogStatusPromise;
+  PRODUCT_CATALOG_TOTAL = catalogStatus ? Number(catalogStatus.total) : null;
   loadCustomPaymentMethodsFromSettings();
   syncPosCustomPaymentMethods();
   if (ME?.role === 'cashier') setAuthScope('cashier');
@@ -12292,9 +12717,9 @@ async function boot(navigateToHash = true) {
   if (navigateToHash) {
     const fallbackView = cashier ? 'pos' : 'dashboard';
     const hashView = (location.hash || '').slice(1);
-    const view = normalizeView(hashView || fallbackView);
+    const view = shouldOfferEmptyCatalogAi() ? 'productos' : normalizeView(hashView || fallbackView);
     document.body.setAttribute('data-current-view', view);
-    navigate(view);
+    await navigate(view);
   }
   if (!cashier) presentStartupJourney();
 }

@@ -7,7 +7,7 @@ const { encrypt, decrypt, lookupHash } = require('../utils/crypto');
 const { signToken, setAuthCookie, clearAuthCookie, requireAuth, requireOwner } = require('../middleware/auth');
 const { createRateLimiter } = require('../middleware/security');
 const { normalizeInternationalPhone, phoneCountries } = require('../utils/phone');
-const { regionalDefaults, isSupportedCurrency, isSupportedTimeZone } = require('../utils/regional');
+const { regionalDefaults, isSupportedTimeZone } = require('../utils/regional');
 const { isMexicoIdentity, invoicingPortalUrl, isFiscalEmitterReady } = require('../utils/invoicing');
 const { sendLeadNotification, sendRegistrationNotification } = require('../utils/mailer');
 const { createConfiguredFacturamaClients } = require('../services/facturama');
@@ -184,10 +184,6 @@ async function ensureDemoUser(username, password, tenant) {
   const found = await q('SELECT * FROM users WHERE tenant_id = $1 AND lower(username) = $2 LIMIT 1', [tenant.id, username]);
   const existing = found.rows[0];
   if (existing) return existing;
-  const conflict = await q('SELECT id FROM users WHERE lower(username) = $1 LIMIT 1', [username]);
-  if (conflict.rows[0]) {
-    throw Object.assign(new Error('El usuario demo está asignado a otro negocio'), { status: 503 });
-  }
   // La contraseña es interna: el visitante entra sólo mediante el formulario
   // público de leads. Si no se configura una, se genera una aleatoria que no
   // se muestra ni habilita un acceso convencional predecible.
@@ -216,6 +212,21 @@ router.get('/register-ready', async (req, res, next) => {
     next(error);
   }
 });
+
+async function availableRegistrationSlug(requestedSlug) {
+  for (let number = 1; number <= 30; number += 1) {
+    const suffix = number === 1 ? '' : `-${number}`;
+    const candidate = `${requestedSlug.slice(0, 40 - suffix.length).replace(/-+$/, '')}${suffix}`;
+    if (RESERVED.has(candidate)) continue;
+    const found = await q(
+      `SELECT EXISTS (SELECT 1 FROM tenants WHERE slug = $1)
+         OR EXISTS (SELECT 1 FROM resellers WHERE slug = $1) AS occupied`,
+      [candidate]
+    );
+    if (!found.rows[0]?.occupied) return candidate;
+  }
+  throw Object.assign(new Error('No se pudo reservar una liga para el negocio. Inténtalo de nuevo.'), { status: 409 });
+}
 
 router.post('/register', authAttemptLimiter, async (req, res, next) => {
   try {
@@ -249,16 +260,42 @@ router.post('/register', authAttemptLimiter, async (req, res, next) => {
         `SELECT
            (EXISTS (SELECT 1 FROM tenants WHERE slug = $1)
              OR EXISTS (SELECT 1 FROM resellers WHERE slug = $1)) AS slug_exists,
-           EXISTS (SELECT 1 FROM users WHERE lower(username) = $2) AS user_exists,
-           (SELECT id FROM resellers WHERE slug = $3 AND active = 1 LIMIT 1) AS reseller_id`,
-        [cleanSlug, cleanUser, String(reseller || '').trim().toLowerCase()]
+           (SELECT id FROM resellers WHERE slug = $2 AND active = 1 LIMIT 1) AS reseller_id`,
+        [cleanSlug, String(reseller || '').trim().toLowerCase()]
       ),
       bcrypt.hash(cleanPassword, 12),
     ]);
     const conflicts = conflictResult.rows[0] || {};
     const resellerId = conflicts.reseller_id || null;
-    if (conflicts.slug_exists) return res.status(409).json({ error: 'Ese slug ya está registrado, elige otro' });
-    if (conflicts.user_exists) return res.status(409).json({ error: 'Ese usuario ya existe' });
+    if (conflicts.slug_exists) {
+      // Un reenvío después de perder la respuesta HTTP debe recuperar la misma
+      // cuenta (incluso si recibió un sufijo), nunca crear otro tenant.
+      const prior = await q(
+        `SELECT row_to_json(t) AS tenant, row_to_json(u) AS owner
+         FROM tenants t JOIN users u ON u.tenant_id = t.id
+         WHERE (t.slug = $1 OR t.slug LIKE $2)
+           AND lower(t.business_name) = lower($3)
+           AND lower(u.username) = $4
+           AND u.role = 'owner' AND t.product_code = $5
+         ORDER BY t.id DESC LIMIT 30`,
+        [cleanSlug, `${cleanSlug.slice(0, 36)}%`, cleanBusinessName, cleanUser, cleanProductCode]
+      );
+      for (const row of prior.rows) {
+        const previousTenant = row.tenant;
+        const previousOwner = row.owner;
+        if (decrypt(previousTenant.phone_enc) !== normalizedPhone.e164) continue;
+        if (!(await bcrypt.compare(cleanPassword, previousOwner.password_hash))) {
+          return res.status(409).json({ error: 'Este negocio ya tiene una cuenta con ese usuario y teléfono. Inicia sesión con la contraseña original.' });
+        }
+        if (previousTenant.account_status !== 'active' || previousTenant.billing_status === 'suspended') {
+          return res.status(403).json({ error: 'La cuenta del negocio no está activa. Contacta al administrador.' });
+        }
+        await initTenantDefaults(previousTenant.slug, previousTenant.business_name, regional, previousTenant.id);
+        setAuthCookie(res, signToken(previousOwner, previousTenant), 'owner');
+        return res.json({ ok: true, slug: previousTenant.slug, resumed: true });
+      }
+    }
+    const availableSlug = await availableRegistrationSlug(cleanSlug);
 
     // Tenant y propietario se crean de forma atómica y en un solo viaje a Neon.
     const created = await q(
@@ -274,7 +311,7 @@ router.post('/register', authAttemptLimiter, async (req, res, next) => {
        SELECT row_to_json(new_tenant) AS tenant, row_to_json(new_user) AS owner
        FROM new_tenant CROSS JOIN new_user`,
       [
-        cleanSlug,
+        availableSlug,
         cleanBusinessName,
         cleanOwnerName,
         encrypt(normalizedPhone.e164),
@@ -293,28 +330,34 @@ router.post('/register', authAttemptLimiter, async (req, res, next) => {
     const tenant = created.rows[0].tenant;
     const owner = created.rows[0].owner;
 
-    const registrationPhoneHashes = [...new Set([
-      lookupHash(normalizedPhone.digits),
-      lookupHash(normalizedPhone.nationalNumber),
-      lookupHash(String(phone || '').replace(/\D/g, '')),
-    ])];
-    const sourceLead = await q(
-      `UPDATE demo_leads
-       SET sales_stage = 'potential', sales_updated_at = now(), last_seen_at = now(), converted_tenant_id = $2
-       WHERE phone_hash = ANY($1::text[])
-       RETURNING id`,
-      [registrationPhoneHashes, tenant.id]
-    );
-    if (sourceLead.rows[0]) {
-      await q(
-        `INSERT INTO sales_followup_activities (demo_lead_id, activity_type, note, stage_from, stage_to, created_by)
-         VALUES ($1, 'stage_change', 'El lead creó su entorno propio de prueba real por 5 días.', 'interested', 'potential', 'system:trial-registration')`,
-        [sourceLead.rows[0].id]
-      );
-    }
-
     // Crea el SCHEMA AISLADO del tenant en Neon con valores por defecto
-    await initTenantDefaults(cleanSlug, cleanBusinessName, regional, tenant.id);
+    await initTenantDefaults(availableSlug, cleanBusinessName, regional, tenant.id);
+
+    // El seguimiento comercial es secundario: si falla, no invalida un alta
+    // cuyo negocio, propietario y catálogo inicial ya fueron creados.
+    try {
+      const registrationPhoneHashes = [...new Set([
+        lookupHash(normalizedPhone.digits),
+        lookupHash(normalizedPhone.nationalNumber),
+        lookupHash(String(phone || '').replace(/\D/g, '')),
+      ])];
+      const sourceLead = await q(
+        `UPDATE demo_leads
+         SET sales_stage = 'potential', sales_updated_at = now(), last_seen_at = now(), converted_tenant_id = $2
+         WHERE phone_hash = ANY($1::text[])
+         RETURNING id`,
+        [registrationPhoneHashes, tenant.id]
+      );
+      if (sourceLead.rows[0]) {
+        await q(
+          `INSERT INTO sales_followup_activities (demo_lead_id, activity_type, note, stage_from, stage_to, created_by)
+           VALUES ($1, 'stage_change', 'El lead creó su entorno propio de prueba real por 5 días.', 'interested', 'potential', 'system:trial-registration')`,
+          [sourceLead.rows[0].id]
+        );
+      }
+    } catch (leadError) {
+      console.error('[register] seguimiento comercial pendiente:', leadError.message);
+    }
 
     // Notificación por email del nuevo registro
     sendRegistrationNotification({
@@ -323,22 +366,25 @@ router.post('/register', authAttemptLimiter, async (req, res, next) => {
       phoneCountry: normalizedPhone.country,
       callingCode: normalizedPhone.callingCode,
       businessName: cleanBusinessName,
-      slug: cleanSlug,
+      slug: availableSlug,
       username: cleanUser,
       timezone: regional.timezone,
       productCode: cleanProductCode,
     }).catch(err => console.error('[mailer] fire-and-forget register error:', err.message));
 
     setAuthCookie(res, signToken(owner, tenant), 'owner');
-    res.json({ ok: true, slug: cleanSlug });
+    res.json({ ok: true, slug: availableSlug });
   } catch (e) {
+    if (e?.code === '23505' && (e.constraint === 'tenants_slug_key' || e.constraint === 'idx_users_tenant_username_unique')) {
+      return res.status(409).json({ error: 'La liga del negocio se ocupó al mismo tiempo. Vuelve a intentar.' });
+    }
     next(e);
   }
 });
 
 router.post('/login', authAttemptLimiter, async (req, res, next) => {
   try {
-    const { username, password, productCode } = req.body || {};
+    const { username, password, productCode, businessSlug } = req.body || {};
     if (!username || !password) return res.status(400).json({ error: 'Usuario y contraseña requeridos' });
     const requestedProductCode = productCode === 'invoicing' ? 'invoicing' : productCode === 'chatbotpro' ? 'chatbotpro' : '';
     if (!requestedProductCode) return res.status(400).json({ error: 'Selecciona el acceso correspondiente a tu producto' });
@@ -347,8 +393,25 @@ router.post('/login', authAttemptLimiter, async (req, res, next) => {
     if (!USERNAME_RE.test(cleanUsername) || cleanPassword.length > 128) {
       return res.status(401).json({ error: 'Usuario o contraseña incorrectos' });
     }
-    const u = await q('SELECT * FROM users WHERE lower(username) = $1', [cleanUsername]);
-    const user = u.rows[0];
+    const cleanBusinessSlug = String(businessSlug || '').trim().toLowerCase();
+    if (cleanBusinessSlug && !SLUG_RE.test(cleanBusinessSlug)) {
+      return res.status(400).json({ error: 'Revisa la liga de tu negocio' });
+    }
+    const u = await q(
+      `SELECT users.*, tenants.slug AS business_slug, tenants.product_code AS business_product_code
+       FROM users JOIN tenants ON tenants.id = users.tenant_id
+       WHERE lower(users.username) = $1 AND ($2 = '' OR tenants.slug = $2)`,
+      [cleanUsername, cleanBusinessSlug]
+    );
+    const candidates = u.rows.filter((row) => !requestedProductCode || row.business_product_code === requestedProductCode);
+    const matching = candidates.length ? candidates : u.rows;
+    if (matching.length > 1) {
+      return res.status(409).json({
+        error: 'Ese usuario existe en más de un negocio. Escribe la liga de tu negocio para entrar.',
+        errorCode: 'BUSINESS_SLUG_REQUIRED',
+      });
+    }
+    const user = matching[0];
     if (!user || !(await bcrypt.compare(cleanPassword, user.password_hash))) {
       return res.status(401).json({ error: 'Usuario o contraseña incorrectos' });
     }
@@ -617,11 +680,7 @@ router.post('/demo-convert', authAttemptLimiter, requireAuth, async (req, res, n
     const ownerName = normalizeLeadText(lead.contact_name, 120);
     const businessName = normalizeLeadText(lead.business_giro, 160);
     const slug = await availableDemoTenantSlug(businessName, demoLeadId);
-    const [userConflict, passwordHash] = await Promise.all([
-      q('SELECT id FROM users WHERE lower(username) = $1 LIMIT 1', [username]),
-      bcrypt.hash(password, 12),
-    ]);
-    if (userConflict.rows[0]) return res.status(409).json({ error: 'Ese usuario ya existe. Elige otro.' });
+    const passwordHash = await bcrypt.hash(password, 12);
 
     const created = await q(
       `WITH new_tenant AS (
@@ -818,6 +877,7 @@ router.get('/me', requireAuth, async (req, res, next) => {
     res.json({
     username: req.user.username,
     role: req.user.role,
+    impersonated: Boolean(req.user.impersonated),
     jobTitle: req.user.jobTitle,
     permissions: req.user.role === 'owner' ? MODULES.map(([key]) => key) : req.user.permissions,
     displayName: req.user.displayName,
@@ -869,27 +929,15 @@ router.post('/onboarding/complete', requireAuth, requireOwner, async (req, res, 
 
 router.post('/identity/complete', requireAuth, requireOwner, async (req, res, next) => {
   try {
-    const visualIdentityComplete = String(req.tenant.business_name || '').trim().length >= 2
-      && Boolean(req.tenant.logo)
-      && /^#[0-9a-fA-F]{6}$/.test(String(req.tenant.primary_color || ''));
-    let complete = visualIdentityComplete;
-    if (req.tenant.product_code !== 'invoicing') {
-      const rows = await req.tdb.all(
-        "SELECT key, value FROM {s}.settings WHERE key = ANY($1::text[])",
-        [['business_type', 'currency', 'timezone']]
-      );
-      const identity = Object.fromEntries(rows.map((row) => [row.key, String(row.value || '').trim()]));
-      const businessTypes = new Set(['restaurant', 'furniture', 'travel_agency', 'office_services', 'screen_printing', 'carpentry', 'health', 'dentist']);
-      complete = complete
-        && businessTypes.has(identity.business_type)
-        && isSupportedCurrency(identity.currency)
-        && isSupportedTimeZone(identity.timezone);
-    }
-    if (!complete) {
-      const requiredFields = req.tenant.product_code === 'invoicing'
-        ? 'nombre, logo y color'
-        : 'nombre, logo, color, modelo de negocio, moneda y zona horaria';
-      return res.status(400).json({ error: `Completa ${requiredFields}` });
+    // ChatBotPro ya recibe nombre y región al registrarse. El resto de la
+    // personalización es opcional y no debe impedir explorar el panel.
+    if (req.tenant.product_code === 'invoicing') {
+      const fiscalIdentityComplete = String(req.tenant.business_name || '').trim().length >= 2
+        && Boolean(req.tenant.logo)
+        && /^#[0-9a-fA-F]{6}$/.test(String(req.tenant.primary_color || ''));
+      if (!fiscalIdentityComplete) {
+        return res.status(400).json({ error: 'Completa nombre, logo y color' });
+      }
     }
     await q('UPDATE users SET identity_completed = 1 WHERE id = $1', [req.user.uid]);
     res.json({ ok: true });

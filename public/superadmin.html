@@ -231,6 +231,11 @@
                 <div class="hint" id="saOpenAiModelHint">Este será el modelo por default para todos los tenants.</div>
               </div>
             </div>
+            <div class="field">
+              <label><i class="ph-bold ph-image-square"></i> Modelo para imágenes de productos</label>
+              <input id="saOpenAiImageModel" type="text" value="gpt-image-2.5-flare" placeholder="gpt-image-2.5-flare" />
+              <div class="hint">Se usa sólo cuando el tenant solicita generar fotografías faltantes del catálogo.</div>
+            </div>
             <div class="field"><label><i class="ph-bold ph-key"></i> API Key OpenAI</label><input id="saOpenAiKey" type="password" placeholder="sk-... (deja vacío para no cambiar)" /></div>
             <div class="field"><label><i class="ph-bold ph-link-simple"></i> Base URL API (opcional)</label><input id="saOpenAiBaseUrl" placeholder="https://api.openai.com/v1" /></div>
             <div class="field"><label><i class="ph-bold ph-webhooks-logo"></i> Webhook chatbot (opcional)</label><input id="saWebhookUrl" placeholder="https://mi-api.com/chatbot/webhook" /></div>

@@ -78,7 +78,7 @@ router.post('/', async (req, res, next) => {
     if (!SLUG_RE.test(cashierSlug)) return res.status(400).json({ error: 'La liga de caja debe tener 3-40 caracteres con letras, números y guiones' });
 
     const branch = await resolveActiveBranch(req, body.branchId);
-    const dupUser = await q('SELECT 1 FROM users WHERE lower(username) = $1', [username]);
+    const dupUser = await q('SELECT 1 FROM users WHERE tenant_id = $1 AND lower(username) = $2', [req.tenant.id, username]);
     if (dupUser.rows.length) return res.status(409).json({ error: 'Ese usuario ya existe' });
     const dupSlug = await q('SELECT 1 FROM users WHERE cashier_slug = $1', [cashierSlug]);
     if (dupSlug.rows.length) return res.status(409).json({ error: 'Esa liga de caja ya existe' });
@@ -123,7 +123,7 @@ router.put('/:id', async (req, res, next) => {
     if (!cashier) return res.status(404).json({ error: 'Cajero no encontrado' });
     const branch = await resolveActiveBranch(req, body.branchId);
 
-    const dupUser = await q('SELECT 1 FROM users WHERE lower(username) = $1 AND id <> $2', [username, id]);
+    const dupUser = await q('SELECT 1 FROM users WHERE tenant_id = $1 AND lower(username) = $2 AND id <> $3', [req.tenant.id, username, id]);
     if (dupUser.rows.length) return res.status(409).json({ error: 'Ese usuario ya existe' });
     const dupSlug = await q('SELECT 1 FROM users WHERE cashier_slug = $1 AND id <> $2', [cashierSlug, id]);
     if (dupSlug.rows.length) return res.status(409).json({ error: 'Esa liga de caja ya existe' });

@@ -42,7 +42,7 @@ router.post('/', async (req, res, next) => {
     if (displayName.length < 2 || jobTitle.length < 2) return res.status(400).json({ error: 'Nombre y puesto son obligatorios' });
     if (password.length < 8 || password.length > 128) return res.status(400).json({ error: 'La contrasena debe tener entre 8 y 128 caracteres' });
     if (!permissions.length) return res.status(400).json({ error: 'Asigna al menos un modulo' });
-    const duplicate = await q('SELECT 1 FROM users WHERE lower(username)=$1 LIMIT 1', [username]);
+    const duplicate = await q('SELECT 1 FROM users WHERE tenant_id=$1 AND lower(username)=$2 LIMIT 1', [req.tenant.id, username]);
     if (duplicate.rows[0]) return res.status(409).json({ error: 'Ese usuario ya existe' });
     const passwordHash = await bcrypt.hash(password, 12);
     const result = await q(`INSERT INTO users
@@ -67,7 +67,7 @@ router.put('/:id', async (req, res, next) => {
     if (!USERNAME_RE.test(username) || displayName.length < 2 || jobTitle.length < 2) return res.status(400).json({ error: 'Revisa nombre, usuario y puesto' });
     if (!permissions.length) return res.status(400).json({ error: 'Asigna al menos un modulo' });
     if (password && (password.length < 8 || password.length > 128)) return res.status(400).json({ error: 'La contrasena debe tener entre 8 y 128 caracteres' });
-    const duplicate = await q('SELECT 1 FROM users WHERE lower(username)=$1 AND id<>$2 LIMIT 1', [username, id]);
+    const duplicate = await q('SELECT 1 FROM users WHERE tenant_id=$1 AND lower(username)=$2 AND id<>$3 LIMIT 1', [req.tenant.id, username, id]);
     if (duplicate.rows[0]) return res.status(409).json({ error: 'Ese usuario ya existe' });
     const result = await q(`UPDATE users SET username=$1,display_name=$2,job_title=$3,permissions_json=$4,active=$5
       WHERE id=$6 AND tenant_id=$7 AND role='staff'

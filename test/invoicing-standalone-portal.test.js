@@ -84,8 +84,8 @@ test('el panel independiente usa el motor fiscal real y presenta la identidad de
   assert.match(client, /api\('\/api\/invoicing\/profile-draft'/);
   assert.match(client, /api\('\/api\/auth\/identity\/complete'/);
   assert.match(client, /api\('\/api\/auth\/onboarding\/complete'/);
-  assert.match(read('src/routes/auth.js'), /if \(req\.tenant\.product_code !== 'invoicing'\)/);
-  assert.match(read('src/routes/auth.js'), /\? 'nombre, logo y color'/);
+  assert.match(read('src/routes/auth.js'), /if \(req\.tenant\.product_code === 'invoicing'\)/);
+  assert.match(read('src/routes/auth.js'), /'Completa nombre, logo y color'/);
   assert.match(client, /¡Felicidades por tu registro, \$\{ownerName\}!/);
   assert.match(client, /ME\.tenant\.primaryColor/);
   assert.match(css, /@media \(max-width: 640px\)/);

@@ -121,6 +121,106 @@ function normalizeModifierGroup(raw) {
   return { name, minSelections, maxSelections, options };
 }
 
+function normalizeImageRegion(raw, fallbackImageIndex = null) {
+  const region = raw?.imageRegion ?? raw?.photoRegion ?? raw?.image_region;
+  if (!region || typeof region !== 'object' || Array.isArray(region)) return null;
+  const rawCoordinates = [
+    Number(region.x ?? region.left),
+    Number(region.y ?? region.top),
+    Number(region.width ?? region.w),
+    Number(region.height ?? region.h),
+  ];
+  if (rawCoordinates.some((value) => !Number.isFinite(value))) return null;
+  const usesUnitScale = rawCoordinates.every((value) => value >= 0 && value <= 1)
+    && rawCoordinates[2] > 0 && rawCoordinates[3] > 0;
+  const [x, y, width, height] = usesUnitScale
+    ? rawCoordinates.map((value) => value * 100)
+    : rawCoordinates;
+  const safeX = Math.max(0, Math.min(99, x));
+  const safeY = Math.max(0, Math.min(99, y));
+  const safeWidth = Math.max(0, Math.min(100 - safeX, width));
+  const safeHeight = Math.max(0, Math.min(100 - safeY, height));
+  if (safeWidth < 5 || safeHeight < 5) return null;
+  const imageIndexRaw = region.imageIndex ?? region.image_index ?? fallbackImageIndex;
+  const imageIndex = Number.isInteger(Number(imageIndexRaw)) ? Math.max(0, Number(imageIndexRaw)) : null;
+  if (imageIndex === null) return null;
+  const confidenceRaw = Number(region.confidence);
+  return {
+    imageIndex,
+    x: Number(safeX.toFixed(2)),
+    y: Number(safeY.toFixed(2)),
+    width: Number(safeWidth.toFixed(2)),
+    height: Number(safeHeight.toFixed(2)),
+    confidence: Number.isFinite(confidenceRaw) ? Math.max(0, Math.min(1, confidenceRaw)) : 0.7,
+  };
+}
+
+function directChoiceGroups(raw) {
+  const definitions = [
+    { keys: ['flavors', 'sabores'], name: 'Elige tu sabor', required: true },
+    { keys: ['sauces', 'salsas'], name: 'Elige tu salsa', required: true },
+    { keys: ['ingredientOptions', 'optionalIngredients', 'ingredientesOpcionales'], name: 'Ingredientes / opciones', required: false },
+    { keys: ['choices', 'selectableOptions'], name: 'Opciones', required: false },
+  ];
+  const groups = [];
+  for (const definition of definitions) {
+    const values = definition.keys.map((key) => raw?.[key]).find(Array.isArray);
+    if (!values?.length) continue;
+    groups.push({
+      name: definition.name,
+      minSelections: definition.required ? 1 : 0,
+      maxSelections: 1,
+      options: values,
+    });
+  }
+  return groups;
+}
+
+const GENERIC_CATEGORY_KEYS = new Set([
+  '', 'general', 'otros', 'productos', 'menu', 'catalogo', 'comida', 'comida rapida', 'platillos', 'alimentos',
+  'other', 'products', 'menu items', 'catalog', 'food', 'fast food', 'dishes',
+]);
+
+function isGenericCategory(value) {
+  return GENERIC_CATEGORY_KEYS.has(normalizedKey(value));
+}
+
+function inferRestaurantCategory(raw) {
+  const name = normalizedKey(raw?.name);
+  const section = normalizedKey(raw?.sourceSection ?? raw?.menuSection ?? raw?.section ?? raw?.heading);
+  const context = `${name} ${section}`.trim();
+  if (!context) return '';
+
+  // El nombre del producto tiene prioridad para que un combo con pollo o alitas
+  // no termine dentro de esas categorías por los componentes de su descripción.
+  if (/\b(combo|mix)\b/.test(name)) return 'Combos';
+  if (/\b(alita|alitas|boneless|wing|wings)\b/.test(context)) return 'Alitas';
+  if (/\b(hamburguesa|hamburguesas|burger|burgers)\b/.test(context)) return 'Hamburguesas';
+  if (/\b(papas y pollo|pollo y papas|orden de pollo|pollo jumbo|pollo sabor|chicken bake|kendaddy)\b/.test(context)) return 'Pollo y papas';
+  if (/\b(costilla|costillas)\b/.test(context)) return 'Costillas';
+  if (/\b(ensalada|ensaladas)\b/.test(context)) return 'Ensaladas';
+  if (/\b(shrimp|camaron|camarones)\b/.test(context)) return 'Mariscos';
+  if (/\b(pizza|pizzas)\b/.test(context)) return 'Pizzas';
+  if (/\b(taco|tacos)\b/.test(context)) return 'Tacos';
+  if (/\b(burrito|burritos)\b/.test(context)) return 'Burritos';
+  if (/\b(hot dog|hot dogs|dogos)\b/.test(context)) return 'Hot dogs';
+  if (/\b(sushi|rollo|rollos)\b/.test(context)) return 'Sushi';
+  if (/\b(pasta|pastas|espagueti)\b/.test(context)) return 'Pastas';
+  if (/\b(postre|postres|pastel|pasteles)\b/.test(context)) return 'Postres';
+  if (/\b(bebida|bebidas|refresco|refrescos|jugo|jugos|agua|aguas|cafe|cafes)\b/.test(context)) return 'Bebidas';
+  if (/\b(desayuno|desayunos)\b/.test(context)) return 'Desayunos';
+  if (/\b(extras?|adicionales?|aros? de cebolla|dedos? de queso|guacamole|aderezo)\b/.test(context)) return 'Extras';
+  if (/\b(papa|papas|fries)\b/.test(context)) return 'Papas';
+  if (/\b(pollo|chicken)\b/.test(context)) return 'Pollo y papas';
+  return '';
+}
+
+function resolveAiCategory(raw, { inferCategories = false } = {}) {
+  const categoryName = cleanText(raw?.categoryName ?? raw?.category, 120);
+  if (!inferCategories || !isGenericCategory(categoryName)) return categoryName;
+  return inferRestaurantCategory(raw) || categoryName;
+}
+
 function mergeUniqueByName(target, incoming, merge) {
   for (const item of incoming) {
     const key = normalizedKey(item.name);
@@ -131,7 +231,7 @@ function mergeUniqueByName(target, incoming, merge) {
   return target;
 }
 
-function normalizeAiCatalogProducts(inputProducts = []) {
+function normalizeAiCatalogProducts(inputProducts = [], options = {}) {
   const rows = (Array.isArray(inputProducts) ? inputProducts : []).slice(0, 200);
   const products = [];
   const inferredVariantCounts = new Map();
@@ -141,7 +241,7 @@ function normalizeAiCatalogProducts(inputProducts = []) {
         || (Array.isArray(raw?.presentations) && raw.presentations.length)) continue;
     const inferred = inferVariantFromProductName(raw?.name);
     if (!inferred.variantName) continue;
-    const key = `${normalizedKey(raw?.categoryName ?? raw?.category)}::${normalizedKey(inferred.baseName)}`;
+    const key = `${normalizedKey(resolveAiCategory(raw, options))}::${normalizedKey(inferred.baseName)}`;
     inferredVariantCounts.set(key, (inferredVariantCounts.get(key) || 0) + 1);
   }
 
@@ -153,7 +253,8 @@ function normalizeAiCatalogProducts(inputProducts = []) {
       : (Array.isArray(raw?.presentations) ? raw.presentations : (Array.isArray(raw?.sizes) ? raw.sizes : []));
     const hasNestedVariants = rawVariants.length > 0;
     const inferredCandidate = inferVariantFromProductName(rowName);
-    const inferredKey = `${normalizedKey(raw?.categoryName ?? raw?.category)}::${normalizedKey(inferredCandidate.baseName)}`;
+    const categoryName = resolveAiCategory(raw, options);
+    const inferredKey = `${normalizedKey(categoryName)}::${normalizedKey(inferredCandidate.baseName)}`;
     const inferred = !explicitBase && !legacyVariantName && !hasNestedVariants
       && (inferredVariantCounts.get(inferredKey) || 0) > 1
       ? inferredCandidate
@@ -172,22 +273,29 @@ function normalizeAiCatalogProducts(inputProducts = []) {
       : (Array.isArray(raw?.optionGroups) ? raw.optionGroups
         : (Array.isArray(raw?.ingredientGroups) ? raw.ingredientGroups
           : (Array.isArray(raw?.modifiers) ? raw.modifiers : [])));
-    const modifierGroups = rawModifierGroups
+    const normalizedModifierGroups = [...rawModifierGroups, ...directChoiceGroups(raw)]
       .slice(0, 15)
       .map(normalizeModifierGroup)
       .filter(Boolean);
+    const modifierGroups = [];
+    mergeUniqueByName(modifierGroups, normalizedModifierGroups, (group, addition) => {
+      mergeUniqueByName(group.options, addition.options);
+      group.minSelections = Math.max(group.minSelections, addition.minSelections);
+      group.maxSelections = Math.max(group.maxSelections, addition.maxSelections);
+    });
 
     const product = {
       name,
       description: cleanText(raw?.description, 1000),
       price: moneyValue(raw?.price),
-      categoryName: cleanText(raw?.categoryName ?? raw?.category, 120),
+      categoryName,
       variants: [],
       modifierGroups,
       warnings: (Array.isArray(raw?.warnings) ? raw.warnings : []).map((item) => cleanText(item, 240)).filter(Boolean).slice(0, 10),
       confidence: Math.max(0, Math.min(1, Number(raw?.confidence) || 0)),
       imageIndex: raw?.imageIndex !== null && raw?.imageIndex !== undefined && raw?.imageIndex !== ''
         && Number.isInteger(Number(raw.imageIndex)) ? Number(raw.imageIndex) : null,
+      imageRegion: normalizeImageRegion(raw, raw?.imageIndex),
     };
     mergeUniqueByName(product.variants, variants);
     if (product.price === 0 && (!product.variants.length || product.variants.every((variant) => variant.price === 0))) {
@@ -215,6 +323,9 @@ function normalizeAiCatalogProducts(inputProducts = []) {
         group.maxSelections = Math.max(group.maxSelections, addition.maxSelections);
       });
       existing.warnings = [...new Set([...existing.warnings, ...product.warnings])];
+      if (!existing.imageRegion || Number(product.imageRegion?.confidence || 0) > Number(existing.imageRegion?.confidence || 0)) {
+        existing.imageRegion = product.imageRegion;
+      }
     } else {
       products.push(product);
     }
@@ -227,21 +338,34 @@ function buildAiCatalogPrompt(businessType, categoryNames = []) {
   const profile = getCatalogProfile(businessType);
   return [
     `Analiza todas las imágenes como páginas de un mismo ${profile.document} y devuelve SOLO JSON válido.`,
+    '- El giro configurado es una referencia, no una restricción: si el contenido visible pertenece claramente a otro giro (por ejemplo, un menú de comida), prioriza siempre el documento real y adapta productos, categorías y opciones a lo que muestra.',
     `Genera cada ${profile.item} listo para cargar en el sistema POS/chatbot, siguiendo exactamente la estructura del alta manual.`,
     'Formato JSON requerido:',
-    '{"products":[{"name":"string","description":"string","price":123.45,"categoryName":"string","variants":[{"name":"string","price":123.45}],"modifierGroups":[{"name":"string","minSelections":0,"maxSelections":1,"options":[{"name":"string","extraPrice":0}]}],"confidence":0.95,"warnings":["string"]}],"notes":["string"]}',
+    '{"products":[{"name":"string","description":"string","price":123.45,"categoryName":"string","sourceSection":"encabezado visible del bloque","imageIndex":0,"imageRegion":{"imageIndex":0,"x":10,"y":20,"width":30,"height":25,"confidence":0.9},"variants":[{"name":"string","price":123.45}],"modifierGroups":[{"name":"string","minSelections":0,"maxSelections":1,"options":[{"name":"string","extraPrice":0}]}],"confidence":0.95,"warnings":["string"]}],"notes":["string"]}',
     'Reglas de lectura:',
+    '- Antes de generar el JSON, haz una auditoría visual silenciosa de cada columna y bloque: título, renglones pequeños debajo o al costado, precios, separadores y siguiente encabezado. No omitas texto pequeño legible.',
+    '- Respeta el alcance espacial: un título abre un bloque y los renglones alineados debajo pertenecen a ese producto hasta encontrar otro título, separador claro o cambio de columna.',
     `- Incluye sólo cada ${profile.item}; omite encabezados, teléfonos, subtotales y texto decorativo.`,
     '- Respeta nombres y precios impresos. price y extraPrice son números sin símbolo de moneda; si no son legibles usa 0 y agrega una advertencia.',
-    `- categoryName debe ser breve (ej. ${profile.categoryExamples}) y reutilizar una categoría existente cuando corresponda.`,
+    `- categoryName debe ser breve (ej. ${profile.categoryExamples}) y representar la familia real del producto. Usa sourceSection para copiar el encabezado visible del bloque y normalízalo como categoría.`,
+    '- No uses una sola categoría genérica para todo el documento. “General”, “Menú”, “Productos”, “Platillos” o “Comida rápida” no sustituyen las secciones específicas visibles.',
+    '- Puedes proponer categorías nuevas aunque no existan todavía; reutiliza una categoría existente sólo cuando sea semánticamente equivalente, nunca sólo porque ya existe.',
+    '- En un menú como este, clasifica Alitas/Boneless en “Alitas”; Hamburguesa y papas en “Hamburguesas”; Papas y pollo, Orden de pollo, Pollo jumbo o Chicken Bake en “Pollo y papas”; Combo/Mix en “Combos”; Extras en “Extras”; y conserva secciones claras como Ensaladas o Costillas.',
     `- ${profile.descriptionRule}`,
     '- No inventes ingredientes, tamaños, precios, opciones ni descripciones que no sean visibles.',
     '- Crea UN solo producto base y coloca dentro de variants sus tamaños, cantidades, presentaciones o planes con precio diferente. No repitas el producto por cada variante.',
-    '- Usa modifierGroups sólo para elecciones que el cliente puede personalizar (ingredientes, sabores, términos, guarniciones o extras). No conviertas la lista descriptiva de ingredientes incluidos en opciones.',
-    '- Para cada grupo infiere minSelections/maxSelections sólo cuando el menú indique “elige”, “incluye”, “hasta” u otra regla clara; si no, usa 0 y 1.',
+    '- Usa modifierGroups para elecciones que el cliente puede personalizar: ingredientes, sabores, salsas, términos o guarniciones. Una lista de alternativas sin precio colocada inmediatamente debajo o junto al producto también es un grupo seleccionable aunque no diga “elige”.',
+    '- Ejemplo obligatorio: si “Alitas” muestra 8 pza $169, 12 pza $199 y 17 pza $229, crea esas tres variantes; si debajo aparecen “Piña habanero, BBQ, Picositas, Ajo parmesano, Pimienta limón, Mango habanero, Tamarindo”, crea además en Alitas un grupo “Elige tu salsa” con esas siete opciones y extraPrice 0.',
+    '- Distingue opciones de descripción: una frase narrativa con “incluye”, “con” o componentes unidos por “+” suele ser contenido fijo y va en description; una lista vertical de sabores/salsas/tipos alternativos es modifierGroups. No conviertas la lista descriptiva de ingredientes incluidos en opciones.',
+    '- Una sección independiente “Extras” o “Adicionales” con precio propio por renglón son productos adicionales, salvo que el menú los vincule claramente a un producto. No la conviertas en un grupo global ni mezcles su precio con las salsas gratuitas.',
+    '- Para cada grupo define minSelections/maxSelections respetando las reglas explícitas de cantidad. Si una lista de sabores o salsas implica escoger una para poder pedir el producto y no muestra otra cantidad, usa minSelections=1 y maxSelections=1. Para opciones realmente opcionales usa 0 y 1.',
     '- En combos, conserva en description los componentes fijos. Sólo crea opciones para componentes que realmente se puedan elegir.',
     '- Si el precio base no aparece pero sí hay variantes, usa como price el menor precio de sus variantes.',
     '- confidence va de 0 a 1; agrega warnings cuando el texto, relación o precio sea dudoso.',
+    '- Antes de responder, verifica para cada producto que ninguna lista cercana de sabores, salsas, tamaños o presentaciones haya quedado sin asignar. Usa imageIndex basado en cero para indicar la página de origen.',
+    '- Si un texto pequeño es legible pero no puedes asociarlo con seguridad, no lo descartes: cópialo en notes con la página y el bloque visual para que el tenant pueda revisarlo.',
+    '- Para imageRegion usa coordenadas porcentuales 0-100 sobre la vista completa original: x/y esquina superior izquierda y width/height del recorte. Devuélvelo sólo cuando exista una fotografía claramente asociada a ese producto, con confidence >= 0.65.',
+    '- El recorte imageRegion debe rodear únicamente la comida o producto: evita precios, textos, logotipos, teléfonos y adornos. Si una foto representa varios productos o no hay relación clara, usa imageRegion:null; nunca asignes por cercanía dudosa.',
     '- Máximo 60 productos, 30 variantes por producto, 15 grupos y 30 opciones por grupo.',
     `Categorías existentes del tenant: ${categoryNames.join(', ') || 'Ninguna'}`,
   ].join('\n');

@@ -135,7 +135,7 @@ async function initMaster(options = {}) {
     CREATE TABLE IF NOT EXISTS users (
       id SERIAL PRIMARY KEY,
       tenant_id INTEGER NOT NULL REFERENCES tenants(id),
-      username TEXT UNIQUE NOT NULL,
+      username TEXT NOT NULL,
       password_hash TEXT NOT NULL,
       role TEXT DEFAULT 'owner',
       display_name TEXT DEFAULT '',
@@ -346,6 +346,11 @@ async function initMaster(options = {}) {
   await q(`ALTER TABLE users ADD COLUMN IF NOT EXISTS active INTEGER DEFAULT 1`);
   await q(`ALTER TABLE users ADD COLUMN IF NOT EXISTS onboarding_completed INTEGER NOT NULL DEFAULT 1`);
   await q(`ALTER TABLE users ADD COLUMN IF NOT EXISTS identity_completed INTEGER NOT NULL DEFAULT 1`);
+  // Los nombres de usuario pertenecen a cada negocio, no a toda la plataforma.
+  // Crear primero el índice nuevo: si hay conflictos históricos, no se retira
+  // la protección anterior y el arranque informa el problema.
+  await q(`CREATE UNIQUE INDEX IF NOT EXISTS idx_users_tenant_username_unique ON users (tenant_id, lower(username))`);
+  await q(`ALTER TABLE users DROP CONSTRAINT IF EXISTS users_username_key`);
   await q(`CREATE UNIQUE INDEX IF NOT EXISTS idx_users_cashier_slug_unique ON users (cashier_slug) WHERE cashier_slug IS NOT NULL AND cashier_slug <> ''`);
   await q(`CREATE UNIQUE INDEX IF NOT EXISTS idx_module_usage_tenant_module ON module_usage (tenant_id, module_key) WHERE demo_lead_id IS NULL`);
   await q(`CREATE UNIQUE INDEX IF NOT EXISTS idx_module_usage_lead_module ON module_usage (demo_lead_id, module_key) WHERE demo_lead_id IS NOT NULL`);
