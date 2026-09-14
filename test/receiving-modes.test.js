@@ -57,6 +57,21 @@ test('los pedidos conservan nombre y comportamiento de la modalidad elegida', ()
   assert.match(kds, /receivingModeLabel/);
 });
 
+test('la recuperación de clientes reconoce modalidades personalizadas a domicilio', () => {
+  assert.match(
+    chatbot,
+    /WHERE c\.phone_hash = \$1\s+AND \(o\.receiving_mode_behavior = 'delivery' OR o\.delivery = 'domicilio'\)/
+  );
+  assert.match(chatbot, /const address = row\.delivery_address \|\| decrypt\(row\.address_enc\)/);
+});
+
+test('un cliente con pedidos solo para recoger conserva su identidad y captura domicilio nuevo', () => {
+  assert.match(chatbot, /AND EXISTS \(SELECT 1 FROM \{s\}\.orders o WHERE o\.customer_id = c\.id\)/);
+  assert.match(chatbot, /hasDeliveryHistory: false/);
+  assert.match(chatbot, /if \(!profile\.hasDeliveryHistory\)/);
+  assert.match(chatbot, /Conservaré tu nombre y teléfono/);
+});
+
 test('solo comer en sucursal abre una cuenta de mesa al importar', () => {
   assert.match(pos, /const isDineInOrder = sourceOrder\.delivery === 'comer_sucursal'/);
   assert.match(pos, /INSERT INTO \{s\}\.table_accounts/);

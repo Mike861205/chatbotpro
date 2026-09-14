@@ -695,6 +695,7 @@ async function findReturningCustomerByPhone(t, phoneRaw) {
        o.customer_location_lng::float AS location_lng,
        o.customer_location_text,
        o.customer_location_resolved,
+      o.delivery_address,
        o.delivery_neighborhood,
        COALESCE(NULLIF(o.delivery_reference, ''), o.notes) AS customer_reference,
        o.delivery_fee::float AS delivery_fee,
@@ -705,19 +706,37 @@ async function findReturningCustomerByPhone(t, phoneRaw) {
      FROM {s}.customers c
      JOIN {s}.orders o ON o.customer_id = c.id
      WHERE c.phone_hash = $1
-       AND o.delivery = 'domicilio'
+       AND (o.receiving_mode_behavior = 'delivery' OR o.delivery = 'domicilio')
      ORDER BY o.id DESC
      LIMIT 1`,
     [phoneHash]
   );
-  if (!row) return null;
+  if (!row) {
+    const customer = await t.get(
+      `SELECT c.id, c.name_enc, c.phone_enc
+       FROM {s}.customers c
+       WHERE c.phone_hash = $1
+         AND EXISTS (SELECT 1 FROM {s}.orders o WHERE o.customer_id = c.id)
+       ORDER BY c.id DESC
+       LIMIT 1`,
+      [phoneHash]
+    );
+    if (!customer) return null;
+    return {
+      id: Number(customer.id),
+      name: decrypt(customer.name_enc) || '',
+      phone: decrypt(customer.phone_enc) || digits,
+      hasDeliveryHistory: false,
+    };
+  }
   const name = decrypt(row.name_enc) || '';
   const phone = decrypt(row.phone_enc) || digits;
-  const address = decrypt(row.address_enc) || row.customer_location_text || '';
+  const address = row.delivery_address || decrypt(row.address_enc) || row.customer_location_text || '';
   return {
     id: Number(row.id),
     name,
     phone,
+    hasDeliveryHistory: true,
     address,
     locationLat: Number.isFinite(Number(row.location_lat)) ? Number(row.location_lat) : null,
     locationLng: Number.isFinite(Number(row.location_lng)) ? Number(row.location_lng) : null,
@@ -2234,12 +2253,33 @@ async function handleMessage(t, slug, sessionId, rawInput) {
   if (state.step === 'ask_returning_phone') {
     const profile = await findReturningCustomerByPhone(t, input);
     if (!profile) {
-      reply.messages = ['No encontré un pedido a domicilio previo con ese teléfono. Verifica el número o continúa como pedido nuevo.'];
+      reply.messages = ['No encontré pedidos previos con ese teléfono. Verifica el número o continúa como cliente nuevo.'];
       reply.options = [
         { label: '🔁 Intentar de nuevo', value: 'returning_customer' },
         { label: '📋 Ver menú', value: 'menu' },
       ];
       state.step = 'start';
+      return finish();
+    }
+
+    if (!profile.hasDeliveryHistory) {
+      state.returningProfile = null;
+      state.customer.name = profile.name || state.customer.name || '';
+      state.customer.phone = String(profile.phone || input).replace(/\D/g, '') || state.customer.phone || '';
+      reply.messages = [
+        `Encontré tus pedidos anteriores, *${profile.name || 'cliente'}* 🙌`,
+        'Conservaré tu nombre y teléfono. Como aún no tienes un domicilio guardado, te pediré los datos necesarios para este pedido.',
+      ];
+      if (receivingModes.length > 1) {
+        state.step = 'ask_delivery';
+        reply.messages.push(labels.askDeliveryMode || '¿Cómo quieres recibir tu pedido?');
+        reply.options = receivingModeOptions();
+      } else if (receivingModes.length === 1) {
+        await startReceivingMode(receivingModes[0]);
+      } else {
+        state.step = 'ask_delivery';
+        reply.messages.push('El negocio no tiene modalidades activas para recibir pedidos. Intenta nuevamente más tarde.');
+      }
       return finish();
     }
 
