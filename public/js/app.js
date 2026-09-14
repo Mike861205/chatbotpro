@@ -6196,7 +6196,7 @@ function renderPosCart() {
           <label><i class="ph-bold ph-note"></i> ${tableAccount ? 'Nota de la ronda' : 'Nota de venta'}</label>
           <textarea id="posSaleNotes" rows="2" placeholder="${tableAccount ? 'Ej. Sin cebolla, término medio...' : POS_IS_DELIVERY ? 'Indicaciones de preparación: sin cebolla, salsa aparte...' : 'Mesa 4, venta rápida, pedido interno...'}">${esc(POS_PAYMENT_FORM.notes || '')}</textarea>
         </div>
-        <div style="display:flex;gap:10px;flex-wrap:wrap">
+        <div class="pos-checkout-actions">
           <button class="btn btn-primary" type="submit" ${submitDisabled}><i class="ph-bold ${POS_PAYMENT_METHOD === 'credit' ? 'ph-file-plus' : 'ph-check-circle'}"></i> ${POS_PAYMENT_METHOD === 'credit' ? 'Registrar venta a crédito' : tableAccount ? 'Cerrar y cobrar cuenta' : 'Cobrar venta'}</button>
           ${tableAccount ? `<button class="btn btn-ghost" type="button" id="posSaveTable" ${POS_CART.length ? '' : 'disabled'}><i class="ph-bold ph-paper-plane-tilt"></i> Enviar ronda e imprimir</button>` : ''}
           <button class="btn btn-ghost" type="button" id="posClearCart"><i class="ph-bold ${tableAccount ? 'ph-arrow-left' : 'ph-broom'}"></i> ${tableAccount ? 'Salir de mesa' : 'Vaciar ticket'}</button>

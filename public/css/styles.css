@@ -10515,6 +10515,65 @@ body.onboarding-open { overflow: hidden; }
 .access-config{display:grid;gap:13px}.access-config-head{display:flex;align-items:flex-start;justify-content:space-between;gap:14px}.access-config-head h3{margin-bottom:5px}.access-config-head p{margin:0;max-width:620px}.internal-user-modal{width:min(820px,calc(100vw - 28px));max-width:none!important;max-height:92vh;overflow:auto}.access-modal-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:18px}.permission-heading{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:4px 0 10px}.permission-heading b,.permission-heading span{display:block}.permission-heading span{margin-top:3px;color:var(--muted);font-size:11px}.module-permission-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));align-items:stretch;gap:8px;margin-bottom:17px}.module-permission-grid.compact{grid-template-columns:repeat(2,minmax(0,1fr))}.module-permission-item{display:flex;align-items:center;gap:10px;min-height:48px;margin:0;padding:10px 12px;border:1px solid var(--line);border-radius:8px;background:#fff;cursor:pointer;font-size:12px;font-weight:750}.module-permission-item:has(input:checked){border-color:color-mix(in srgb,var(--primary) 55%,var(--line));background:color-mix(in srgb,var(--primary) 6%,white);color:var(--primary)}.module-permission-item input{flex:0 0 16px;width:16px;height:16px;margin:0;accent-color:var(--primary)}.module-permission-item span{min-width:0;line-height:1.25;text-align:left}.user-permission-chips{display:flex;gap:4px;flex-wrap:wrap;max-width:360px}.user-permission-chips span{padding:3px 7px;border-radius:999px;background:var(--soft);color:var(--ink-2);font-size:9px;font-weight:750}@media(max-width:700px){.access-config-head,.permission-heading{align-items:stretch;flex-direction:column}.access-config-head .btn{width:100%}.module-permission-grid,.module-permission-grid.compact{grid-template-columns:1fr}.internal-user-modal{width:calc(100vw - 16px);padding:18px!important}}
 .pos-sale-processing-card h3{margin:7px 0 8px;font-size:25px}.pos-sale-processing-card p{margin:0;color:var(--muted);line-height:1.5}
 .pos-sale-processing-status{margin-top:18px;padding:11px 13px;border-radius:12px;background:#ecfdf5;color:#047857;font-size:12px;font-weight:800}
+
+/* POS: keep the ticket and payment controls inside narrow phone viewports. */
+.pos-checkout-actions { display: flex; gap: 10px; flex-wrap: wrap; }
+@media (max-width: 760px) {
+  #view-pos,
+  #view-pos .pos-shell,
+  #view-pos .pos-main,
+  #view-pos .pos-side,
+  #view-pos .pos-catalog-card,
+  #view-pos .pos-checkout-card {
+    width: 100%;
+    min-width: 0;
+    max-width: 100%;
+  }
+  #view-pos .pos-shell { grid-template-columns: minmax(0, 1fr); }
+  #view-pos .pos-cart-item > div:first-child,
+  #view-pos .pos-table-context-head > div:first-child,
+  #view-pos .pos-delivery-toggle .t-info,
+  #view-pos .pos-delivery-toggle .t-info > div {
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+  #view-pos .pos-cart-actions { flex: 0 0 auto; }
+  #view-pos .pos-total-line { gap: 8px; }
+  #view-pos .pos-total-line b { min-width: 0; text-align: right; overflow-wrap: anywhere; }
+  #view-pos .pos-pay-methods {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+    overflow: visible;
+    padding: 0;
+    scroll-snap-type: none;
+  }
+  #view-pos .pos-pay-methods button {
+    width: 100%;
+    min-width: 0;
+    padding: 9px 6px;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+  #view-pos .pos-checkout-actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+  }
+  #view-pos .pos-checkout-actions .btn {
+    width: 100%;
+    min-width: 0;
+    justify-content: center;
+    white-space: normal;
+    text-align: center;
+  }
+  #view-pos .pos-checkout-actions .btn-primary { grid-column: 1 / -1; min-height: 50px; }
+}
+@media (max-width: 340px) {
+  #view-pos .pos-cart-item { flex-wrap: wrap; }
+  #view-pos .pos-cart-item > div:first-child { flex: 1 1 100%; }
+  #view-pos .pos-cart-actions { margin-left: auto; }
+}
 .currency-conversion-panel{border:1px solid var(--line);border-radius:16px;padding:12px;margin-bottom:14px;background:linear-gradient(145deg,rgba(37,99,235,.035),rgba(16,185,129,.035))}
 .currency-conversion-panel .toggle-row{margin:0}
 .currency-conversion-panel #cfgCurrencyConversionFields{padding-top:14px;border-top:1px solid var(--line);margin-top:12px}
