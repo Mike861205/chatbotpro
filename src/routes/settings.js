@@ -10,6 +10,7 @@ const { CURRENCIES, TIME_ZONES, regionalDefaults, isSupportedCurrency, isSupport
 const { normalizeCustomPaymentMethods, normalizePaymentAccounts } = require('../utils/paymentMethods');
 const { validateFloatingIcons } = require('../utils/chatbotAppearance');
 const { resolveCurrencyConversion, fetchAutomaticRate, positiveRate, PROVIDER_NAME, PROVIDER_URL } = require('../utils/currencyConversion');
+const { normalizePrinterConfig } = require('../utils/printerConfig');
 
 const router = express.Router();
 router.use(requireAuth);
@@ -74,6 +75,7 @@ const SETTING_KEYS = [
   'ticket_show_logo',
   'ticket_print_mode',
   'ticket_mobile_zoom_percent',
+  'multi_printer_config_json',
   'pos_catalog_sort_mode',
   'pos_round_edit_enabled',
   'pos_round_edit_require_pin',
@@ -232,6 +234,13 @@ router.put('/', upload.single('logo'), async (req, res, next) => {
     if (body.custom_payment_methods_json !== undefined) {
       try {
         body.custom_payment_methods_json = JSON.stringify(normalizeCustomPaymentMethods(body.custom_payment_methods_json));
+      } catch (error) {
+        return res.status(400).json({ error: error.message });
+      }
+    }
+    if (body.multi_printer_config_json !== undefined) {
+      try {
+        body.multi_printer_config_json = JSON.stringify(normalizePrinterConfig(body.multi_printer_config_json));
       } catch (error) {
         return res.status(400).json({ error: error.message });
       }

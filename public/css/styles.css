@@ -4050,6 +4050,8 @@ select.status-sel {
   overflow-y: auto;
   overscroll-behavior: contain;
   scrollbar-gutter: stable;
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--primary) 65%, #64748b) #eef2f7;
   background:
     radial-gradient(500px 220px at 95% -65%, color-mix(in srgb, var(--primary) 16%, transparent), transparent 70%),
     #fff;
@@ -4070,11 +4072,26 @@ select.status-sel {
   overflow-y: auto;
   overscroll-behavior: contain;
   scrollbar-gutter: stable;
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--primary) 65%, #64748b) #eef2f7;
   border: 1px solid color-mix(in srgb, var(--primary) 24%, #dbe3ff);
   box-shadow: 0 14px 40px rgba(23, 28, 46, 0.14);
   background:
     radial-gradient(420px 140px at 105% -15%, color-mix(in srgb, var(--primary) 20%, transparent), transparent 70%),
     linear-gradient(180deg, #ffffff 0%, #f8fbff 100%);
+}
+.pos-catalog-card::-webkit-scrollbar,
+.pos-checkout-card::-webkit-scrollbar { width: 10px; }
+.pos-catalog-card::-webkit-scrollbar-track,
+.pos-checkout-card::-webkit-scrollbar-track {
+  border-radius: 999px;
+  background: #eef2f7;
+}
+.pos-catalog-card::-webkit-scrollbar-thumb,
+.pos-checkout-card::-webkit-scrollbar-thumb {
+  border: 2px solid #eef2f7;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--primary) 65%, #64748b);
 }
 .pos-checkout-card h3 {
   position: sticky;
@@ -5495,12 +5512,17 @@ select.status-sel {
 @media (max-width: 760px) {
   .pos-shell { grid-template-columns: 1fr; height: auto; }
   .pos-main, .pos-side { height: auto; }
-  .pos-catalog-card {
-    max-height: min(62vh, 620px);
-    overflow-y: auto;
-    overscroll-behavior: contain;
+  .pos-catalog-card,
+  .pos-checkout-card {
+    height: auto;
+    max-height: none;
+    overflow: visible;
+    overscroll-behavior: auto;
+    scrollbar-gutter: auto;
   }
-  .pos-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .pos-catalog-head,
+  .pos-checkout-card h3 { position: static; }
+  .pos-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
   .pos-finance-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .pos-fin-card { grid-template-columns: 48px 1fr; padding: 12px; }
   .pos-fin-ic { width: 48px; height: 48px; font-size: 22px; }
@@ -5509,13 +5531,108 @@ select.status-sel {
 }
 
 @media (max-width: 480px) {
-  .pos-catalog-card { max-height: 58vh; }
   .pos-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .pos-prod-media { height: 66px; }
+  .pos-prod { min-width: 0; gap: 5px; padding: 7px; border-radius: 10px; }
+  .pos-prod-media { height: 52px; border-radius: 8px; }
+  .pos-prod-body { min-width: 0; gap: 2px; }
+  .pos-prod-body b { overflow-wrap: anywhere; font-size: 11.5px; line-height: 1.25; }
+  .pos-prod-body small {
+    display: -webkit-box;
+    min-height: 0;
+    overflow: hidden;
+    font-size: 9.5px;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+  }
+  .pos-prod-cat { max-width: 100%; overflow: hidden; padding: 2px 5px; font-size: 8px; text-overflow: ellipsis; white-space: nowrap; }
+  .pos-prod-price { font-size: 12.5px; }
 }
 
 @media (max-width: 360px) {
-  .pos-grid { grid-template-columns: 1fr; }
+  .pos-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
+}
+
+.direct-print-panel {
+  margin: 18px 0;
+  padding: 18px;
+  border: 1px solid #bfdbfe;
+  border-left: 4px solid #2563eb;
+  border-radius: 8px;
+  background: linear-gradient(135deg, #f8fbff, #f0fdf4);
+}
+.direct-print-heading,
+.direct-print-toolbar,
+.direct-print-bridge,
+.direct-printer-head,
+.direct-printer-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.direct-print-heading { align-items: flex-start; justify-content: space-between; margin-bottom: 16px; }
+.direct-print-heading h4 { margin: 4px 0; font-size: 18px; }
+.direct-print-heading p { margin: 0; color: var(--ink-2); font-size: 12px; line-height: 1.5; }
+.direct-print-kicker { color: #1d4ed8; font-size: 10px; font-weight: 900; text-transform: uppercase; }
+.direct-print-steps { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin: 0 0 16px; }
+.direct-print-steps > div { display: flex; align-items: flex-start; gap: 9px; min-width: 0; padding: 10px; border: 1px solid #dbeafe; border-radius: 8px; background: rgba(255,255,255,.82); }
+.direct-print-steps > div > span { display: grid; place-items: center; flex: 0 0 24px; width: 24px; height: 24px; border-radius: 50%; color: #fff; background: #2563eb; font-size: 11px; font-weight: 900; }
+.direct-print-steps p { margin: 0; color: #475569; font-size: 10px; line-height: 1.4; }
+.direct-print-steps b { display: block; margin-bottom: 2px; color: var(--ink); font-size: 10.5px; }
+.direct-print-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+  padding: 7px 10px;
+  border: 1px solid #cbd5e1;
+  border-radius: 999px;
+  color: #475569;
+  background: #fff;
+  font-size: 10px;
+  font-weight: 800;
+}
+.direct-print-status.connected { border-color: #86efac; color: #047857; background: #ecfdf5; }
+.direct-print-status.error { border-color: #fca5a5; color: #b91c1c; background: #fef2f2; }
+.direct-print-mode-row { align-items: end; }
+.direct-print-bridge { justify-content: space-between; min-height: 70px; padding: 11px 13px; border: 1px solid #dbeafe; border-radius: 8px; background: #fff; }
+.direct-print-bridge div { min-width: 0; }
+.direct-print-bridge b, .direct-print-bridge span { display: block; }
+.direct-print-bridge span { margin-top: 3px; color: var(--ink-3); font-size: 10px; line-height: 1.35; }
+.direct-print-toolbar { flex-wrap: wrap; margin: 8px 0 12px; }
+.direct-printer-list { display: grid; gap: 10px; }
+.direct-printer-card { padding: 13px; border: 1px solid #dbe3ef; border-radius: 8px; background: #fff; }
+.direct-printer-head { align-items: end; }
+.direct-printer-head .field { min-width: 0; margin: 0; }
+.direct-printer-head .direct-printer-label { flex: .7; }
+.direct-printer-head .direct-printer-device { flex: 1.3; }
+.direct-printer-head .direct-printer-small { width: 110px; flex: 0 0 110px; }
+.direct-printer-destinations { display: flex; gap: 7px; flex-wrap: wrap; margin-top: 12px; }
+.direct-destination {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 34px;
+  padding: 6px 9px;
+  border: 1px solid #dbe3ef;
+  border-radius: 7px;
+  background: #f8fafc;
+  font-size: 10px;
+  font-weight: 750;
+}
+.direct-destination input { margin: 0; accent-color: #2563eb; }
+.direct-print-example { display: flex; gap: 9px; margin-top: 12px; padding: 10px 12px; border: 1px solid #bbf7d0; border-radius: 8px; color: #166534; background: #f0fdf4; font-size: 10.5px; line-height: 1.45; }
+.direct-print-example i { flex: 0 0 auto; color: #16a34a; font-size: 17px; }
+.direct-print-note { display: flex; gap: 8px; margin-top: 12px; color: #475569; font-size: 10.5px; line-height: 1.45; }
+.direct-print-note i { flex: 0 0 auto; color: #2563eb; font-size: 16px; }
+.direct-printer-empty { padding: 17px; border: 1px dashed #94a3b8; border-radius: 8px; color: var(--ink-2); text-align: center; background: rgba(255,255,255,.7); }
+@media (max-width: 760px) {
+  .direct-print-heading, .direct-print-bridge, .direct-printer-head { align-items: stretch; flex-direction: column; }
+  .direct-print-steps { grid-template-columns: 1fr; }
+  .direct-print-status { align-self: flex-start; }
+  .direct-printer-head .direct-printer-small { width: 100%; flex-basis: auto; }
+  .direct-print-toolbar .btn { flex: 1 1 150px; }
+  .direct-destination { flex: 1 1 130px; }
 }
 
 /* ---------- Products ---------- */

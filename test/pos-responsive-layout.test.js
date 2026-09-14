@@ -18,8 +18,10 @@ test('alinea catálogo y checkout del POS y los mantiene cercanos en móvil', ()
   assert.match(css, /\.pos-checkout-card\s*\{[^}]*height:\s*100%;[^}]*overflow-y:\s*auto;/s);
   assert.match(css, /\.pos-catalog-head\s*\{[^}]*position:\s*sticky;/s);
   assert.match(css, /@media \(max-width: 1180px\)[\s\S]*grid-template-columns:\s*minmax\(0, 1fr\) minmax\(320px, 38vw\)/);
-  assert.match(css, /@media \(max-width: 760px\)[\s\S]*\.pos-catalog-card\s*\{[^}]*max-height:[^}]*overflow-y:\s*auto;/);
+  assert.match(css, /@media \(max-width: 760px\)[\s\S]*\.pos-catalog-card,\s*\.pos-checkout-card\s*\{[^}]*height:\s*auto;[^}]*max-height:\s*none;[^}]*overflow:\s*visible;[^}]*overscroll-behavior:\s*auto;/);
+  assert.match(css, /@media \(max-width: 480px\)[\s\S]*\.pos-grid\s*\{\s*grid-template-columns:\s*repeat\(2, minmax\(0, 1fr\)\);/);
+  assert.match(css, /@media \(max-width: 480px\)[\s\S]*\.pos-prod-media\s*\{\s*height:\s*52px;/);
   assert.match(css, /body\.sidebar-collapsed \.main\s*\{[^}]*margin-left:\s*0;[^}]*max-width:\s*100vw;/s);
   assert.match(client, /SIDEBAR_COLLAPSED_KEY = 'cbpSidebarCollapsed'/);
-  assert.match(css, /@media \(max-width: 360px\)[\s\S]*\.pos-grid\s*\{\s*grid-template-columns:\s*1fr;/);
+  assert.match(css, /@media \(max-width: 360px\)[\s\S]*\.pos-grid\s*\{\s*grid-template-columns:\s*repeat\(2, minmax\(0, 1fr\)\);/);
 });

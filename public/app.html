@@ -11,7 +11,7 @@
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/fill/style.css" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/duotone/style.css" />
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-  <link rel="stylesheet" href="/static/css/styles.css?v=20260913-ai-draft-review" />
+  <link rel="stylesheet" href="/static/css/styles.css?v=20260914-multi-print-help" />
   <link rel="icon" type="image/svg+xml" href="/static/favicon.svg" />
   <link rel="icon" type="image/png" href="/static/chatbotpro100.png" />
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
@@ -1377,6 +1377,45 @@
                   </select>
                 </div>
               </div>
+              <section class="direct-print-panel" data-owner-only>
+                <div class="direct-print-heading">
+                  <div>
+                    <span class="direct-print-kicker"><i class="ph-bold ph-printer"></i> Impresión directa múltiple</span>
+                    <h4>Cobra una vez e imprime en cada área</h4>
+                    <p>Configúralo una sola vez. Después, cada cobro del POS enviará automáticamente el ticket y las comandas a las impresoras asignadas.</p>
+                  </div>
+                  <span class="direct-print-status" id="directPrintStatus"><i class="ph-bold ph-circle"></i> Sin conectar</span>
+                </div>
+                <div class="direct-print-steps" aria-label="Cómo configurar la impresión directa">
+                  <div><span>1</span><p><b>Instala QZ Tray</b>Descárgalo en la computadora Windows, macOS o Linux donde están instaladas las impresoras y déjalo abierto.</p></div>
+                  <div><span>2</span><p><b>Conecta tus impresoras</b>USB, red o Bluetooth deben aparecer primero como impresoras instaladas en esa computadora.</p></div>
+                  <div><span>3</span><p><b>Asigna cada destino</b>Busca las impresoras y elige cuál imprime Caja, Cocina, Barra u otra área.</p></div>
+                </div>
+                <div class="row-2 direct-print-mode-row">
+                  <div class="field">
+                    <label for="cfgDirectPrintMode"><i class="ph-bold ph-arrows-split"></i> Forma de imprimir</label>
+                    <select id="cfgDirectPrintMode">
+                      <option value="browser">Diálogo del navegador (actual)</option>
+                      <option value="qz">Directa a una o varias impresoras</option>
+                    </select>
+                  </div>
+                  <div class="direct-print-bridge">
+                    <div><b>Primero descarga QZ Tray en la computadora</b><span>No se instala en iPad ni en tablet Android. El POS y QZ Tray deben usarse en la computadora de impresión para esta conexión directa.</span></div>
+                    <a class="btn btn-ghost btn-sm" href="https://qz.io/download/" target="_blank" rel="noopener noreferrer"><i class="ph-bold ph-download-simple"></i> Descargar QZ Tray</a>
+                  </div>
+                </div>
+                <div id="directPrintControls" hidden>
+                  <div class="direct-print-toolbar">
+                    <button class="btn btn-primary btn-sm" type="button" id="connectPrintBridgeBtn"><i class="ph-bold ph-plugs-connected"></i> Conectar puente</button>
+                    <button class="btn btn-ghost btn-sm" type="button" id="refreshPrinterListBtn"><i class="ph-bold ph-arrows-clockwise"></i> Buscar impresoras</button>
+                    <button class="btn btn-ghost btn-sm" type="button" id="addDirectPrinterBtn"><i class="ph-bold ph-plus"></i> Agregar impresora</button>
+                  </div>
+                  <datalist id="qzPrinterNames"></datalist>
+                  <div class="direct-printer-list" id="directPrinterList"></div>
+                  <div class="direct-print-example"><i class="ph-bold ph-receipt"></i><span><b>Ejemplo con 3 impresoras:</b> al cobrar una sola vez, Caja recibe el ticket del cliente, Cocina recibe solo los platillos y Barra recibe solo las bebidas. Si asignas el mismo destino a varias impresoras, todas recibirán esa impresión.</span></div>
+                  <div class="direct-print-note"><i class="ph-bold ph-info"></i><span>QZ Tray debe permanecer abierto. Sin certificado de firma puede mostrar una confirmación; con la firma configurada, la impresión es automática y silenciosa.</span></div>
+                </div>
+              </section>
               <button class="btn btn-primary" type="submit"><i class="ph-bold ph-floppy-disk"></i> Guardar ticket</button>
             </form>
           </div>
@@ -3326,7 +3365,8 @@
     </div>
   </div>
 
-<script src="/socket.io/socket.io.js"></script>
-  <script src="/static/js/app.js?v=20260913-ai-accept-local"></script>
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="/static/vendor/qz-tray.js?v=2.3.0"></script>
+  <script src="/static/js/app.js?v=20260914-multi-print"></script>
 </body>
 </html>

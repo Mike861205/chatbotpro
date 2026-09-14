@@ -84,6 +84,11 @@ let POS_PAYMENT_METHOD = 'cash';
 let POS_CHECKOUT_IN_FLIGHT = false;
 let POS_CHECKOUT_IDEMPOTENCY_KEY = '';
 let POS_CHECKOUT_FINGERPRINT = '';
+let DIRECT_PRINT_CONFIG = { version: 1, mode: 'browser', printers: [] };
+let QZ_PRINTER_NAMES = [];
+let QZ_CONNECTION_PROMISE = null;
+let QZ_SECURITY_CONFIGURED = false;
+let QZ_SIGNED_CONNECTION = false;
 const DASHBOARD_PERIOD_LABELS = {
   day: 'de hoy',
   week: 'de la semana',
@@ -3319,11 +3324,178 @@ function operationalOrderNote(order) {
 
 // ── Helpers de impresión de comanda ────────────────────────────────────────
 
-function buildComandaHtml(order, areaItems, areaLabel) {
+function parseDirectPrintConfig(raw = SETTINGS?.multi_printer_config_json) {
+  try {
+    const parsed = typeof raw === 'string' ? JSON.parse(raw || '{}') : (raw || {});
+    return {
+      version: 1,
+      mode: parsed.mode === 'qz' ? 'qz' : 'browser',
+      printers: Array.isArray(parsed.printers) ? parsed.printers.map((printer, index) => ({
+        id: String(printer.id || `printer_${index + 1}`),
+        label: String(printer.label || printer.name || ''),
+        name: String(printer.name || ''),
+        branchId: Number(printer.branchId) > 0 ? Number(printer.branchId) : null,
+        widthMm: Number(printer.widthMm) === 58 ? 58 : 80,
+        copies: Math.max(1, Math.min(3, Number(printer.copies) || 1)),
+        destinations: Array.isArray(printer.destinations) ? printer.destinations.map(String) : [],
+      })) : [],
+    };
+  } catch {
+    return { version: 1, mode: 'browser', printers: [] };
+  }
+}
+
+function directPrintEnabled() {
+  return parseDirectPrintConfig().mode === 'qz';
+}
+
+function setPrintBridgeStatus(state, text) {
+  const status = $('#directPrintStatus');
+  if (!status) return;
+  status.className = `direct-print-status ${state || ''}`.trim();
+  status.innerHTML = `<i class="ph-bold ${state === 'connected' ? 'ph-check-circle' : state === 'error' ? 'ph-warning-circle' : 'ph-circle'}"></i> ${esc(text)}`;
+}
+
+function withPrintTimeout(promise, milliseconds, message) {
+  let timer;
+  const timeout = new Promise((resolve, reject) => {
+    timer = setTimeout(() => reject(new Error(message)), milliseconds);
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
+
+async function connectQzBridge({ notify = false } = {}) {
+  if (!globalThis.qz?.websocket) throw new Error('No se pudo cargar el conector de QZ Tray');
+  if (!QZ_SECURITY_CONFIGURED) {
+    QZ_SECURITY_CONFIGURED = true;
+    try {
+      const status = await api('/api/printing/qz-status');
+      QZ_SIGNED_CONNECTION = status.signed === true;
+      if (QZ_SIGNED_CONNECTION) {
+        const authScope = getAuthScope();
+        const certificateResponse = await fetch('/api/printing/qz-certificate', {
+          cache: 'no-store',
+          headers: authScope ? { 'x-cbp-auth-scope': authScope } : {},
+        });
+        if (!certificateResponse.ok) throw new Error('Certificado QZ no disponible');
+        const certificate = await certificateResponse.text();
+        globalThis.qz.security.setCertificatePromise((resolve) => resolve(certificate));
+        globalThis.qz.security.setSignatureAlgorithm('SHA512');
+        globalThis.qz.security.setSignaturePromise((request) => (resolve, reject) => {
+          const headers = { 'Content-Type': 'text/plain' };
+          if (authScope) headers['x-cbp-auth-scope'] = authScope;
+          fetch('/api/printing/qz-sign', { method: 'POST', headers, body: request })
+            .then(async (response) => {
+              if (!response.ok) throw new Error((await response.json().catch(() => null))?.error || 'No se pudo firmar la impresión');
+              resolve(await response.text());
+            })
+            .catch(reject);
+        });
+      }
+    } catch (error) {
+      console.warn('[QZ] No se pudo activar la firma digital:', error.message);
+      QZ_SIGNED_CONNECTION = false;
+      QZ_SECURITY_CONFIGURED = false;
+    }
+  }
+  if (globalThis.qz.websocket.isActive()) {
+    setPrintBridgeStatus('connected', QZ_SIGNED_CONNECTION ? 'QZ conectado · impresión silenciosa' : 'QZ Tray conectado');
+    return true;
+  }
+  if (!QZ_CONNECTION_PROMISE) {
+    setPrintBridgeStatus('', 'Conectando…');
+    QZ_CONNECTION_PROMISE = withPrintTimeout(
+      globalThis.qz.websocket.connect({ retries: 1, delay: 1 }),
+      10000,
+      'QZ Tray tardó demasiado en responder'
+    )
+      .finally(() => { QZ_CONNECTION_PROMISE = null; });
+  }
+  try {
+    await QZ_CONNECTION_PROMISE;
+    setPrintBridgeStatus('connected', QZ_SIGNED_CONNECTION ? 'QZ conectado · impresión silenciosa' : 'QZ Tray conectado');
+    if (notify) toast('Puente QZ Tray conectado');
+    return true;
+  } catch {
+    setPrintBridgeStatus('error', 'QZ Tray no disponible');
+    throw new Error('Abre QZ Tray en este equipo y autoriza la conexión');
+  }
+}
+
+async function refreshQzPrinters({ notify = true } = {}) {
+  await connectQzBridge();
+  const found = await globalThis.qz.printers.find();
+  QZ_PRINTER_NAMES = [...new Set((Array.isArray(found) ? found : [found]).filter(Boolean).map(String))].sort();
+  DIRECT_PRINT_CONFIG.printers = readDirectPrinterInputs();
+  renderDirectPrinterConfig();
+  if (notify) toast(`${QZ_PRINTER_NAMES.length} impresora${QZ_PRINTER_NAMES.length === 1 ? '' : 's'} detectada${QZ_PRINTER_NAMES.length === 1 ? '' : 's'}`);
+  return QZ_PRINTER_NAMES;
+}
+
+function directPrintAreas() {
+  return (Array.isArray(KDS_CONFIG?.areas) ? KDS_CONFIG.areas : [])
+    .filter((area) => area.active && area.type !== 'delivery');
+}
+
+function readDirectPrinterInputs() {
+  return [...document.querySelectorAll('[data-direct-printer]')].map((card, index) => ({
+    id: card.dataset.directPrinter || `printer_${index + 1}`,
+    label: card.querySelector('[data-printer-label]')?.value || '',
+    name: card.querySelector('[data-printer-name]')?.value || '',
+    branchId: Number(card.querySelector('[data-printer-branch]')?.value) || null,
+    widthMm: Number(card.querySelector('[data-printer-width]')?.value) === 58 ? 58 : 80,
+    copies: Number(card.querySelector('[data-printer-copies]')?.value) || 1,
+    destinations: [...card.querySelectorAll('[data-printer-destination]:checked')].map((input) => input.value),
+  }));
+}
+
+function renderDirectPrinterConfig() {
+  const modeSelect = $('#cfgDirectPrintMode');
+  const controls = $('#directPrintControls');
+  const list = $('#directPrinterList');
+  if (!modeSelect || !controls || !list) return;
+  modeSelect.value = DIRECT_PRINT_CONFIG.mode === 'qz' ? 'qz' : 'browser';
+  controls.hidden = modeSelect.value !== 'qz';
+  $('#qzPrinterNames').innerHTML = QZ_PRINTER_NAMES.map((name) => `<option value="${esc(name)}"></option>`).join('');
+  const areas = directPrintAreas();
+  const branches = Array.isArray(BRANCHES) ? BRANCHES.filter((branch) => branch.active !== false) : [];
+  list.innerHTML = DIRECT_PRINT_CONFIG.printers.length
+    ? DIRECT_PRINT_CONFIG.printers.map((printer, index) => {
+      const selected = new Set(printer.destinations || []);
+      const areaDestinations = areas.map((area) => `<label class="direct-destination"><input type="checkbox" data-printer-destination value="area:${area.id}" ${selected.has(`area:${area.id}`) ? 'checked' : ''} /><span><i class="ph-bold ${kdsAreaIcon(area.name)}"></i> ${esc(area.name)}</span></label>`).join('');
+      return `<article class="direct-printer-card" data-direct-printer="${esc(printer.id || `printer_${index + 1}`)}">
+        <div class="direct-printer-head">
+          <div class="field direct-printer-label"><label>Nombre visible</label><input data-printer-label maxlength="60" value="${esc(printer.label || '')}" placeholder="Ej. Caja principal" /></div>
+          <div class="field direct-printer-device"><label>Impresora del sistema</label><input data-printer-name list="qzPrinterNames" maxlength="180" value="${esc(printer.name || '')}" placeholder="Conecta QZ Tray para buscar" /></div>
+          <div class="field direct-printer-small"><label>Sucursal</label><select data-printer-branch><option value="">Todas</option>${branches.map((branch) => `<option value="${branch.id}" ${Number(printer.branchId) === Number(branch.id) ? 'selected' : ''}>${esc(branch.name)}</option>`).join('')}</select></div>
+          <div class="field direct-printer-small"><label>Ancho</label><select data-printer-width><option value="80" ${Number(printer.widthMm) !== 58 ? 'selected' : ''}>80 mm</option><option value="58" ${Number(printer.widthMm) === 58 ? 'selected' : ''}>58 mm</option></select></div>
+          <div class="field direct-printer-small"><label>Copias</label><input data-printer-copies type="number" min="1" max="3" value="${Math.max(1, Math.min(3, Number(printer.copies) || 1))}" /></div>
+          <div class="direct-printer-actions"><button class="btn btn-ghost btn-icon" type="button" data-test-direct-printer title="Imprimir prueba"><i class="ph-bold ph-play"></i></button><button class="btn btn-danger btn-icon" type="button" data-remove-direct-printer="${index}" title="Quitar impresora"><i class="ph-bold ph-trash"></i></button></div>
+        </div>
+        <div class="direct-printer-destinations">
+          <label class="direct-destination"><input type="checkbox" data-printer-destination value="ticket" ${selected.has('ticket') ? 'checked' : ''} /><span><i class="ph-bold ph-receipt"></i> Ticket de caja</span></label>
+          <label class="direct-destination"><input type="checkbox" data-printer-destination value="general" ${selected.has('general') ? 'checked' : ''} /><span><i class="ph-bold ph-tray"></i> Sin área / General</span></label>
+          ${areaDestinations}
+        </div>
+      </article>`;
+    }).join('')
+    : '<div class="direct-printer-empty"><i class="ph-bold ph-printer"></i><b> Aún no hay impresoras asignadas</b><div>Conecta QZ Tray y agrega la impresora de caja, Cocina, Barra u otras áreas.</div></div>';
+}
+
+async function loadDirectPrintDestinations() {
+  try {
+    KDS_CONFIG = await api('/api/kds');
+  } catch {
+    KDS_CONFIG = { ...KDS_CONFIG, areas: [] };
+  }
+  renderDirectPrinterConfig();
+}
+
+function buildComandaHtml(order, areaItems, areaLabel, widthOverride = null, autoPrint = true) {
   const biz = esc(SETTINGS?.business_name || ME?.tenant?.businessName || 'Negocio');
   const bizAddress = esc(SETTINGS?.address || '');
   const bizWhatsapp = esc((SETTINGS?.whatsapp || '').trim());
-  const widthMm = Math.max(58, Math.min(80, Number(SETTINGS?.ticket_width_mm || 80)));
+  const widthMm = Math.max(58, Math.min(80, Number(widthOverride || SETTINGS?.ticket_width_mm || 80)));
   const fontPx = Math.max(10, Math.min(24, Number(SETTINGS?.ticket_font_size_px || 14)));
   const lineHeight = Math.max(1.1, Math.min(2, Number(SETTINGS?.ticket_line_height || 1.45)));
   const showLogo = SETTINGS?.ticket_show_logo !== '0';
@@ -3348,8 +3520,8 @@ function buildComandaHtml(order, areaItems, areaLabel) {
     </tr>`;
   }).join('');
 
-  const customerName = esc(order?.customer?.name || 'Mostrador');
-  const customerPhone = esc(order?.customer?.phone || '');
+  const customerName = esc(order?.customer?.name || order?.customerName || order?.customer_name || 'Mostrador');
+  const customerPhone = esc(order?.customer?.phone || order?.customerPhone || order?.customer_phone || '');
   const delivery = esc(buildOrderDeliveryLabel(order));
   const addressDelivery = order?.receiving_mode_behavior === 'delivery' || order?.delivery === 'domicilio';
   const branch = esc(orderBranchLabel(order));
@@ -3423,12 +3595,12 @@ function buildComandaHtml(order, areaItems, areaLabel) {
     <div class="sep"></div>
     <div class="center meta">${areaLabel ? `Área: ${esc(areaLabel)}` : 'Impresión de cocina'}</div>
   </div>
-  <script>
+  ${autoPrint ? `<script>
     window.onload = () => {
       window.print();
       setTimeout(() => window.close(), 120);
     };
-  </script>
+  </script>` : ''}
 </body>
 </html>`;
 
@@ -3448,16 +3620,14 @@ function printComandaWindow(html, printWindowSize) {
   return true;
 }
 
-async function openOrderComandaPrintWindow(order) {
+async function openOrderComandaPrintWindowBrowser(order) {
   if (!order) return toast('No se encontró el pedido para imprimir', true);
   const allItems = buildOrderComandaItems(order);
   if (!allItems.length) return toast('El pedido no tiene productos para comanda', true);
 
   try {
     // Consultar al backend cómo agrupar los ítems por área KDS
-    const res = await fetch(`/api/orders/${order.id}/comanda-areas`);
-    if (!res.ok) throw new Error('Error al obtener áreas');
-    const data = await res.json();
+    const data = await api(`/api/orders/${order.id}/comanda-areas`);
 
     if (!data.areas || data.areas.length === 0) {
       // Sin áreas configuradas → comanda única (comportamiento original)
@@ -3481,6 +3651,19 @@ async function openOrderComandaPrintWindow(order) {
     const { html, printWindowSize } = buildComandaHtml(order, allItems, '');
     printComandaWindow(html, printWindowSize);
   }
+}
+
+async function openOrderComandaPrintWindow(order) {
+  if (directPrintEnabled()) {
+    try {
+      const result = await dispatchDirectPrint({ order, includeTicket: false, includeAreas: true });
+      if (result.attempted > 0) return;
+      toast('No hay impresoras asignadas a las áreas. Se abrirá la impresión actual.', true);
+    } catch (error) {
+      toast(`${error.message}. Se abrirá la impresión actual.`, true);
+    }
+  }
+  await openOrderComandaPrintWindowBrowser(order);
 }
 
 
@@ -4452,15 +4635,15 @@ function buildPosTicketData() {
   return null;
 }
 
-function openThermalPrintWindow(ticket) {
-  if (!ticket) return toast('No hay ticket para imprimir', true);
+function buildThermalTicketDocument(ticket, widthOverride = null, autoPrint = true) {
+  if (!ticket) return null;
   const biz = esc(SETTINGS?.business_name || ME?.tenant?.businessName || 'Negocio');
   const bizAddress = esc(SETTINGS?.address || '');
   const bizHours = esc(SETTINGS?.hours || '');
   const bizWhatsapp = esc((SETTINGS?.whatsapp || '').trim());
   const seller = esc(ME?.username || 'cajero');
   const currency = SETTINGS?.currency || 'MXN';
-  const widthMm = Math.max(58, Math.min(80, Number(SETTINGS?.ticket_width_mm || 80)));
+  const widthMm = Math.max(58, Math.min(80, Number(widthOverride || SETTINGS?.ticket_width_mm || 80)));
   const fontPx = Math.max(10, Math.min(24, Number(SETTINGS?.ticket_font_size_px || 14)));
   const lineHeight = Math.max(1.1, Math.min(2, Number(SETTINGS?.ticket_line_height || 1.45)));
   const showLogo = SETTINGS?.ticket_show_logo !== '0';
@@ -4615,7 +4798,7 @@ function openThermalPrintWindow(ticket) {
   ${invoiceUrl ? `<div class="invoice-box"><b>FACTURA TU COMPRA</b><img class="invoice-qr" src="${esc(invoiceQrUrl)}" alt="QR de facturacion" /><div class="invoice-code-label">TICKET #${esc(String(ticket.id))} &middot; C&Oacute;DIGO DE FACTURACI&Oacute;N</div><div class="invoice-code">${esc(friendlyInvoiceCode)}</div><div class="invoice-link">${esc(ME.tenant.invoicingPortalUrl)}</div></div><div class="sep"></div>` : ''}
   <div class="center meta">${esc(ticket.footerMessage || (isRoundTicket ? 'Ronda enviada a preparación' : 'Gracias por tu compra'))}</div>
   </div>
-  <script>
+  ${autoPrint ? `<script>
     window.onload = () => {
       const images = Array.from(document.images);
       Promise.all(images.map((image) => image.complete ? Promise.resolve() : new Promise((resolve) => {
@@ -4626,14 +4809,127 @@ function openThermalPrintWindow(ticket) {
         setTimeout(() => window.close(), 120);
       });
     };
-  </script>
+  </script>` : ''}
 </body>
 </html>`;
-  const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
+  return { html, printWindowSize };
+}
+
+function openThermalPrintWindow(ticket) {
+  const documentData = buildThermalTicketDocument(ticket);
+  if (!documentData) return toast('No hay ticket para imprimir', true);
+  const blob = new Blob([documentData.html], { type: 'text/html;charset=utf-8' });
   const blobUrl = URL.createObjectURL(blob);
-  const w = window.open(blobUrl, '_blank', printWindowSize);
+  const w = window.open(blobUrl, '_blank', documentData.printWindowSize);
   if (!w) return toast('Permite ventanas emergentes para imprimir', true);
   setTimeout(() => URL.revokeObjectURL(blobUrl), 10000);
+}
+
+function printOutputBranchId(order, ticket) {
+  return Number(
+    ticket?.serviceBranchId
+    || ticket?.service_branch_id
+    || order?.serviceBranchId
+    || order?.service_branch_id
+    || order?.pickupBranchId
+    || order?.pickup_branch_id
+    || POS_OVERVIEW?.activeSession?.branch_id
+    || ME?.branchId
+    || 0
+  );
+}
+
+async function qzPrintHtml(printer, html, jobName) {
+  const printerName = String(printer?.name || '').trim();
+  if (!printerName) throw new Error('La impresora no tiene un nombre válido');
+  const config = globalThis.qz.configs.create(printerName, {
+    copies: Math.max(1, Math.min(3, Number(printer.copies) || 1)),
+    colorType: 'grayscale',
+    jobName: String(jobName || 'ChatBotPro').slice(0, 120),
+    margins: 0,
+    units: 'mm',
+    size: { width: Number(printer.widthMm) === 58 ? 58 : 80 },
+  });
+  await withPrintTimeout(
+    globalThis.qz.print(config, [{ type: 'pixel', format: 'html', flavor: 'plain', data: html }]),
+    15000,
+    `La impresora ${printer.label || printerName} no respondió`
+  );
+}
+
+function printersForDestination(printers, destination, branchId) {
+  const assigned = printers.filter((printer) => printer.destinations.includes(destination));
+  if (!branchId) return assigned.filter((printer) => !printer.branchId);
+  const branchPrinters = assigned.filter((printer) => Number(printer.branchId) === branchId);
+  return branchPrinters.length ? branchPrinters : assigned.filter((printer) => !printer.branchId);
+}
+
+async function dispatchDirectPrint({ order, ticket = null, includeTicket = false, includeAreas = true }) {
+  const directConfig = parseDirectPrintConfig();
+  if (directConfig.mode !== 'qz') return { attempted: 0, succeeded: 0, failed: 0 };
+  const branchId = printOutputBranchId(order, ticket);
+  const printers = directConfig.printers.filter((printer) => !printer.branchId || Number(printer.branchId) === branchId);
+  const jobs = [];
+  if (includeTicket && ticket) {
+    printersForDestination(printers, 'ticket', branchId).forEach((printer) => {
+      const documentData = buildThermalTicketDocument(ticket, printer.widthMm, false);
+      if (documentData) jobs.push({ printer, html: documentData.html, label: 'Ticket de caja' });
+    });
+  }
+
+  if (includeAreas && order?.id) {
+    const data = await withPrintTimeout(
+      api(`/api/orders/${order.id}/comanda-areas`),
+      8000,
+      'La preparación de comandas tardó demasiado'
+    );
+    const allItems = buildOrderComandaItems(order);
+    const areas = Array.isArray(data.areas) && data.areas.length
+      ? data.areas
+      : [{ id: 0, name: 'General', items: Array.isArray(data.items) && data.items.length ? data.items : allItems }];
+    areas.forEach((area) => {
+      const destination = Number(area.id) > 0 ? `area:${area.id}` : 'general';
+      printersForDestination(printers, destination, branchId).forEach((printer) => {
+        const documentData = buildComandaHtml(order, area.items || [], area.name === 'General' ? '' : area.name, printer.widthMm, false);
+        jobs.push({ printer, html: documentData.html, label: area.name || 'General' });
+      });
+    });
+  }
+
+  if (jobs.length) await connectQzBridge();
+  let succeeded = 0;
+  const failures = [];
+  for (const job of jobs) {
+    try {
+      await qzPrintHtml(job.printer, job.html, `ChatBotPro · ${job.label} · #${order?.id || ticket?.id || ''}`);
+      succeeded += 1;
+    } catch (error) {
+      failures.push(`${job.printer.label || job.printer.name}: ${error.message || 'error de impresión'}`);
+    }
+  }
+  if (jobs.length) {
+    toast(failures.length
+      ? `${succeeded}/${jobs.length} impresiones enviadas. Revisa: ${failures.join(', ')}`
+      : `${succeeded} impresión${succeeded === 1 ? '' : 'es'} enviada${succeeded === 1 ? '' : 's'} correctamente`,
+    failures.length > 0);
+  }
+  return { attempted: jobs.length, succeeded, failed: failures.length, failures };
+}
+
+async function printPosSaleOutputs() {
+  const ticket = buildPosTicketData();
+  if (!ticket) return toast('No hay ticket para imprimir', true);
+  if (!directPrintEnabled()) return openThermalPrintWindow(ticket);
+  try {
+    const result = await dispatchDirectPrint({ order: LAST_POS_SALE, ticket, includeTicket: true, includeAreas: !ticket.tableNumber });
+    if (!result.attempted) {
+      toast('No hay impresoras asignadas a esta sucursal o destino. Se abrirá el ticket actual.', true);
+      openThermalPrintWindow(ticket);
+    }
+  } catch (error) {
+    toast(`${error.message}. Se abrirá el ticket en el modo actual.`, true);
+    openThermalPrintWindow(ticket);
+  }
 }
 
 function printTableRoundTicket(round, account, accumulatedTotal) {
@@ -6042,7 +6338,7 @@ function renderPosCart() {
       POS_TABLE_ACCOUNT = null;
       clearPosCart();
       setTimeout(() => {
-        if (LAST_POS_SALE) printPosTicket();
+        if (LAST_POS_SALE) printPosSaleOutputs();
       }, 100);
       await loadPos();
     } catch (err) {
@@ -11295,6 +11591,7 @@ function updateTimezonePreview() {
 
 async function fillConfigForm() {
   if (!SETTINGS) return;
+  DIRECT_PRINT_CONFIG = parseDirectPrintConfig();
   renderRegionalSettingsOptions();
   $('#cfgName').value = SETTINGS.business_name || '';
   $('#cfgColor').value = SETTINGS.primary_color || '#ff6b35';
@@ -11347,6 +11644,7 @@ async function fillConfigForm() {
   $('#cfgTicketShowLogo').value = SETTINGS.ticket_show_logo === '0' ? '0' : '1';
   $('#cfgTicketPrintMode').value = SETTINGS.ticket_print_mode === 'bluetooth' ? 'bluetooth' : 'thermal';
   $('#cfgTicketMobileZoom').value = String(Math.max(80, Math.min(120, Number(SETTINGS.ticket_mobile_zoom_percent || 100))));
+  renderDirectPrinterConfig();
   $('#logoPreview').innerHTML = SETTINGS.logo ? `<img src="${esc(SETTINGS.logo)}" alt="" />` : '<i class="ph ph-image"></i>';
   renderSwatches();
   renderBusinessModelPicker();
@@ -11356,6 +11654,7 @@ async function fillConfigForm() {
     await loadInternalUsers();
     renderModuleVisibility();
     await loadSelfServiceDevices();
+    await loadDirectPrintDestinations();
   } else if (ME?.role === 'staff' && ME.permissions?.includes('config')) {
     await loadBranches();
     await loadSelfServiceDevices();
@@ -11911,6 +12210,11 @@ $('#contactForm').addEventListener('submit', async (e) => {
 
 $('#ticketForm').addEventListener('submit', async (e) => {
   e.preventDefault();
+  DIRECT_PRINT_CONFIG = {
+    version: 1,
+    mode: $('#cfgDirectPrintMode')?.value === 'qz' ? 'qz' : 'browser',
+    printers: readDirectPrinterInputs(),
+  };
   const fd = new FormData();
   fd.append('ticket_width_mm', $('#cfgTicketWidth').value);
   fd.append('ticket_font_size_px', $('#cfgTicketFont').value);
@@ -11918,9 +12222,67 @@ $('#ticketForm').addEventListener('submit', async (e) => {
   fd.append('ticket_show_logo', $('#cfgTicketShowLogo').value);
   fd.append('ticket_print_mode', $('#cfgTicketPrintMode').value);
   fd.append('ticket_mobile_zoom_percent', $('#cfgTicketMobileZoom').value);
+  fd.append('multi_printer_config_json', JSON.stringify(DIRECT_PRINT_CONFIG));
   await api('/api/settings', { method: 'PUT', body: fd });
-  toast('Configuración de ticket guardada');
+  toast(DIRECT_PRINT_CONFIG.mode === 'qz' ? 'Ticket e impresoras directas guardados' : 'Configuración de ticket guardada');
   SETTINGS = await api('/api/settings');
+  DIRECT_PRINT_CONFIG = parseDirectPrintConfig();
+  renderDirectPrinterConfig();
+});
+
+$('#cfgDirectPrintMode')?.addEventListener('change', (event) => {
+  DIRECT_PRINT_CONFIG.printers = readDirectPrinterInputs();
+  DIRECT_PRINT_CONFIG.mode = event.target.value === 'qz' ? 'qz' : 'browser';
+  renderDirectPrinterConfig();
+});
+
+$('#addDirectPrinterBtn')?.addEventListener('click', () => {
+  DIRECT_PRINT_CONFIG.printers = readDirectPrinterInputs();
+  if (DIRECT_PRINT_CONFIG.printers.length >= 12) return toast('Puedes configurar hasta 12 impresoras', true);
+  DIRECT_PRINT_CONFIG.printers.push({
+    id: `printer_${Date.now().toString(36)}`,
+    label: '',
+    name: QZ_PRINTER_NAMES[0] || '',
+    branchId: null,
+    widthMm: Number($('#cfgTicketWidth')?.value) === 58 ? 58 : 80,
+    copies: 1,
+    destinations: DIRECT_PRINT_CONFIG.printers.length ? [] : ['ticket'],
+  });
+  renderDirectPrinterConfig();
+  document.querySelector('[data-direct-printer]:last-child [data-printer-label]')?.focus();
+});
+
+$('#directPrinterList')?.addEventListener('click', (event) => {
+  const testButton = event.target.closest('[data-test-direct-printer]');
+  const button = event.target.closest('[data-remove-direct-printer]');
+  if (testButton) {
+    const card = testButton.closest('[data-direct-printer]');
+    const printer = readDirectPrinterInputs().find((item) => item.id === card?.dataset.directPrinter);
+    if (!printer?.name) return toast('Selecciona primero una impresora del sistema', true);
+    const testHtml = `<!doctype html><html><body style="font-family:monospace;text-align:center"><h2>ChatBotPro</h2><p>Prueba de ${esc(printer.label || printer.name)}</p><p>${esc(fmtBusinessDateTime())}</p></body></html>`;
+    connectQzBridge()
+      .then(() => qzPrintHtml(printer, testHtml, `ChatBotPro · Prueba · ${printer.label || printer.name}`))
+      .then(() => toast(`Prueba enviada a ${printer.label || printer.name}`))
+      .catch((error) => toast(error.message, true));
+    return;
+  }
+  if (!button) return;
+  DIRECT_PRINT_CONFIG.printers = readDirectPrinterInputs();
+  DIRECT_PRINT_CONFIG.printers.splice(Number(button.dataset.removeDirectPrinter), 1);
+  renderDirectPrinterConfig();
+});
+
+$('#connectPrintBridgeBtn')?.addEventListener('click', async () => {
+  try {
+    await connectQzBridge({ notify: true });
+    await refreshQzPrinters({ notify: false });
+  } catch (error) {
+    toast(error.message, true);
+  }
+});
+
+$('#refreshPrinterListBtn')?.addEventListener('click', () => {
+  refreshQzPrinters().catch((error) => toast(error.message, true));
 });
 
 async function saveSelfServiceSettings(showToast = true) {

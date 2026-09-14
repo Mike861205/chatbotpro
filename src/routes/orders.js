@@ -177,15 +177,17 @@ router.get('/:id/comanda-areas', async (req, res, next) => {
 
     // Obtener todas las áreas KDS activas con sus asignaciones
     const areaRows = await req.tdb.all(
-      `SELECT a.id, a.name, a.color,
+      `SELECT a.id, a.name, a.color, a.branch_id,
               COALESCE(array_agg(DISTINCT ac.category_id) FILTER (WHERE ac.category_id IS NOT NULL), '{}') AS category_ids,
               COALESCE(array_agg(DISTINCT ap.product_id)  FILTER (WHERE ap.product_id  IS NOT NULL), '{}') AS product_ids
        FROM {s}.kds_areas a
        LEFT JOIN {s}.kds_area_categories ac ON ac.area_id = a.id
        LEFT JOIN {s}.kds_area_products   ap ON ap.area_id = a.id
        WHERE a.active = 1
-       GROUP BY a.id, a.name, a.color
-       ORDER BY a.id ASC`
+        AND (a.branch_id IS NULL OR a.branch_id = COALESCE($1::int, $2::int))
+       GROUP BY a.id, a.name, a.color, a.branch_id
+       ORDER BY (a.branch_id IS NULL) ASC, a.id ASC`,
+      [orderRow.service_branch_id, orderRow.pickup_branch_id]
     );
 
     // Si no hay áreas configuradas → devolver todos los ítems como una sola comanda

@@ -61,6 +61,21 @@ Los pedidos mixtos aparecen en todas las áreas correspondientes, pero cada pant
 
 También puedes crear una pantalla de tipo **Delivery**. Esta recibe automáticamente sólo los pedidos a domicilio y muestra cliente, colonia, importe y avance por cada área de preparación. El pedido pasa a **Listo para recoger** cuando todas las estaciones involucradas terminan; entonces el repartidor puede marcarlo como recogido.
 
+## Impresión directa múltiple
+
+ChatBotPro conserva la impresión mediante el diálogo del navegador y ofrece un modo directo con **QZ Tray** para enviar, con un solo clic, el ticket de caja y las comandas de Cocina, Barra u otras áreas a impresoras diferentes.
+
+1. Instala [QZ Tray](https://qz.io/download/) en la computadora Windows, macOS o Linux donde estén instaladas las impresoras.
+2. Conecta la impresora de caja por USB y empareja las impresoras Bluetooth desde el sistema operativo. Todas deben aparecer como impresoras del equipo.
+3. Abre QZ Tray y mantenlo ejecutándose.
+4. En ChatBotPro entra a **Mi negocio → Impresión de tickets** y selecciona **Directa a una o varias impresoras**.
+5. Pulsa **Conectar puente**, agrega cada impresora y asígnale `Ticket de caja`, `Sin área / General` o las áreas KDS correspondientes.
+6. Usa el botón de prueba de cada fila y guarda la configuración.
+
+La primera conexión puede pedir autorización de QZ Tray. La impresión directa funciona cuando el navegador y QZ Tray se ejecutan en la misma computadora. Un teléfono no puede acceder a la impresora USB de otra computadora; para cobrar desde móvil debe mantenerse el modo del navegador o utilizar una estación de impresión dedicada.
+
+Para eliminar todas las advertencias de QZ Tray y obtener impresión completamente silenciosa, configura un certificado de QZ y su llave privada únicamente en el servidor mediante `QZ_CERTIFICATE`/`QZ_PRIVATE_KEY`, o mediante las rutas indicadas en `QZ_CERTIFICATE_PATH`/`QZ_PRIVATE_KEY_PATH`. La llave privada nunca debe publicarse dentro de `public/` ni enviarse al navegador.
+
 ## 🧪 Separar test y producción
 
 El proyecto ya soporta archivos de entorno separados:

@@ -65,6 +65,9 @@ const BILLING_REFRESH_INTERVAL_MS = 24 * 60 * 60 * 1000;
 
 // Estáticos
 app.use('/static', express.static(path.join(__dirname, 'public')));
+app.get('/static/vendor/qz-tray.js', (req, res) => {
+  res.sendFile(require.resolve('qz-tray'));
+});
 app.use('/uploads', (req, res, next) => {
   if (/\.svg(?:$|[?#])/i.test(req.url)) return res.status(404).end();
   res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
@@ -99,6 +102,7 @@ app.use('/api/chat', chatLimiter, require('./src/routes/chatbot'));
 app.use('/api/superadmin', require('./src/routes/superadmin'));
 app.use('/api/resellers', require('./src/routes/resellers'));
 app.use('/api/notifications', require('./src/routes/notifications'));
+app.use('/api/printing', require('./src/routes/printing'));
 app.use('/api/inventory', require('./src/routes/inventory'));
 app.use('/api/employees', require('./src/routes/employees'));
 app.use('/api/kds', require('./src/routes/kds'));
