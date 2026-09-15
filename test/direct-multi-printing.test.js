@@ -69,8 +69,8 @@ test('despacha el cobro y las comandas por QZ respetando áreas y sucursal', () 
   assert.match(client, /printersForDestination\(printers, 'ticket', branchId\)/);
   assert.match(client, /return branchPrinters\.length \? branchPrinters : assigned\.filter/);
   assert.match(client, /`area:\$\{area\.id\}`/);
-  assert.match(client, /if \(LAST_POS_SALE\) printPosSaleOutputs\(\)/);
-  assert.match(client, /openOrderComandaPrintWindowBrowser\(order\)/);
+  assert.match(client, /if \(LAST_POS_SALE\) printPosSaleOutputs\(reservedPrintWindow\)/);
+  assert.match(client, /openOrderComandaPrintWindowBrowser\(order, reservedWindow\)/);
   assert.match(orders, /a\.branch_id IS NULL OR a\.branch_id = COALESCE\(\$1::int, \$2::int\)/);
   assert.match(orders, /ORDER BY \(a\.branch_id IS NULL\) ASC/);
 });

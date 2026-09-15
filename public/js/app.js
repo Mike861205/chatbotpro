@@ -3598,7 +3598,6 @@ function buildComandaHtml(order, areaItems, areaLabel, widthOverride = null, aut
   ${autoPrint ? `<script>
     window.onload = () => {
       window.print();
-      setTimeout(() => window.close(), 120);
     };
   </script>` : ''}
 </body>
@@ -3607,23 +3606,59 @@ function buildComandaHtml(order, areaItems, areaLabel, widthOverride = null, aut
   return { html, printWindowSize };
 }
 
-function printComandaWindow(html, printWindowSize) {
+function reserveBrowserPrintWindow(printWindowSize) {
+  const w = window.open('about:blank', '_blank', printWindowSize);
+  if (!w) toast('Permite ventanas emergentes para imprimir', true);
+  return w;
+}
+
+function openBrowserPrintDocument(html, printWindowSize, reservedWindow = null) {
   const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
   const blobUrl = URL.createObjectURL(blob);
-  const w = window.open(blobUrl, '_blank', printWindowSize);
+  const w = reservedWindow && !reservedWindow.closed
+    ? reservedWindow
+    : window.open(blobUrl, '_blank', printWindowSize);
   if (!w) {
     toast('Permite ventanas emergentes para imprimir', true);
     URL.revokeObjectURL(blobUrl);
     return false;
   }
-  setTimeout(() => URL.revokeObjectURL(blobUrl), 10000);
+  if (w === reservedWindow) w.location.replace(blobUrl);
+  setTimeout(() => URL.revokeObjectURL(blobUrl), 60000);
   return true;
 }
 
-async function openOrderComandaPrintWindowBrowser(order) {
-  if (!order) return toast('No se encontró el pedido para imprimir', true);
+function printComandaWindow(html, printWindowSize, reservedWindow = null) {
+  return openBrowserPrintDocument(html, printWindowSize, reservedWindow);
+}
+
+function buildCombinedComandaDocument(order, areas) {
+  const first = buildComandaHtml(order, areas[0].items || [], areas[0].name || '', null, false);
+  const document = new DOMParser().parseFromString(first.html, 'text/html');
+  areas.slice(1).forEach((area) => {
+    const next = buildComandaHtml(order, area.items || [], area.name || '', null, false);
+    const section = new DOMParser().parseFromString(next.html, 'text/html').querySelector('.ticket-wrap');
+    if (!section) return;
+    section.style.breakBefore = 'page';
+    section.style.pageBreakBefore = 'always';
+    document.body.appendChild(document.importNode(section, true));
+  });
+  const script = document.createElement('script');
+  script.textContent = `window.onload=()=>{Promise.all(Array.from(document.images).map(image=>image.complete?Promise.resolve():new Promise(resolve=>{image.addEventListener('load',resolve,{once:true});image.addEventListener('error',resolve,{once:true})}))).finally(()=>window.print())}`;
+  document.body.appendChild(script);
+  return { html: `<!doctype html>${document.documentElement.outerHTML}`, printWindowSize: first.printWindowSize };
+}
+
+async function openOrderComandaPrintWindowBrowser(order, reservedWindow = null) {
+  if (!order) {
+    reservedWindow?.close();
+    return toast('No se encontró el pedido para imprimir', true);
+  }
   const allItems = buildOrderComandaItems(order);
-  if (!allItems.length) return toast('El pedido no tiene productos para comanda', true);
+  if (!allItems.length) {
+    reservedWindow?.close();
+    return toast('El pedido no tiene productos para comanda', true);
+  }
 
   try {
     // Consultar al backend cómo agrupar los ítems por área KDS
@@ -3632,28 +3667,21 @@ async function openOrderComandaPrintWindowBrowser(order) {
     if (!data.areas || data.areas.length === 0) {
       // Sin áreas configuradas → comanda única (comportamiento original)
       const { html, printWindowSize } = buildComandaHtml(order, allItems, '');
-      printComandaWindow(html, printWindowSize);
+      printComandaWindow(html, printWindowSize, reservedWindow);
       return;
     }
 
-    // Con áreas → abrir una ventana por área con un pequeño delay para no bloquear popups
-    let blocked = false;
-    data.areas.forEach((area, idx) => {
-      if (blocked) return;
-      setTimeout(() => {
-        const { html, printWindowSize } = buildComandaHtml(order, area.items, area.name);
-        const ok = printComandaWindow(html, printWindowSize);
-        if (!ok) blocked = true;
-      }, idx * 600); // 600ms entre cada ventana para que el navegador no las bloquee
-    });
+    // En navegador, todas las áreas comparten el destino que elija el dispositivo.
+    const { html, printWindowSize } = buildCombinedComandaDocument(order, data.areas);
+    printComandaWindow(html, printWindowSize, reservedWindow);
   } catch {
     // Fallback: si falla la petición, imprimir comanda única sin área
     const { html, printWindowSize } = buildComandaHtml(order, allItems, '');
-    printComandaWindow(html, printWindowSize);
+    printComandaWindow(html, printWindowSize, reservedWindow);
   }
 }
 
-async function openOrderComandaPrintWindow(order) {
+async function openOrderComandaPrintWindow(order, reservedWindow = null) {
   if (directPrintEnabled()) {
     try {
       const result = await dispatchDirectPrint({ order, includeTicket: false, includeAreas: true });
@@ -3663,7 +3691,7 @@ async function openOrderComandaPrintWindow(order) {
       toast(`${error.message}. Se abrirá la impresión actual.`, true);
     }
   }
-  await openOrderComandaPrintWindowBrowser(order);
+  await openOrderComandaPrintWindowBrowser(order, reservedWindow);
 }
 
 
@@ -3853,7 +3881,8 @@ async function loadOrders() {
         toast('No se encontró el pedido para imprimir', true);
         return;
       }
-      openOrderComandaPrintWindow(order);
+      const reservedWindow = directPrintEnabled() ? null : reserveBrowserPrintWindow('width=430,height=760');
+      openOrderComandaPrintWindow(order, reservedWindow);
     })
   );
 }
@@ -4806,7 +4835,6 @@ function buildThermalTicketDocument(ticket, widthOverride = null, autoPrint = tr
         image.addEventListener('error', resolve, { once: true });
       }))).finally(() => {
         window.print();
-        setTimeout(() => window.close(), 120);
       });
     };
   </script>` : ''}
@@ -4815,14 +4843,13 @@ function buildThermalTicketDocument(ticket, widthOverride = null, autoPrint = tr
   return { html, printWindowSize };
 }
 
-function openThermalPrintWindow(ticket) {
+function openThermalPrintWindow(ticket, reservedWindow = null) {
   const documentData = buildThermalTicketDocument(ticket);
-  if (!documentData) return toast('No hay ticket para imprimir', true);
-  const blob = new Blob([documentData.html], { type: 'text/html;charset=utf-8' });
-  const blobUrl = URL.createObjectURL(blob);
-  const w = window.open(blobUrl, '_blank', documentData.printWindowSize);
-  if (!w) return toast('Permite ventanas emergentes para imprimir', true);
-  setTimeout(() => URL.revokeObjectURL(blobUrl), 10000);
+  if (!documentData) {
+    reservedWindow?.close();
+    return toast('No hay ticket para imprimir', true);
+  }
+  return openBrowserPrintDocument(documentData.html, documentData.printWindowSize, reservedWindow);
 }
 
 function printOutputBranchId(order, ticket) {
@@ -4916,19 +4943,22 @@ async function dispatchDirectPrint({ order, ticket = null, includeTicket = false
   return { attempted: jobs.length, succeeded, failed: failures.length, failures };
 }
 
-async function printPosSaleOutputs() {
+async function printPosSaleOutputs(reservedWindow = null) {
   const ticket = buildPosTicketData();
-  if (!ticket) return toast('No hay ticket para imprimir', true);
-  if (!directPrintEnabled()) return openThermalPrintWindow(ticket);
+  if (!ticket) {
+    reservedWindow?.close();
+    return toast('No hay ticket para imprimir', true);
+  }
+  if (!directPrintEnabled()) return openThermalPrintWindow(ticket, reservedWindow);
   try {
     const result = await dispatchDirectPrint({ order: LAST_POS_SALE, ticket, includeTicket: true, includeAreas: !ticket.tableNumber });
     if (!result.attempted) {
       toast('No hay impresoras asignadas a esta sucursal o destino. Se abrirá el ticket actual.', true);
-      openThermalPrintWindow(ticket);
+      openThermalPrintWindow(ticket, reservedWindow);
     }
   } catch (error) {
     toast(`${error.message}. Se abrirá el ticket en el modo actual.`, true);
-    openThermalPrintWindow(ticket);
+    openThermalPrintWindow(ticket, reservedWindow);
   }
 }
 
@@ -6286,6 +6316,7 @@ function renderPosCart() {
     e.preventDefault();
     if (POS_CHECKOUT_IN_FLIGHT) return;
     POS_CHECKOUT_IN_FLIGHT = true;
+    const reservedPrintWindow = directPrintEnabled() ? null : reserveBrowserPrintWindow('width=430,height=760');
     const submitButton = e.submitter || e.currentTarget.querySelector('button[type="submit"]');
     const originalButtonHtml = submitButton?.innerHTML || '';
     if (submitButton) {
@@ -6338,10 +6369,11 @@ function renderPosCart() {
       POS_TABLE_ACCOUNT = null;
       clearPosCart();
       setTimeout(() => {
-        if (LAST_POS_SALE) printPosSaleOutputs();
+        if (LAST_POS_SALE) printPosSaleOutputs(reservedPrintWindow);
       }, 100);
       await loadPos();
     } catch (err) {
+      reservedPrintWindow?.close();
       toast(err.message, true);
     } finally {
       POS_CHECKOUT_IN_FLIGHT = false;
@@ -12228,6 +12260,15 @@ $('#ticketForm').addEventListener('submit', async (e) => {
   SETTINGS = await api('/api/settings');
   DIRECT_PRINT_CONFIG = parseDirectPrintConfig();
   renderDirectPrinterConfig();
+});
+
+$('#testBrowserTicketBtn')?.addEventListener('click', () => {
+  const widthMm = Number($('#cfgTicketWidth')?.value) === 58 ? 58 : 80;
+  const pageCss = $('#cfgTicketPrintMode')?.value === 'bluetooth'
+    ? '@page { size: auto; margin: 6mm; }'
+    : `@page { size: ${widthMm}mm auto; margin: 3mm; }`;
+  const html = `<!doctype html><html lang="es"><head><meta charset="utf-8"><title>Prueba de impresión</title><style>${pageCss}body{max-width:${widthMm}mm;margin:0 auto;font:14px/1.5 monospace;color:#000;text-align:center}.sep{border-top:1px dashed #000;margin:12px 0}</style></head><body><h2>${esc(SETTINGS?.business_name || ME?.tenant?.businessName || 'ChatBotPro')}</h2><div class="sep"></div><b>PRUEBA DE IMPRESIÓN</b><p>${esc(fmtBusinessDateTime())}</p><p>Si este ticket sale en papel, el dispositivo puede imprimir desde el POS.</p><script>window.onload=()=>window.print();<\/script></body></html>`;
+  openBrowserPrintDocument(html, 'width=430,height=760');
 });
 
 $('#cfgDirectPrintMode')?.addEventListener('change', (event) => {

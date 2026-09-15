@@ -1539,21 +1539,90 @@ async function aiFallback(t, businessName, userText, state, businessType) {
       messages: [
         {
           role: 'system',
-          content: buildBusinessSystemPrompt(businessType, businessName, menuText),
+          content: buildBusinessSystemPrompt(businessType, businessName, menuText) +
+            '\nNunca afirmes que agregaste, quitaste, confirmaste o registraste un pedido mediante una respuesta de texto. ' +
+            'Si el cliente pide cambios concretos en su pedido, usa la herramienta update_cart. ' +
+            'Usa solo IDs del catálogo indicado abajo. Para quitar una variante o línea concreta, indica line_index de la línea del carrito. ' +
+            'Solicita aclaración si un producto no es identificable.\nCatálogo:\n' +
+            products.map((p) => `${p.id}: ${p.name}`).join('\n') +
+            '\nCarrito actual (índice de línea, ID, nombre, cantidad):\n' +
+            (state.cart || []).map((item, index) => `${index}, ${item.id}, ${item.name}, ${item.qty}`).join('\n'),
         },
         ...history,
         { role: 'user', content: userText },
       ],
+      tools: [{ type: 'function', function: {
+        name: 'update_cart',
+        description: 'Agregar o quitar productos concretos del pedido en curso. No confirma ni crea el pedido.',
+        parameters: { type: 'object', properties: {
+          changes: { type: 'array', items: { type: 'object', properties: {
+            product_id: { type: 'integer' }, action: { type: 'string', enum: ['add', 'remove'] }, quantity: { type: 'integer', minimum: 1, maximum: 50 }, line_index: { type: 'integer', minimum: 0 },
+          }, required: ['product_id', 'action', 'quantity'], additionalProperties: false } },
+        }, required: ['changes'], additionalProperties: false },
+      } }],
+      tool_choice: 'auto',
     });
-    return String(completion.choices[0]?.message?.content || '').trim() || null;
+    const message = completion.choices[0]?.message;
+    const call = message?.tool_calls?.find((item) => item.function?.name === 'update_cart');
+    if (call) {
+      try { return { changes: JSON.parse(call.function.arguments || '{}').changes || [] }; }
+      catch { return { changes: [] }; }
+    }
+    return { text: String(message?.content || '').trim() };
   } catch (e) {
     console.error('[openai]', e.message);
     return null;
   }
 }
 
-async function handleMessage(t, slug, sessionId, rawInput) {
-  const input = String(rawInput || '').trim();
+const NATURAL_FINISH_INTENTS = new Set([
+  'es todo', 'eso es todo', 'es todo gracias', 'eso es todo gracias',
+  'seria todo', 'seria todo gracias', 'eso seria todo', 'eso seria todo gracias',
+  'ya es todo', 'ya seria todo', 'ya no quiero mas', 'no quiero nada mas',
+  'finalizar', 'finalizar pedido', 'finalizar mi pedido', 'terminar pedido',
+]);
+
+function guidedCommandForText(state, rawInput) {
+  const normalized = normalizeSearchText(rawInput);
+  if (!normalized) return '';
+  if (state.step === 'order_complete' && ['otro pedido', 'hacer otro pedido', 'nuevo pedido'].includes(normalized)) return 'start';
+  if (state.step === 'confirm' && rawInput === 'checkout') return 'confirm_yes';
+  if (state.step === 'confirm' && NATURAL_FINISH_INTENTS.has(normalized)) return 'confirm_yes';
+  if (['start', 'choosing_category', 'choosing_promotion_category', 'choosing_product', 'upsell_offer'].includes(state.step)
+      && NATURAL_FINISH_INTENTS.has(normalized)) return 'checkout';
+  if (state.step === 'confirm' && ['si', 'si confirmo', 'si confirmo mi pedido', 'confirmo', 'confirmo mi pedido', 'confirmar', 'confirmar pedido', 'confirmar mi pedido', 'asi esta bien', 'todo correcto', 'lo confirmo', 'si esta bien', 'esta bien', 'adelante'].includes(normalized)) return 'confirm_yes';
+  if (state.step === 'confirm' && ['no', 'regresar', 'quiero cambiarlo'].includes(normalized)) return 'confirm_no';
+  if (state.step === 'ask_order_note_choice' && ['no gracias', 'no quiero nota', 'sin nota por favor'].includes(normalized)) return 'order_note_no';
+  if (state.step === 'ask_order_note_choice' && ['si', 'no', 'sin nota', 'continuar', 'agregar nota'].includes(normalized)) return normalized === 'si' || normalized === 'agregar nota' ? 'order_note_yes' : 'order_note_no';
+  if (state.step === 'checkout_identity_choice' && ['primera vez', 'nuevo cliente', 'soy nuevo'].includes(normalized)) return 'checkout_new_customer';
+  const exactLabel = (state.lastOptions || []).find((option) => normalizeSearchText(option.label) === normalized);
+  return exactLabel?.value || '';
+}
+
+async function aiGuidedOption(state, rawInput) {
+  const options = Array.isArray(state.lastOptions) ? state.lastOptions : [];
+  if (!options.length || options.length > 30 || String(rawInput).length > 100) return '';
+  const aiCfg = await getAiRuntimeConfig();
+  if (!aiCfg.enabled || !aiCfg.key) return '';
+  try {
+    const completion = await getOpenAiClient(aiCfg.key, aiCfg.baseUrl).chat.completions.create({
+      model: aiCfg.model || 'gpt-4o-mini', temperature: 0, max_tokens: 80,
+      response_format: { type: 'json_object' },
+      messages: [
+        { role: 'system', content: 'Interpreta el texto del cliente como una de las opciones visibles del asistente. Responde SOLO JSON: {"value":"valor"} si la intención es clara, o {"value":null} si hay dudas, correcciones no representadas por una opción, datos nuevos o una pregunta. Nunca inventes una opción. No confirmes un pedido si el mensaje incluye condiciones o correcciones.' },
+        { role: 'user', content: JSON.stringify({ step: state.step, text: rawInput, options: options.map((option) => ({ label: option.label, value: option.value })) }) },
+      ],
+    });
+    const value = JSON.parse(completion.choices[0]?.message?.content || '{}').value;
+    return options.some((option) => option.value === value) ? value : '';
+  } catch (error) {
+    console.error('[openai][guided-option]', error.message);
+    return '';
+  }
+}
+
+async function handleMessage(t, slug, sessionId, rawInput, runtime = {}) {
+  let input = String(rawInput || '').trim();
   const businessName = await getSetting(t, 'business_name', slug);
   const businessType = await getSetting(t, 'business_type', 'restaurant');
   const currency = await getSetting(t, 'currency', 'MXN');
@@ -1634,17 +1703,28 @@ async function handleMessage(t, slug, sessionId, rawInput) {
   state.cart = applyPromotions(state.cart, activeChatbotPromotions);
   state.cart.currencyConversion = state.currencyConversion;
 
+  const guided = guidedCommandForText(state, input);
+  const choiceSteps = new Set(['ask_order_note_choice', 'checkout_identity_choice', 'confirm_returning_address', 'ask_delivery', 'ask_branch', 'ask_payment_method', 'confirm', 'choosing_variant', 'upsell_offer']);
+  const machineCommand = /^[a-z0-9_|-]+$/.test(input) && (input.includes('_') || input.includes('|') || ['menu', 'cart', 'checkout', 'start', 'promotions'].includes(input));
+  const normalizedChoiceText = normalizeSearchText(input);
+  const handledByStep = (state.step === 'ask_delivery' && /(domicilio|entrega|envio|recoger|recojo|paso por|para llevar|comer|consumir)/.test(normalizedChoiceText))
+    || (state.step === 'ask_payment_method' && /^(efectivo|cash|transferencia|transfer|tarjeta|card)$/.test(normalizedChoiceText))
+    || (state.step === 'ask_branch' && (state.branchOptions || []).some((branch) => normalizeSearchText(branch.name) === normalizedChoiceText))
+    || (state.step === 'checkout_identity_choice' && /\b(ya pedi|ya he pedido|cliente frecuente|cliente nuevo|soy nuevo|es mi primera vez)\b/.test(normalizedChoiceText));
+  const conditionalConfirmation = state.step === 'confirm' && /\b(pero|sin|cambia|cambiar|quita|elimina|agrega|anade|mas|menos|nota)\b/.test(normalizedChoiceText);
+  const courtesyOnly = /^(gracias|muchas gracias|ok gracias)$/.test(normalizedChoiceText);
+  if (guided) input = guided;
+  else if (choiceSteps.has(state.step) && Array.isArray(state.lastOptions) && state.lastOptions.length
+      && !machineCommand && !handledByStep && !conditionalConfirmation && !courtesyOnly && !NATURAL_FINISH_INTENTS.has(normalizedChoiceText)
+      && !state.lastOptions.some((option) => option.value === input)) {
+    const chosen = await (runtime.guidedChoice || aiGuidedOption)(state, input);
+    if (chosen && state.lastOptions.some((option) => option.value === chosen)) input = chosen;
+  }
+
   const reply = { messages: [], options: [], products: null, cart: null, order: null, bankAccounts: null, bankAccountTitle: null, modifierGroup: null };
   const lower = input.toLowerCase();
-  const finishIntents = new Set([
-    'seria todo',
-    'seria todo gracias',
-    'eso seria todo',
-    'eso seria todo gracias',
-    'finalizar pedido',
-    'finalizar mi pedido',
-  ]);
-  const checkoutRequested = lower === 'checkout' || finishIntents.has(normalizeSearchText(input));
+  const checkoutSteps = ['start', 'choosing_category', 'choosing_promotion_category', 'choosing_product', 'choosing_variant', 'choosing_modifiers', 'upsell_offer'];
+  const checkoutRequested = checkoutSteps.includes(state.step) && (lower === 'checkout' || NATURAL_FINISH_INTENTS.has(normalizeSearchText(input)));
 
   const attachBankAccounts = (accounts = bankAccounts, paymentLabel = 'Transferencia') => {
     if (!accounts.length) return;
@@ -1662,6 +1742,8 @@ async function handleMessage(t, slug, sessionId, rawInput) {
   const finish = async () => {
     state.cart = applyPromotions(state.cart, activeChatbotPromotions);
     state.cart.currencyConversion = state.currencyConversion;
+    state.lastOptions = reply.options.slice(0, 30).map((option) => ({ label: option.label, value: option.value }));
+    if (reply.messages.length) state.lastPrompt = reply.messages[reply.messages.length - 1];
     await saveState(t, sessionId, state);
     reply.cart = {
       items: state.cart,
@@ -1670,6 +1752,7 @@ async function handleMessage(t, slug, sessionId, rawInput) {
       convertedTotalLabel: convertedMoney(cartTotal(state.cart), state.currencyConversion),
       exchangeRateLabel: conversionRateLabel(state.currencyConversion),
     };
+    reply.orderComplete = state.step === 'order_complete';
     // Notificar al tenant el estado en vivo de esta sesión
     emitSessionUpdate(slug, {
       sessionId: sessionId.slice(0, 10),
@@ -1784,8 +1867,8 @@ async function handleMessage(t, slug, sessionId, rawInput) {
     const hasReturningData =
       Boolean(state.customer?.name) &&
       Boolean(state.customer?.phone) &&
-      (state.receivingMode?.behavior === 'delivery' || state.delivery === 'domicilio') &&
-      Boolean(state.customer?.address);
+      Boolean(state.receivingMode?.behavior || state.delivery) &&
+      (!isAddressDelivery() || Boolean(state.customer?.address));
 
     if (hasReturningData) {
       reply.messages = ['Usaré tus datos guardados del último pedido para agilizar ✅'];
@@ -1839,6 +1922,17 @@ async function handleMessage(t, slug, sessionId, rawInput) {
   };
 
   // Comandos globales
+  if (state.step === 'order_complete' && !['start', 'hola', 'inicio'].includes(lower)) {
+    reply.messages = ['¡Gracias! Tu pedido ya quedó registrado. Si deseas pedir otra vez, inicia un pedido nuevo.'];
+    reply.options = [{ label: '🆕 Hacer otro pedido', value: 'start' }];
+    return finish();
+  }
+  const formSteps = new Set(['ask_order_note_choice', 'ask_order_note_text', 'checkout_identity_choice', 'ask_returning_phone', 'confirm_returning_address', 'ask_name', 'ask_phone', 'ask_delivery', 'ask_branch', 'ask_address', 'ask_address_after_location', 'ask_neighborhood', 'ask_location_optional', 'ask_reference', 'ask_payment_method', 'confirm_edit_note_text']);
+  if (formSteps.has(state.step) && (lower === 'checkout' || NATURAL_FINISH_INTENTS.has(normalizeSearchText(input)))) {
+    reply.messages = [state.lastPrompt || 'Para terminar, responde primero la pregunta actual.'];
+    reply.options = state.lastOptions || [];
+    return finish();
+  }
   if (!input || lower === 'start' || lower === 'hola' || lower === 'inicio') {
     cancelPendingProductConfiguration(state);
     state.step = 'start';
@@ -1887,6 +1981,7 @@ async function handleMessage(t, slug, sessionId, rawInput) {
   }
   if (lower === 'cart' || lower === 'carrito') {
     reply.messages = [cartSummary(state.cart, currency, labels)];
+    reply.editCart = state.cart.length > 0;
     reply.options = state.cart.length
       ? [
           { label: labels.checkoutButton, value: 'checkout' },
@@ -1894,6 +1989,46 @@ async function handleMessage(t, slug, sessionId, rawInput) {
           { label: '🗑️ Vaciar carrito', value: 'clear_cart' },
         ]
       : [{ label: labels.browseButton, value: 'menu' }];
+    return finish();
+  }
+  if (lower === 'confirm_edit_cart' && state.step === 'confirm') {
+    reply.messages = ['Puedes cambiar la cantidad de cada producto o quitarlo antes de confirmar.'];
+    reply.editCart = true;
+    reply.options = [
+      { label: '➕ Agregar productos', value: 'menu' },
+      { label: '⬅️ Volver a confirmar', value: 'review_order' },
+    ];
+    return finish();
+  }
+  if (lower === 'review_order' && state.cart.length && state.customer?.name && state.customer?.phone) {
+    state.step = 'confirm';
+    reply.messages = [confirmText(state, businessName, currency, labels)];
+    reply.options = confirmOptions(labels);
+    return finish();
+  }
+  if (lower.startsWith('cart_line_')) {
+    const match = /^cart_line_(\d+)_(\d+)$/.exec(lower);
+    const index = match ? Number(match[1]) : -1;
+    const qty = match ? Number(match[2]) : -1;
+    if (index < 0 || index >= state.cart.length || !Number.isInteger(qty) || qty < 0 || qty > 50) {
+      reply.messages = ['No pude aplicar ese cambio. Abre el carrito e inténtalo otra vez.'];
+      reply.options = [{ label: labels.cartButton, value: 'cart' }];
+      return finish();
+    }
+    const name = state.cart[index].name;
+    if (qty === 0) state.cart.splice(index, 1);
+    else state.cart[index].qty = qty;
+    cancelPendingProductConfiguration(state);
+    resetUpsellProgress();
+    if (state.step === 'confirm' && state.cart.length) {
+      reply.messages = [`✅ ${qty ? `Ahora llevas ${qty}x ${name}.` : `Quité ${name} del pedido.`}`, confirmText(state, businessName, currency, labels)];
+      reply.options = confirmOptions(labels);
+    } else {
+      state.step = 'start';
+      reply.messages = [`✅ ${qty ? `Ahora llevas ${qty}x ${name}.` : `Quité ${name} del pedido.`}`, cartSummary(state.cart, currency, labels)];
+      showPostSendOptions();
+    }
+    reply.editCart = state.cart.length > 0;
     return finish();
   }
   if (lower === 'clear_cart') {
@@ -2443,13 +2578,13 @@ async function handleMessage(t, slug, sessionId, rawInput) {
   }
 
   if (state.step === 'ask_order_note_choice') {
-    if (lower === 'order_note_yes') {
+    if (lower === 'order_note_yes' || ['si', 'si quiero', 'agregar nota'].includes(normalizeSearchText(input))) {
       state.step = 'ask_order_note_text';
       reply.messages = ['Perfecto. Escribe tus instrucciones para el pedido 📝'];
       reply.options = [{ label: 'Omitir nota', value: 'order_note_skip' }];
       return finish();
     }
-    if (lower === 'order_note_no') {
+    if (lower === 'order_note_no' || ['no', 'sin nota', 'continuar'].includes(normalizeSearchText(input))) {
       state.customer.orderNote = '';
       continueCheckoutFlow();
       return finish();
@@ -2563,7 +2698,7 @@ async function handleMessage(t, slug, sessionId, rawInput) {
   }
 
   if (state.step === 'checkout_identity_choice') {
-    if (lower === 'returning_customer') {
+    if (lower === 'returning_customer' || /\b(ya pedi|ya he pedido|cliente frecuente)\b/.test(normalizeSearchText(input))) {
       if (!deliveryEnabled) {
         state.step = 'ask_name';
         reply.messages = ['En este momento solo está activo el flujo normal. ¿Cuál es tu *nombre*?'];
@@ -2573,7 +2708,7 @@ async function handleMessage(t, slug, sessionId, rawInput) {
       reply.messages = ['¡Claro! Si ya has pedido, escribe tu *número de teléfono* para recuperar tus datos 📱'];
       return finish();
     }
-    if (lower === 'checkout_new_customer') {
+    if (lower === 'checkout_new_customer' || /\b(cliente nuevo|soy nuevo|es mi primera vez)\b/.test(normalizeSearchText(input))) {
       state.step = 'ask_name';
       reply.messages = ['¡Perfecto! Para completar tu pedido, ¿cuál es tu *nombre*?'];
       return finish();
@@ -2620,7 +2755,12 @@ async function handleMessage(t, slug, sessionId, rawInput) {
   if (state.step === 'ask_delivery') {
     const legacyModeId = lower === 'delivery_domicilio' ? 'domicilio' : (lower === 'delivery_recoger' ? 'recoger' : '');
     const selectedModeId = legacyModeId || (lower.startsWith('receiving_mode_') ? lower.slice(15) : '');
-    const selectedMode = receivingModes.find((mode) => mode.id === selectedModeId);
+    const modeText = normalizeSearchText(input);
+    const selectedMode = receivingModes.find((mode) => mode.id === selectedModeId)
+      || receivingModes.find((mode) => normalizeSearchText(mode.label) === modeText)
+      || (/(domicilio|entrega|envio)/.test(modeText) ? receivingModes.find((mode) => mode.behavior === 'delivery') : null)
+      || (/(recoger|recojo|paso por|para llevar)/.test(modeText) ? receivingModes.find((mode) => mode.id === 'recoger') : null)
+      || (/(comer|consumir)/.test(modeText) ? receivingModes.find((mode) => mode.id === 'comer_sucursal') : null);
     if (selectedMode) {
       await startReceivingMode(selectedMode);
       return finish();
@@ -2631,9 +2771,10 @@ async function handleMessage(t, slug, sessionId, rawInput) {
   }
 
   if (state.step === 'ask_branch') {
-    if (lower.startsWith('branch_')) {
-      const branchId = Number(lower.slice(7));
-      const chosen = (state.branchOptions || []).find((b) => Number(b.id) === branchId);
+    const branchId = lower.startsWith('branch_') ? Number(lower.slice(7)) : null;
+    const chosenByName = (state.branchOptions || []).filter((b) => normalizeSearchText(b.name) === normalizeSearchText(input));
+    if (lower.startsWith('branch_') || chosenByName.length === 1) {
+      const chosen = chosenByName.length === 1 ? chosenByName[0] : (state.branchOptions || []).find((b) => Number(b.id) === branchId);
       if (!chosen) {
         reply.messages = ['Selecciona una sucursal válida, por favor.'];
         reply.options = (state.branchOptions || []).map((b) => ({ label: `🏪 ${b.name}`, value: `branch_${b.id}` }));
@@ -2834,7 +2975,9 @@ async function handleMessage(t, slug, sessionId, rawInput) {
       pay_cash: 'cash',
       pay_transfer: 'transfer',
       pay_card: 'card',
-    }[lower] || (lower.startsWith('pay_custom_') ? lower.slice(4) : '');
+    }[lower] || (lower.startsWith('pay_custom_') ? lower.slice(4) : '')
+      || ({ efectivo: 'cash', cash: 'cash', transferencia: 'transfer', transfer: 'transfer', tarjeta: 'card', card: 'card' }[normalizeSearchText(input)] || '')
+      || chatPaymentOptions.find((option) => normalizeSearchText(option.plainLabel || option.label) === normalizeSearchText(input))?.method;
     if (!selected || !chatPaymentOptions.some((opt) => opt.method === selected)) {
       reply.messages = ['Elige una opción de pago válida para continuar:'];
       reply.options = chatPaymentOptions.map((opt) => ({ label: opt.label, value: opt.value }));
@@ -2954,7 +3097,7 @@ async function handleMessage(t, slug, sessionId, rawInput) {
       reply.order = { id: orderRow.id, total, totalLabel: money(total, currency), convertedTotalLabel: convertedMoney(total, state.currencyConversion), exchangeRateLabel: conversionRateLabel(state.currencyConversion), whatsappLink: waLink, summary: orderText };
       if (waLink) reply.messages.push('👇 Toca el botón para enviar el resumen de tu pedido por WhatsApp y agilizar la atención.');
       if (!waLink) reply.messages.push('⚠️ El negocio aún no tiene un WhatsApp válido para envío automático. Tu pedido ya quedó registrado.');
-      state = { step: 'start', cart: [], customer: {}, currency };
+      state = { step: 'order_complete', cart: [], customer: {}, currency, lastOrderId: orderRow.id };
       reply.options = [{ label: '🆕 Hacer otro pedido', value: 'start' }];
       return finish();
     }
@@ -3002,24 +3145,99 @@ async function handleMessage(t, slug, sessionId, rawInput) {
     return finish();
   }
 
-  // Texto libre: busca producto por nombre
-  const products = await activeProducts(t);
-  const match = findProductByNaturalInput(products, input);
-  if (match) {
-    const existing = state.cart.find((it) => it.id === match.id);
-    if (existing) existing.qty += 1;
-    else state.cart.push({ id: match.id, name: match.name, price: match.price, qty: 1, ...productTaxLineSnapshot(match.price, match), ...promotionLineSnapshot(match) });
-    resetUpsellProgress();
-    reply.messages = [`¡Agregado! 1x *${match.name}* 🎉\n\n${cartSummary(state.cart, currency, labels)}`];
-    showPostSendOptions();
+  if (choiceSteps.has(state.step) && !/\b(quiero|quisiera|necesito|agrega|agregar|quita|quitar|elimina|eliminar)\b/.test(normalizeSearchText(input))) {
+    reply.messages = [state.step === 'confirm' ? confirmText(state, businessName, currency, labels) : 'Elige una de estas opciones para continuar:'];
+    reply.options = state.step === 'confirm' ? confirmOptions(labels) : (state.lastOptions || []);
     return finish();
   }
 
+  // El texto libre de compra debe modificar el carrito real, nunca solo responder que se tomó el pedido.
+  const normalizedInput = normalizeSearchText(input);
+  const orderIntent = /\b(quiero|quisiera|necesito|gustaria|dame|das|ponme|agrega|agregar|anade|quita|quitar|elimina|eliminar|pido|pedir|llevo|ordenar|compro|pedido)\b/.test(normalizedInput)
+    || /^(\d+|un|una|dos|tres|cuatro|cinco|seis|siete|ocho|nueve|diez)\s/.test(normalizedInput);
+  const ai = await (runtime.aiFallback || aiFallback)(t, businessName, input, state, businessType);
+  if (orderIntent && Array.isArray(ai?.changes)) {
+    const lines = [];
+    const configurable = [];
+    const warnings = [];
+    const originalCartLines = [...state.cart];
+    for (const change of ai.changes.slice(0, 20)) {
+      const id = Number(change.product_id);
+      const qty = Number(change.quantity);
+      if (!Number.isInteger(id) || !Number.isInteger(qty) || qty < 1 || qty > 50) continue;
+      const cfg = await loadProductConfig(t, id);
+      if (!cfg) continue;
+      if (change.action === 'remove') {
+        const lineIndex = Number(change.line_index);
+        const selectedLine = originalCartLines[lineIndex];
+        if (change.line_index != null && Number.isInteger(lineIndex) && Number(selectedLine?.id) === id && state.cart.includes(selectedLine)) {
+          const line = selectedLine;
+          line.qty -= qty;
+          if (line.qty <= 0) state.cart.splice(state.cart.indexOf(line), 1);
+          lines.push(`• Reducido o quitado: *${line.name}*`);
+        } else {
+          const matchingLines = state.cart.filter((item) => Number(item.id) === id);
+          if (matchingLines.length === 1) {
+            matchingLines[0].qty -= qty;
+            if (matchingLines[0].qty <= 0) state.cart = state.cart.filter((item) => item !== matchingLines[0]);
+            lines.push(`• Reducido o quitado: *${matchingLines[0].name}*`);
+          } else if (matchingLines.length > 1) {
+            warnings.push(`Hay varias presentaciones de *${cfg.name}* en tu pedido. Abre el carrito y elige cuál quieres quitar.`);
+          }
+        }
+      } else if (change.action === 'add') {
+        if (cfg.hasVariants || cfg.hasModifiers) configurable.push({ productId: id, qty });
+        else {
+          const existing = state.cart.find((item) => Number(item.id) === id && !item._cartKey);
+          if (existing) existing.qty = Math.min(50, existing.qty + qty);
+          else state.cart.push({ id, name: cfg.name, price: cfg.price, qty, ...productTaxLineSnapshot(cfg.price, cfg), ...promotionLineSnapshot(cfg) });
+          lines.push(`• Agregado: *${qty}x ${cfg.name}*`);
+        }
+      }
+    }
+    if (lines.length || configurable.length) {
+      resetUpsellProgress();
+      if (configurable.length) {
+        state.pendingConfigurationQueue = configurable;
+        state.pendingConfigurationTotal = configurable.length;
+        state.pendingConfigurationCurrent = 0;
+        reply.messages = lines.length ? [`✅ Cambios en tu pedido:\n${lines.join('\n')}`, ...warnings] : warnings;
+        return presentNextQueuedProductConfiguration(state, reply, currency, t, finish, labels);
+      }
+      state.step = 'start';
+      reply.messages = [`✅ Cambios en tu pedido:\n${lines.join('\n')}`, ...warnings, cartSummary(state.cart, currency, labels)];
+      showPostSendOptions();
+      return finish();
+    }
+    if (warnings.length) {
+      reply.messages = [...warnings, cartSummary(state.cart, currency, labels)];
+      reply.options = [{ label: labels.cartButton, value: 'cart' }, { label: '➕ Agregar productos', value: 'menu' }];
+      return finish();
+    }
+  }
+  // Respaldo sin IA para un producto sencillo mencionado de forma explícita.
+  if (orderIntent && !ai?.changes && !/\b(quita|quitar|elimina|eliminar)\b/.test(normalizeSearchText(input)) && !/\b([2-9]|[1-9]\d+)\b/.test(normalizeSearchText(input))) {
+    const products = await activeProducts(t);
+    const mentioned = products.filter((product) => normalizeSearchText(input).includes(normalizeSearchText(product.name)));
+    const match = mentioned.length === 1 ? mentioned[0] : null;
+    if (match) {
+      const cfg = await loadProductConfig(t, match.id);
+      if (cfg && !cfg.hasVariants && !cfg.hasModifiers) {
+        const existing = state.cart.find((it) => it.id === match.id && !it._cartKey);
+        if (existing) existing.qty += 1;
+        else state.cart.push({ id: match.id, name: match.name, price: match.price, qty: 1, ...productTaxLineSnapshot(match.price, match), ...promotionLineSnapshot(match) });
+        resetUpsellProgress();
+        reply.messages = [`¡Agregado! 1x *${match.name}* 🎉\n\n${cartSummary(state.cart, currency, labels)}`];
+        showPostSendOptions();
+        return finish();
+      }
+    }
+  }
+
   // IA opcional para preguntas libres
-  const ai = await aiFallback(t, businessName, input, state, businessType);
   pushAiHistory(state, 'user', input);
-  if (ai) pushAiHistory(state, 'assistant', ai);
-  reply.messages = [ai || 'No estoy seguro de haber entendido 🤔 ¿Te ayudo con alguna de estas opciones?'];
+  if (ai?.text) pushAiHistory(state, 'assistant', ai.text);
+  reply.messages = [orderIntent ? 'Para tomar tu pedido, elige los productos del menú o dime sus nombres y cantidades. Aún no he agregado nada nuevo.' : (ai?.text || 'No estoy seguro de haber entendido 🤔 ¿Te ayudo con alguna de estas opciones?')];
   reply.options = mainOptions(state.cart, chatbotInfoOptions, labels);
   return finish();
 }
@@ -3047,6 +3265,7 @@ function confirmText(state, businessName, currency, labels = RESTAURANT_LABELS) 
 function confirmOptions(labels = RESTAURANT_LABELS) {
   return [
     { label: labels.confirmYes || RESTAURANT_LABELS.confirmYes, value: 'confirm_yes' },
+    { label: '✏️ Editar productos', value: 'confirm_edit_cart' },
     { label: labels.editNote || RESTAURANT_LABELS.editNote, value: 'confirm_edit_note' },
     { label: labels.confirmBack || RESTAURANT_LABELS.confirmBack, value: 'confirm_no' },
   ];
