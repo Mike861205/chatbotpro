@@ -14,6 +14,7 @@ const { emitNewOrder, emitSelfServiceStatus } = require('../notifications');
 const { parseCustomPaymentMethods, isCustomPaymentMethod } = require('../utils/paymentMethods');
 const { loadProductTaxConfig, effectiveProductPrice, productTaxLineSnapshot, applyProductTaxToCatalogProduct } = require('../utils/productTax');
 const { applyPromotionsToItems, getActivePromotions, decorateCatalogProducts } = require('../utils/promotions');
+const { isProductAvailableToday } = require('../utils/productAvailability');
 
 const router = express.Router();
 router.use(requireAuth);
@@ -578,8 +579,10 @@ async function listOpenCreditSales(t, branchId) {
   const normalizedBranchId = Number(branchId || 0);
   if (!Number.isInteger(normalizedBranchId) || normalizedBranchId <= 0) return [];
   const rows = await t.all(
-    `SELECT id, items, total::float AS total, payment_breakdown, notes, table_number,
+    `SELECT id, items, subtotal::float AS subtotal, total::float AS total, payment_breakdown, notes, table_number,
             service_branch_id, service_branch_name,
+            delivery, delivery_fee::float AS delivery_fee,
+            delivery_address, delivery_neighborhood, delivery_reference,
             to_char(created_at AT TIME ZONE '${tenantTimeZone(t)}', 'DD Mon YYYY, HH24:MI') AS created_at
      FROM {s}.orders
      WHERE channel = 'pos' AND status != 'cancelado' AND payment_status = 'pending'
@@ -811,7 +814,7 @@ async function normalizePosItems(t, inputItems) {
   const ids = [...new Set(items.map((item) => Number(item.productId ?? item.id)).filter((id) => Number.isInteger(id) && id > 0))];
   if (!ids.length) throw badRequest('Los productos del ticket no son válidos');
   const rows = await t.all(
-    `SELECT id, name, price::float AS price, COALESCE(unit_cost, 0)::float AS unit_cost, active, category_id
+    `SELECT id, name, price::float AS price, COALESCE(unit_cost, 0)::float AS unit_cost, active, category_id, sale_days
      FROM {s}.products
      WHERE id = ANY($1::int[])`,
     [ids]
@@ -821,7 +824,9 @@ async function normalizePosItems(t, inputItems) {
   const normalized = items.map((item) => {
     const product = byId.get(Number(item.productId ?? item.id));
     const qty = Number(item.qty);
-    if (!product || !product.active) throw badRequest('Uno de los productos ya no está disponible');
+    if (!product || !product.active || !isProductAvailableToday(product, new Date(), tenantTimeZone(t))) {
+      throw badRequest('Uno de los productos no está disponible para venta hoy');
+    }
     if (!Number.isInteger(qty) || qty <= 0) throw badRequest('La cantidad de un producto es inválida');
 
     const requestedName = String(item.name || '').trim();
@@ -1296,16 +1301,17 @@ router.get('/overview', async (req, res, next) => {
        ORDER BY ps.opened_at DESC`
     );
     const products = await req.tdb.all(
-      `SELECT p.id, p.category_id, p.name, p.description, p.price::float AS price, p.image, c.name AS category_name
+      `SELECT p.id, p.category_id, p.name, p.description, p.price::float AS price, p.image, p.sale_days, c.name AS category_name
        FROM {s}.products p
        LEFT JOIN {s}.categories c ON c.id = p.category_id
        WHERE p.active = 1
        ORDER BY COALESCE(c.sort, 0), c.name NULLS FIRST, p.name`
     );
-    const { variantsMap, groupsMap } = await getProductExtrasMaps(req.tdb, products.map((p) => p.id));
+    const availableProducts = products.filter((product) => isProductAvailableToday(product, new Date(), tenantTimeZone(req.tdb)));
+    const { variantsMap, groupsMap } = await getProductExtrasMaps(req.tdb, availableProducts.map((p) => p.id));
     const taxConfig = await loadProductTaxConfig(req.tdb);
     const soldQtyByProduct = await listSoldQtyByProduct(req.tdb);
-    const productsWithExtras = await Promise.all(products.map(async (p) => applyProductTaxToCatalogProduct({
+    const productsWithExtras = await Promise.all(availableProducts.map(async (p) => applyProductTaxToCatalogProduct({
       ...p,
       image: await resolveExistingPublicMediaPath(p.image),
       soldQty: Number(soldQtyByProduct.get(Number(p.id)) || 0),
@@ -1925,6 +1931,130 @@ async function createPosSale(req, res, next) {
   }
 }
 
+router.put('/sales/:id/credit', async (req, res, next) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id) || id <= 0) throw badRequest('Venta a crédito inválida');
+
+    const result = await req.tdb.tx(async (tx) => {
+      const session = await getOpenSession(tx, userSessionContext(req.user, req));
+      if (!session) throw badRequest('Abre una caja antes de editar una venta a crédito');
+
+      const sale = await tx.get(
+        `SELECT id, items, subtotal::float AS subtotal, total::float AS total, status, channel,
+                payment_status, payment_method, payment_breakdown, pos_session_id,
+                service_branch_id, service_branch_name, branch_stock_applied,
+                delivery, delivery_fee::float AS delivery_fee, notes, order_notes,
+                delivery_address, delivery_neighborhood, delivery_reference
+         FROM {s}.orders
+         WHERE id=$1
+         FOR UPDATE`,
+        [id]
+      );
+      if (!sale || sale.channel !== 'pos') throw Object.assign(new Error('No se encontró la venta POS'), { statusCode: 404 });
+      if (sale.status === 'cancelado') throw Object.assign(new Error('No se puede editar una venta cancelada'), { statusCode: 409 });
+      if (sale.payment_status !== 'pending' || sale.payment_method !== 'credit') {
+        throw Object.assign(new Error('Esta venta a crédito ya fue liquidada'), { statusCode: 409 });
+      }
+      if (Number(session.branch_id || 0) !== Number(sale.service_branch_id || 0)) {
+        throw Object.assign(new Error('La venta a crédito pertenece a otra sucursal'), { statusCode: 403 });
+      }
+
+      const fiscalInvoice = await tx.get(
+        `SELECT status FROM {s}.invoices
+         WHERE order_id=$1 AND status IN ('pending','unknown','active','cancel_pending')
+         ORDER BY id DESC LIMIT 1`,
+        [id]
+      );
+      if (fiscalInvoice) {
+        throw Object.assign(new Error('No puedes cambiar los productos después de timbrar; cancela primero el CFDI'), { statusCode: 409 });
+      }
+      const globalInvoice = await tx.get(
+        `SELECT gi.status FROM {s}.global_invoice_orders gio
+         JOIN {s}.global_invoices gi ON gi.id=gio.global_invoice_id
+         WHERE gio.order_id=$1 AND gio.active=1 AND gi.status IN ('pending','unknown','active') LIMIT 1`,
+        [id]
+      );
+      if (globalInvoice) {
+        throw Object.assign(new Error('No puedes cambiar una venta incluida en una factura global'), { statusCode: 409 });
+      }
+
+      const saleItems = await normalizePosItems(tx, req.body?.items);
+      const subtotal = n(saleItems.reduce((sum, item) => sum + Number(item.price || 0) * Number(item.qty || 0), 0));
+      const isDelivery = Boolean(req.body?.isDelivery);
+      const deliveryFee = isDelivery ? Math.max(0, n(req.body?.deliveryFee)) : 0;
+      const total = n(subtotal + deliveryFee);
+      const paymentMethod = String(req.body?.paymentMethod || 'credit').trim();
+      const payment = await normalizeTenantPayment(tx, paymentMethod, req.body?.payments || {}, total, req.body?.cashReceived);
+      const remainsCredit = payment.method === 'credit';
+      const previousBreakdown = parseJsonObject(sale.payment_breakdown);
+      const paymentBreakdown = remainsCredit
+        ? { ...previousBreakdown, ...payment.breakdown, creditEditedAt: new Date().toISOString(), creditEditedBy: req.user.username }
+        : { ...previousBreakdown, ...payment.breakdown, creditSettledAt: new Date().toISOString(), creditSettledBy: req.user.username };
+      const notes = String(req.body?.notes ?? sale.order_notes ?? sale.notes ?? '').trim().slice(0, 240);
+      const deliveryAddress = isDelivery ? String(req.body?.deliveryAddress || '').trim().replace(/\s+/g, ' ').slice(0, 300) : '';
+      const deliveryNeighborhood = isDelivery ? String(req.body?.deliveryNeighborhood || '').trim().replace(/\s+/g, ' ').slice(0, 160) : '';
+      const deliveryReference = isDelivery ? String(req.body?.deliveryReference || '').trim().replace(/\s+/g, ' ').slice(0, 240) : '';
+      const oldItems = parseJsonArray(sale.items);
+
+      if (Number(sale.branch_stock_applied)) {
+        await restoreBranchStockForCancelledSale(tx, sale.service_branch_id, oldItems);
+      }
+      const branchStockApplied = await decrementBranchStockForSale(tx, sale.service_branch_id, saleItems);
+
+      const updated = await tx.get(
+        `UPDATE {s}.orders
+         SET items=$1, subtotal=$2, total=$3, delivery=$4, delivery_fee=$5,
+             notes=$6, order_notes=$6, delivery_address=$7, delivery_neighborhood=$8, delivery_reference=$9,
+             payment_method=$10, payment_breakdown=$11, cash_received=$12, cash_change=$13,
+             payment_status=$14, cogs_total=$15, branch_stock_applied=$16,
+             credit_paid_session_id=CASE WHEN $14='paid' THEN $17::integer ELSE NULL END,
+             credit_paid_at=CASE WHEN $14='paid' THEN now() ELSE NULL END,
+             credit_paid_by=CASE WHEN $14='paid' THEN $18 ELSE '' END
+         WHERE id=$19 AND payment_status='pending' AND payment_method='credit'
+         RETURNING id, items, subtotal::float AS subtotal, total::float AS total,
+                   delivery_fee::float AS delivery_fee, payment_status, payment_method, payment_breakdown,
+                   cash_received::float AS cash_received, cash_change::float AS cash_change,
+                   notes, delivery, delivery_address, delivery_neighborhood, delivery_reference,
+                   invoice_code, invoice_token`,
+        [
+          JSON.stringify(saleItems), subtotal, total, isDelivery ? 'domicilio' : 'mostrador', deliveryFee,
+          notes, deliveryAddress, deliveryNeighborhood, deliveryReference,
+          payment.method, JSON.stringify(paymentBreakdown), payment.cashReceived || null, payment.cashChange || null,
+          remainsCredit ? 'pending' : 'paid', itemsCost(saleItems), branchStockApplied ? 1 : 0,
+          session.id, req.user.username, id,
+        ]
+      );
+      if (!updated) throw Object.assign(new Error('Esta venta a crédito fue modificada o liquidada por otro usuario'), { statusCode: 409 });
+
+      await insertSalesAudit(tx, req, {
+        eventType: remainsCredit ? 'credit_sale_edited' : 'credit_sale_edited_and_paid',
+        orderId: id,
+        sessionId: session.id,
+        branchId: sale.service_branch_id,
+        amount: n(total - Number(sale.total || 0)),
+        reason: remainsCredit ? 'Edición de productos de venta a crédito' : 'Edición y liquidación de venta a crédito',
+        before: { total: n(sale.total), items: oldItems, paymentStatus: sale.payment_status },
+        after: { total, items: saleItems, paymentStatus: remainsCredit ? 'pending' : 'paid', paymentMethod: payment.method },
+      });
+
+      return { updated, session, remainsCredit };
+    });
+
+    const totals = await getSessionTotals(req.tdb, result.session.id);
+    res.json({
+      ok: true,
+      sale: posSaleResponse(result.updated),
+      remainsCredit: result.remainsCredit,
+      totals,
+      expectedCash: expectedCashForSession(result.session, totals),
+    });
+  } catch (error) {
+    if ([400, 403, 404, 409].includes(error.statusCode)) return res.status(error.statusCode).json({ error: error.message });
+    next(error);
+  }
+});
+
 router.post('/self-service/:id/checkout', async (req, res, next) => {
   try {
     const orderId = Number(req.params.id);
@@ -2223,7 +2353,7 @@ router.get('/audit-log', async (req, res, next) => {
       `SELECT COUNT(*)::int AS total,
               COUNT(*) FILTER (WHERE sal.event_type='sale_cancelled')::int AS cancellations,
               COUNT(*) FILTER (WHERE sal.event_type IN ('table_round_edited','table_round_deleted'))::int AS round_edits,
-              COUNT(*) FILTER (WHERE sal.event_type='sale_payment_edited')::int AS payment_edits,
+              COUNT(*) FILTER (WHERE sal.event_type IN ('sale_payment_edited','credit_sale_paid','credit_sale_edited_and_paid'))::int AS payment_edits,
               COALESCE(SUM(sal.amount) FILTER (WHERE sal.event_type='sale_cancelled'),0)::float AS cancelled_amount,
               COALESCE(SUM(ABS(sal.amount)) FILTER (WHERE sal.event_type IN ('table_round_edited','table_round_deleted')),0)::float AS corrected_amount
        FROM {s}.sales_audit_log sal ${whereSql}`,

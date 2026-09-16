@@ -476,6 +476,7 @@ async function createTenantSchema(slug) {
       price NUMERIC(12,2) NOT NULL DEFAULT 0,
       image TEXT,
       active INTEGER DEFAULT 1,
+      sale_days TEXT NOT NULL DEFAULT '[]',
       created_at TIMESTAMPTZ DEFAULT now()
     );
     CREATE TABLE IF NOT EXISTS "${s}".promotions (
@@ -576,6 +577,7 @@ async function createTenantSchema(slug) {
       created_at TIMESTAMPTZ DEFAULT now()
     );
     ALTER TABLE "${s}".products ADD COLUMN IF NOT EXISTS unit_cost NUMERIC(12,4) DEFAULT 0;
+    ALTER TABLE "${s}".products ADD COLUMN IF NOT EXISTS sale_days TEXT NOT NULL DEFAULT '[]';
     CREATE TABLE IF NOT EXISTS "${s}".restaurant_tables (
       id SERIAL PRIMARY KEY,
       table_number INTEGER NOT NULL,

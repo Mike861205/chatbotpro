@@ -12,6 +12,7 @@ const { parseCustomPaymentMethods } = require('../utils/paymentMethods');
 const { resolveCurrencyConversion, convertedMoney, formatCurrencyAmount, conversionRateLabel } = require('../utils/currencyConversion');
 const { loadProductTaxConfig, applyProductTaxToCatalogProduct, productTaxLineSnapshot } = require('../utils/productTax');
 const { applyPromotions, getActivePromotions, decorateCatalogProducts } = require('../utils/promotions');
+const { isProductAvailableToday } = require('../utils/productAvailability');
 
 let aiConfigCache = { expiresAt: 0, value: null };
 const aiClientCache = new Map();
@@ -434,11 +435,13 @@ async function saveState(t, sessionId, state) {
 async function activeProducts(t, promotions = null) {
   const taxConfig = await loadProductTaxConfig(t);
   const rows = await t.all(
-    `SELECT p.id, p.category_id, p.name, p.description, p.price::float AS price, p.image, c.name AS category
+    `SELECT p.id, p.category_id, p.name, p.description, p.price::float AS price, p.image, p.sale_days, c.name AS category
      FROM {s}.products p LEFT JOIN {s}.categories c ON c.id = p.category_id
      WHERE p.active = 1 ORDER BY c.sort, c.name, p.name`
   );
-  const catalog = rows.map((p) => applyProductTaxToCatalogProduct({
+  const catalog = rows
+    .filter((product) => isProductAvailableToday(product, new Date(), t.timezone))
+    .map((p) => applyProductTaxToCatalogProduct({
     ...p,
     categoryId: Number(p.category_id || 0),
     image: String(p.image || '').trim()
@@ -882,8 +885,8 @@ function addPendingProductToCart(state) {
 
 async function loadProductConfig(t, productId) {
   const taxConfig = await loadProductTaxConfig(t);
-  const prod = await t.get('SELECT id, category_id, name, price::float AS price FROM {s}.products WHERE id = $1 AND active = 1', [Number(productId)]);
-  if (!prod) return null;
+  const prod = await t.get('SELECT id, category_id, name, price::float AS price, sale_days FROM {s}.products WHERE id = $1 AND active = 1', [Number(productId)]);
+  if (!prod || !isProductAvailableToday(prod, new Date(), t.timezone)) return null;
   const variants = await t.all(
     'SELECT id, name, price::float AS price FROM {s}.product_variants WHERE product_id = $1 AND active = 1 ORDER BY sort, id',
     [prod.id]
@@ -3002,6 +3005,20 @@ async function handleMessage(t, slug, sessionId, rawInput, runtime = {}) {
 
   if (state.step === 'confirm') {
     if (lower === 'confirm_yes') {
+      if (t?.schema) {
+        const productsAvailableNow = await activeProducts(t, activeChatbotPromotions);
+        const availableProductIds = new Set(productsAvailableNow.map((product) => Number(product.id)));
+        const unavailableLines = state.cart.filter((item) => !availableProductIds.has(Number(item.id)));
+        if (unavailableLines.length) {
+          state.cart = state.cart.filter((item) => availableProductIds.has(Number(item.id)));
+          state.step = 'start';
+          reply.messages = [
+            `Al cambiar el día, ${unavailableLines.map((item) => `*${item.name}*`).join(', ')} dejó de estar disponible. Lo retiré del carrito para evitar cobrarte un producto fuera de su día de venta.`,
+          ];
+          reply.options = mainOptions(state.cart, chatbotInfoOptions, labels);
+          return finish();
+        }
+      }
       await ensurePurchasingSchema(t);
       await ensureBranchStockSchema(t);
       await initializeBranchStock(t, 'chatbot');

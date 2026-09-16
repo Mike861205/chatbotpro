@@ -18,6 +18,7 @@ const {
 } = require('../utils/mercadoPagoPoint');
 const { finalizeSelfServiceOrder, getOpenBranchSession } = require('../utils/selfServiceCheckout');
 const { loadProductTaxConfig, effectiveProductPrice, productTaxLineSnapshot, applyProductTaxToCatalogProduct } = require('../utils/productTax');
+const { isProductAvailableToday } = require('../utils/productAvailability');
 
 const router = express.Router();
 const publicLimiter = createRateLimiter({
@@ -233,19 +234,20 @@ async function buildCatalog(tenantDb) {
   const [categories, products] = await Promise.all([
     tenantDb.all('SELECT id,name,sort FROM {s}.categories ORDER BY sort,name'),
     tenantDb.all(
-      `SELECT p.id,p.category_id,p.name,p.description,p.price::float AS price,p.image,c.name AS category_name
+      `SELECT p.id,p.category_id,p.name,p.description,p.price::float AS price,p.image,p.sale_days,c.name AS category_name
        FROM {s}.products p LEFT JOIN {s}.categories c ON c.id=p.category_id
        WHERE p.active=1 ORDER BY COALESCE(c.sort,0),c.name NULLS LAST,p.name`
     ),
   ]);
-  const ids = products.map((row) => Number(row.id));
+  const availableProducts = products.filter((product) => isProductAvailableToday(product, new Date(), tenantDb.timezone));
+  const ids = availableProducts.map((row) => Number(row.id));
   const { variantsByProduct, groupsByProduct } = ids.length
     ? await productConfiguration(tenantDb, ids)
     : { variantsByProduct: new Map(), groupsByProduct: new Map() };
   const taxConfig = await loadProductTaxConfig(tenantDb);
   return {
     categories,
-    products: products.map((product) => applyProductTaxToCatalogProduct({
+    products: availableProducts.map((product) => applyProductTaxToCatalogProduct({
       ...product,
       variants: variantsByProduct.get(Number(product.id)) || [],
       modifierGroups: groupsByProduct.get(Number(product.id)) || [],
@@ -260,7 +262,7 @@ async function normalizeKioskItems(tenantDb, requestedItems) {
   const ids = [...new Set(input.map((item) => Number(item.productId || item.id)).filter((id) => Number.isInteger(id) && id > 0))];
   if (!ids.length) throw Object.assign(new Error('Los productos seleccionados no son válidos'), { status: 400 });
   const products = await tenantDb.all(
-    'SELECT id,name,price::float AS price,active FROM {s}.products WHERE id=ANY($1::int[])',
+    'SELECT id,name,price::float AS price,active,sale_days FROM {s}.products WHERE id=ANY($1::int[])',
     [ids]
   );
   const productById = new Map(products.map((row) => [Number(row.id), row]));
@@ -271,7 +273,9 @@ async function normalizeKioskItems(tenantDb, requestedItems) {
     const productId = Number(requested.productId || requested.id);
     const product = productById.get(productId);
     const qty = Number(requested.qty);
-    if (!product || !Number(product.active)) throw Object.assign(new Error('Uno de los productos ya no está disponible'), { status: 409 });
+    if (!product || !Number(product.active) || !isProductAvailableToday(product, new Date(), tenantDb.timezone)) {
+      throw Object.assign(new Error('Uno de los productos no está disponible para venta hoy'), { status: 409 });
+    }
     if (!Number.isInteger(qty) || qty < 1 || qty > 99) throw Object.assign(new Error('La cantidad seleccionada no es válida'), { status: 400 });
 
     const variants = variantsByProduct.get(productId) || [];

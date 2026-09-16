@@ -47,6 +47,36 @@ test('permite registrar, ver, cobrar e imprimir ventas a crédito', () => {
   assert.match(css, /\.pos-credit-card/);
 });
 
+test('permite reabrir un crédito en el carrito, cambiar productos y decidir si sigue pendiente o se cobra', () => {
+  assert.match(app, /let POS_EDITING_CREDIT_SALE = null/);
+  assert.match(app, /data-edit-credit="\$\{sale\.id\}"/);
+  assert.match(app, /async function editPosCreditSale\(sale\)/);
+  assert.match(app, /Guardar cambios a crédito/);
+  assert.match(app, /Guardar y cobrar crédito/);
+  assert.match(app, /`\/api\/pos\/sales\/\$\{editingCredit\.id\}\/credit`/);
+  assert.match(pos, /router\.put\('\/sales\/:id\/credit'/);
+  assert.match(pos, /payment_status !== 'pending' \|\| sale\.payment_method !== 'credit'/);
+  assert.match(pos, /remainsCredit \? 'pending' : 'paid'/);
+});
+
+test('la edición del crédito ajusta existencias y deja auditoría sin duplicar la venta', () => {
+  assert.match(pos, /FOR UPDATE/);
+  assert.match(pos, /restoreBranchStockForCancelledSale\(tx, sale\.service_branch_id, oldItems\)/);
+  assert.match(pos, /decrementBranchStockForSale\(tx, sale\.service_branch_id, saleItems\)/);
+  assert.match(pos, /eventType: remainsCredit \? 'credit_sale_edited' : 'credit_sale_edited_and_paid'/);
+  assert.match(pos, /credit_paid_session_id=CASE WHEN \$14='paid' THEN \$17::integer ELSE NULL END/);
+  assert.match(pos, /WHERE id=\$19 AND payment_status='pending' AND payment_method='credit'/);
+  assert.doesNotMatch(pos.match(/router\.put\('\/sales\/:id\/credit'[\s\S]+?\n\}\);/)?.[0] || '', /INSERT INTO \{s\}\.orders/);
+});
+
+test('bloquea cambios de productos facturados y conserva datos de entrega del crédito', () => {
+  assert.match(pos, /No puedes cambiar los productos después de timbrar/);
+  assert.match(pos, /No puedes cambiar una venta incluida en una factura global/);
+  assert.match(pos, /delivery_address, delivery_neighborhood, delivery_reference/);
+  assert.match(app, /deliveryAddress: sale\.delivery_address \|\| ''/);
+  assert.match(css, /\.pos-credit-edit-banner/);
+});
+
 test('reporta el crédito al cobrarlo y bloquea facturación mientras esté pendiente', () => {
   assert.match(sales, /COALESCE\(o\.credit_paid_at, o\.created_at\) AS financial_at/);
   assert.match(dashboard, /COALESCE\(payment_status, 'paid'\) = 'paid'/);

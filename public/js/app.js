@@ -117,6 +117,7 @@ let POS_CHATBOT_TOTAL_PAGES = 1;
 const POS_CHATBOT_IMPORTING = new Set();
 let POS_CHATBOT_TABLE_ORDER_ID = null;
 let POS_TABLE_ACCOUNT = null;
+let POS_EDITING_CREDIT_SALE = null;
 let PROMOTIONS_CACHE = [];
 let PROMOTION_PRODUCTS = [];
 let PROMOTION_CATEGORIES = [];
@@ -3313,9 +3314,59 @@ function buildOrderDeliveryLabel(order) {
 function buildOrderComandaItems(order) {
   const rows = Array.isArray(order?.items) ? order.items : [];
   return rows.map((item) => ({
+    ...item,
     qty: Number(item?.qty || 0),
     name: String(item?.name || 'Producto'),
   }));
+}
+
+function printableItemSelection(item) {
+  const rawName = String(item?.name || 'Producto').trim() || 'Producto';
+  const variant = String(item?.variantName || item?.variant_name || '').trim();
+  const explicitModifiers = String(item?.modifiersLabel || item?.modifiers_label || '').trim();
+  const groupedModifiers = [];
+
+  if (Array.isArray(item?.modifiers)) {
+    const flatGroups = new Map();
+    item.modifiers.forEach((modifier) => {
+      if (Array.isArray(modifier?.options)) {
+        const options = modifier.options
+          .map((option) => String(option?.name || option?.label || option?.optionName || '').trim())
+          .filter(Boolean);
+        if (!options.length) return;
+        const groupName = String(modifier?.groupName || modifier?.group_name || '').trim();
+        groupedModifiers.push(groupName ? `${groupName}: ${options.join(', ')}` : options.join(', '));
+        return;
+      }
+
+      const optionName = String(modifier?.optionName || modifier?.option_name || modifier?.name || modifier?.label || '').trim();
+      if (!optionName) return;
+      const groupName = String(modifier?.groupName || modifier?.group_name || '').trim();
+      const groupKey = groupName || '__options__';
+      if (!flatGroups.has(groupKey)) flatGroups.set(groupKey, []);
+      flatGroups.get(groupKey).push(optionName);
+    });
+    flatGroups.forEach((options, groupName) => {
+      const uniqueOptions = [...new Set(options)];
+      groupedModifiers.push(groupName === '__options__'
+        ? uniqueOptions.join(', ')
+        : `${groupName}: ${uniqueOptions.join(', ')}`);
+    });
+  }
+
+  const modifiers = groupedModifiers.filter(Boolean).join(' · ') || explicitModifiers;
+  const stripTrailingSelection = (name, selection) => {
+    if (!selection || name.length <= selection.length) return name;
+    if (!name.toLocaleLowerCase().endsWith(selection.toLocaleLowerCase())) return name;
+    const prefix = name.slice(0, name.length - selection.length);
+    if (!/[·|,—–\-/:]\s*$/u.test(prefix)) return name;
+    return prefix.replace(/[\s·|,—–\-/:]+$/gu, '').trim() || name;
+  };
+
+  let name = stripTrailingSelection(rawName, modifiers);
+  if (explicitModifiers && explicitModifiers !== modifiers) name = stripTrailingSelection(name, explicitModifiers);
+  name = stripTrailingSelection(name, variant);
+  return { name, variant, modifiers };
 }
 
 function operationalOrderNote(order) {
@@ -3511,12 +3562,16 @@ function buildComandaHtml(order, areaItems, areaLabel, widthOverride = null, aut
     ? `${location.origin}${ME.tenant.logo.startsWith('/') ? ME.tenant.logo : `/${ME.tenant.logo}`}`
     : '';
 
-  const items = areaItems.map((it) => ({ qty: Number(it?.qty ?? 0), name: String(it?.name || 'Producto') }));
+  const items = areaItems.map((it) => ({ ...it, qty: Number(it?.qty ?? 0), name: String(it?.name || 'Producto') }));
   const itemRows = items.map((it) => {
     const qty = Number.isFinite(it.qty) ? it.qty : 0;
+    const selection = printableItemSelection(it);
     return `<tr>
       <td class="qty">${esc(String(qty))}</td>
-      <td>${esc(it.name)}</td>
+      <td><b>${esc(selection.name)}</b>
+        ${selection.variant ? `<div class="item-selection"><span>Variante:</span> ${esc(selection.variant)}</div>` : ''}
+        ${selection.modifiers ? `<div class="item-selection"><span>Ingredientes/opciones:</span> ${esc(selection.modifiers)}</div>` : ''}
+      </td>
     </tr>`;
   }).join('');
 
@@ -3560,6 +3615,8 @@ function buildComandaHtml(order, areaItems, areaLabel, widthOverride = null, aut
     td.qty { width: 22%; text-align: center; font-weight: 800; }
     .headline { font-size: ${Math.max(fontPx + 2, 14)}px; font-weight: 800; letter-spacing: 0.5px; }
     .area-label { font-size: ${Math.max(fontPx + 4, 16)}px; font-weight: 900; letter-spacing: 1px; padding: 4px 0; border: 2px solid #000; margin: 6px 0; }
+    .item-selection { margin-top: 2px; font-size: ${Math.max(fontPx - 1, 10)}px; font-weight: 700; line-height: 1.3; overflow-wrap: anywhere; }
+    .item-selection span { font-weight: 900; }
     .order-note { margin: 9px 0; padding: 8px; border: 3px double #000; font-size: ${Math.max(fontPx + 2, 14)}px; font-weight: 900; line-height: 1.35; text-align: center; overflow-wrap: anywhere; }
     .order-note span { display: block; margin-bottom: 3px; font-size: ${Math.max(fontPx - 2, 10)}px; letter-spacing: .7px; }
     .delivery-block { margin: 7px 0; padding: 7px; border: 2px solid #000; overflow-wrap: anywhere; }
@@ -4691,18 +4748,24 @@ function buildThermalTicketDocument(ticket, widthOverride = null, autoPrint = tr
   const ticketId = ticket.ticketLabel || (isRoundTicket
     ? `Mesa ${ticket.tableNumber} · Ronda ${ticket.roundNumber}`
     : ticket.id ? `#${ticket.id}` : 'Pre-ticket');
-  const itemRows = (ticket.items || [])
-    .map(
-      (it) => `<tr>
-        <td>${esc(`${it.qty} x ${it.name}`)}<div style="font-size:${Math.max(fontPx-2,10)}px;color:#555">${esc(fmtMoney(it.price, currency))} c/u</div></td>
-        <td class="r">${esc(fmtMoney(it.total, currency))}</td>
-      </tr>`
-    )
-    .join('') || '<tr><td>Sin productos</td><td class="r">$0.00</td></tr>';
+  const ticketItemRow = (it) => {
+    const selection = printableItemSelection(it);
+    const lineTotal = Number(it?.total ?? (Number(it?.qty || 0) * Number(it?.price || 0)));
+    return `<tr>
+      <td><b>${esc(`${it.qty} x ${selection.name}`)}</b>
+        ${selection.variant ? `<div class="item-selection"><span>Variante:</span> ${esc(selection.variant)}</div>` : ''}
+        ${selection.modifiers ? `<div class="item-selection"><span>Ingredientes/opciones:</span> ${esc(selection.modifiers)}</div>` : ''}
+        <div class="item-price">${esc(fmtMoney(it.price, currency))} c/u</div>
+      </td>
+      <td class="r">${esc(fmtMoney(lineTotal, currency))}</td>
+    </tr>`;
+  };
+  const itemRows = (ticket.items || []).map(ticketItemRow).join('')
+    || '<tr><td>Sin productos</td><td class="r">$0.00</td></tr>';
   const groupedRoundRows = !isRoundTicket && Array.isArray(ticket.rounds) && ticket.rounds.length
     ? ticket.rounds.map((round) => `
       <tr><td colspan="2" style="padding-top:7px;border-top:1px dashed #777"><b>RONDA ${esc(String(round.roundNumber))}</b><span style="float:right"><b>${esc(fmtMoney(round.subtotal || 0, currency))}</b></span></td></tr>
-      ${(round.items || []).map((it) => `<tr><td>${esc(`${it.qty} x ${it.name}`)}<div style="font-size:${Math.max(fontPx-2,10)}px;color:#555">${esc(fmtMoney(it.price, currency))} c/u</div></td><td class="r">${esc(fmtMoney(Number(it.qty || 0) * Number(it.price || 0), currency))}</td></tr>`).join('')}
+      ${(round.items || []).map(ticketItemRow).join('')}
     `).join('')
     : '';
 
@@ -4767,6 +4830,9 @@ function buildThermalTicketDocument(ticket, widthOverride = null, autoPrint = tr
     table { width: 100%; border-collapse: collapse; }
     td { padding: 4px 2px; vertical-align: top; }
     td.r { text-align: right; white-space: nowrap; }
+    .item-selection { margin-top: 2px; font-size: ${Math.max(fontPx - 1, 10)}px; font-weight: 700; line-height: 1.3; overflow-wrap: anywhere; }
+    .item-selection span { font-weight: 900; }
+    .item-price { font-size: ${Math.max(fontPx - 2, 10)}px; color: #555; }
     .tot { font-size: ${Math.max(fontPx + 2, 14)}px; font-weight: 700; }
     .meta { font-size: ${Math.max(fontPx - 1, 10)}px; }
     .logo { text-align: center; margin-bottom: 6px; }
@@ -5070,9 +5136,14 @@ function printPosCreditSale(sale) {
     customerName: sale.payment_breakdown?.creditCustomerName || 'Cliente',
     customerPhone: sale.payment_breakdown?.creditCustomerPhone || '',
     items: (sale.items || []).map((item) => ({ ...item, total: moneyNum(Number(item.qty || 0) * Number(item.price || 0)) })),
-    subtotal: Number(sale.total || 0),
+    subtotal: Number(sale.subtotal ?? (Number(sale.total || 0) - Number(sale.delivery_fee || 0))),
+    deliveryFee: Number(sale.delivery_fee || 0),
     total: Number(sale.total || 0),
     notes: sale.notes || '',
+    delivery: sale.delivery || '',
+    deliveryAddress: sale.delivery_address || '',
+    deliveryNeighborhood: sale.delivery_neighborhood || '',
+    deliveryReference: sale.delivery_reference || '',
     tableNumber: sale.table_number || null,
     suppressInvoice: true,
   });
@@ -5507,6 +5578,7 @@ function updatePosQty(productId, delta, cartKey) {
 
 function clearPosCart() {
   POS_CART = [];
+  POS_EDITING_CREDIT_SALE = null;
   resetPosPaymentForm();
   renderPosCart();
 }
@@ -5667,6 +5739,54 @@ function renderPos() {
   renderPosCart();
 }
 
+async function editPosCreditSale(sale) {
+  if (!sale) return;
+  if (POS_TABLE_ACCOUNT) return toast('Sal de la cuenta de mesa antes de editar un crédito', true);
+  if (POS_CART.length && !await askConfirm(
+    '¿Reemplazar el ticket actual?',
+    `Se cargará la venta a crédito #${sale.id} y se descartará el ticket que estás preparando.`
+  )) return;
+
+  const productsById = new Map((POS_OVERVIEW?.products || []).map((product) => [Number(product.id), product]));
+  POS_EDITING_CREDIT_SALE = sale;
+  POS_CART = (sale.items || []).map((item, index) => {
+    const id = Number(item.id ?? item.productId ?? item.product_id);
+    const product = productsById.get(id);
+    return {
+      ...item,
+      id,
+      name: String(item.name || product?.name || 'Producto'),
+      qty: Math.max(1, Number(item.qty || item.quantity || 1)),
+      price: Number(item.price || 0),
+      originalUnitPrice: Number(item.originalUnitPrice ?? item.listPrice ?? item.price ?? 0),
+      image: product?.image || item.image || '',
+      activePromotion: product?.activePromotion || null,
+      activePromotions: product?.activePromotions || [],
+      _cartKey: item._cartKey || item.cartKey || (item.variantId || item.modifiersLabel ? `credit_${sale.id}_${index}` : null),
+    };
+  }).filter((item) => Number.isInteger(item.id) && item.id > 0);
+
+  const breakdown = sale.payment_breakdown || {};
+  POS_PAYMENT_METHOD = 'credit';
+  POS_PAYMENT_FORM = {
+    cashReceived: '', cash: '', card: '', cardType: '', transfer: '',
+    creditCustomerName: breakdown.creditCustomerName || '',
+    creditCustomerPhone: breakdown.creditCustomerPhone || '',
+    notes: sale.notes || '',
+    deliveryAddress: sale.delivery_address || '',
+    deliveryNeighborhood: sale.delivery_neighborhood || '',
+    deliveryReference: sale.delivery_reference || '',
+  };
+  POS_IS_DELIVERY = sale.delivery === 'domicilio';
+  POS_DELIVERY_FEE = POS_IS_DELIVERY ? String(Number(sale.delivery_fee || 0)) : '';
+  POS_CHECKOUT_IDEMPOTENCY_KEY = '';
+  POS_CHECKOUT_FINGERPRINT = '';
+  LAST_POS_SALE = null;
+  renderPosCart();
+  $('#posCartCard')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  toast(`Crédito #${sale.id} abierto para editar`);
+}
+
 function renderPosCreditQueue() {
   const host = $('#posCreditQueue');
   if (!host) return;
@@ -5681,7 +5801,7 @@ function renderPosCreditQueue() {
         <header><span>Ticket #${sale.id}</span><b>${fmtMoney(sale.total)}</b></header>
         <div class="pos-credit-customer"><i class="ph-bold ph-user-circle"></i><div><strong>${esc(breakdown.creditCustomerName || 'Cliente')}</strong>${breakdown.creditCustomerPhone ? `<small>${esc(breakdown.creditCustomerPhone)}</small>` : ''}</div></div>
         <div class="pos-credit-meta"><span><i class="ph-bold ph-calendar"></i>${esc(sale.created_at || '')}</span>${sale.table_number ? `<span><i class="ph-bold ph-fork-knife"></i>Mesa ${esc(String(sale.table_number))}</span>` : ''}</div>
-        <footer><button class="btn btn-ghost" type="button" data-print-credit="${sale.id}"><i class="ph-bold ph-printer"></i> Ticket</button><button class="btn btn-primary" type="button" data-settle-credit="${sale.id}"><i class="ph-bold ph-hand-coins"></i> Cobrar</button></footer>
+        <footer><button class="btn btn-ghost" type="button" data-print-credit="${sale.id}"><i class="ph-bold ph-printer"></i> Ticket</button><button class="btn btn-ghost" type="button" data-edit-credit="${sale.id}"><i class="ph-bold ph-pencil-simple"></i> Editar</button><button class="btn btn-primary" type="button" data-settle-credit="${sale.id}"><i class="ph-bold ph-hand-coins"></i> Cobrar</button></footer>
       </article>`;
     }).join('')}</div>
   </section>`;
@@ -5695,6 +5815,10 @@ function renderPosCreditQueue() {
   host.querySelectorAll('[data-print-credit]').forEach((button) => button.addEventListener('click', () => {
     const sale = rows.find((row) => Number(row.id) === Number(button.dataset.printCredit));
     if (sale) printPosCreditSale(sale);
+  }));
+  host.querySelectorAll('[data-edit-credit]').forEach((button) => button.addEventListener('click', () => {
+    const sale = rows.find((row) => Number(row.id) === Number(button.dataset.editCredit));
+    editPosCreditSale(sale).catch((error) => toast(error.message, true));
   }));
 }
 
@@ -6099,6 +6223,7 @@ function renderPosCatalog() {
 
 function renderPosCart() {
   const el = $('#posCartCard');
+  const creditEdit = POS_EDITING_CREDIT_SALE;
   const total = posGrandTotal();
   const subtotalItems = posCartTotal();
   const deliveryFeeAmt = POS_IS_DELIVERY ? moneyNum(Number(POS_DELIVERY_FEE) || 0) : 0;
@@ -6162,10 +6287,17 @@ function renderPosCart() {
     : '';
   const mixedSum = moneyNum(Number(POS_PAYMENT_FORM.cash || 0) + Number(POS_PAYMENT_FORM.card || 0) + Number(POS_PAYMENT_FORM.transfer || 0));
   const mixedValid = POS_PAYMENT_METHOD !== 'mixed' || Math.abs(mixedSum - total) < 0.01;
-  const submitDisabled = session && mixedValid ? '' : 'disabled';
+  const hasCheckoutItems = tableAccount ? Number(tableAccount.total || 0) + POS_CART.length > 0 : POS_CART.length > 0;
+  const submitDisabled = session && mixedValid && hasCheckoutItems ? '' : 'disabled';
   const sessionHint = session ? '' : '<div class="hint" style="margin-top:10px">Abre una caja para poder finalizar ventas.</div>';
-  const cartHtml = POS_CART.length || Number(tableAccount?.total || 0) > 0
+  const creditEditBanner = creditEdit ? `<div class="pos-credit-edit-banner">
+    <i class="ph-bold ph-pencil-simple"></i>
+    <div><b>Editando venta a crédito #${creditEdit.id}</b><span>Agrega o quita productos. Elige Crédito para guardar el nuevo saldo o selecciona otro medio para cobrarla y cerrarla.</span></div>
+    <strong>${fmtMoney(creditEdit.total || 0)} anterior</strong>
+  </div>` : '';
+  const cartHtml = POS_CART.length || Number(tableAccount?.total || 0) > 0 || creditEdit
     ? `${roundHistoryHtml}
+      ${creditEditBanner}
       ${tableAccount ? `<div class="pos-current-round"><b><i class="ph-bold ph-plus-circle"></i> ${POS_CART.length ? `Nueva ronda ${tableRounds.length + 1}` : 'Sin ronda pendiente'}</b><small>${POS_CART.length ? `${POS_CART.reduce((sum, item) => sum + Number(item.qty || 0), 0)} producto(s) por enviar` : 'Agrega productos para iniciar la siguiente ronda.'}</small></div>` : ''}
       <div class="pos-cart-list">
         ${POS_CART.map((item) => {
@@ -6227,9 +6359,9 @@ function renderPosCart() {
           <textarea id="posSaleNotes" rows="2" placeholder="${tableAccount ? 'Ej. Sin cebolla, término medio...' : POS_IS_DELIVERY ? 'Indicaciones de preparación: sin cebolla, salsa aparte...' : 'Mesa 4, venta rápida, pedido interno...'}">${esc(POS_PAYMENT_FORM.notes || '')}</textarea>
         </div>
         <div class="pos-checkout-actions">
-          <button class="btn btn-primary" type="submit" ${submitDisabled}><i class="ph-bold ${POS_PAYMENT_METHOD === 'credit' ? 'ph-file-plus' : 'ph-check-circle'}"></i> ${POS_PAYMENT_METHOD === 'credit' ? 'Registrar venta a crédito' : tableAccount ? 'Cerrar y cobrar cuenta' : 'Cobrar venta'}</button>
+          <button class="btn btn-primary" type="submit" ${submitDisabled}><i class="ph-bold ${POS_PAYMENT_METHOD === 'credit' ? 'ph-file-plus' : 'ph-check-circle'}"></i> ${creditEdit ? (POS_PAYMENT_METHOD === 'credit' ? 'Guardar cambios a crédito' : 'Guardar y cobrar crédito') : POS_PAYMENT_METHOD === 'credit' ? 'Registrar venta a crédito' : tableAccount ? 'Cerrar y cobrar cuenta' : 'Cobrar venta'}</button>
           ${tableAccount ? `<button class="btn btn-ghost" type="button" id="posSaveTable" ${POS_CART.length ? '' : 'disabled'}><i class="ph-bold ph-paper-plane-tilt"></i> Enviar ronda e imprimir</button>` : ''}
-          <button class="btn btn-ghost" type="button" id="posClearCart"><i class="ph-bold ${tableAccount ? 'ph-arrow-left' : 'ph-broom'}"></i> ${tableAccount ? 'Salir de mesa' : 'Vaciar ticket'}</button>
+          <button class="btn btn-ghost" type="button" id="posClearCart"><i class="ph-bold ${tableAccount ? 'ph-arrow-left' : creditEdit ? 'ph-x' : 'ph-broom'}"></i> ${tableAccount ? 'Salir de mesa' : creditEdit ? 'Cancelar edición' : 'Vaciar ticket'}</button>
           ${tableAccount ? '' : '<button class="btn btn-ghost" type="button" id="posPrintTicket"><i class="ph-bold ph-printer"></i> Imprimir ticket</button>'}
         </div>
         ${sessionHint}
@@ -6243,7 +6375,7 @@ function renderPosCart() {
       </div>
     </div>` : '';
   el.innerHTML = `
-    <h3><i class="ph-bold ${tableAccount ? 'ph-fork-knife' : 'ph-shopping-cart'}"></i> ${tableAccount ? `Cuenta mesa ${esc(String(tableNumber || ''))}` : 'Ticket actual'}</h3>
+    <h3><i class="ph-bold ${tableAccount ? 'ph-fork-knife' : creditEdit ? 'ph-pencil-simple' : 'ph-shopping-cart'}"></i> ${tableAccount ? `Cuenta mesa ${esc(String(tableNumber || ''))}` : creditEdit ? `Editar crédito #${creditEdit.id}` : 'Ticket actual'}</h3>
     ${tableContext}
     ${cartHtml}`;
 
@@ -6315,6 +6447,7 @@ function renderPosCart() {
   $('#posCheckoutForm')?.addEventListener('submit', async (e) => {
     e.preventDefault();
     if (POS_CHECKOUT_IN_FLIGHT) return;
+    const editingCredit = POS_EDITING_CREDIT_SALE;
     POS_CHECKOUT_IN_FLIGHT = true;
     const reservedPrintWindow = directPrintEnabled() ? null : reserveBrowserPrintWindow('width=430,height=760');
     const submitButton = e.submitter || e.currentTarget.querySelector('button[type="submit"]');
@@ -6344,20 +6477,24 @@ function renderPosCart() {
         deliveryReference: POS_IS_DELIVERY ? ($('#posDeliveryReference')?.value || '') : '',
       };
       if (!tableAccount) payload.items = posCartPayload();
-      const checkoutFingerprint = JSON.stringify({ accountId: tableAccount?.id || null, payload });
-      if (!POS_CHECKOUT_IDEMPOTENCY_KEY || POS_CHECKOUT_FINGERPRINT !== checkoutFingerprint) {
-        POS_CHECKOUT_IDEMPOTENCY_KEY = newPosCheckoutKey();
-        POS_CHECKOUT_FINGERPRINT = checkoutFingerprint;
+      if (!editingCredit) {
+        const checkoutFingerprint = JSON.stringify({ accountId: tableAccount?.id || null, payload });
+        if (!POS_CHECKOUT_IDEMPOTENCY_KEY || POS_CHECKOUT_FINGERPRINT !== checkoutFingerprint) {
+          POS_CHECKOUT_IDEMPOTENCY_KEY = newPosCheckoutKey();
+          POS_CHECKOUT_FINGERPRINT = checkoutFingerprint;
+        }
+        payload.idempotencyKey = POS_CHECKOUT_IDEMPOTENCY_KEY;
       }
-      payload.idempotencyKey = POS_CHECKOUT_IDEMPOTENCY_KEY;
       let checkoutAccount = tableAccount;
       if (tableAccount && POS_CART.length) {
         const roundResult = await sendActiveTableRound({ silent: true });
         checkoutAccount = roundResult.account;
       }
-      const endpoint = checkoutAccount ? `/api/pos/table-accounts/${checkoutAccount.id}/checkout` : '/api/pos/sales';
+      const endpoint = editingCredit
+        ? `/api/pos/sales/${editingCredit.id}/credit`
+        : checkoutAccount ? `/api/pos/table-accounts/${checkoutAccount.id}/checkout` : '/api/pos/sales';
       const result = await api(endpoint, {
-        method: 'POST',
+        method: editingCredit ? 'PUT' : 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
       });
@@ -6365,7 +6502,9 @@ function renderPosCart() {
       POS_CHECKOUT_IDEMPOTENCY_KEY = '';
       POS_CHECKOUT_FINGERPRINT = '';
       setPosSaleProcessing(false);
-      toast(checkoutAccount ? `Cuenta de mesa ${tableNumber} cerrada` : 'Venta registrada en punto de venta');
+      toast(editingCredit
+        ? (result?.sale?.paymentStatus === 'pending' ? 'Venta a crédito actualizada' : 'Venta a crédito actualizada y liquidada')
+        : checkoutAccount ? `Cuenta de mesa ${tableNumber} cerrada` : 'Venta registrada en punto de venta');
       POS_TABLE_ACCOUNT = null;
       clearPosCart();
       setTimeout(() => {
@@ -8228,6 +8367,34 @@ function renderCategoryChips() {
   });
 }
 
+const PRODUCT_SALE_DAY_ORDER = [1, 2, 3, 4, 5, 6, 0];
+const PRODUCT_SALE_DAY_LABELS = Object.freeze({ 0: 'Dom', 1: 'Lun', 2: 'Mar', 3: 'Mié', 4: 'Jue', 5: 'Vie', 6: 'Sáb' });
+
+function normalizeClientProductSaleDays(value) {
+  let input = value;
+  if (typeof input === 'string') {
+    try { input = JSON.parse(input || '[]'); } catch { input = []; }
+  }
+  if (!Array.isArray(input)) return [];
+  return [...new Set(input.map(Number).filter((day) => Number.isInteger(day) && day >= 0 && day <= 6))];
+}
+
+function productSaleDaysText(value) {
+  const selected = new Set(normalizeClientProductSaleDays(value));
+  return PRODUCT_SALE_DAY_ORDER.filter((day) => selected.has(day)).map((day) => PRODUCT_SALE_DAY_LABELS[day]).join(', ');
+}
+
+function productSaleScheduleBadge(product, compact = false) {
+  const saleDays = normalizeClientProductSaleDays(product?.saleDays ?? product?.sale_days);
+  if (!saleDays.length) return '';
+  const availableToday = product?.availableToday !== false;
+  const daysText = productSaleDaysText(saleDays);
+  const text = compact
+    ? (availableToday ? `Hoy · ${daysText}` : `No hoy · ${daysText}`)
+    : (availableToday ? `Venta hoy · ${daysText}` : `No se vende hoy · ${daysText}`);
+  return `<span class="prod-badge prod-badge-schedule ${availableToday ? '' : 'unavailable'}" title="Días de venta: ${esc(daysText)}"><i class="ph-bold ph-calendar-dots"></i> ${esc(text)}</span>`;
+}
+
 function renderProductsGrid() {
   const grid = $('#prodGrid');
   if (!grid) return;
@@ -8270,6 +8437,7 @@ function renderProductsGrid() {
           const varBadge = (p.variants?.length > 1) ? `<span class="prod-badge prod-badge-variant"><i class="ph-bold ph-stack"></i> ${p.variants.length} variantes</span>` : '';
           const modBadge = (p.modifierGroups?.length > 0) ? `<span class="prod-badge prod-badge-mod"><i class="ph-bold ph-sliders"></i> ${p.modifierGroups.length} grupo${p.modifierGroups.length > 1 ? 's' : ''}</span>` : '';
           const topBadge = topBadgeHTML(p, idx);
+          const scheduleBadge = productSaleScheduleBadge(p);
           return `<article class="prod-row ${p.active ? '' : 'inactive'}">
       <div class="thumb">
         ${p.image ? `<img src="${esc(p.image)}" alt="" loading="lazy" />` : '<i class="ph ph-fork-knife"></i>'}
@@ -8279,7 +8447,7 @@ function renderProductsGrid() {
           <div>
             <div class="name">${esc(p.name)}</div>
             ${p.category_name ? `<div class="cat">${esc(p.category_name)}</div>` : ''}
-            ${topBadge || varBadge || modBadge ? `<div class="prod-badges-row">${topBadge}${varBadge}${modBadge}</div>` : ''}
+            ${topBadge || scheduleBadge || varBadge || modBadge ? `<div class="prod-badges-row">${topBadge}${scheduleBadge}${varBadge}${modBadge}</div>` : ''}
           </div>
           <span class="price-tag">${fmtMoney(p.price)}</span>
         </div>
@@ -8301,6 +8469,8 @@ function renderProductsGrid() {
           const extras = [];
           const topBadge = topBadgeHTML(p, idx);
           if (topBadge) extras.push(topBadge);
+          const scheduleBadge = productSaleScheduleBadge(p, true);
+          if (scheduleBadge) extras.push(scheduleBadge);
           if (p.variants?.length > 1) extras.push(`<span class="prod-badge prod-badge-variant"><i class="ph-bold ph-stack"></i>${p.variants.length}</span>`);
           if (p.modifierGroups?.length > 0) extras.push(`<span class="prod-badge prod-badge-mod"><i class="ph-bold ph-sliders"></i>${p.modifierGroups.length}</span>`);
           return `<article class="prod-mini ${p.active ? '' : 'inactive'}">
@@ -8322,6 +8492,7 @@ function renderProductsGrid() {
           const varBadge = (p.variants?.length > 1) ? `<span class="prod-badge prod-badge-variant"><i class="ph-bold ph-stack"></i> ${p.variants.length} var.</span>` : '';
           const modBadge = (p.modifierGroups?.length > 0) ? `<span class="prod-badge prod-badge-mod"><i class="ph-bold ph-sliders"></i> ${p.modifierGroups.length} opc.</span>` : '';
           const topBadge = topBadgeHTML(p, idx);
+          const scheduleBadge = productSaleScheduleBadge(p);
           return `<div class="prod-card ${p.active ? '' : 'inactive'}">
       <div class="img">
         ${p.image ? `<img src="${esc(p.image)}" alt="" loading="lazy" />` : '<i class="ph ph-fork-knife"></i>'}
@@ -8332,7 +8503,7 @@ function renderProductsGrid() {
         ${p.category_name ? `<span class="cat">${esc(p.category_name)}</span>` : ''}
         <div class="name">${esc(p.name)}</div>
         <div class="desc">${esc(p.description || '')}</div>
-        ${topBadge || varBadge || modBadge ? `<div class="prod-badges-row">${topBadge}${varBadge}${modBadge}</div>` : ''}
+        ${topBadge || scheduleBadge || varBadge || modBadge ? `<div class="prod-badges-row">${topBadge}${scheduleBadge}${varBadge}${modBadge}</div>` : ''}
       </div>
       <div class="actions">
         <button class="btn btn-ghost" data-edit="${p.id}"><i class="ph-bold ph-pencil-simple"></i> Editar</button>
@@ -9048,6 +9219,30 @@ $('#pImage').addEventListener('change', () => {
   })
 );
 
+function selectedProductSaleDays() {
+  return [...document.querySelectorAll('input[name="pSaleDay"]:checked')]
+    .map((input) => Number(input.value))
+    .filter((day) => Number.isInteger(day) && day >= 0 && day <= 6);
+}
+
+function syncProductSaleSchedule() {
+  const enabled = Boolean($('#pSaleScheduleEnabled')?.checked);
+  const panel = $('#pSaleDaysPanel');
+  if (panel) panel.hidden = !enabled;
+  const selected = selectedProductSaleDays();
+  const summary = $('#pSaleDaysSummary');
+  if (summary) {
+    summary.textContent = !enabled
+      ? 'Disponible todos los días'
+      : selected.length
+        ? `Disponible: ${productSaleDaysText(selected)}`
+        : 'Selecciona al menos un día';
+  }
+}
+
+$('#pSaleScheduleEnabled')?.addEventListener('change', syncProductSaleSchedule);
+document.querySelectorAll('input[name="pSaleDay"]').forEach((input) => input.addEventListener('change', syncProductSaleSchedule));
+
 function openProdModal(p = null) {
   const ui = businessUi();
   $('#prodModalTitle').innerHTML = p
@@ -9059,6 +9254,12 @@ function openProdModal(p = null) {
   $('#pPrice').value = p ? p.price : '';
   $('#pCat').value = p && p.category_id ? p.category_id : '';
   $('#pActive').checked = p ? !!p.active : true;
+  const saleDays = normalizeClientProductSaleDays(p?.saleDays ?? p?.sale_days);
+  $('#pSaleScheduleEnabled').checked = saleDays.length > 0;
+  document.querySelectorAll('input[name="pSaleDay"]').forEach((input) => {
+    input.checked = saleDays.includes(Number(input.value));
+  });
+  syncProductSaleSchedule();
   $('#pSatProductCode').value = p?.sat_product_code || '';
   $('#pSatUnitCode').value = p?.sat_unit_code || '';
   $('#pSatUnitName').value = p?.sat_unit_name || '';
@@ -9612,6 +9813,11 @@ $('#aiProductImport')?.addEventListener('click', async () => {
 $('#prodForm').addEventListener('submit', async (e) => {
   e.preventDefault();
   const id = $('#pId').value;
+  const scheduledSale = $('#pSaleScheduleEnabled').checked;
+  const saleDays = scheduledSale ? selectedProductSaleDays() : [];
+  if (scheduledSale && !saleDays.length) {
+    return toast('Selecciona al menos un día para vender este producto', true);
+  }
   const btn = $('#prodSave');
   btn.disabled = true;
   const fd = new FormData();
@@ -9620,6 +9826,7 @@ $('#prodForm').addEventListener('submit', async (e) => {
   fd.append('price', $('#pPrice').value);
   fd.append('categoryId', $('#pCat').value);
   fd.append('active', $('#pActive').checked ? '1' : '0');
+  fd.append('saleDays', JSON.stringify(saleDays));
   fd.append('satProductCode', $('#pSatProductCode').value.trim());
   fd.append('satUnitCode', $('#pSatUnitCode').value.trim());
   fd.append('satUnitName', $('#pSatUnitName').value.trim());
@@ -11890,6 +12097,9 @@ async function loadAuditLog(page = 1) {
 const AUDIT_EVENT_META = {
   sale_cancelled: { label: 'Venta cancelada', icon: 'ph-x-circle', tone: 'cancelled' },
   sale_payment_edited: { label: 'Pago editado', icon: 'ph-credit-card', tone: 'payment' },
+  credit_sale_paid: { label: 'Crédito liquidado', icon: 'ph-hand-coins', tone: 'payment' },
+  credit_sale_edited: { label: 'Crédito editado', icon: 'ph-pencil-simple', tone: 'edited' },
+  credit_sale_edited_and_paid: { label: 'Crédito editado y liquidado', icon: 'ph-check-circle', tone: 'payment' },
   table_round_edited: { label: 'Ronda editada', icon: 'ph-pencil-simple', tone: 'edited' },
   table_round_deleted: { label: 'Ronda eliminada', icon: 'ph-trash', tone: 'deleted' },
 };
@@ -12233,11 +12443,29 @@ $('#contactForm').addEventListener('submit', async (e) => {
   fd.append('chatbot_payment_pickup_card', $('#cfgChatPayPickupCard').checked ? '1' : '0');
   fd.append('custom_payment_methods_json', JSON.stringify(CUSTOM_PAYMENT_METHODS));
   fd.append('chatbot_bank_accounts_json', JSON.stringify(BANK_ACCOUNTS));
-  fd.append('chatbot_pos_integration_enabled', $('#cfgPosChatIntegration').checked ? '1' : '0');
   await api('/api/settings', { method: 'PUT', body: fd });
   toast('Cuentas y medios de pago guardados');
   SETTINGS = await api('/api/settings');
   fillConfigForm();
+});
+
+$('#cfgPosChatIntegration')?.addEventListener('change', async (event) => {
+  const checkbox = event.currentTarget;
+  const previousValue = SETTINGS?.chatbot_pos_integration_enabled || '0';
+  const value = checkbox.checked ? '1' : '0';
+  checkbox.disabled = true;
+  try {
+    const fd = new FormData();
+    fd.append('chatbot_pos_integration_enabled', value);
+    await api('/api/settings', { method: 'PUT', body: fd });
+    SETTINGS.chatbot_pos_integration_enabled = value;
+    toast(checkbox.checked ? 'Integración con punto de venta activada' : 'Integración con punto de venta desactivada');
+  } catch (error) {
+    checkbox.checked = previousValue === '1';
+    toast(error.message, true);
+  } finally {
+    checkbox.disabled = false;
+  }
 });
 
 $('#ticketForm').addEventListener('submit', async (e) => {
