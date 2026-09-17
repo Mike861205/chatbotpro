@@ -38,23 +38,33 @@ async function sendTenantPush(slug, payload, options = {}) {
   if (!canSendWebPush()) return { sent: 0, skipped: 'vapid' };
   try {
     const t = tdb(slug);
-    const { rows } = await t.all('SELECT endpoint, p256dh, auth FROM {s}.push_subscriptions');
-    if (!rows.length) return { sent: 0, skipped: 'no_subscriptions' };
+    const subscriptions = await t.all('SELECT endpoint, p256dh, auth FROM {s}.push_subscriptions');
+    if (!Array.isArray(subscriptions)) throw new TypeError('Resultado de suscripciones inválido');
+    if (!subscriptions.length) return { sent: 0, skipped: 'no_subscriptions' };
 
     const dead = [];
     let sent = 0;
+    let invalid = 0;
     await Promise.all(
-      rows.map(async (sub) => {
+      subscriptions.map(async (sub) => {
+        const endpoint = typeof sub?.endpoint === 'string' ? sub.endpoint.trim() : '';
+        const p256dh = typeof sub?.p256dh === 'string' ? sub.p256dh.trim() : '';
+        const auth = typeof sub?.auth === 'string' ? sub.auth.trim() : '';
+        if (!endpoint || !p256dh || !auth) {
+          invalid += 1;
+          console.warn('[push] suscripción inválida omitida', endpoint ? endpoint.slice(-20) : '(sin endpoint)');
+          return;
+        }
         try {
           await webpush.sendNotification(
-            { endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.auth } },
+            { endpoint, keys: { p256dh, auth } },
             JSON.stringify(payload),
             { TTL: options.ttl || 300, urgency: options.urgency || 'high' }
           );
           sent += 1;
         } catch (err) {
-          if (err.statusCode === 410 || err.statusCode === 404) dead.push(sub.endpoint);
-          else console.error('[push] error enviando a', sub.endpoint.slice(-20), err.statusCode || err.message);
+          if (err.statusCode === 410 || err.statusCode === 404) dead.push(endpoint);
+          else console.error('[push] error enviando a', endpoint.slice(-20), err.statusCode || err.message);
         }
       })
     );
@@ -64,7 +74,7 @@ async function sendTenantPush(slug, payload, options = {}) {
         await t.run('DELETE FROM {s}.push_subscriptions WHERE endpoint = $1', [ep]).catch(() => {});
       }
     }
-    return { sent, dead: dead.length };
+    return { sent, dead: dead.length, invalid };
   } catch (e) {
     console.error('[push] error general:', e.message);
     return { sent: 0, error: e.message };
