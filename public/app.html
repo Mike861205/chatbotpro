@@ -484,9 +484,11 @@
             </div>
             <button type="button" class="btn btn-ghost" id="addCatBtn" aria-label="Nueva categoría"><i class="ph-bold ph-folder-plus"></i><span class="prod-action-label-full">Categoría</span><span class="prod-action-label-short" aria-hidden="true">Categoría</span></button>
             <button type="button" class="btn btn-ghost" id="aiImportBtn" aria-label="Cargar productos por IA"><i class="ph-bold ph-magic-wand"></i><span class="prod-action-label-full">Cargar por IA</span><span class="prod-action-label-short" aria-hidden="true">Por IA</span></button>
+            <button type="button" class="btn btn-ai-images" id="generateCatalogImagesBtn" aria-label="Crear imágenes faltantes con inteligencia artificial" hidden><i class="ph-bold ph-sparkle"></i><span class="prod-action-label-full">Crear imágenes con IA</span><span class="prod-action-label-short" aria-hidden="true">Fotos IA</span></button>
             <button type="button" class="btn btn-primary" id="addProdBtn" aria-label="Nuevo producto"><i class="ph-bold ph-plus-circle"></i><span class="prod-action-label-full">Nuevo producto</span><span class="prod-action-label-short" aria-hidden="true">Nuevo</span></button>
           </div>
         </div>
+        <div class="catalog-ai-image-status" id="catalogAiImageStatus" role="status" aria-live="polite" hidden></div>
         <div class="prod-grid" id="prodGrid"></div>
       </section>
 

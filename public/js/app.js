@@ -8267,6 +8267,9 @@ let AI_PRODUCTS_DRAFT = [];
 let AI_IMAGE_BULK_RUNNING = false;
 let AI_IMAGE_BULK_PROGRESS = null;
 let AI_IMAGE_GENERATE_REST_QUEUED = false;
+let CATALOG_AI_IMAGE_RUNNING = false;
+let CATALOG_AI_IMAGE_IDS = new Set();
+let CATALOG_AI_IMAGE_STATUS = null;
 
 const PRODUCT_VIEW_MODES = new Set(['card', 'detail', 'compact']);
 
@@ -8395,9 +8398,142 @@ function productSaleScheduleBadge(product, compact = false) {
   return `<span class="prod-badge prod-badge-schedule ${availableToday ? '' : 'unavailable'}" title="Días de venta: ${esc(daysText)}"><i class="ph-bold ph-calendar-dots"></i> ${esc(text)}</span>`;
 }
 
+function productHasCatalogImage(product) {
+  return Boolean(String(product?.image || '').trim());
+}
+
+function catalogAiImageButton(product, variant = 'card') {
+  if (productHasCatalogImage(product)) return '';
+  const id = Number(product.id);
+  const busy = CATALOG_AI_IMAGE_IDS.has(id);
+  const compact = variant === 'compact';
+  const label = busy ? 'Generando…' : 'Crear imagen con IA';
+  const icon = busy ? 'ph-spinner-gap' : 'ph-sparkle';
+  return `<button type="button" class="btn catalog-ai-image-btn catalog-ai-image-${variant} ${busy ? 'is-generating' : ''}" data-generate-product-image="${id}" title="${label}" aria-label="${label} para ${esc(product.name)}" ${CATALOG_AI_IMAGE_RUNNING ? 'disabled' : ''}><i class="ph-bold ${icon}"></i>${compact ? '' : `<span>${label}</span>`}</button>`;
+}
+
+function updateCatalogAiImageButton() {
+  const button = $('#generateCatalogImagesBtn');
+  if (!button) return;
+  const missing = PRODUCTS_CACHE.filter((product) => !productHasCatalogImage(product)).length;
+  const batchSize = Math.min(5, missing);
+  button.hidden = missing === 0;
+  button.disabled = CATALOG_AI_IMAGE_RUNNING || missing === 0;
+  button.setAttribute('aria-label', CATALOG_AI_IMAGE_RUNNING
+    ? `Generando ${CATALOG_AI_IMAGE_IDS.size} imágenes con inteligencia artificial`
+    : `Crear ${batchSize} imágenes faltantes con inteligencia artificial`);
+  const icon = CATALOG_AI_IMAGE_RUNNING ? 'ph-spinner-gap' : 'ph-sparkle';
+  const fullLabel = CATALOG_AI_IMAGE_RUNNING
+    ? `Generando ${CATALOG_AI_IMAGE_IDS.size}…`
+    : `Crear ${batchSize} ${batchSize === 1 ? 'imagen' : 'imágenes'} con IA`;
+  const shortLabel = CATALOG_AI_IMAGE_RUNNING ? 'Generando…' : `${batchSize} foto${batchSize === 1 ? '' : 's'} IA`;
+  button.classList.toggle('is-generating', CATALOG_AI_IMAGE_RUNNING);
+  button.innerHTML = `<i class="ph-bold ${icon}"></i><span class="prod-action-label-full">${fullLabel}</span><span class="prod-action-label-short" aria-hidden="true">${shortLabel}</span>`;
+}
+
+function renderCatalogAiImageStatus() {
+  const host = $('#catalogAiImageStatus');
+  if (!host) return;
+  if (!CATALOG_AI_IMAGE_STATUS?.items?.length) {
+    host.hidden = true;
+    host.innerHTML = '';
+    return;
+  }
+  const { state = 'running', title, items } = CATALOG_AI_IMAGE_STATUS;
+  const icon = state === 'running' ? 'ph-spinner-gap' : state === 'error' ? 'ph-warning-circle' : 'ph-check-circle';
+  const stateLabels = { running: 'Generando', generated: 'Imagen creada', skipped: 'Omitido', error: 'No generada' };
+  host.className = `catalog-ai-image-status is-${state}`;
+  host.hidden = false;
+  host.innerHTML = `
+    <div class="catalog-ai-image-status-head">
+      <div><i class="ph-bold ${icon}"></i><span><b>${esc(title)}</b><small>${state === 'running' ? 'El proceso se realiza uno por uno para no saturar la IA.' : 'Resultado del último lote de imágenes.'}</small></span></div>
+      ${state === 'running' ? '' : '<button type="button" data-close-catalog-ai-status aria-label="Cerrar resultado de imágenes"><i class="ph-bold ph-x"></i></button>'}
+    </div>
+    <div class="catalog-ai-image-products">${items.map((item) => `<span class="catalog-ai-product-state is-${item.status}"><i class="ph-bold ${item.status === 'generated' ? 'ph-check' : item.status === 'error' ? 'ph-warning' : item.status === 'skipped' ? 'ph-minus' : 'ph-spinner-gap'}"></i><span>${esc(item.name)}</span><small>${stateLabels[item.status] || stateLabels.running}</small></span>`).join('')}</div>`;
+  host.querySelector('[data-close-catalog-ai-status]')?.addEventListener('click', () => {
+    CATALOG_AI_IMAGE_STATUS = null;
+    renderCatalogAiImageStatus();
+  });
+}
+
+async function generateCatalogProductImages(productIds = null) {
+  if (CATALOG_AI_IMAGE_RUNNING) return;
+  const requested = productIds ? new Set(productIds.map(Number)) : null;
+  const selected = PRODUCTS_CACHE
+    .filter((product) => !productHasCatalogImage(product) && (!requested || requested.has(Number(product.id))))
+    .slice(0, 5);
+  if (!selected.length) {
+    toast('Todos los productos seleccionados ya tienen imagen.');
+    return;
+  }
+
+  CATALOG_AI_IMAGE_RUNNING = true;
+  CATALOG_AI_IMAGE_IDS = new Set(selected.map((product) => Number(product.id)));
+  CATALOG_AI_IMAGE_STATUS = {
+    state: 'running',
+    title: `Generando ${selected.length} ${selected.length === 1 ? 'imagen' : 'imágenes'} con IA`,
+    items: selected.map((product) => ({ id: Number(product.id), name: product.name, status: 'running' })),
+  };
+  renderProductsGrid();
+  updateCatalogAiImageButton();
+  renderCatalogAiImageStatus();
+  try {
+    const result = await api('/api/products/ai/images/catalog', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ productIds: selected.map((product) => product.id) }),
+    });
+    for (const generated of result.images || []) {
+      const product = PRODUCTS_CACHE.find((item) => Number(item.id) === Number(generated.id));
+      if (product) product.image = generated.image;
+    }
+    const generatedCount = (result.images || []).length;
+    const failedCount = (result.errors || []).length;
+    const generatedIds = new Set((result.images || []).map((item) => Number(item.id)));
+    const failedIds = new Set((result.errors || []).map((item) => Number(item.id)));
+    const skippedIds = new Set((result.skipped || []).map((item) => Number(item.id)));
+    CATALOG_AI_IMAGE_STATUS = {
+      state: failedCount && !generatedCount ? 'error' : 'done',
+      title: generatedCount
+        ? `${generatedCount} ${generatedCount === 1 ? 'imagen creada' : 'imágenes creadas'} correctamente`
+        : 'El lote terminó sin crear imágenes',
+      items: selected.map((product) => ({
+        id: Number(product.id),
+        name: product.name,
+        status: generatedIds.has(Number(product.id)) ? 'generated' : failedIds.has(Number(product.id)) ? 'error' : skippedIds.has(Number(product.id)) ? 'skipped' : 'error',
+      })),
+    };
+    renderCatalogAiImageStatus();
+    const remaining = Math.max(0, PRODUCTS_CACHE.filter((product) => !productHasCatalogImage(product)).length);
+    const summary = generatedCount
+      ? `${generatedCount} ${generatedCount === 1 ? 'imagen creada' : 'imágenes creadas'} con IA${remaining ? ` · quedan ${remaining} para otro lote` : ''}`
+      : 'No había imágenes pendientes para estos productos.';
+    toast(`${summary}${failedCount ? ` · ${failedCount} no se pudieron generar` : ''}`, failedCount > 0);
+  } catch (error) {
+    CATALOG_AI_IMAGE_STATUS = {
+      state: 'error',
+      title: 'No se pudieron generar las imágenes del lote',
+      items: selected.map((product) => ({ id: Number(product.id), name: product.name, status: 'error' })),
+    };
+    renderCatalogAiImageStatus();
+    toast(error.message || 'No se pudieron crear las imágenes con IA', true);
+  } finally {
+    CATALOG_AI_IMAGE_RUNNING = false;
+    CATALOG_AI_IMAGE_IDS.clear();
+    try {
+      await loadProducts();
+    } catch {
+      renderProductsGrid();
+      updateCatalogAiImageButton();
+    }
+    renderCatalogAiImageStatus();
+  }
+}
+
 function renderProductsGrid() {
   const grid = $('#prodGrid');
   if (!grid) return;
+  updateCatalogAiImageButton();
   const filtered = PRODUCT_CAT_FILTER === 'all'
     ? PRODUCTS_CACHE
     : PRODUCTS_CACHE.filter((p) => String(p.category_id || '') === String(PRODUCT_CAT_FILTER));
@@ -8455,6 +8591,7 @@ function renderProductsGrid() {
       </div>
       <div class="row-actions">
         <span class="state-dot ${p.active ? 'on' : 'off'}">${p.active ? 'ACTIVO' : 'OCULTO'}</span>
+        ${catalogAiImageButton(p, 'row')}
         <button class="btn btn-ghost" data-edit="${p.id}"><i class="ph-bold ph-pencil-simple"></i> Editar</button>
         <button class="btn btn-danger btn-icon" data-del="${p.id}" title="Eliminar"><i class="ph-bold ph-trash"></i></button>
       </div>
@@ -8478,6 +8615,7 @@ function renderProductsGrid() {
       <div class="mini-name">${esc(p.name)}${extras.length ? ` ${extras.join('')}` : ''}</div>
       <div class="mini-price">${fmtMoney(p.price)}</div>
       <div class="mini-actions">
+        ${catalogAiImageButton(p, 'compact')}
         <button class="btn btn-ghost" data-edit="${p.id}"><i class="ph-bold ph-pencil-simple"></i></button>
         <button class="btn btn-danger btn-icon" data-del="${p.id}" title="Eliminar"><i class="ph-bold ph-trash"></i></button>
       </div>
@@ -8495,7 +8633,7 @@ function renderProductsGrid() {
           const scheduleBadge = productSaleScheduleBadge(p);
           return `<div class="prod-card ${p.active ? '' : 'inactive'}">
       <div class="img">
-        ${p.image ? `<img src="${esc(p.image)}" alt="" loading="lazy" />` : '<i class="ph ph-fork-knife"></i>'}
+        ${p.image ? `<img src="${esc(p.image)}" alt="" loading="lazy" />` : `<div class="prod-ai-placeholder"><i class="ph ph-fork-knife"></i>${catalogAiImageButton(p, 'card')}</div>`}
         <span class="state-dot ${p.active ? 'on' : 'off'}">${p.active ? 'ACTIVO' : 'OCULTO'}</span>
         <span class="price-tag">${fmtMoney(p.price)}</span>
       </div>
@@ -8517,6 +8655,9 @@ function renderProductsGrid() {
 
   document.querySelectorAll('[data-edit]').forEach((b) =>
     b.addEventListener('click', () => openProdModal(PRODUCTS_CACHE.find((p) => p.id == b.dataset.edit)))
+  );
+  grid.querySelectorAll('[data-generate-product-image]').forEach((button) =>
+    button.addEventListener('click', () => generateCatalogProductImages([Number(button.dataset.generateProductImage)]))
   );
   document.querySelectorAll('[data-del]').forEach((b) =>
     b.addEventListener('click', async () => {
@@ -9573,6 +9714,7 @@ async function saveProductExtras(productId) {
 
 $('#addProdBtn').addEventListener('click', () => openProdModal());
 $('#aiImportBtn')?.addEventListener('click', () => openAiImportModal());
+$('#generateCatalogImagesBtn')?.addEventListener('click', () => generateCatalogProductImages());
 $('#prodCancel').addEventListener('click', () => $('#prodModal').classList.remove('show'));
 $('#aiProductCancel')?.addEventListener('click', closeAiImportModal);
 $('#aiAcceptSuggestedImages')?.addEventListener('click', async () => {

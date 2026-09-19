@@ -10,7 +10,7 @@ const { decrypt } = require('../utils/crypto');
 const { buildAiCatalogPrompt, normalizeAiCatalogProducts } = require('../utils/businessCatalog');
 const { cropAiMenuProductImage, prepareAiMenuImage } = require('../utils/aiMenuImages');
 const { buildProductImagePrompt, normalizeImageStyle } = require('../utils/productImageGeneration');
-const { createImageUpload, deleteManagedUpload, optimizeUploadedImage, safeUnlink } = require('../utils/uploads');
+const { createImageUpload, deleteManagedUpload, optimizeUploadedImage, saveImageBuffer, safeUnlink } = require('../utils/uploads');
 const { normalizeProductSaleDays, productAvailabilityFields } = require('../utils/productAvailability');
 
 const router = express.Router();
@@ -42,6 +42,7 @@ const uploadAiProductImages = createImageUpload({
 });
 
 const aiClientCache = new Map();
+const catalogImageGenerationLocks = new Set();
 
 function normalizeCategoryName(name) {
   return String(name || '').trim().toLowerCase();
@@ -162,7 +163,7 @@ function normalizeAiProviderError(err) {
   return { status, code, message, retryAfterSec };
 }
 
-function mapAiProviderErrorToClient(aiErr) {
+function mapAiProviderErrorToClient(aiErr, { operation = 'analysis' } = {}) {
   const msg = String(aiErr?.message || '').toLowerCase();
   if (aiErr.status === 401 || aiErr.status === 403) {
     return {
@@ -181,7 +182,9 @@ function mapAiProviderErrorToClient(aiErr) {
   if (msg.includes('model') && (msg.includes('vision') || msg.includes('image') || msg.includes('multimodal'))) {
     return {
       status: 400,
-      error: 'El modelo configurado no soporta análisis de imágenes. Usa uno multimodal (por ejemplo gpt-4o-mini).',
+      error: operation === 'image'
+        ? 'El modelo configurado no soporta generación de imágenes. Revisa el modelo de imágenes en SuperAdmin.'
+        : 'El modelo configurado no soporta análisis de imágenes. Usa uno multimodal (por ejemplo gpt-4o-mini).',
     };
   }
   if (msg.includes('payload') || msg.includes('too large') || msg.includes('content length') || msg.includes('context length')) {
@@ -192,7 +195,9 @@ function mapAiProviderErrorToClient(aiErr) {
   }
   return {
     status: aiErr.status >= 400 && aiErr.status < 500 ? 400 : 502,
-    error: 'No se pudo analizar el menú con IA en este momento. Inténtalo nuevamente.',
+    error: operation === 'image'
+      ? 'No se pudo generar la imagen con IA en este momento. Inténtalo nuevamente.'
+      : 'No se pudo analizar el menú con IA en este momento. Inténtalo nuevamente.',
   };
 }
 
@@ -369,6 +374,7 @@ async function requestGeneratedProductImage(aiCfg, product, options = {}) {
       const optimized = await sharpGeneratedProductImage(generated);
       return {
         dataUrl: `data:image/webp;base64,${optimized.toString('base64')}`,
+        buffer: optimized,
         bytes: optimized.length,
         model,
       };
@@ -585,7 +591,7 @@ router.post('/ai/images/generate', async (req, res, next) => {
         });
       } catch (error) {
         const aiErr = error?.normalized || normalizeAiProviderError(error);
-        const mapped = mapAiProviderErrorToClient(aiErr);
+        const mapped = mapAiProviderErrorToClient(aiErr, { operation: 'image' });
         errors.push({ id: product.id, name: product.name, error: mapped.error });
       }
     }
@@ -599,6 +605,90 @@ router.post('/ai/images/generate', async (req, res, next) => {
     return res.json({ images, errors, style });
   } catch (error) {
     next(error);
+  }
+});
+
+router.post('/ai/images/catalog', async (req, res, next) => {
+  const tenantKey = String(req.tenant?.slug || req.tenant?.id || 'tenant');
+  if (catalogImageGenerationLocks.has(tenantKey)) {
+    return res.status(409).json({ error: 'Ya hay una generación de imágenes en curso. Espera a que termine.' });
+  }
+
+  const ids = [...new Set((Array.isArray(req.body?.productIds) ? req.body.productIds : [])
+    .map(Number)
+    .filter((id) => Number.isInteger(id) && id > 0))].slice(0, 5);
+  if (!ids.length) return res.status(400).json({ error: 'Selecciona al menos un producto sin imagen.' });
+
+  catalogImageGenerationLocks.add(tenantKey);
+  try {
+    const rows = await req.tdb.all(
+      `SELECT p.id,p.name,p.description,p.image,c.name AS category_name
+       FROM {s}.products p
+       LEFT JOIN {s}.categories c ON c.id=p.category_id
+       WHERE p.id=ANY($1::int[])`,
+      [ids]
+    );
+    const rowMap = new Map(rows.map((row) => [Number(row.id), row]));
+    const products = ids.map((id) => rowMap.get(id)).filter(Boolean);
+    if (!products.length) return res.status(404).json({ error: 'No se encontraron los productos seleccionados.' });
+
+    const aiCfg = await getOpenAiRuntimeConfig();
+    if (!aiCfg.key) return res.status(400).json({ error: 'No hay API key de OpenAI configurada para generar imágenes.' });
+    const businessType = await getSetting(req.tdb, 'business_type', 'restaurant');
+    const style = normalizeImageStyle(req.body?.style);
+    const images = [];
+    const errors = [];
+    const skipped = [];
+
+    // El lote se procesa en serie y está limitado a cinco para proteger al proveedor y al servidor.
+    for (const product of products) {
+      let storedImage = '';
+      try {
+        const currentImage = await resolveExistingPublicMediaPath(product.image);
+        if (currentImage) {
+          skipped.push({ id: Number(product.id), reason: 'already_has_image' });
+          continue;
+        }
+        const generated = await requestGeneratedProductImage(aiCfg, {
+          id: product.id,
+          name: product.name,
+          description: product.description,
+          categoryName: product.category_name,
+        }, { businessType, style });
+        storedImage = await saveImageBuffer(generated.buffer, {
+          scope: req.tenant.slug,
+          outputPrefix: 'prod-ai',
+          maxWidth: 1200,
+          quality: 84,
+        });
+        const saved = await req.tdb.get(
+          'UPDATE {s}.products SET image=$1 WHERE id=$2 AND image IS NOT DISTINCT FROM $3 RETURNING id',
+          [storedImage, product.id, product.image]
+        );
+        if (!saved) {
+          await deleteManagedUpload(storedImage);
+          storedImage = '';
+          skipped.push({ id: Number(product.id), reason: 'image_changed' });
+          continue;
+        }
+        if (product.image && product.image !== storedImage) await deleteManagedUpload(product.image);
+        images.push({ id: Number(product.id), image: storedImage, model: generated.model });
+      } catch (error) {
+        if (storedImage) await deleteManagedUpload(storedImage).catch(() => {});
+        const aiErr = error?.normalized || normalizeAiProviderError(error);
+        const mapped = mapAiProviderErrorToClient(aiErr, { operation: 'image' });
+        errors.push({ id: Number(product.id), name: product.name, error: mapped.error });
+      }
+    }
+
+    if (!images.length && errors.length) {
+      return res.status(502).json({ error: errors[0].error, images, errors, skipped });
+    }
+    return res.json({ images, errors, skipped, limit: 5 });
+  } catch (error) {
+    next(error);
+  } finally {
+    catalogImageGenerationLocks.delete(tenantKey);
   }
 });
 

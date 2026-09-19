@@ -71,6 +71,24 @@ async function optimizeUploadedImage(file, { scope, outputPrefix, maxWidth = 160
   return `/uploads/${scope}/${finalName}`;
 }
 
+async function saveImageBuffer(bytes, { scope, outputPrefix = 'image', maxWidth = 1600, quality = 80 }) {
+  const cleanScope = String(scope || '').trim().toLowerCase();
+  const dir = ensureScopedUploadsDir(cleanScope);
+  const finalName = `${outputPrefix}_${Date.now()}_${randomSuffix()}.webp`;
+  const finalPath = path.join(dir, finalName);
+  try {
+    await sharp(Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes || []), { failOn: 'none' })
+      .rotate()
+      .resize({ width: maxWidth, height: maxWidth, fit: 'inside', withoutEnlargement: true })
+      .webp({ quality, effort: 4 })
+      .toFile(finalPath);
+    return `/uploads/${cleanScope}/${finalName}`;
+  } catch (error) {
+    await safeUnlink(finalPath);
+    throw error;
+  }
+}
+
 function resolveManagedUploadPath(publicPath) {
   const clean = String(publicPath || '').trim();
   if (!clean.startsWith('/uploads/')) return null;
@@ -114,6 +132,7 @@ module.exports = {
   createImageUpload,
   deleteManagedUpload,
   optimizeUploadedImage,
+  saveImageBuffer,
   resolveManagedUploadPath,
   safeUnlink,
 };
