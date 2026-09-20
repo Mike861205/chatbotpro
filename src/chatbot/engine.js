@@ -357,6 +357,122 @@ function money(n, currency = 'MXN') {
   return formatCurrencyAmount(n, currency);
 }
 
+function moneyWithCurrency(n, currency = 'MXN') {
+  const code = String(currency || 'MXN').trim().toUpperCase();
+  const formatted = money(n, code);
+  return formatted.toUpperCase().includes(code) ? formatted : `${formatted} ${code}`;
+}
+
+function roundMoney(value) {
+  return Math.round((Number(value) + Number.EPSILON) * 100) / 100;
+}
+
+function parseNumericCashAmount(raw) {
+  const match = String(raw || '').match(/\d[\d\s.,]*/);
+  if (!match) return null;
+  let value = match[0].replace(/\s+/g, '');
+  const lastDot = value.lastIndexOf('.');
+  const lastComma = value.lastIndexOf(',');
+
+  if (lastDot >= 0 && lastComma >= 0) {
+    const decimalSeparator = lastDot > lastComma ? '.' : ',';
+    const thousandsSeparator = decimalSeparator === '.' ? ',' : '.';
+    value = value.split(thousandsSeparator).join('').replace(decimalSeparator, '.');
+  } else {
+    const separator = lastDot >= 0 ? '.' : (lastComma >= 0 ? ',' : '');
+    if (separator) {
+      const parts = value.split(separator);
+      const looksGrouped = parts.length > 2 || (parts.length === 2 && parts[1].length === 3);
+      value = looksGrouped ? parts.join('') : `${parts[0]}.${parts[1] || '0'}`;
+    }
+  }
+
+  const amount = Number(value);
+  return Number.isFinite(amount) && amount >= 0 ? roundMoney(amount) : null;
+}
+
+function parseSpanishInteger(tokens) {
+  const values = {
+    cero: 0, un: 1, uno: 1, una: 1, dos: 2, tres: 3, cuatro: 4, cinco: 5, seis: 6,
+    siete: 7, ocho: 8, nueve: 9, diez: 10, once: 11, doce: 12, trece: 13, catorce: 14,
+    quince: 15, dieciseis: 16, diecisiete: 17, dieciocho: 18, diecinueve: 19, veinte: 20,
+    veintiuno: 21, veintiun: 21, veintidos: 22, veintitres: 23, veinticuatro: 24,
+    veinticinco: 25, veintiseis: 26, veintisiete: 27, veintiocho: 28, veintinueve: 29,
+    treinta: 30, cuarenta: 40, cincuenta: 50, sesenta: 60, setenta: 70, ochenta: 80,
+    noventa: 90, cien: 100, ciento: 100, doscientos: 200, trescientos: 300,
+    cuatrocientos: 400, quinientos: 500, seiscientos: 600, setecientos: 700,
+    ochocientos: 800, novecientos: 900,
+  };
+  let total = 0;
+  let current = 0;
+  let recognized = 0;
+
+  for (const token of tokens) {
+    if (token === 'y') continue;
+    if (Object.hasOwn(values, token)) {
+      current += values[token];
+      recognized += 1;
+      continue;
+    }
+    if (token === 'mil') {
+      total += (current || 1) * 1000;
+      current = 0;
+      recognized += 1;
+      continue;
+    }
+    if (token === 'millon' || token === 'millones') {
+      total = (total + (current || 1)) * 1000000;
+      current = 0;
+      recognized += 1;
+    }
+  }
+
+  return recognized ? total + current : null;
+}
+
+function parseCashAmount(raw) {
+  const numeric = parseNumericCashAmount(raw);
+  if (numeric !== null) return numeric;
+
+  const normalized = normalizeSearchText(raw);
+  if (!normalized) return null;
+  const tokens = normalized.split(' ');
+  const decimalIndex = tokens.findIndex((token) => token === 'punto' || token === 'coma');
+  const integerTokens = decimalIndex >= 0 ? tokens.slice(0, decimalIndex) : tokens;
+  const integer = parseSpanishInteger(integerTokens);
+  if (integer === null) return null;
+
+  if (decimalIndex < 0) {
+    const centIndex = tokens.findIndex((token) => token === 'centavo' || token === 'centavos');
+    if (centIndex > 0) {
+      const cents = parseSpanishInteger(tokens.slice(0, centIndex));
+      return cents === null ? null : roundMoney(cents / 100);
+    }
+    return roundMoney(integer);
+  }
+
+  const decimalTokens = tokens.slice(decimalIndex + 1);
+  const decimal = parseSpanishInteger(decimalTokens);
+  if (decimal === null) return roundMoney(integer);
+  const decimalDigits = decimal < 10 ? decimal / 10 : decimal / (10 ** String(Math.trunc(decimal)).length);
+  return roundMoney(integer + decimalDigits);
+}
+
+function cashChangeSummaryLines(customer, total, currency) {
+  if (customer?.paymentMethod !== 'cash') return [];
+  if (customer.cashChangePreference === 'exact') {
+    return ['💵 Cambio / vuelto: No ocupa; pagará exacto.'];
+  }
+  if (customer.cashChangePreference !== 'change' || !Number.isFinite(Number(customer.cashTendered))) return [];
+  const tendered = Number(customer.cashTendered);
+  const change = roundMoney(tendered - Number(total || 0));
+  if (change < 0) return [];
+  return [
+    `💵 Pagará con: ${moneyWithCurrency(tendered, currency)}`,
+    `↩️ Cambio / vuelto: ${moneyWithCurrency(change, currency)}`,
+  ];
+}
+
 function conversionSummaryLines(amount, conversion) {
   const label = convertedMoney(amount, conversion);
   if (!label) return [];
@@ -1173,6 +1289,7 @@ async function replyNextModifierGroup(
 function buildOrderText(businessName, cart, customer, delivery, currency, labels = RESTAURANT_LABELS, orderId = null, conversion = null) {
   const subtotal = cartTotal(cart);
   const deliveryFee = Number(customer?.deliveryFee || 0);
+  const total = subtotal + deliveryFee;
   const deliveryLabel = deliveryZoneServiceLabel(customer);
   const orderNote = String(customer?.orderNote || '').trim();
   const headerTitle = labels.newOrderHeader || 'Nuevo pedido';
@@ -1193,13 +1310,14 @@ function buildOrderText(businessName, cart, customer, delivery, currency, labels
     '',
     `*Subtotal: ${money(subtotal, currency)}*`,
     ...(deliveryFee > 0 ? [`*Envío${deliveryLabel ? ` (${deliveryLabel})` : ''}: ${money(deliveryFee, currency)}*`] : []),
-    `*Total: ${money(subtotal + deliveryFee, currency)}*`,
-    ...conversionSummaryLines(subtotal + deliveryFee, conversion),
+    `*Total: ${money(total, currency)}*`,
+    ...conversionSummaryLines(total, conversion),
     ...(orderNote ? [`*🧾 Nota del pedido: ${orderNote}*`] : []),
     '',
     `👤 ${customer.name}`,
     `📞 ${customer.phone}`,
     `💳 Pago: ${customer.paymentMethodLabel || paymentMethodLabel(customer.paymentMethod)}`,
+    ...cashChangeSummaryLines(customer, total, currency),
     isAddressDelivery
       ? `${addressLbl}: ${customer.address}`
       : `${receivingLabel}${customer.branchName ? `: ${customer.branchName}` : ''}`,
@@ -1707,11 +1825,12 @@ async function handleMessage(t, slug, sessionId, rawInput, runtime = {}) {
   state.cart.currencyConversion = state.currencyConversion;
 
   const guided = guidedCommandForText(state, input);
-  const choiceSteps = new Set(['ask_order_note_choice', 'checkout_identity_choice', 'confirm_returning_address', 'ask_delivery', 'ask_branch', 'ask_payment_method', 'confirm', 'choosing_variant', 'upsell_offer']);
+  const choiceSteps = new Set(['ask_order_note_choice', 'checkout_identity_choice', 'confirm_returning_address', 'ask_delivery', 'ask_branch', 'ask_payment_method', 'ask_cash_change_choice', 'confirm', 'choosing_variant', 'upsell_offer']);
   const machineCommand = /^[a-z0-9_|-]+$/.test(input) && (input.includes('_') || input.includes('|') || ['menu', 'cart', 'checkout', 'start', 'promotions'].includes(input));
   const normalizedChoiceText = normalizeSearchText(input);
   const handledByStep = (state.step === 'ask_delivery' && /(domicilio|entrega|envio|recoger|recojo|paso por|para llevar|comer|consumir)/.test(normalizedChoiceText))
     || (state.step === 'ask_payment_method' && /^(efectivo|cash|transferencia|transfer|tarjeta|card)$/.test(normalizedChoiceText))
+    || (state.step === 'ask_cash_change_choice' && /\b(exacto|cambio|vuelto)\b/.test(normalizedChoiceText))
     || (state.step === 'ask_branch' && (state.branchOptions || []).some((branch) => normalizeSearchText(branch.name) === normalizedChoiceText))
     || (state.step === 'checkout_identity_choice' && /\b(ya pedi|ya he pedido|cliente frecuente|cliente nuevo|soy nuevo|es mi primera vez)\b/.test(normalizedChoiceText));
   const conditionalConfirmation = state.step === 'confirm' && /\b(pero|sin|cambia|cambiar|quita|elimina|agrega|anade|mas|menos|nota)\b/.test(normalizedChoiceText);
@@ -1777,15 +1896,26 @@ async function handleMessage(t, slug, sessionId, rawInput, runtime = {}) {
 
   const isAddressDelivery = () => state.receivingMode?.behavior === 'delivery' || state.delivery === 'domicilio';
 
+  const askCashChange = () => {
+    const total = cartTotal(state.cart) + Number(state.customer?.deliveryFee || 0);
+    state.step = 'ask_cash_change_choice';
+    reply.messages.push(`El total de tu pedido es *${moneyWithCurrency(total, currency)}*.\n\n¿Pagarás exacto o ocupas vuelto (cambio)?`);
+    reply.options = [
+      { label: '💵 Sí, ocupo vuelto (cambio)', value: 'cash_change_needed' },
+      { label: '✅ Pagaré exacto', value: 'cash_exact' },
+    ];
+  };
+
   const goToPaymentOrConfirm = () => {
     const chatPaymentOptions = isAddressDelivery()
       ? enabledPaymentOptions(chatPaymentDeliverySettings, customPaymentMethods)
       : enabledPaymentOptions(chatPaymentPickupSettings, customPaymentMethods);
     if (!chatPaymentOptions.length) {
       state.customer.paymentMethod = 'cash';
-      state.step = 'confirm';
-      reply.messages.push(confirmText(state, businessName, currency, labels));
-      reply.options = confirmOptions(labels);
+      state.customer.paymentMethodLabel = paymentMethodLabel('cash');
+      delete state.customer.cashChangePreference;
+      delete state.customer.cashTendered;
+      askCashChange();
       return;
     }
     state.step = 'ask_payment_method';
@@ -1930,7 +2060,7 @@ async function handleMessage(t, slug, sessionId, rawInput, runtime = {}) {
     reply.options = [{ label: '🆕 Hacer otro pedido', value: 'start' }];
     return finish();
   }
-  const formSteps = new Set(['ask_order_note_choice', 'ask_order_note_text', 'checkout_identity_choice', 'ask_returning_phone', 'confirm_returning_address', 'ask_name', 'ask_phone', 'ask_delivery', 'ask_branch', 'ask_address', 'ask_address_after_location', 'ask_neighborhood', 'ask_location_optional', 'ask_reference', 'ask_payment_method', 'confirm_edit_note_text']);
+  const formSteps = new Set(['ask_order_note_choice', 'ask_order_note_text', 'checkout_identity_choice', 'ask_returning_phone', 'confirm_returning_address', 'ask_name', 'ask_phone', 'ask_delivery', 'ask_branch', 'ask_address', 'ask_address_after_location', 'ask_neighborhood', 'ask_location_optional', 'ask_reference', 'ask_payment_method', 'ask_cash_change_choice', 'ask_cash_payment_amount', 'confirm_edit_note_text']);
   if (formSteps.has(state.step) && (lower === 'checkout' || NATURAL_FINISH_INTENTS.has(normalizeSearchText(input)))) {
     reply.messages = [state.lastPrompt || 'Para terminar, responde primero la pregunta actual.'];
     reply.options = state.lastOptions || [];
@@ -2988,6 +3118,12 @@ async function handleMessage(t, slug, sessionId, rawInput, runtime = {}) {
     }
     state.customer.paymentMethod = selected;
     state.customer.paymentMethodLabel = chatPaymentOptions.find((opt) => opt.method === selected)?.plainLabel || paymentMethodLabel(selected);
+    delete state.customer.cashChangePreference;
+    delete state.customer.cashTendered;
+    if (selected === 'cash') {
+      askCashChange();
+      return finish();
+    }
     state.step = 'confirm';
     const selectedCustomMethod = customPaymentMethods.find((method) => method.id === selected);
     const hasAccountDetails = selected === 'transfer'
@@ -3003,8 +3139,83 @@ async function handleMessage(t, slug, sessionId, rawInput, runtime = {}) {
     return finish();
   }
 
+  if (state.step === 'ask_cash_change_choice') {
+    const normalized = normalizeSearchText(input);
+    const exact = lower === 'cash_exact'
+      || /\b(pagare|pago|pagar|sera) exacto\b/.test(normalized)
+      || /\b(no|sin) (necesito |ocupo |quiero )?(cambio|vuelto)\b/.test(normalized);
+    const needsChange = lower === 'cash_change_needed'
+      || (!exact && /\b(cambio|vuelto)\b/.test(normalized));
+
+    if (exact) {
+      state.customer.cashChangePreference = 'exact';
+      delete state.customer.cashTendered;
+      state.step = 'confirm';
+      reply.messages = [confirmText(state, businessName, currency, labels)];
+      reply.options = confirmOptions(labels);
+      return finish();
+    }
+    if (needsChange) {
+      state.customer.cashChangePreference = 'change';
+      delete state.customer.cashTendered;
+      state.step = 'ask_cash_payment_amount';
+      reply.messages = [`¿Con cuánto pagarás? Escríbeme el monto con números o letras.\n\nEjemplo: *50* o *cincuenta*.`];
+      reply.options = [{ label: '✅ Pagaré exacto', value: 'cash_exact' }];
+      return finish();
+    }
+
+    askCashChange();
+    return finish();
+  }
+
+  if (state.step === 'ask_cash_payment_amount') {
+    if (lower === 'cash_exact' || /\b(pagare|pago|pagar|sera) exacto\b/.test(normalizeSearchText(input))) {
+      state.customer.cashChangePreference = 'exact';
+      delete state.customer.cashTendered;
+      state.step = 'confirm';
+      reply.messages = [confirmText(state, businessName, currency, labels)];
+      reply.options = confirmOptions(labels);
+      return finish();
+    }
+
+    const total = roundMoney(cartTotal(state.cart) + Number(state.customer?.deliveryFee || 0));
+    const tendered = parseCashAmount(input);
+    if (tendered === null || tendered <= 0) {
+      reply.messages = [`No pude identificar el monto. Escríbelo con números o letras; por ejemplo: *50* o *cincuenta*.`];
+      reply.options = [{ label: '✅ Pagaré exacto', value: 'cash_exact' }];
+      return finish();
+    }
+    if (tendered <= total) {
+      reply.messages = [tendered === total
+        ? `Ese monto es exacto: *${moneyWithCurrency(total, currency)}*. Puedes elegir “Pagaré exacto” o escribir un monto mayor.`
+        : `El monto debe ser mayor al total de *${moneyWithCurrency(total, currency)}* para poder calcular el cambio.`];
+      reply.options = [{ label: '✅ Pagaré exacto', value: 'cash_exact' }];
+      return finish();
+    }
+
+    state.customer.cashChangePreference = 'change';
+    state.customer.cashTendered = tendered;
+    state.step = 'confirm';
+    reply.messages = [
+      `Tu cambio (vuelto) será de *${moneyWithCurrency(roundMoney(tendered - total), currency)}*.`,
+      confirmText(state, businessName, currency, labels),
+    ];
+    reply.options = confirmOptions(labels);
+    return finish();
+  }
+
   if (state.step === 'confirm') {
     if (lower === 'confirm_yes') {
+      const currentTotal = roundMoney(cartTotal(state.cart) + Number(state.customer?.deliveryFee || 0));
+      if (state.customer?.paymentMethod === 'cash'
+          && state.customer.cashChangePreference === 'change'
+          && Number(state.customer.cashTendered) < currentTotal) {
+        delete state.customer.cashTendered;
+        state.step = 'ask_cash_payment_amount';
+        reply.messages = [`El total cambió a *${moneyWithCurrency(currentTotal, currency)}*. Indica nuevamente con cuánto pagarás para calcular el cambio.`];
+        reply.options = [{ label: '✅ Pagaré exacto', value: 'cash_exact' }];
+        return finish();
+      }
       if (t?.schema) {
         const productsAvailableNow = await activeProducts(t, activeChatbotPromotions);
         const availableProductIds = new Set(productsAvailableNow.map((product) => Number(product.id)));
@@ -3018,6 +3229,47 @@ async function handleMessage(t, slug, sessionId, rawInput, runtime = {}) {
           reply.options = mainOptions(state.cart, chatbotInfoOptions, labels);
           return finish();
         }
+      }
+      if (runtime.previewOrder) {
+        state.cart = applyPromotions(state.cart, activeChatbotPromotions);
+        const subtotal = cartTotal(state.cart);
+        const deliveryFee = Number(state.customer.deliveryFee || 0);
+        const total = subtotal + deliveryFee;
+        const previewCode = `PRUEBA-${String(sessionId || '').replace(/[^a-z0-9]/gi, '').slice(0, 8).toUpperCase() || crypto.randomBytes(4).toString('hex').toUpperCase()}`;
+        const orderSummary = buildOrderText(
+          businessName,
+          state.cart,
+          state.customer,
+          state.delivery,
+          currency,
+          labels,
+          null,
+          state.currencyConversion
+        );
+        const orderText = `🧪 *PEDIDO DE PRUEBA ${previewCode}*\n_Este pedido proviene de la demostración pública de ChatBotPro._\n\n${orderSummary}`;
+        const waLink = whatsapp ? `https://wa.me/${whatsapp}?text=${encodeURIComponent(orderText)}` : null;
+        reply.messages = [
+          '🎉 *¡Tu pedido de prueba está listo!*',
+          waLink
+            ? 'Envíalo por WhatsApp para completar la experiencia real. Así podremos recibirlo, identificarlo como prueba y atenderte personalmente.'
+            : 'Así de fácil tus clientes podrán pedir desde el asistente virtual de tu negocio. Crea tu cuenta gratis para configurarlo con tus productos, colores y WhatsApp.',
+        ];
+        reply.order = {
+          id: null,
+          total,
+          totalLabel: money(total, currency),
+          convertedTotalLabel: convertedMoney(total, state.currencyConversion),
+          exchangeRateLabel: conversionRateLabel(state.currencyConversion),
+          whatsappLink: waLink,
+          summary: orderText,
+          preview: true,
+          previewCode,
+        };
+        reply.previewComplete = true;
+        reply.registrationUrl = runtime.registrationUrl || '/register?source=chatbot-demo';
+        state = { step: 'order_complete', cart: [], customer: {}, currency, previewComplete: true };
+        reply.options = [{ label: '🔄 Hacer otro pedido de prueba', value: 'start' }];
+        return finish();
       }
       await ensurePurchasingSchema(t);
       await ensureBranchStockSchema(t);
@@ -3261,6 +3513,8 @@ async function handleMessage(t, slug, sessionId, rawInput, runtime = {}) {
 
 function confirmText(state, businessName, currency, labels = RESTAURANT_LABELS) {
   const c = state.customer;
+  const total = cartTotal(state.cart) + Number(c?.deliveryFee || 0);
+  const cashLines = cashChangeSummaryLines(c, total, currency);
   const locationDetails = locationSummary(c);
   const pickupLbl = labels.pickupLabel || '🏪 Recoger en sucursal';
   const isAddressDelivery = state.receivingMode?.behavior === 'delivery' || state.delivery === 'domicilio';
@@ -3269,6 +3523,7 @@ function confirmText(state, businessName, currency, labels = RESTAURANT_LABELS) 
     `${pricingSummary(state, currency, labels)}\n\n` +
     `👤 ${c.name}\n📞 ${c.phone}\n` +
     `💳 Pago: ${c.paymentMethodLabel || paymentMethodLabel(c.paymentMethod)}\n` +
+    (cashLines.length ? `${cashLines.join('\n')}\n` : '') +
     (isAddressDelivery
       ? `📍 ${c.address}`
       : `${receivingLabel}${c.branchName ? `: ${c.branchName}` : ''}`) +
@@ -3299,5 +3554,6 @@ module.exports = {
   getLabels,
   handleMessage,
   newSessionId,
+  parseCashAmount,
   toggleModifierOptionSelection,
 };

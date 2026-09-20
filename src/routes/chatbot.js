@@ -1,5 +1,6 @@
 // API pública del chatbot (sin autenticación): la usa la liga pública /:slug
 const express = require('express');
+const config = require('../config');
 const { q, tdb, getSetting } = require('../db');
 const { decrypt } = require('../utils/crypto');
 const { handleMessage, newSessionId } = require('../chatbot/engine');
@@ -57,7 +58,14 @@ router.post('/:slug/message', findTenant, async (req, res, next) => {
     let { sessionId, message } = req.body || {};
     if (!sessionId || typeof sessionId !== 'string' || sessionId.length > 64) sessionId = newSessionId();
     if (typeof message !== 'string' || message.length > 500) message = String(message || '').slice(0, 500);
-    const reply = await handleMessage(req.tdb, req.tenant.slug, sessionId, message);
+    const previewOrder = req.body?.preview === true
+      && config.DEMO_LOGIN_ENABLED
+      && req.tenant.slug === config.DEMO_TENANT_SLUG;
+    const reseller = /^[a-z0-9][a-z0-9-]{1,38}[a-z0-9]$/.test(String(req.body?.reseller || ''))
+      ? String(req.body.reseller)
+      : '';
+    const registrationUrl = `/register?source=chatbot-demo${reseller ? `&reseller=${encodeURIComponent(reseller)}` : ''}`;
+    const reply = await handleMessage(req.tdb, req.tenant.slug, sessionId, message, { previewOrder, registrationUrl });
     res.json({ sessionId, ...reply });
   } catch (e) { next(e); }
 });

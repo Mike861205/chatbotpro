@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { buildBusinessSystemPrompt, buildOrderText, defaultReceivingModes, getLabels } = require('../src/chatbot/engine');
+const { buildBusinessSystemPrompt, buildOrderText, defaultReceivingModes, getLabels, parseCashAmount } = require('../src/chatbot/engine');
 
 const cart = [{ qty: 1, name: 'Combo pollo', price: 90 }];
 const customer = {
@@ -19,6 +19,32 @@ test('respeta el encabezado del giro e incorpora el mismo ID', () => {
   const labels = { newOrderHeader: 'Nueva solicitud de servicio', pickupLabel: '🏢 En la oficina' };
   const summary = buildOrderText('Daddy RH', cart, customer, 'recoger', 'MXN', labels, 87);
   assert.match(summary, /^🧾 \*Nueva solicitud de servicio #87 — Daddy RH\*/);
+});
+
+test('agrega al resumen la información de cambio sin alterar el total', () => {
+  const summary = buildOrderText('Negocio', [{ qty: 1, name: 'Producto', price: 45 }], {
+    ...customer,
+    cashChangePreference: 'change',
+    cashTendered: 50,
+  }, 'recoger', 'USD', undefined, 88);
+  assert.match(summary, /\*Total: USD\s?45\.00\*/);
+  assert.match(summary, /Pagará con: USD\s?50\.00/);
+  assert.match(summary, /Cambio \/ vuelto: USD\s?5\.00/);
+});
+
+test('el resumen indica cuando el pago en efectivo será exacto', () => {
+  const summary = buildOrderText('Negocio', cart, {
+    ...customer,
+    cashChangePreference: 'exact',
+  }, 'recoger', 'MXN');
+  assert.match(summary, /Cambio \/ vuelto: No ocupa; pagará exacto/);
+});
+
+test('entiende montos de efectivo escritos con números o letras', () => {
+  assert.equal(parseCashAmount('50'), 50);
+  assert.equal(parseCashAmount('$1,250.50 USD'), 1250.5);
+  assert.equal(parseCashAmount('mil doscientos cincuenta'), 1250);
+  assert.equal(parseCashAmount('cincuenta punto cincuenta'), 50.5);
 });
 
 test('cada giro presenta su catalogo con lenguaje propio', () => {

@@ -452,7 +452,11 @@ router.post('/login', authAttemptLimiter, async (req, res, next) => {
 });
 
 router.get('/demo-status', (req, res) => {
-  res.json({ enabled: isSecureDemoConfigured() });
+  const enabled = isSecureDemoConfigured();
+  res.json({
+    enabled,
+    chatbotPreviewUrl: enabled ? `/c/${encodeURIComponent(config.DEMO_TENANT_SLUG)}?preview=1&embed=1` : '',
+  });
 });
 
 router.post('/demo-login', authAttemptLimiter, async (req, res, next) => {

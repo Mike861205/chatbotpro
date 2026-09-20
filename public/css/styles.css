@@ -950,8 +950,22 @@ body.signup-promo-open { overflow: hidden; }
 }
 .signup-promo-cta:hover { color: #fff; transform: translateY(-2px); box-shadow: 0 20px 38px rgba(124,58,237,.3), inset 0 1px 0 rgba(255,255,255,.4); }
 .signup-promo-cta i { font-size: 18px; }
-.signup-promo-later { width: 100%; margin-top: 8px; padding: 7px; border: 0; color: #7b8496; background: transparent; font-size: 10px; font-weight: 750; }
-.signup-promo-later:hover { color: var(--primary); }
+.signup-promo-try {
+  width: 100%; min-height: 58px; margin-top: 10px; padding: 8px 13px 8px 9px;
+  display: grid; grid-template-columns: 40px minmax(0, 1fr) 18px; align-items: center; gap: 10px;
+  border: 1.5px solid #c4b5fd; border-radius: 14px; color: #44207b;
+  background: linear-gradient(135deg, #f5f3ff, #fdf2f8 56%, #fff7ed);
+  box-shadow: 0 8px 20px rgba(124,58,237,.12), inset 0 1px 0 rgba(255,255,255,.9);
+  font-family: inherit; text-align: left; cursor: pointer;
+  transition: transform .2s var(--ease), border-color .2s, box-shadow .2s;
+}
+.signup-promo-try:hover { transform: translateY(-2px); border-color: #8b5cf6; box-shadow: 0 14px 28px rgba(124,58,237,.2); }
+.signup-promo-try-icon { width: 40px; height: 40px; display: grid; place-items: center; border-radius: 12px; color: #fff; background: linear-gradient(135deg, #7c3aed, #ec4899); box-shadow: 0 7px 15px rgba(124,58,237,.28); }
+.signup-promo-try-icon i { font-size: 22px; }
+.signup-promo-try > span:nth-child(2) { min-width: 0; display: flex; flex-direction: column; line-height: 1.15; }
+.signup-promo-try b { font-size: 12px; font-weight: 900; }
+.signup-promo-try small { margin-top: 4px; color: #7b6c93; font-size: 9px; font-weight: 700; }
+.signup-promo-try > i { color: #7c3aed; font-size: 17px; }
 .signup-promo-trust { display: flex; align-items: center; justify-content: center; gap: 5px; margin-top: 7px; color: #8a94a7; font-size: 9px; font-weight: 650; text-align: center; }
 .signup-promo-trust i { color: #16a34a; font-size: 13px; }
 @media (max-width: 700px) {
@@ -1456,6 +1470,54 @@ body.signup-promo-open { overflow: hidden; }
 @media (max-width: 560px) {
   .wa-fab .wa-txt { display: none; }
   .wa-fab { padding: 14px; }
+}
+
+/* --- Prueba inmediata del asistente desde la landing --- */
+.order-demo-fab {
+  position: fixed; right: 22px; bottom: 92px; z-index: 65;
+  display: flex; align-items: center; gap: 11px;
+  padding: 8px 17px 8px 8px; border: 1px solid rgba(255,255,255,.75); border-radius: 999px;
+  color: #fff; background: linear-gradient(135deg, #7c3aed, #ec4899 58%, #f97316);
+  box-shadow: 0 16px 36px rgba(124,58,237,.38), 0 0 0 6px rgba(236,72,153,.1);
+  font-family: inherit; cursor: pointer; animation: orderDemoPulse 2.6s ease-in-out infinite;
+  transition: transform .2s var(--ease), box-shadow .2s var(--ease);
+}
+.order-demo-fab[hidden] { display: none; }
+.order-demo-fab:hover { transform: translateY(-3px) scale(1.02); box-shadow: 0 22px 44px rgba(124,58,237,.5), 0 0 0 8px rgba(236,72,153,.13); }
+.order-demo-fab-icon { width: 48px; height: 48px; flex: 0 0 48px; display: grid; place-items: center; border-radius: 50%; color: #7c3aed; background: #fff; box-shadow: inset 0 0 0 4px rgba(124,58,237,.09), 0 8px 18px rgba(62,25,110,.24); }
+.order-demo-fab-icon i { font-size: 27px; }
+.order-demo-fab-copy { display: flex; flex-direction: column; align-items: flex-start; line-height: 1.15; text-align: left; }
+.order-demo-fab-copy b { font-size: 13px; font-weight: 900; }
+.order-demo-fab-copy small { margin-top: 3px; font-size: 10px; font-weight: 650; opacity: .88; }
+@keyframes orderDemoPulse {
+  0%,100% { box-shadow: 0 16px 36px rgba(124,58,237,.38), 0 0 0 0 rgba(236,72,153,.36); }
+  50% { box-shadow: 0 16px 36px rgba(124,58,237,.42), 0 0 0 13px rgba(236,72,153,0); }
+}
+.order-demo-bg {
+  position: fixed; inset: 0; z-index: 2300; display: none; align-items: center; justify-content: center;
+  padding: 18px; background: rgba(7,12,28,.78); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+}
+.order-demo-bg.show { display: flex; animation: fadeIn .2s ease-out; }
+body.order-demo-open { overflow: hidden; }
+.order-demo-shell {
+  width: min(500px, 100%); height: min(920px, calc(100dvh - 36px)); overflow: hidden;
+  display: flex; flex-direction: column; border: 1px solid rgba(255,255,255,.82); border-radius: 28px;
+  background: #f0f2f8; box-shadow: 0 36px 110px rgba(2,8,23,.58); animation: signupPromoIn .32s var(--ease);
+}
+.order-demo-head { flex: 0 0 auto; display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 13px 14px 12px 18px; color: #fff; background: linear-gradient(135deg, #171c2e, #34215b); }
+.order-demo-head span { color: #d8b4fe; font-size: 9px; font-weight: 900; letter-spacing: .12em; text-transform: uppercase; }
+.order-demo-head h2 { margin: 3px 0 0; font-size: 14px; line-height: 1.25; }
+.order-demo-head button { width: 39px; height: 39px; flex: 0 0 39px; display: grid; place-items: center; border: 1px solid rgba(255,255,255,.25); border-radius: 50%; color: #fff; background: rgba(255,255,255,.1); font-size: 18px; cursor: pointer; }
+.order-demo-head button:hover { background: rgba(255,255,255,.2); transform: rotate(4deg); }
+.order-demo-shell iframe { width: 100%; min-height: 0; flex: 1; border: 0; background: #f0f2f8; }
+@media (max-width: 560px) {
+  .order-demo-fab { right: 14px; bottom: 82px; padding: 7px 13px 7px 7px; }
+  .order-demo-fab-icon { width: 44px; height: 44px; flex-basis: 44px; }
+  .order-demo-fab-copy b { font-size: 11.5px; }
+  .order-demo-fab-copy small { font-size: 9px; }
+  .order-demo-bg { align-items: stretch; padding: 0; }
+  .order-demo-shell { width: 100%; height: 100dvh; max-height: none; border: 0; border-radius: 0; }
+  .order-demo-head { padding-top: calc(12px + env(safe-area-inset-top)); }
 }
 
 @media (max-width: 560px) {

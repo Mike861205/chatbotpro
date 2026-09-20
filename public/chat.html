@@ -532,6 +532,20 @@
     }
     .wa-btn:active { transform: scale(0.97); }
     .wa-btn i { font-size: 20px; }
+    .preview-signup-card {
+      align-self: stretch; position: relative; overflow: hidden; flex: 0 0 auto; min-height: 205px;
+      padding: 18px; border-radius: 22px; color: #fff;
+      background: radial-gradient(circle at 92% 0, rgba(255,255,255,.25), transparent 32%), linear-gradient(135deg, #7c3aed, #ec4899 56%, #f97316);
+      box-shadow: 0 14px 32px rgba(124,58,237,.3); animation: popIn .35s var(--ease);
+    }
+    .preview-signup-card::after { content:''; position:absolute; width:110px; height:110px; right:-42px; bottom:-55px; border-radius:50%; border:20px solid rgba(255,255,255,.12); }
+    .preview-signup-card > * { position: relative; z-index: 1; }
+    .preview-signup-card span { display:flex; align-items:center; gap:6px; font-size:10px; font-weight:900; text-transform:uppercase; letter-spacing:.09em; opacity:.86; }
+    .preview-signup-card h2 { margin:7px 0 5px; font-size:19px; line-height:1.16; }
+    .preview-signup-card p { margin:0 0 13px; font-size:11.5px; line-height:1.5; font-weight:600; opacity:.9; }
+    .preview-signup-card a { display:flex; align-items:center; justify-content:center; gap:8px; min-height:47px; padding:11px 14px; border-radius:14px; color:#6326a5; background:#fff; text-decoration:none; font-size:13px; font-weight:900; box-shadow:0 8px 18px rgba(63,20,105,.2); }
+    body.preview-embed { background:#f0f2f8; }
+    body.preview-embed .chat-app { height:100dvh; max-width:none; border-radius:0; box-shadow:none; }
     /* ── Typing ── */
     .typing { display: flex; gap: 5px; padding: 14px 18px; background: #fff; border-radius: 20px; border-bottom-left-radius: 6px; align-self: flex-start; box-shadow: 0 2px 8px rgba(15,18,32,0.06); }
     .typing span { width: 7px; height: 7px; border-radius: 50%; background: #c2c8d8; animation: blink 1.2s infinite; }
@@ -626,7 +640,12 @@
 
   <script>
     const slug = location.pathname.split('/').pop();
-    let sessionId = sessionStorage.getItem('cbp_session_' + slug) || null;
+    const queryParams = new URLSearchParams(location.search);
+    const isPreview = queryParams.get('preview') === '1';
+    const previewReseller = queryParams.get('reseller') || '';
+    const sessionKey = `${isPreview ? 'cbp_preview_session_' : 'cbp_session_'}${slug}`;
+    if (isPreview && queryParams.get('embed') === '1') document.body.classList.add('preview-embed');
+    let sessionId = sessionStorage.getItem(sessionKey) || null;
     let lastCartItemsCount = 0;
     const messagesEl = document.getElementById('messages');
     const inputEl = document.getElementById('input');
@@ -848,7 +867,7 @@
 
     function clearInteractive() {
       closeProductDetail({ restoreFocus: false });
-      messagesEl.querySelectorAll('.options, .prods, .wa-btn, .cart-editor, .products-hint').forEach((el) => el.remove());
+      messagesEl.querySelectorAll('.options, .prods, .wa-btn, .preview-signup-card, .cart-editor, .products-hint').forEach((el) => el.remove());
     }
 
     function renderCartEditor(items) {
@@ -1163,8 +1182,21 @@
         a.href = data.order.whatsappLink;
         a.target = '_blank';
         a.rel = 'noopener';
-        a.innerHTML = '<i class="ph-fill ph-whatsapp-logo"></i> Enviar mi pedido por WhatsApp';
+        a.innerHTML = data.order.preview
+          ? '<i class="ph-fill ph-whatsapp-logo"></i> Enviar pedido de prueba por WhatsApp'
+          : '<i class="ph-fill ph-whatsapp-logo"></i> Enviar mi pedido por WhatsApp';
         messagesEl.appendChild(a);
+      }
+
+      if (data.previewComplete && data.registrationUrl) {
+        const signup = document.createElement('section');
+        signup.className = 'preview-signup-card';
+        signup.innerHTML = `
+          <span><i class="ph-fill ph-sparkle"></i> Ahora hazlo tuyo</span>
+          <h2>Crea el asistente virtual de tu negocio</h2>
+          <p>Registra tu negocio gratis y configura tus productos, colores, pagos y WhatsApp.</p>
+          <a href="${esc(data.registrationUrl)}" target="_top"><i class="ph-bold ph-rocket-launch"></i> Crear mi cuenta</a>`;
+        messagesEl.appendChild(signup);
       }
 
       const modifierGroupRendered = renderModifierGroup(data.modifierGroup);
@@ -1241,12 +1273,12 @@
         const res = await fetch(`/api/chat/${slug}/message`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ sessionId, message: value }),
+          body: JSON.stringify({ sessionId, message: value, preview: isPreview, reseller: previewReseller }),
         });
         const data = await res.json();
         if (data.sessionId) {
           sessionId = data.sessionId;
-          sessionStorage.setItem('cbp_session_' + slug, sessionId);
+          sessionStorage.setItem(sessionKey, sessionId);
         }
         renderReply(data);
       } catch {
@@ -1274,6 +1306,10 @@
         const info = await res.json();
         document.title = `${info.businessName} — Haz tu pedido`;
         document.getElementById('bizName').textContent = info.businessName;
+        if (isPreview) {
+          document.title = `Prueba el asistente — ${info.businessName}`;
+          document.querySelector('.chat-header .status').innerHTML = '<span class="dot"></span> Pedido de prueba · puedes enviarlo por WhatsApp';
+        }
         if (info.primaryColor) document.documentElement.style.setProperty('--primary', info.primaryColor);
         if (info.logo) document.getElementById('bizLogo').innerHTML = `<img src="${esc(info.logo)}" alt="">`;
         renderFloatingBackground(info.floatingIcons);

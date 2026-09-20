@@ -155,10 +155,32 @@ test('las respuestas escritas avanzan por modalidad y pago', async () => {
 
   const paymentDb = fakeTenantDb({ step: 'ask_payment_method', cart: [{ id: 9, name: 'Papas', qty: 1, price: 50 }],
     customer: { name: 'Ana', phone: '6141234567' }, delivery: 'recoger', currency: 'MXN', aiHistory: [] });
-  const reply = await handleMessage(paymentDb, 'restaurante', 'session-text-pay', 'Efectivo');
-  assert.equal(paymentDb.savedState.step, 'confirm');
+  let reply = await handleMessage(paymentDb, 'restaurante', 'session-text-pay', 'Efectivo');
+  assert.equal(paymentDb.savedState.step, 'ask_cash_change_choice');
   assert.equal(paymentDb.savedState.customer.paymentMethod, 'cash');
+  assert.match(reply.messages[0], /\$50\.00 MXN/);
+  assert.deepEqual(reply.options.map((option) => option.value), ['cash_change_needed', 'cash_exact']);
+
+  reply = await handleMessage(paymentDb, 'restaurante', 'session-text-pay', 'cash_exact');
+  assert.equal(paymentDb.savedState.step, 'confirm');
+  assert.equal(paymentDb.savedState.customer.cashChangePreference, 'exact');
+  assert.match(reply.messages.join('\n'), /No ocupa; pagará exacto/);
   assert.equal(reply.options.some((option) => option.value === 'confirm_yes'), true);
+});
+
+test('calcula el cambio en efectivo con un monto escrito en letras', async () => {
+  const db = fakeTenantDb({ step: 'ask_payment_method', cart: [{ id: 9, name: 'Papas', qty: 1, price: 45 }],
+    customer: { name: 'Ana', phone: '6141234567' }, delivery: 'recoger', currency: 'USD', aiHistory: [] });
+
+  await handleMessage(db, 'restaurante', 'session-cash-change', 'pay_cash');
+  let reply = await handleMessage(db, 'restaurante', 'session-cash-change', 'cash_change_needed');
+  assert.equal(db.savedState.step, 'ask_cash_payment_amount');
+  assert.match(reply.messages[0], /números o letras/);
+
+  reply = await handleMessage(db, 'restaurante', 'session-cash-change', 'cincuenta');
+  assert.equal(db.savedState.step, 'confirm');
+  assert.equal(db.savedState.customer.cashTendered, 50);
+  assert.match(reply.messages.join('\n'), /Cambio \/ vuelto: USD\s?5\.00/);
 });
 
 function modifierState(group) {
@@ -191,6 +213,7 @@ function fakeTenantDb(initialState) {
     async get(sql, params) {
       if (sql.includes('chat_sessions')) return { state: JSON.stringify(savedState) };
       if (sql.includes('settings')) {
+        if (params[0] === 'currency' && initialState.currency) return { value: initialState.currency };
         if (params[0] === 'whatsapp') return { value: '526141234567' };
         return null;
       }
@@ -234,6 +257,7 @@ function fakeCatalogTenantDb(initialState) {
     async get(sql, params) {
       if (sql.includes('chat_sessions')) return { state: JSON.stringify(savedState) };
       if (sql.includes('settings')) {
+        if (params[0] === 'currency' && initialState.currency) return { value: initialState.currency };
         if (params[0] === 'whatsapp') return { value: '526141234567' };
         return null;
       }
