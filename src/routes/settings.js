@@ -11,6 +11,7 @@ const { normalizeCustomPaymentMethods, normalizePaymentAccounts } = require('../
 const { validateFloatingIcons } = require('../utils/chatbotAppearance');
 const { resolveCurrencyConversion, fetchAutomaticRate, positiveRate, PROVIDER_NAME, PROVIDER_URL } = require('../utils/currencyConversion');
 const { normalizePrinterConfig } = require('../utils/printerConfig');
+const { normalizeBusinessHours } = require('../utils/businessHours');
 
 const router = express.Router();
 router.use(requireAuth);
@@ -39,6 +40,9 @@ const SETTING_KEYS = [
   'timezone',
   'address',
   'hours',
+  'business_hours_enabled',
+  'business_hours_json',
+  'chatbot_preorders_enabled',
   'delivery_enabled',
   'pickup_enabled',
   'dine_in_enabled',
@@ -58,6 +62,7 @@ const SETTING_KEYS = [
   'chatbot_upsell_offers_json',
   'chatbot_extra_options_json',
   'chatbot_floating_icons_json',
+  'chatbot_full_menu_enabled',
   'chatbot_pos_integration_enabled',
   'chatbot_pos_global_orders_enabled',
   'self_service_enabled',
@@ -163,6 +168,20 @@ router.put('/', upload.single('logo'), async (req, res, next) => {
     if (body.timezone !== undefined) {
       body.timezone = String(body.timezone || '').trim();
       if (!isSupportedTimeZone(body.timezone)) return res.status(400).json({ error: 'Selecciona una zona horaria válida' });
+    }
+    if (body.business_hours_json !== undefined) {
+      try {
+        const schedule = normalizeBusinessHours(body.business_hours_json);
+        if (!schedule.some((entry) => entry.enabled)) {
+          return res.status(400).json({ error: 'Activa al menos un día de atención' });
+        }
+        if (schedule.some((entry) => entry.enabled && entry.open === entry.close)) {
+          return res.status(400).json({ error: 'La hora de apertura y cierre no pueden ser iguales' });
+        }
+        body.business_hours_json = JSON.stringify(schedule);
+      } catch {
+        return res.status(400).json({ error: 'El horario semanal no es válido' });
+      }
     }
     if (body.chatbot_bank_accounts_json !== undefined) {
       try {

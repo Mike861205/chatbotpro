@@ -1,3 +1,19 @@
+.business-hours-panel{border:1px solid var(--line);border-radius:8px;background:#fbfdfc;margin:12px 0;padding:10px}
+.business-hours-panel .toggle-row{margin:0}
+.business-hours-panel .t-info{min-width:0}
+.business-hours-panel .t-info span{display:block;color:var(--ink-3);font-size:12px;line-height:1.45;margin-top:2px}
+#cfgBusinessHoursFields{border-top:1px solid var(--line);margin-top:10px;padding-top:10px}
+.business-hours-head,.business-hours-row{display:grid;grid-template-columns:minmax(110px,1fr) minmax(82px,110px) minmax(82px,110px);gap:8px;align-items:center}
+.business-hours-head{color:var(--ink-3);font-size:11px;font-weight:800;padding:0 8px 5px;text-transform:uppercase}
+.business-hours-row{border-radius:7px;padding:6px 8px}
+.business-hours-row:nth-child(even){background:#f3f7f5}
+.business-hours-day{display:flex;align-items:center;gap:8px;font-size:13px;font-weight:750;min-width:0}
+.business-hours-day input{width:16px;height:16px;flex:0 0 auto}
+.business-hours-row input[type="time"]{min-width:0;width:100%;padding:7px 6px;font-size:12px}
+.business-hours-row.is-closed input[type="time"]{opacity:.42;pointer-events:none}
+.preorder-toggle{border-top:1px dashed var(--line);margin-top:8px!important;padding-top:10px}
+.menu-display-panel{margin-top:10px}
+@media(max-width:520px){.business-hours-head{display:none}.business-hours-row{grid-template-columns:1fr 1fr;padding:9px 7px}.business-hours-day{grid-column:1/-1}.business-hours-row input[type="time"]{font-size:14px}.business-hours-row input[type="time"]:before{color:var(--ink-3);content:attr(aria-label);font-size:11px;margin-right:4px}}
 /* ============================================================
    ChatBotPro — Design System v2 (premium)
    ============================================================ */

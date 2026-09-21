@@ -488,7 +488,8 @@ async function loadChatbotOrderForImport(t, orderId) {
     `SELECT o.id, o.customer_id, o.items, o.subtotal::float AS subtotal, o.total::float AS total, o.status, o.channel, o.delivery, o.notes, o.order_notes,
             o.payment_method, o.pickup_branch_id, o.pickup_branch_name, o.payment_breakdown, o.customer_location_text, o.customer_location_resolved,
             o.receiving_mode_label, o.receiving_mode_behavior, o.delivery_address, o.delivery_neighborhood, o.delivery_reference,
-            o.delivery_fee::float AS delivery_fee, o.delivery_zone_name, o.service_branch_id, o.service_branch_name,o.branch_stock_applied,
+            o.delivery_fee::float AS delivery_fee, o.delivery_zone_name, o.service_branch_id, o.service_branch_name,o.branch_stock_applied, o.scheduled_for,
+            to_char(o.scheduled_for AT TIME ZONE '${tenantTimeZone(t)}', 'DD Mon YYYY, HH24:MI') AS scheduled_for_label,
             to_char(o.created_at AT TIME ZONE '${tenantTimeZone(t)}', 'DD Mon YYYY, HH24:MI') AS created_at,
             c.name_enc, c.phone_enc, c.address_enc
      FROM {s}.orders o
@@ -509,6 +510,7 @@ function chatbotSummaryNote(order) {
   const receivingLabel = order.receiving_mode_label || (order.delivery === 'domicilio' ? 'Domicilio' : (order.delivery === 'comer_sucursal' ? 'Comer en sucursal' : 'Recoger'));
   parts.push(`Modalidad: ${receivingLabel}${order.pickup_branch_name ? ` · ${order.pickup_branch_name}` : ''}`);
   if (order.service_branch_name) parts.push(`Sucursal gestora: ${order.service_branch_name}`);
+  if (order.scheduled_for_label) parts.push(`Programado para: ${order.scheduled_for_label}`);
   if (address) parts.push(`Dirección: ${address}`);
   if (order.delivery_neighborhood) parts.push(`Urbanización / colonia / barrio / sector: ${order.delivery_neighborhood}`);
   if (order.delivery_reference) parts.push(`Referencia: ${order.delivery_reference}`);
@@ -1390,7 +1392,7 @@ router.get('/chatbot-orders', async (req, res, next) => {
        WHERE o.channel = 'chatbot'
          AND o.status = ANY($1::text[])
          ${branchFilter}
-         AND (o.created_at AT TIME ZONE '${req.timezone}')::date = (now() AT TIME ZONE '${req.timezone}')::date`,
+         AND (COALESCE(o.scheduled_for, o.created_at) AT TIME ZONE '${req.timezone}')::date = (now() AT TIME ZONE '${req.timezone}')::date`,
       countParams
     );
     const total = Number(totalRow?.c || 0);
@@ -1412,7 +1414,8 @@ router.get('/chatbot-orders', async (req, res, next) => {
       `SELECT o.id, o.items, o.total::float AS total, o.status, o.delivery, o.notes, o.order_notes, o.payment_method,
               o.pickup_branch_name, o.customer_location_text, o.customer_location_resolved,
               o.receiving_mode_label, o.receiving_mode_behavior, o.delivery_address, o.delivery_neighborhood, o.delivery_reference,
-              o.service_branch_id, o.service_branch_name,
+              o.service_branch_id, o.service_branch_name, o.scheduled_for,
+              to_char(o.scheduled_for AT TIME ZONE '${req.timezone}', 'DD Mon YYYY, HH24:MI') AS scheduled_for_label,
               to_char(o.created_at AT TIME ZONE '${req.timezone}', 'DD Mon YYYY, HH24:MI') AS created_at,
               c.name_enc, c.phone_enc, c.address_enc
        FROM {s}.orders o
@@ -1420,7 +1423,7 @@ router.get('/chatbot-orders', async (req, res, next) => {
        WHERE o.channel = 'chatbot'
          AND o.status = ANY($1::text[])
          ${branchFilter}
-         AND (o.created_at AT TIME ZONE '${req.timezone}')::date = (now() AT TIME ZONE '${req.timezone}')::date
+         AND (COALESCE(o.scheduled_for, o.created_at) AT TIME ZONE '${req.timezone}')::date = (now() AT TIME ZONE '${req.timezone}')::date
        ORDER BY o.id ASC
        LIMIT $${limitIndex} OFFSET $${offsetIndex}`,
       rowParams
@@ -1444,6 +1447,8 @@ router.get('/chatbot-orders', async (req, res, next) => {
       delivery_neighborhood: row.delivery_neighborhood || '',
       delivery_reference: row.delivery_reference || ((row.receiving_mode_behavior === 'delivery' || row.delivery === 'domicilio') ? row.notes : '') || '',
       created_at: row.created_at,
+      scheduled_for: row.scheduled_for,
+      scheduled_for_label: row.scheduled_for_label || '',
       customer_name: decrypt(row.name_enc) || 'Cliente',
       customer_phone: decrypt(row.phone_enc) || '',
       items: JSON.parse(row.items || '[]'),
@@ -1482,7 +1487,7 @@ router.post('/chatbot-orders/:id/import', async (req, res, next) => {
       `SELECT 1 AS ok
        FROM {s}.orders
        WHERE id = $1
-         AND (created_at AT TIME ZONE '${req.timezone}')::date = (now() AT TIME ZONE '${req.timezone}')::date
+         AND (COALESCE(scheduled_for, created_at) AT TIME ZONE '${req.timezone}')::date = (now() AT TIME ZONE '${req.timezone}')::date
        LIMIT 1`,
       [id]
     );
@@ -1607,7 +1612,7 @@ router.post('/chatbot-orders/:id/import', async (req, res, next) => {
          WHERE id = $5
            AND channel = 'chatbot'
            AND status = ANY($6::text[])
-           AND (created_at AT TIME ZONE '${req.timezone}')::date = (now() AT TIME ZONE '${req.timezone}')::date
+           AND (COALESCE(scheduled_for, created_at) AT TIME ZONE '${req.timezone}')::date = (now() AT TIME ZONE '${req.timezone}')::date
          RETURNING id, total::float AS total, payment_method, payment_breakdown, cash_received::float AS cash_received,
                    cash_change::float AS cash_change, notes, order_notes, items,
                    to_char(created_at AT TIME ZONE '${req.timezone}', 'DD Mon YYYY, HH24:MI') AS created_at`,

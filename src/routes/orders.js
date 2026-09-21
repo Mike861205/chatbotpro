@@ -56,11 +56,12 @@ async function decorate(t, o) {
 
 router.get('/', async (req, res, next) => {
   try {
-    const { status, limit, todayOnly, startDate, endDate } = req.query;
+    const { status, limit, todayOnly, startDate, endDate, scheduled } = req.query;
     let sql = `SELECT id, customer_id, items, subtotal::float AS subtotal, total::float AS total,
       delivery_fee::float AS delivery_fee, delivery_zone_name, receiving_mode_label, receiving_mode_behavior, delivery_address, delivery_neighborhood, delivery_reference, cancel_note, status, channel, source_channel, self_service_device_id, self_service_folio, delivery, notes, order_notes, payment_method, payment_breakdown,
-        pickup_branch_name, service_branch_name, customer_location_lat, customer_location_lng, customer_location_text,
+        pickup_branch_name, service_branch_name, customer_location_lat, customer_location_lng, customer_location_text, scheduled_for,
         customer_location_resolved,
+        to_char(scheduled_for AT TIME ZONE '${req.timezone}', 'DD Mon YYYY, HH24:MI') AS scheduled_for_label,
                       to_char(created_at AT TIME ZONE '${req.timezone}', 'DD Mon YYYY, HH24:MI') AS created_at
                FROM {s}.orders`;
     const params = [];
@@ -80,18 +81,23 @@ router.get('/', async (req, res, next) => {
       where.push(`status = $${params.length}`);
     }
 
+    const scheduledOnly = String(scheduled || '').toLowerCase() === 'upcoming';
     const isTodayOnly = String(todayOnly || '').toLowerCase() === '1' || String(todayOnly || '').toLowerCase() === 'true';
-    if (isTodayOnly) {
-      where.push(`(created_at AT TIME ZONE '${req.timezone}')::date = (now() AT TIME ZONE '${req.timezone}')::date`);
+    if (scheduledOnly) {
+      where.push('scheduled_for IS NOT NULL');
+      where.push('scheduled_for > now()');
+      where.push("status <> 'cancelado'");
+    } else if (isTodayOnly) {
+      where.push(`(COALESCE(scheduled_for, created_at) AT TIME ZONE '${req.timezone}')::date = (now() AT TIME ZONE '${req.timezone}')::date`);
     } else {
       const validDate = /^\d{4}-\d{2}-\d{2}$/;
       if (startDate && validDate.test(String(startDate))) {
         params.push(String(startDate));
-        where.push(`(created_at AT TIME ZONE '${req.timezone}')::date >= $${params.length}::date`);
+        where.push(`(COALESCE(scheduled_for, created_at) AT TIME ZONE '${req.timezone}')::date >= $${params.length}::date`);
       }
       if (endDate && validDate.test(String(endDate))) {
         params.push(String(endDate));
-        where.push(`(created_at AT TIME ZONE '${req.timezone}')::date <= $${params.length}::date`);
+        where.push(`(COALESCE(scheduled_for, created_at) AT TIME ZONE '${req.timezone}')::date <= $${params.length}::date`);
       }
     }
 
@@ -100,7 +106,9 @@ router.get('/', async (req, res, next) => {
     }
 
     params.push(Math.min(Number(limit) || 500, 500));
-    sql += ` ORDER BY id DESC LIMIT $${params.length}`;
+    sql += scheduledOnly
+      ? ` ORDER BY scheduled_for ASC, id ASC LIMIT $${params.length}`
+      : ` ORDER BY COALESCE(scheduled_for, created_at) DESC, id DESC LIMIT $${params.length}`;
     const rows = await req.tdb.all(sql, params);
     res.json(await Promise.all(rows.map((o) => decorate(req.tdb, o))));
   } catch (e) { next(e); }

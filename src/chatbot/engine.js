@@ -13,6 +13,16 @@ const { resolveCurrencyConversion, convertedMoney, formatCurrencyAmount, convers
 const { loadProductTaxConfig, applyProductTaxToCatalogProduct, productTaxLineSnapshot } = require('../utils/productTax');
 const { applyPromotions, getActivePromotions, decorateCatalogProducts } = require('../utils/promotions');
 const { isProductAvailableToday } = require('../utils/productAvailability');
+const {
+  DAY_NAMES,
+  businessDateKey,
+  businessStatusAt,
+  formatBusinessDate,
+  formatBusinessDateTime,
+  normalizeBusinessHours,
+  parseRequestedDateTime,
+  validateScheduledDate,
+} = require('../utils/businessHours');
 
 let aiConfigCache = { expiresAt: 0, value: null };
 const aiClientCache = new Map();
@@ -548,7 +558,7 @@ async function saveState(t, sessionId, state) {
   );
 }
 
-async function activeProducts(t, promotions = null) {
+async function activeProducts(t, promotions = null, availabilityDate = new Date()) {
   const taxConfig = await loadProductTaxConfig(t);
   const rows = await t.all(
     `SELECT p.id, p.category_id, p.name, p.description, p.price::float AS price, p.image, p.sale_days, c.name AS category
@@ -556,7 +566,7 @@ async function activeProducts(t, promotions = null) {
      WHERE p.active = 1 ORDER BY c.sort, c.name, p.name`
   );
   const catalog = rows
-    .filter((product) => isProductAvailableToday(product, new Date(), t.timezone))
+    .filter((product) => isProductAvailableToday(product, availabilityDate, t.timezone))
     .map((p) => applyProductTaxToCatalogProduct({
     ...p,
     categoryId: Number(p.category_id || 0),
@@ -871,11 +881,14 @@ async function findReturningCustomerByPhone(t, phoneRaw) {
   };
 }
 
-async function showMenu(t, state, labels = RESTAURANT_LABELS, activePromotions = null) {
+async function showMenu(t, state, labels = RESTAURANT_LABELS, activePromotions = null, showFullMenu = false) {
   const cats = await t.all('SELECT * FROM {s}.categories ORDER BY sort, name');
   const products = await activeProducts(t, activePromotions);
   if (!products.length) {
     return { messages: [labels.emptyCatalog || 'Por ahora no tenemos productos en el menú. ¡Vuelve pronto! 🙏'], options: [] };
+  }
+  if (showFullMenu) {
+    return showProducts(t, state, null, labels, { catalogProducts: products });
   }
   const catsWithProducts = cats.filter((c) => products.some((p) => p.category === c.name));
   if (catsWithProducts.length > 1) {
@@ -1318,6 +1331,7 @@ function buildOrderText(businessName, cart, customer, delivery, currency, labels
     `📞 ${customer.phone}`,
     `💳 Pago: ${customer.paymentMethodLabel || paymentMethodLabel(customer.paymentMethod)}`,
     ...cashChangeSummaryLines(customer, total, currency),
+    ...(customer?.scheduledForLabel ? [`🗓️ Programado para: ${customer.scheduledForLabel}`] : []),
     isAddressDelivery
       ? `${addressLbl}: ${customer.address}`
       : `${receivingLabel}${customer.branchName ? `: ${customer.branchName}` : ''}`,
@@ -1765,6 +1779,30 @@ async function handleMessage(t, slug, sessionId, rawInput, runtime = {}) {
   const pickupEnabled = (await getSetting(t, 'pickup_enabled', '1')) === '1';
   const dineInEnabled = (await getSetting(t, 'dine_in_enabled', '1')) !== '0';
   const locationEnabled = (await getSetting(t, 'location_enabled', '1')) === '1';
+  const showFullMenu = (await getSetting(t, 'chatbot_full_menu_enabled', '0')) === '1';
+  const timeZone = await getSetting(t, 'timezone', t.timezone || 'America/Mexico_City');
+  const businessHoursEnabled = (await getSetting(t, 'business_hours_enabled', '0')) === '1';
+  const preordersEnabled = (await getSetting(t, 'chatbot_preorders_enabled', '0')) === '1';
+  const businessHours = normalizeBusinessHours(await getSetting(t, 'business_hours_json', '[]'));
+  const scheduledHoursForDate = (dateKey) => {
+    const weekday = new Date(`${dateKey}T00:00:00.000Z`).getUTCDay();
+    return businessHours[weekday];
+  };
+  const timeFormatHelp = 'Puedes escribir la hora como *9*, *9.30 am*, *1 pm* o *13:00*; debe estar dentro del horario indicado.';
+  const customSchedulePrompt = () => {
+    const enabledDays = businessHours.filter((entry) => entry.enabled);
+    const availability = enabledDays
+      .map((entry) => `${DAY_NAMES[entry.day]}: ${entry.open} a ${entry.close}`)
+      .join(' · ');
+    const firstDay = enabledDays[0];
+    const example = firstDay ? `${DAY_NAMES[firstDay.day]} a las ${firstDay.open}` : 'día y hora';
+    return `Días y horarios disponibles: *${availability || 'no hay días abiertos configurados'}*. Escribe el día y la hora, por ejemplo: *${example}*. ${timeFormatHelp}`;
+  };
+  const selectedDatePrompt = (dateKey, dateLabel) => {
+    const hours = scheduledHoursForDate(dateKey);
+    const range = hours?.enabled ? ` Ese día atendemos de *${hours.open} a ${hours.close}*.` : '';
+    return `Elegiste el *${dateLabel}*. ¿A qué hora quieres tu pedido?${range} ${timeFormatHelp}`;
+  };
   let labels = getLabels(businessType);
   const customReceivingModes = parseCustomReceivingModes(await getSetting(t, 'chatbot_receiving_modes_json', '[]'));
   const receivingModes = [
@@ -1825,12 +1863,13 @@ async function handleMessage(t, slug, sessionId, rawInput, runtime = {}) {
   state.cart.currencyConversion = state.currencyConversion;
 
   const guided = guidedCommandForText(state, input);
-  const choiceSteps = new Set(['ask_order_note_choice', 'checkout_identity_choice', 'confirm_returning_address', 'ask_delivery', 'ask_branch', 'ask_payment_method', 'ask_cash_change_choice', 'confirm', 'choosing_variant', 'upsell_offer']);
+  const choiceSteps = new Set(['ask_order_note_choice', 'ask_scheduled_order', 'checkout_identity_choice', 'confirm_returning_address', 'ask_delivery', 'ask_branch', 'ask_payment_method', 'ask_cash_change_choice', 'confirm', 'choosing_variant', 'upsell_offer']);
   const machineCommand = /^[a-z0-9_|-]+$/.test(input) && (input.includes('_') || input.includes('|') || ['menu', 'cart', 'checkout', 'start', 'promotions'].includes(input));
   const normalizedChoiceText = normalizeSearchText(input);
   const handledByStep = (state.step === 'ask_delivery' && /(domicilio|entrega|envio|recoger|recojo|paso por|para llevar|comer|consumir)/.test(normalizedChoiceText))
     || (state.step === 'ask_payment_method' && /^(efectivo|cash|transferencia|transfer|tarjeta|card)$/.test(normalizedChoiceText))
     || (state.step === 'ask_cash_change_choice' && /\b(exacto|cambio|vuelto)\b/.test(normalizedChoiceText))
+    || (state.step === 'ask_scheduled_order' && /\b(proxima|apertura|otra fecha|otro horario|programar)\b/.test(normalizedChoiceText))
     || (state.step === 'ask_branch' && (state.branchOptions || []).some((branch) => normalizeSearchText(branch.name) === normalizedChoiceText))
     || (state.step === 'checkout_identity_choice' && /\b(ya pedi|ya he pedido|cliente frecuente|cliente nuevo|soy nuevo|es mi primera vez)\b/.test(normalizedChoiceText));
   const conditionalConfirmation = state.step === 'confirm' && /\b(pero|sin|cambia|cambiar|quita|elimina|agrega|anade|mas|menos|nota)\b/.test(normalizedChoiceText);
@@ -1996,7 +2035,7 @@ async function handleMessage(t, slug, sessionId, rawInput, runtime = {}) {
     return opts;
   };
 
-  const continueCheckoutFlowCore = () => {
+  const continueCustomerFlowCore = () => {
     const hasReturningData =
       Boolean(state.customer?.name) &&
       Boolean(state.customer?.phone) &&
@@ -2015,6 +2054,33 @@ async function handleMessage(t, slug, sessionId, rawInput, runtime = {}) {
       { label: '🔁 Ya he pedido', value: 'returning_customer' },
       { label: '👤 Soy cliente nuevo', value: 'checkout_new_customer' },
     ];
+  };
+
+  const continueCheckoutFlowCore = () => {
+    if (businessHoursEnabled && !state.customer?.scheduledFor) {
+      const status = businessStatusAt(businessHours, new Date(), timeZone);
+      if (!status.open) {
+        if (!preordersEnabled) {
+          state.step = 'start';
+          reply.messages = [status.nextOpening
+            ? `En este momento estamos cerrados. Nuestra próxima apertura es el *${formatBusinessDateTime(status.nextOpening, timeZone)}*.`
+            : 'En este momento estamos cerrados y no hay una próxima apertura configurada.'];
+          reply.options = mainOptions(state.cart, chatbotInfoOptions, labels);
+          return;
+        }
+        state.step = 'ask_scheduled_order';
+        state.nextBusinessOpening = status.nextOpening?.toISOString() || '';
+        reply.messages = [status.nextOpening
+          ? `En este momento estamos cerrados, pero puedes dejar tu pedido anticipado. La próxima apertura es el *${formatBusinessDateTime(status.nextOpening, timeZone)}*.`
+          : 'En este momento estamos cerrados. Puedes indicar otro día y hora dentro del horario de atención.'];
+        reply.options = [
+          ...(status.nextOpening ? [{ label: '🕒 Próxima apertura', value: 'schedule_next_open' }] : []),
+          { label: '📅 Elegir otro día y hora', value: 'schedule_custom' },
+        ];
+        return;
+      }
+    }
+    continueCustomerFlowCore();
   };
 
   const continueCheckoutFlow = () => {
@@ -2060,7 +2126,7 @@ async function handleMessage(t, slug, sessionId, rawInput, runtime = {}) {
     reply.options = [{ label: '🆕 Hacer otro pedido', value: 'start' }];
     return finish();
   }
-  const formSteps = new Set(['ask_order_note_choice', 'ask_order_note_text', 'checkout_identity_choice', 'ask_returning_phone', 'confirm_returning_address', 'ask_name', 'ask_phone', 'ask_delivery', 'ask_branch', 'ask_address', 'ask_address_after_location', 'ask_neighborhood', 'ask_location_optional', 'ask_reference', 'ask_payment_method', 'ask_cash_change_choice', 'ask_cash_payment_amount', 'confirm_edit_note_text']);
+  const formSteps = new Set(['ask_order_note_choice', 'ask_order_note_text', 'ask_scheduled_order', 'ask_scheduled_time', 'ask_scheduled_datetime', 'checkout_identity_choice', 'ask_returning_phone', 'confirm_returning_address', 'ask_name', 'ask_phone', 'ask_delivery', 'ask_branch', 'ask_address', 'ask_address_after_location', 'ask_neighborhood', 'ask_location_optional', 'ask_reference', 'ask_payment_method', 'ask_cash_change_choice', 'ask_cash_payment_amount', 'confirm_edit_note_text']);
   if (formSteps.has(state.step) && (lower === 'checkout' || NATURAL_FINISH_INTENTS.has(normalizeSearchText(input)))) {
     reply.messages = [state.lastPrompt || 'Para terminar, responde primero la pregunta actual.'];
     reply.options = state.lastOptions || [];
@@ -2070,12 +2136,26 @@ async function handleMessage(t, slug, sessionId, rawInput, runtime = {}) {
     cancelPendingProductConfiguration(state);
     state.step = 'start';
     state.returningProfile = null;
+    delete state.customer.scheduledFor;
+    delete state.customer.scheduledForLabel;
+    delete state.nextBusinessOpening;
+    delete state.scheduledDateKey;
+    delete state.scheduledDateLabel;
     state.aiHistory = [];
     resetUpsellProgress();
     const defaultWelcome = typeof labels.welcomeDefault === 'function'
       ? labels.welcomeDefault(businessName)
       : `¡Hola! Bienvenido a ${businessName} 👋`;
     reply.messages = [await getSetting(t, 'welcome_message', defaultWelcome)];
+    if (businessHoursEnabled) {
+      const status = businessStatusAt(businessHours, new Date(), timeZone);
+      if (status.open) reply.messages.push('🟢 En este momento estamos abiertos.');
+      else if (status.nextOpening) {
+        reply.messages.push(`🔴 En este momento estamos cerrados. Próxima apertura: *${formatBusinessDateTime(status.nextOpening, timeZone)}*.${preordersEnabled ? ' Puedes armar tu pedido y programarlo.' : ''}`);
+      } else {
+        reply.messages.push('🔴 En este momento estamos cerrados.');
+      }
+    }
     reply.options = mainOptions(state.cart, chatbotInfoOptions, labels);
     return finish();
   }
@@ -2104,7 +2184,88 @@ async function handleMessage(t, slug, sessionId, rawInput, runtime = {}) {
   }
   if (lower === 'menu' || lower === 'menú') {
     cancelPendingProductConfiguration(state);
-    Object.assign(reply, await showMenu(t, state, labels, activeChatbotPromotions));
+    Object.assign(reply, await showMenu(t, state, labels, activeChatbotPromotions, showFullMenu));
+    return finish();
+  }
+  if (state.step === 'ask_scheduled_order') {
+    if (lower === 'schedule_next_open' && state.nextBusinessOpening) {
+      const nextOpening = new Date(state.nextBusinessOpening);
+      if (nextOpening.getTime() > Date.now() && validateScheduledDate(businessHours, nextOpening, timeZone).valid) {
+        state.scheduledDateKey = businessDateKey(nextOpening, timeZone);
+        state.scheduledDateLabel = formatBusinessDate(nextOpening, timeZone);
+        state.step = 'ask_scheduled_time';
+        delete state.nextBusinessOpening;
+        reply.messages = [selectedDatePrompt(state.scheduledDateKey, state.scheduledDateLabel)];
+        return finish();
+      }
+    }
+    if (lower === 'schedule_custom') {
+      state.step = 'ask_scheduled_datetime';
+      delete state.scheduledDateKey;
+      delete state.scheduledDateLabel;
+      reply.messages = [customSchedulePrompt()];
+      return finish();
+    }
+    const parsed = parseRequestedDateTime(input, new Date(), timeZone);
+    if (!parsed.error) {
+      const availability = validateScheduledDate(businessHours, parsed.date, timeZone);
+      if (availability.valid) {
+        state.customer.scheduledFor = parsed.date.toISOString();
+        state.customer.scheduledForLabel = formatBusinessDateTime(parsed.date, timeZone);
+        delete state.nextBusinessOpening;
+        delete state.scheduledDateKey;
+        delete state.scheduledDateLabel;
+        reply.messages = [`Perfecto. Prepararemos tu pedido para el *${state.customer.scheduledForLabel}*.`];
+        continueCustomerFlowCore();
+        return finish();
+      }
+      reply.messages = [`${availability.error} ${customSchedulePrompt()}`];
+      return finish();
+    }
+    reply.messages = ['Elige la próxima apertura o indica que deseas otro día y hora.'];
+    reply.options = [
+      ...(state.nextBusinessOpening ? [{ label: '🕒 Próxima apertura', value: 'schedule_next_open' }] : []),
+      { label: '📅 Elegir otro día y hora', value: 'schedule_custom' },
+    ];
+    return finish();
+  }
+  if (state.step === 'ask_scheduled_time' && state.scheduledDateKey) {
+    const parsed = parseRequestedDateTime(input, new Date(), timeZone, { fixedDateKey: state.scheduledDateKey });
+    if (parsed.error) {
+      reply.messages = [parsed.error, selectedDatePrompt(state.scheduledDateKey, state.scheduledDateLabel)];
+      return finish();
+    }
+    const availability = validateScheduledDate(businessHours, parsed.date, timeZone);
+    if (!availability.valid) {
+      reply.messages = [`${availability.error} ${selectedDatePrompt(state.scheduledDateKey, state.scheduledDateLabel)}`];
+      return finish();
+    }
+    state.customer.scheduledFor = parsed.date.toISOString();
+    state.customer.scheduledForLabel = formatBusinessDateTime(parsed.date, timeZone);
+    delete state.scheduledDateKey;
+    delete state.scheduledDateLabel;
+    reply.messages = [`Perfecto. Prepararemos tu pedido para el *${state.customer.scheduledForLabel}*.`];
+    continueCustomerFlowCore();
+    return finish();
+  }
+  if (state.step === 'ask_scheduled_datetime') {
+    const parsed = parseRequestedDateTime(input, new Date(), timeZone);
+    if (parsed.error) {
+      reply.messages = [`${parsed.error} ${customSchedulePrompt()}`];
+      return finish();
+    }
+    const availability = validateScheduledDate(businessHours, parsed.date, timeZone);
+    if (!availability.valid) {
+      reply.messages = [`${availability.error} ${customSchedulePrompt()}`];
+      return finish();
+    }
+    state.customer.scheduledFor = parsed.date.toISOString();
+    state.customer.scheduledForLabel = formatBusinessDateTime(parsed.date, timeZone);
+    delete state.nextBusinessOpening;
+    delete state.scheduledDateKey;
+    delete state.scheduledDateLabel;
+    reply.messages = [`Perfecto. Prepararemos tu pedido para el *${state.customer.scheduledForLabel}*.`];
+    continueCustomerFlowCore();
     return finish();
   }
   if (lower === 'promotions' || lower === 'promociones' || lower === 'promoción' || lower === 'promocion') {
@@ -2591,7 +2752,7 @@ async function handleMessage(t, slug, sessionId, rawInput, runtime = {}) {
       } else {
         state.step = 'start';
         const quickMessages = ['¡Perfecto! Ya usaré tus mismos datos de ubicación para este pedido 🚀', 'Ahora solo elige del menú y será más rápido.'];
-        const menuReply = await showMenu(t, state, labels);
+        const menuReply = await showMenu(t, state, labels, null, showFullMenu);
         Object.assign(reply, menuReply);
         reply.messages = [...quickMessages, ...(menuReply.messages || [])];
       }
@@ -3216,8 +3377,20 @@ async function handleMessage(t, slug, sessionId, rawInput, runtime = {}) {
         reply.options = [{ label: '✅ Pagaré exacto', value: 'cash_exact' }];
         return finish();
       }
+      if (state.customer?.scheduledFor) {
+        const scheduledDate = new Date(state.customer.scheduledFor);
+        const scheduleValidation = validateScheduledDate(businessHours, scheduledDate, timeZone);
+        if (!Number.isFinite(scheduledDate.getTime()) || scheduledDate.getTime() <= Date.now() || !scheduleValidation.valid) {
+          delete state.customer.scheduledFor;
+          delete state.customer.scheduledForLabel;
+          state.step = 'ask_scheduled_datetime';
+          reply.messages = ['Ese horario ya no está disponible. Indica una nueva fecha y hora dentro del horario de atención.'];
+          return finish();
+        }
+      }
       if (t?.schema) {
-        const productsAvailableNow = await activeProducts(t, activeChatbotPromotions);
+        const availabilityDate = state.customer?.scheduledFor ? new Date(state.customer.scheduledFor) : new Date();
+        const productsAvailableNow = await activeProducts(t, activeChatbotPromotions, availabilityDate);
         const availableProductIds = new Set(productsAvailableNow.map((product) => Number(product.id)));
         const unavailableLines = state.cart.filter((item) => !availableProductIds.has(Number(item.id)));
         if (unavailableLines.length) {
@@ -3301,8 +3474,8 @@ async function handleMessage(t, slug, sessionId, rawInput, runtime = {}) {
         : (state.customer.branchName || null);
       const orderRow = await t.get(
         `INSERT INTO {s}.orders
-         (customer_id, items, subtotal, total, status, channel, source_channel, delivery, receiving_mode_label, receiving_mode_behavior, notes, order_notes, pickup_branch_id, pickup_branch_name, customer_location_lat, customer_location_lng, customer_location_text, customer_location_resolved, delivery_fee, delivery_zone_name, service_branch_id, service_branch_name, delivery_address, delivery_neighborhood, delivery_reference)
-         VALUES ($1,$2,$3,$4,$5,$6,'chatbot',$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24) RETURNING id`,
+         (customer_id, items, subtotal, total, status, channel, source_channel, delivery, receiving_mode_label, receiving_mode_behavior, notes, order_notes, pickup_branch_id, pickup_branch_name, customer_location_lat, customer_location_lng, customer_location_text, customer_location_resolved, delivery_fee, delivery_zone_name, service_branch_id, service_branch_name, delivery_address, delivery_neighborhood, delivery_reference, scheduled_for)
+         VALUES ($1,$2,$3,$4,$5,$6,'chatbot',$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25) RETURNING id`,
         [
           customer.id,
           JSON.stringify(state.cart),
@@ -3328,6 +3501,7 @@ async function handleMessage(t, slug, sessionId, rawInput, runtime = {}) {
           isAddressDelivery() ? (state.customer.address || '') : '',
           isAddressDelivery() ? (state.customer.neighborhood || '') : '',
           isAddressDelivery() ? (state.customer.reference || '') : '',
+          state.customer.scheduledFor || null,
         ]
       );
       const paymentBreakdown = String(state.customer.paymentMethod || '').startsWith('custom_')
@@ -3357,13 +3531,17 @@ async function handleMessage(t, slug, sessionId, rawInput, runtime = {}) {
         items: state.cart.map(i => `${i.qty}x ${i.name}`).join(', '),
         summary: orderText,
         businessName,
+        scheduledFor: state.customer.scheduledFor || null,
+        scheduledForLabel: state.customer.scheduledForLabel || '',
       }).catch(() => {});
 
       reply.messages = [
-        `🎉 *¡Pedido #${orderRow.id} recibido!*\n\nEn breve lo confirmamos. ¡Gracias por tu preferencia! 🙏`,
+        state.customer.scheduledForLabel
+          ? `🎉 *¡Pedido #${orderRow.id} programado!*\n\nLo prepararemos para el *${state.customer.scheduledForLabel}*. ¡Gracias por tu preferencia! 🙏`
+          : `🎉 *¡Pedido #${orderRow.id} recibido!*\n\nEn breve lo confirmamos. ¡Gracias por tu preferencia! 🙏`,
       ];
       attachAccountsForPayment(state.customer.paymentMethod);
-      reply.order = { id: orderRow.id, total, totalLabel: money(total, currency), convertedTotalLabel: convertedMoney(total, state.currencyConversion), exchangeRateLabel: conversionRateLabel(state.currencyConversion), whatsappLink: waLink, summary: orderText };
+      reply.order = { id: orderRow.id, total, totalLabel: money(total, currency), convertedTotalLabel: convertedMoney(total, state.currencyConversion), exchangeRateLabel: conversionRateLabel(state.currencyConversion), scheduledFor: state.customer.scheduledFor || null, scheduledForLabel: state.customer.scheduledForLabel || '', whatsappLink: waLink, summary: orderText };
       if (waLink) reply.messages.push('👇 Toca el botón para enviar el resumen de tu pedido por WhatsApp y agilizar la atención.');
       if (!waLink) reply.messages.push('⚠️ El negocio aún no tiene un WhatsApp válido para envío automático. Tu pedido ya quedó registrado.');
       state = { step: 'order_complete', cart: [], customer: {}, currency, lastOrderId: orderRow.id };
@@ -3524,6 +3702,7 @@ function confirmText(state, businessName, currency, labels = RESTAURANT_LABELS) 
     `👤 ${c.name}\n📞 ${c.phone}\n` +
     `💳 Pago: ${c.paymentMethodLabel || paymentMethodLabel(c.paymentMethod)}\n` +
     (cashLines.length ? `${cashLines.join('\n')}\n` : '') +
+    (c.scheduledForLabel ? `🗓️ Programado para: ${c.scheduledForLabel}\n` : '') +
     (isAddressDelivery
       ? `📍 ${c.address}`
       : `${receivingLabel}${c.branchName ? `: ${c.branchName}` : ''}`) +

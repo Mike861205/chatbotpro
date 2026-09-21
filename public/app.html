@@ -11,7 +11,7 @@
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/fill/style.css" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/duotone/style.css" />
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-  <link rel="stylesheet" href="/static/css/styles.css?v=20260914-pos-mobile" />
+  <link rel="stylesheet" href="/static/css/styles.css?v=20260921-business-hours" />
   <link rel="icon" type="image/svg+xml" href="/static/favicon.svg" />
   <link rel="icon" type="image/png" href="/static/chatbotpro100.png" />
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
@@ -146,6 +146,7 @@
           <div class="orders-topbar">
             <div class="segmented" id="orderFilter">
               <button data-st="" class="on">Todos</button>
+              <button data-view="scheduled"><i class="ph-bold ph-calendar-dots"></i> Programados</button>
               <button data-st="pendiente">Pendientes</button>
               <button data-st="confirmado">Confirmados</button>
               <button data-st="preparando">Preparando</button>
@@ -1229,7 +1230,28 @@
               <div class="field">
                 <label><i class="ph-bold ph-clock"></i> Horario</label>
                 <input type="text" id="cfgHours" placeholder="Lun-Dom · 12:00 — 22:00" />
+                <div class="hint">Este texto se muestra como referencia en tu información comercial.</div>
               </div>
+              <section class="business-hours-panel">
+                <div class="toggle-row">
+                  <div class="t-info"><i class="ph-bold ph-calendar-check"></i><div><b>Usar horario semanal</b><span>El asistente identificará automáticamente si el negocio está abierto o cerrado.</span></div></div>
+                  <label class="switch"><input type="checkbox" id="cfgBusinessHoursEnabled" /><span class="track"></span></label>
+                </div>
+                <div id="cfgBusinessHoursFields" hidden>
+                  <div class="business-hours-head"><span>Día</span><span>Abre</span><span>Cierra</span></div>
+                  <div class="business-hours-grid" id="cfgBusinessHoursGrid"></div>
+                  <div class="toggle-row preorder-toggle">
+                    <div class="t-info"><i class="ph-bold ph-clock-countdown"></i><div><b>Aceptar pedidos anticipados</b><span>Cuando esté cerrado, el cliente podrá elegir un día y hora dentro del horario activo.</span></div></div>
+                    <label class="switch"><input type="checkbox" id="cfgChatbotPreordersEnabled" /><span class="track"></span></label>
+                  </div>
+                </div>
+              </section>
+              <section class="business-hours-panel menu-display-panel">
+                <div class="toggle-row">
+                  <div class="t-info"><i class="ph-bold ph-squares-four"></i><div><b>Mostrar el menú completo</b><span>“Ver menú” mostrará todos los productos directamente. Desactivado conserva la navegación por categorías.</span></div></div>
+                  <label class="switch"><input type="checkbox" id="cfgChatbotFullMenu" /><span class="track"></span></label>
+                </div>
+              </section>
               <div class="field">
                 <label><i class="ph-bold ph-coins"></i> Moneda</label>
                 <select id="cfgCurrency">
@@ -3390,6 +3412,6 @@
 
   <script src="/socket.io/socket.io.js"></script>
   <script src="/static/vendor/qz-tray.js?v=2.3.0"></script>
-  <script src="/static/js/app.js?v=20260914-pos-mobile"></script>
+  <script src="/static/js/app.js?v=20260921-scheduled-orders"></script>
 </body>
 </html>

@@ -120,14 +120,15 @@ async function buildKdsPayload(tenant, tenantDb, area) {
     tenantDb.all(
             `SELECT o.id, o.customer_id, o.items, o.total::float AS total, o.status AS order_status, o.channel, o.delivery, o.receiving_mode_label, o.receiving_mode_behavior,
               o.delivery_address, o.delivery_neighborhood, o.delivery_reference, o.notes, o.order_notes,
-              o.service_branch_id, o.service_branch_name, o.pickup_branch_id, o.pickup_branch_name, o.created_at,
+              o.service_branch_id, o.service_branch_name, o.pickup_branch_id, o.pickup_branch_name, o.created_at, o.scheduled_for,
               s.status AS kds_status, s.started_at, s.ready_at, s.completed_at, s.updated_at
        FROM {s}.orders o
        LEFT JOIN {s}.kds_ticket_states s ON s.order_id = o.id AND s.area_id = $1
        WHERE o.status <> 'cancelado'
          AND NOT (o.channel = 'kiosk' AND o.status = 'pendiente_cobro')
          AND o.table_account_id IS NULL
-         AND (o.created_at AT TIME ZONE '${tenant.timezone}')::date = (now() AT TIME ZONE '${tenant.timezone}')::date
+         AND (COALESCE(o.scheduled_for, o.created_at) AT TIME ZONE '${tenant.timezone}')::date = (now() AT TIME ZONE '${tenant.timezone}')::date
+         AND (o.scheduled_for IS NULL OR o.scheduled_for <= now() + INTERVAL '30 minutes')
          AND (
            $2::int IS NULL
            OR o.service_branch_id = $2
@@ -259,6 +260,7 @@ async function buildKdsPayload(tenant, tenantDb, area) {
       branchName: order.service_branch_name || order.pickup_branch_name || '',
       customerName: customerById.get(Number(order.customer_id)) || order.table_customer_name || '',
       createdAt: order.created_at,
+      scheduledFor: order.scheduled_for,
       startedAt: order.started_at,
       readyAt: order.ready_at,
       areaItems,

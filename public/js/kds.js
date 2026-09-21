@@ -108,6 +108,9 @@
         : ['completed', 'ph-hand-palm', 'Entregar / retirar'];
     const back = deliveryArea ? '' : ticket.status === 'preparing' ? 'pending' : ticket.status === 'ready' ? 'preparing' : '';
     const channelLabel = ticket.channel === 'table_round' ? 'Mesa' : ticket.channel === 'pos' ? 'Punto de venta' : 'Chatbot';
+    const scheduledLabel = ticket.scheduledFor
+      ? new Intl.DateTimeFormat('es-MX', { timeZone: payload?.tenant?.timezone || undefined, weekday: 'short', hour: '2-digit', minute: '2-digit' }).format(new Date(ticket.scheduledFor))
+      : '';
     const ticketLabel = ticket.channel === 'table_round'
       ? `Mesa ${ticket.tableNumber} · Ronda ${ticket.roundNumber}`
       : `#${ticket.id}`;
@@ -126,6 +129,7 @@
         ${ticket.customerName ? `<span><i class="ph-bold ph-user"></i> ${esc(ticket.customerName)}</span>` : ''}
         ${ticket.waiterName ? `<span><i class="ph-bold ph-identification-badge"></i> Mesero: ${esc(ticket.waiterName)}</span>` : ''}
         ${ticket.branchName ? `<span><i class="ph-bold ph-storefront"></i> ${esc(ticket.branchName)}</span>` : ''}
+        ${scheduledLabel ? `<span><i class="ph-bold ph-calendar-check"></i> Programado: ${esc(scheduledLabel)}</span>` : ''}
         <span><i class="ph-bold ${ticket.receivingModeBehavior === 'delivery' || ticket.delivery === 'domicilio' ? 'ph-scooter' : (ticket.delivery === 'comer_sucursal' ? 'ph-fork-knife' : 'ph-shopping-bag-open')}"></i> ${esc(ticket.receivingModeLabel || ticket.delivery || 'mostrador')}</span>
         ${ticket.isMixed ? `<span class="mixed-badge"><i class="ph-bold ph-arrows-split"></i> Mixto: ${esc(routeNames || 'varias áreas')}</span>` : ''}
       </div>

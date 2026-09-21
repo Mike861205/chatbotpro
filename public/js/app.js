@@ -59,6 +59,7 @@ try {
 } catch {}
 let DASHBOARD_PERIOD = 'day';
 let orderStatusFilter = '';
+let orderScheduledOnly = false;
 let orderPage = 1;
 const ORDER_PAGE_SIZE = 10;
 let orderTodayOnly = true;
@@ -3581,6 +3582,7 @@ function buildComandaHtml(order, areaItems, areaLabel, widthOverride = null, aut
   const addressDelivery = order?.receiving_mode_behavior === 'delivery' || order?.delivery === 'domicilio';
   const branch = esc(orderBranchLabel(order));
   const createdAt = esc(order?.created_at || fmtBusinessDateTime());
+  const scheduledFor = esc(order?.scheduled_for_label || '');
   const notes = esc(operationalOrderNote(order));
   const deliveryAddress = esc(order?.delivery_address || order?.customer?.address || '');
   const deliveryNeighborhood = esc(order?.delivery_neighborhood || '');
@@ -3632,6 +3634,7 @@ function buildComandaHtml(order, areaItems, areaLabel, widthOverride = null, aut
     <div class="center headline">COMANDA #${esc(String(order.id || ''))}</div>
     ${areaHeader}
     <div class="center meta">${createdAt}</div>
+    ${scheduledFor ? `<div class="center headline">PROGRAMADO: ${scheduledFor}</div>` : ''}
     <div class="meta"><b>Cliente:</b> ${customerName}${customerPhone ? ` · ${customerPhone}` : ''}</div>
     <div class="meta"><b>Entrega:</b> ${delivery}</div>
     <div class="meta"><b>Sucursal:</b> ${branch}</div>
@@ -3807,7 +3810,7 @@ function ordersTableHTML(orders, editable = true) {
         <td><b>${fmtMoney(o.total)}</b>${convertedMoneyHtml(o.total, origin.source === 'chatbot' ? 'chatbot' : 'pos')}</td>
         <td>${paymentText}</td>
         <td>${statusCell}</td>
-        <td style="white-space:nowrap;color:var(--ink-3);font-size:12.5px">${esc(o.created_at)}</td>
+        <td style="white-space:nowrap;color:var(--ink-3);font-size:12.5px">${o.scheduled_for_label ? `<b style="color:var(--primary)"><i class="ph-bold ph-calendar-check"></i> Programado</b><br>${esc(o.scheduled_for_label)}<br><small>Capturado: ${esc(o.created_at)}</small>` : esc(o.created_at)}</td>
         ${editable ? `<td style="white-space:nowrap">${comandaBtn}</td>` : ''}
       </tr>`;
     })
@@ -3854,30 +3857,35 @@ function syncOrdersFiltersUI() {
         ? 'últimos 7 días'
         : 'rango personalizado';
     }
-    toggle.classList.toggle('on', orderTodayOnly);
-    toggle.setAttribute('aria-pressed', String(orderTodayOnly));
-    toggle.innerHTML = `<i class="ph-bold ph-calendar-check"></i> Solo pedidos del día: ${orderTodayOnly ? 'Activado' : `Desactivado · ${dateModeLabel}`}`;
+    toggle.classList.toggle('on', orderTodayOnly && !orderScheduledOnly);
+    toggle.disabled = orderScheduledOnly;
+    toggle.setAttribute('aria-pressed', String(orderTodayOnly && !orderScheduledOnly));
+    toggle.innerHTML = orderScheduledOnly
+      ? '<i class="ph-bold ph-calendar-dots"></i> Mostrando pedidos programados futuros'
+      : `<i class="ph-bold ph-calendar-check"></i> Solo pedidos del día: ${orderTodayOnly ? 'Activado' : `Desactivado · ${dateModeLabel}`}`;
   }
   const start = $('#ordersDateStart');
   const end = $('#ordersDateEnd');
   if (start) {
     start.value = orderDateStart;
-    start.disabled = orderTodayOnly;
+    start.disabled = orderTodayOnly || orderScheduledOnly;
   }
   if (end) {
     end.value = orderDateEnd;
-    end.disabled = orderTodayOnly;
+    end.disabled = orderTodayOnly || orderScheduledOnly;
   }
-  $('#ordersApplyDate')?.toggleAttribute('disabled', orderTodayOnly);
+  $('#ordersApplyDate')?.toggleAttribute('disabled', orderTodayOnly || orderScheduledOnly);
+  $('#ordersClearDate')?.toggleAttribute('disabled', orderScheduledOnly);
 }
 
 async function loadOrders() {
   syncOrdersFiltersUI();
   const params = new URLSearchParams();
   if (orderStatusFilter) params.set('status', orderStatusFilter);
-  if (orderTodayOnly) params.set('todayOnly', '1');
-  if (!orderTodayOnly && orderDateStart) params.set('startDate', orderDateStart);
-  if (!orderTodayOnly && orderDateEnd) params.set('endDate', orderDateEnd);
+  if (orderScheduledOnly) params.set('scheduled', 'upcoming');
+  if (!orderScheduledOnly && orderTodayOnly) params.set('todayOnly', '1');
+  if (!orderScheduledOnly && !orderTodayOnly && orderDateStart) params.set('startDate', orderDateStart);
+  if (!orderScheduledOnly && !orderTodayOnly && orderDateEnd) params.set('endDate', orderDateEnd);
 
   const orders = await api(`/api/orders${params.toString() ? `?${params.toString()}` : ''}`);
   LAST_ORDERS = orders;
@@ -3889,7 +3897,9 @@ async function loadOrders() {
 
   $('#ordersTable').innerHTML = orders.length
     ? ordersTableHTML(pageOrders, true)
-    : emptyHTML('ph-funnel', 'Sin resultados', 'No hay pedidos con este filtro.');
+    : orderScheduledOnly
+      ? emptyHTML('ph-calendar-dots', 'Sin pedidos programados', 'Los pedidos anticipados futuros aparecerán aquí automáticamente.')
+      : emptyHTML('ph-funnel', 'Sin resultados', 'No hay pedidos con este filtro.');
   renderOrdersPagination(orders.length);
 
   document.querySelectorAll('.status-sel').forEach((sel) =>
@@ -4087,7 +4097,7 @@ function formatExportRows(orders) {
       metodo_pago: orderPaymentLabel(o.payment_method, o.payment_breakdown),
       total: Number(o.total || 0),
       estatus: o.status,
-      fecha: o.created_at || '',
+      fecha: o.scheduled_for_label ? `Programado: ${o.scheduled_for_label} (capturado: ${o.created_at || ''})` : (o.created_at || ''),
     };
   });
 }
@@ -4149,7 +4159,8 @@ $('#orderFilter').addEventListener('click', (e) => {
   if (!btn) return;
   document.querySelectorAll('#orderFilter button').forEach((b) => b.classList.remove('on'));
   btn.classList.add('on');
-  orderStatusFilter = btn.dataset.st;
+  orderScheduledOnly = btn.dataset.view === 'scheduled';
+  orderStatusFilter = orderScheduledOnly ? '' : (btn.dataset.st || '');
   orderPage = 1;
   loadOrders();
 });
@@ -7306,7 +7317,7 @@ async function loadPosChatbotQueue(page = 1) {
             <div class="pos-chatbot-kv"><span>Pago</span><b>${esc(posMethodLabel(order.payment_method || 'cash', order.payment_breakdown))}</b></div>
             <div class="pos-chatbot-kv"><span>Productos</span><div>${esc(items || '—')}</div></div>
             <div class="pos-chatbot-kv"><span>Estado</span><div>${chatbotOrderStatusBadge(order.status)}</div></div>
-            <div class="pos-chatbot-kv"><span>Fecha</span><div>${esc(order.created_at || '')}</div></div>
+            <div class="pos-chatbot-kv"><span>${order.scheduled_for_label ? 'Programado' : 'Fecha'}</span><div>${esc(order.scheduled_for_label || order.created_at || '')}</div></div>
             ${noteText ? `<div class="order-note-callout" style="grid-column:1/-1"><span><i class="ph-fill ph-warning-circle"></i> Nota del pedido</span><b>${esc(noteText)}</b></div>` : ''}
           </div>
           <button type="button" class="btn-pos-charge" data-import-chatbot-order="${order.id}" ${isImporting ? 'disabled' : ''}><i class="ph-bold ${isDineIn ? 'ph-fork-knife' : 'ph-cash-register'}"></i> ${isImporting ? 'Procesando...' : (isDineIn ? 'Abrir en mesa' : 'Cobrar en POS')}</button>
@@ -7333,7 +7344,7 @@ async function loadPosChatbotQueue(page = 1) {
           <td class="td-pago">${esc(posMethodLabel(order.payment_method || 'cash', order.payment_breakdown))}</td>
           <td class="td-total"><b>${fmtMoney(order.total)}</b></td>
           <td class="td-estado">${chatbotOrderStatusBadge(order.status)}</td>
-          <td class="td-fecha">${esc(order.created_at || '')}</td>
+          <td class="td-fecha">${order.scheduled_for_label ? `<b style="color:var(--primary)">Programado</b><br>${esc(order.scheduled_for_label)}` : esc(order.created_at || '')}</td>
           <td class="td-cobro">${chatbotChargeStatusBadge(order.id)}</td>
         </tr>`;
       })
@@ -11970,6 +11981,60 @@ function updateTimezonePreview() {
   }
 }
 
+const BUSINESS_HOURS_DAYS = ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'];
+
+function parseBusinessHoursConfig() {
+  const fallback = BUSINESS_HOURS_DAYS.map((_, day) => ({ day, enabled: day >= 1 && day <= 5, open: '09:00', close: '18:00' }));
+  try {
+    const parsed = JSON.parse(SETTINGS?.business_hours_json || '[]');
+    if (!Array.isArray(parsed)) return fallback;
+    const byDay = new Map(parsed.map((entry) => [Number(entry?.day), entry]));
+    return fallback.map((entry) => {
+      const saved = byDay.get(entry.day);
+      return saved ? {
+        day: entry.day,
+        enabled: saved.enabled !== false,
+        open: /^([01]\d|2[0-3]):[0-5]\d$/.test(saved.open) ? saved.open : entry.open,
+        close: /^([01]\d|2[0-3]):[0-5]\d$/.test(saved.close) ? saved.close : entry.close,
+      } : entry;
+    });
+  } catch {
+    return fallback;
+  }
+}
+
+function syncBusinessHoursFields() {
+  const enabled = Boolean($('#cfgBusinessHoursEnabled')?.checked);
+  $('#cfgBusinessHoursFields').hidden = !enabled;
+  $('#cfgChatbotPreordersEnabled').disabled = !enabled;
+  document.querySelectorAll('[data-business-hours-row]').forEach((row) => {
+    const active = row.querySelector('[data-hours-enabled]').checked;
+    row.classList.toggle('is-closed', !active);
+    row.querySelectorAll('input[type="time"]').forEach((input) => { input.disabled = !active; });
+  });
+}
+
+function renderBusinessHoursConfig() {
+  const schedule = parseBusinessHoursConfig();
+  $('#cfgBusinessHoursGrid').innerHTML = schedule.map((entry) => `
+    <div class="business-hours-row" data-business-hours-row data-day="${entry.day}">
+      <label class="business-hours-day"><input type="checkbox" data-hours-enabled ${entry.enabled ? 'checked' : ''} /> <span>${BUSINESS_HOURS_DAYS[entry.day]}</span></label>
+      <input type="time" data-hours-open value="${entry.open}" aria-label="${BUSINESS_HOURS_DAYS[entry.day]} abre" />
+      <input type="time" data-hours-close value="${entry.close}" aria-label="${BUSINESS_HOURS_DAYS[entry.day]} cierra" />
+    </div>
+  `).join('');
+  syncBusinessHoursFields();
+}
+
+function readBusinessHoursConfig() {
+  return [...document.querySelectorAll('[data-business-hours-row]')].map((row) => ({
+    day: Number(row.dataset.day),
+    enabled: row.querySelector('[data-hours-enabled]').checked,
+    open: row.querySelector('[data-hours-open]').value,
+    close: row.querySelector('[data-hours-close]').value,
+  }));
+}
+
 async function fillConfigForm() {
   if (!SETTINGS) return;
   DIRECT_PRINT_CONFIG = parseDirectPrintConfig();
@@ -11978,6 +12043,10 @@ async function fillConfigForm() {
   $('#cfgColor').value = SETTINGS.primary_color || '#ff6b35';
   $('#cfgAddress').value = SETTINGS.address || '';
   $('#cfgHours').value = SETTINGS.hours || '';
+  $('#cfgBusinessHoursEnabled').checked = (SETTINGS.business_hours_enabled || '0') === '1';
+  $('#cfgChatbotPreordersEnabled').checked = (SETTINGS.chatbot_preorders_enabled || '0') === '1';
+  $('#cfgChatbotFullMenu').checked = (SETTINGS.chatbot_full_menu_enabled || '0') === '1';
+  renderBusinessHoursConfig();
   $('#cfgCurrency').value = SETTINGS.currency || 'MXN';
   $('#cfgCurrencyConversionEnabled').checked = SETTINGS.currency_conversion_enabled === '1';
   $('#cfgCurrencyConversionChatbot').checked = (SETTINGS.currency_conversion_chatbot_enabled || '1') === '1';
@@ -12566,9 +12635,20 @@ $('#contactForm').addEventListener('submit', async (e) => {
   if (conversionEnabled && selectedCurrencyConversionMode() === 'manual' && conversionRate <= 0) {
     return toast('Escribe un tipo de cambio mayor que cero', true);
   }
+  const businessHours = readBusinessHoursConfig();
+  if ($('#cfgBusinessHoursEnabled').checked && !businessHours.some((entry) => entry.enabled)) {
+    return toast('Activa al menos un día de atención', true);
+  }
+  if (businessHours.some((entry) => entry.enabled && (!entry.open || !entry.close || entry.open === entry.close))) {
+    return toast('Revisa las horas de apertura y cierre de los días activos', true);
+  }
   const fd = new FormData();
   fd.append('address', $('#cfgAddress').value);
   fd.append('hours', $('#cfgHours').value);
+  fd.append('business_hours_enabled', $('#cfgBusinessHoursEnabled').checked ? '1' : '0');
+  fd.append('business_hours_json', JSON.stringify(businessHours));
+  fd.append('chatbot_preorders_enabled', $('#cfgBusinessHoursEnabled').checked && $('#cfgChatbotPreordersEnabled').checked ? '1' : '0');
+  fd.append('chatbot_full_menu_enabled', $('#cfgChatbotFullMenu').checked ? '1' : '0');
   fd.append('currency', $('#cfgCurrency').value);
   fd.append('currency_conversion_enabled', conversionEnabled ? '1' : '0');
   fd.append('currency_conversion_target', $('#cfgCurrencyConversionTarget').value);
@@ -12589,6 +12669,11 @@ $('#contactForm').addEventListener('submit', async (e) => {
   toast('Cuentas y medios de pago guardados');
   SETTINGS = await api('/api/settings');
   fillConfigForm();
+});
+
+$('#cfgBusinessHoursEnabled')?.addEventListener('change', syncBusinessHoursFields);
+$('#cfgBusinessHoursGrid')?.addEventListener('change', (event) => {
+  if (event.target.matches('[data-hours-enabled]')) syncBusinessHoursFields();
 });
 
 $('#cfgPosChatIntegration')?.addEventListener('change', async (event) => {

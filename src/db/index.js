@@ -540,6 +540,7 @@ async function createTenantSchema(slug) {
       delivery_address TEXT DEFAULT '',
       delivery_neighborhood TEXT DEFAULT '',
       delivery_reference TEXT DEFAULT '',
+      scheduled_for TIMESTAMPTZ,
       notes TEXT DEFAULT '',
       order_notes TEXT DEFAULT '',
       created_at TIMESTAMPTZ DEFAULT now()
@@ -753,6 +754,7 @@ async function createTenantSchema(slug) {
     ALTER TABLE "${s}".orders ADD COLUMN IF NOT EXISTS delivery_address TEXT DEFAULT '';
     ALTER TABLE "${s}".orders ADD COLUMN IF NOT EXISTS delivery_neighborhood TEXT DEFAULT '';
     ALTER TABLE "${s}".orders ADD COLUMN IF NOT EXISTS delivery_reference TEXT DEFAULT '';
+    ALTER TABLE "${s}".orders ADD COLUMN IF NOT EXISTS scheduled_for TIMESTAMPTZ;
     ALTER TABLE "${s}".orders ADD COLUMN IF NOT EXISTS cancel_note TEXT;
     ALTER TABLE "${s}".orders ADD COLUMN IF NOT EXISTS payment_method TEXT DEFAULT '';
     ALTER TABLE "${s}".orders ADD COLUMN IF NOT EXISTS order_notes TEXT DEFAULT '';
@@ -1438,6 +1440,9 @@ async function ensureTenantDefaults(slug, businessName = slug, regional = {}) {
     timezone: regional.timezone || 'America/Mexico_City',
     address: '',
     hours: '',
+    business_hours_enabled: '0',
+    business_hours_json: '[{"day":0,"enabled":false,"open":"09:00","close":"18:00"},{"day":1,"enabled":true,"open":"09:00","close":"18:00"},{"day":2,"enabled":true,"open":"09:00","close":"18:00"},{"day":3,"enabled":true,"open":"09:00","close":"18:00"},{"day":4,"enabled":true,"open":"09:00","close":"18:00"},{"day":5,"enabled":true,"open":"09:00","close":"18:00"},{"day":6,"enabled":false,"open":"09:00","close":"18:00"}]',
+    chatbot_preorders_enabled: '0',
     delivery_enabled: '1',
     pickup_enabled: '1',
     dine_in_enabled: '1',
@@ -1455,6 +1460,7 @@ async function ensureTenantDefaults(slug, businessName = slug, regional = {}) {
     chatbot_upsell_product_ids: '[]',
     chatbot_upsell_offers_json: '[]',
     chatbot_extra_options_json: '[]',
+    chatbot_full_menu_enabled: '0',
     chatbot_pos_integration_enabled: '0',
     chatbot_pos_global_orders_enabled: '0',
     self_service_enabled: '0',
