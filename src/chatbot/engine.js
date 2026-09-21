@@ -790,7 +790,7 @@ function mainOptions(cart, infoOptions = [], labels = RESTAURANT_LABELS) {
 function returningAddressText(profile) {
   const lines = [];
   if (profile.address) lines.push(`📍 Dirección: ${profile.address}`);
-  if (profile.neighborhood) lines.push(`🏘️ Urbanización / colonia / barrio / sector: ${profile.neighborhood}`);
+  if (profile.neighborhood) lines.push(`🏘️ Urbanización / sector / colonia / barrio: ${profile.neighborhood}`);
   if (Number.isFinite(profile.locationLat) && Number.isFinite(profile.locationLng)) {
     lines.push(`🗺️ Maps: ${mapsUrl(profile.locationLat, profile.locationLng)}`);
   }
@@ -1321,7 +1321,7 @@ function buildOrderText(businessName, cart, customer, delivery, currency, labels
     isAddressDelivery
       ? `${addressLbl}: ${customer.address}`
       : `${receivingLabel}${customer.branchName ? `: ${customer.branchName}` : ''}`,
-    ...(isAddressDelivery && customer?.neighborhood ? [`🏘️ Urbanización / colonia / barrio / sector: ${customer.neighborhood}`] : []),
+    ...(isAddressDelivery && customer?.neighborhood ? [`🏘️ Urbanización / sector / colonia / barrio: ${customer.neighborhood}`] : []),
     ...(isAddressDelivery && customer?.deliveryBranchName ? [`🏪 Atiende: Sucursal ${customer.deliveryBranchName}`] : []),
     ...(isAddressDelivery && customer?.reference ? [`📝 Referencia cliente: ${customer.reference}`] : []),
   ];
@@ -2559,7 +2559,7 @@ async function handleMessage(t, slug, sessionId, rawInput, runtime = {}) {
     ];
     reply.options = [
       { label: '✅ Sí, usar este domicilio', value: 'returning_address_yes' },
-      { label: '✏️ No, capturar nueva', value: 'returning_address_no' },
+      { label: '✏️ Capturar nueva dirección de entrega', value: 'returning_address_no' },
       { label: '🏪 Usar para recoger en sucursal', value: 'returning_address_pickup' },
     ];
     return finish();
@@ -2610,7 +2610,7 @@ async function handleMessage(t, slug, sessionId, rawInput, runtime = {}) {
         reply.messages = ['En este momento solo está activa la entrega a domicilio. ¿Deseas usar la dirección guardada?'];
         reply.options = [
           { label: '✅ Sí, usar este domicilio', value: 'returning_address_yes' },
-          { label: '✏️ No, capturar nueva', value: 'returning_address_no' },
+          { label: '✏️ Capturar nueva dirección de entrega', value: 'returning_address_no' },
         ];
         return finish();
       }
@@ -2659,7 +2659,7 @@ async function handleMessage(t, slug, sessionId, rawInput, runtime = {}) {
     reply.messages = ['Confírmame si usarás la misma dirección del último pedido:'];
     reply.options = [
       { label: '✅ Sí, usar este domicilio', value: 'returning_address_yes' },
-      { label: '✏️ No, capturar nueva', value: 'returning_address_no' },
+      { label: '✏️ Capturar nueva dirección de entrega', value: 'returning_address_no' },
       { label: '🏪 Usar para recoger en sucursal', value: 'returning_address_pickup' },
     ];
     return finish();
@@ -2976,7 +2976,7 @@ async function handleMessage(t, slug, sessionId, rawInput, runtime = {}) {
     }
     state.customer.address = input.slice(0, 200);
     state.step = 'ask_neighborhood';
-    reply.messages = ['¿En qué urbanización, colonia, barrio o sector está el domicilio?'];
+    reply.messages = ['¿En qué urbanización, sector, colonia o barrio está el domicilio?'];
     return finish();
   }
 
@@ -2988,14 +2988,14 @@ async function handleMessage(t, slug, sessionId, rawInput, runtime = {}) {
     }
     state.customer.address = address.slice(0, 200);
     state.step = 'ask_neighborhood';
-    reply.messages = ['¿En qué urbanización, colonia, barrio o sector está el domicilio?'];
+    reply.messages = ['¿En qué urbanización, sector, colonia o barrio está el domicilio?'];
     return finish();
   }
 
   if (state.step === 'ask_neighborhood') {
     const neighborhood = String(input || '').trim();
     if (neighborhood.length < 2) {
-      reply.messages = ['Escribe la urbanización, colonia, barrio o sector para identificar correctamente el domicilio.'];
+      reply.messages = ['Escribe la urbanización, sector, colonia o barrio para identificar correctamente el domicilio.'];
       return finish();
     }
     state.customer.neighborhood = neighborhood.slice(0, 160);

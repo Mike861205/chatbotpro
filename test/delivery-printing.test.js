@@ -20,15 +20,17 @@ test('persiste por separado domicilio, colonia y referencia de entrega', () => {
   }
 });
 
-test('el chatbot solicita la colonia antes de completar un domicilio', () => {
+test('el chatbot solicita urbanización, sector, colonia o barrio antes de completar un domicilio', () => {
   assert.match(chatbot, /state\.step = 'ask_neighborhood'/);
   assert.match(chatbot, /if \(state\.step === 'ask_neighborhood'\)/);
-  assert.match(chatbot, /urbanización, colonia, barrio o sector/i);
+  assert.match(chatbot, /urbanización, sector, colonia o barrio/i);
 });
 
 test('el asistente usa el vocabulario solicitado para notas y domicilio', () => {
   assert.match(chatbot, /Ej\. salsa de soya, salsa agridulce\.\.\./);
   assert.match(chatbot, /Sí, usar este domicilio/);
+  assert.match(chatbot, /Capturar nueva dirección de entrega/);
+  assert.doesNotMatch(chatbot, /No, capturar nueva/);
   assert.match(chatbot, /Incluye calle\/edificio/);
   assert.doesNotMatch(chatbot, /hamburguesa sin cebolla/i);
   assert.doesNotMatch(chatbot, /usar esta dirección/i);

@@ -16,6 +16,9 @@ test('la landing ofrece un botón flotante que abre el asistente de prueba en pr
   assert.match(landing, /chatbotPreviewUrl[\s\S]*openOrderDemo/);
   assert.match(styles, /\.order-demo-fab[\s\S]*\.order-demo-bg[\s\S]*\.order-demo-shell/);
   assert.match(styles, /\.signup-promo-try[\s\S]*\.signup-promo-try-icon/);
+  assert.match(styles, /animation: signupPromoTryGlow[\s\S]*signupPromoTryGradient/);
+  assert.match(styles, /@keyframes signupPromoTryShine/);
+  assert.match(styles, /@media \(prefers-reduced-motion: reduce\)/);
 });
 
 test('la vista de prueba conserva el flujo del chat y muestra el registro al finalizar', () => {
