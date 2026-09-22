@@ -169,6 +169,43 @@ async function initMaster(options = {}) {
       created_by TEXT DEFAULT '',
       paid_at TIMESTAMPTZ DEFAULT now()
     );
+    CREATE TABLE IF NOT EXISTS tenant_operation_resets (
+      id BIGSERIAL PRIMARY KEY,
+      tenant_id INTEGER NOT NULL,
+      tenant_slug TEXT NOT NULL,
+      business_name TEXT NOT NULL,
+      scope TEXT NOT NULL DEFAULT 'sales_purchases_inventory',
+      summary_json TEXT NOT NULL DEFAULT '{}',
+      created_by TEXT NOT NULL DEFAULT '',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS idx_tenant_operation_resets_tenant
+      ON tenant_operation_resets(tenant_id, created_at DESC);
+    CREATE TABLE IF NOT EXISTS storage_cleanup_jobs (
+      id BIGSERIAL PRIMARY KEY,
+      subject_type TEXT NOT NULL,
+      tenant_id INTEGER,
+      tenant_slug TEXT NOT NULL DEFAULT '',
+      business_name TEXT NOT NULL DEFAULT '',
+      action TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'preparing',
+      file_count INTEGER NOT NULL DEFAULT 0,
+      total_bytes BIGINT NOT NULL DEFAULT 0,
+      orphan_file_count INTEGER NOT NULL DEFAULT 0,
+      orphan_bytes BIGINT NOT NULL DEFAULT 0,
+      manifest_json TEXT NOT NULL DEFAULT '{}',
+      quarantine_key TEXT NOT NULL DEFAULT '',
+      created_by TEXT NOT NULL DEFAULT '',
+      error TEXT NOT NULL DEFAULT '',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      quarantined_at TIMESTAMPTZ,
+      purge_after TIMESTAMPTZ,
+      purged_at TIMESTAMPTZ
+    );
+    CREATE INDEX IF NOT EXISTS idx_storage_cleanup_jobs_status
+      ON storage_cleanup_jobs(status, purge_after, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_storage_cleanup_jobs_tenant
+      ON storage_cleanup_jobs(tenant_id, created_at DESC);
     CREATE TABLE IF NOT EXISTS resellers (
       id SERIAL PRIMARY KEY,
       slug TEXT UNIQUE NOT NULL,

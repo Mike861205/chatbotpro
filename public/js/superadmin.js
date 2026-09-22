@@ -19,6 +19,11 @@ let SA_STAMP_TENANT_ID = null;
 let SA_STAMP_DATA = null;
 let SA_DEPLOY_POLL_TIMER = null;
 let SA_DELETE_TARGET = null;
+let SA_OPERATION_RESET = null;
+let SA_STORAGE_REPORT = null;
+let SA_STORAGE_ACTION = null;
+let SA_STORAGE_LOADING = false;
+let SA_ACTIVE_VIEW = 'tenants';
 let SA_TENANT_SORT = { key: 'created_at', dir: 'desc' };
 let SA_TENANT_PAGE = 1;
 let SA_TENANT_PER_PAGE = 20;
@@ -495,7 +500,8 @@ function renderTenantTable() {
             <i class="ph-bold ${(t.account_status === 'active' && t.billing_status !== 'suspended') ? 'ph-pause-circle' : 'ph-play-circle'}"></i>
             ${(t.account_status === 'active' && t.billing_status !== 'suspended') ? 'Suspender' : 'Activar'}
           </button>
-          <button type="button" class="btn btn-danger" data-sa-delete-tenant="${t.id}"><i class="ph-bold ph-trash"></i> Eliminar</button>
+          <button type="button" class="btn btn-sa-operation-reset" data-sa-operation-reset="${t.id}"><i class="ph-bold ph-arrow-counter-clockwise"></i> Reiniciar ventas</button>
+          <button type="button" class="btn btn-storage-review" data-sa-storage-prospect="${t.id}"><i class="ph-bold ph-hard-drives"></i> Revisar archivos</button>
         </div>
       </td>
     </tr>`;
@@ -519,11 +525,14 @@ function renderTenantTable() {
   document.querySelectorAll('#saTenantsTable [data-sa-branches]').forEach((btn) => {
     btn.addEventListener('click', () => changeBranchLimit(Number(btn.dataset.saBranches)).catch((err) => toast(err.message, true)));
   });
+  document.querySelectorAll('#saTenantsTable [data-sa-operation-reset]').forEach((btn) => {
+    btn.addEventListener('click', () => openOperationResetModal(Number(btn.dataset.saOperationReset)).catch((err) => toast(err.message, true)));
+  });
   bindModuleUsageButtons();
   bindPhoneActions();
   bindSalesSelection('tenant', filtered);
-  document.querySelectorAll('[data-sa-delete-tenant]').forEach((btn) => {
-    btn.addEventListener('click', () => openDeleteModal('tenant', Number(btn.dataset.saDeleteTenant)));
+  document.querySelectorAll('[data-sa-storage-prospect]').forEach((btn) => {
+    btn.addEventListener('click', () => openStorageAction('delete-prospect', { id: Number(btn.dataset.saStorageProspect) }).catch((error) => toast(error.message, true)));
   });
   // Sort bindings
   document.querySelectorAll('#saTenantsTable .sortable').forEach((th) => {
@@ -1102,7 +1111,8 @@ function renderClientsTable() {
           <i class="ph-bold ${(client.account_status === 'active' && client.billing_status !== 'suspended') ? 'ph-pause-circle' : 'ph-play-circle'}"></i>
           ${(client.account_status === 'active' && client.billing_status !== 'suspended') ? 'Suspender' : 'Activar'}
         </button>
-        <button type="button" class="btn btn-danger" data-sa-delete-tenant="${client.id}"><i class="ph-bold ph-trash"></i> Eliminar</button>
+        <button type="button" class="btn btn-sa-operation-reset" data-sa-operation-reset="${client.id}"><i class="ph-bold ph-arrow-counter-clockwise"></i> Reiniciar ventas</button>
+        <span class="sa-client-protected"><i class="ph-bold ph-shield-check"></i> Cliente protegido</span>
       </div></td>
     </tr>`;
   }).join('')}</tbody></table></div>`;
@@ -1115,7 +1125,7 @@ function renderClientsTable() {
   document.querySelectorAll('#saClientsTable [data-sa-branches]').forEach((button) => button.onclick = () => changeBranchLimit(Number(button.dataset.saBranches)).catch((error) => toast(error.message, true)));
   document.querySelectorAll('#saClientsTable [data-sa-stamps]').forEach((button) => button.onclick = () => manageTenantStamps(Number(button.dataset.saStamps)).catch((error) => toast(error.message, true)));
   document.querySelectorAll('#saClientsTable [data-sa-suspend]').forEach((button) => button.onclick = () => toggleTenantSuspend(Number(button.dataset.saSuspend)).catch((error) => toast(error.message, true)));
-  document.querySelectorAll('#saClientsTable [data-sa-delete-tenant]').forEach((button) => button.onclick = () => openDeleteModal('tenant', Number(button.dataset.saDeleteTenant)));
+  document.querySelectorAll('#saClientsTable [data-sa-operation-reset]').forEach((button) => button.onclick = () => openOperationResetModal(Number(button.dataset.saOperationReset)).catch((error) => toast(error.message, true)));
   bindModuleUsageButtons();
 }
 
@@ -1193,6 +1203,114 @@ function bindModuleUsageButtons() {
   });
 }
 
+function syncOperationResetConfirm() {
+  const confirmButton = $('#saOperationResetConfirm');
+  if (!confirmButton) return;
+  const phraseMatches = String($('#saOperationResetPhrase')?.value || '').trim() === String(SA_OPERATION_RESET?.confirmationPhrase || '');
+  const acknowledged = Boolean($('#saOperationResetAck')?.checked);
+  confirmButton.disabled = !SA_OPERATION_RESET?.canReset || !phraseMatches || !acknowledged || Boolean(SA_OPERATION_RESET?.processing);
+}
+
+function renderOperationResetPreview(data) {
+  const host = $('#saOperationResetPreview');
+  if (!host) return;
+  const sales = data.preview?.sales || {};
+  const purchases = data.preview?.purchases || {};
+  const inventory = data.preview?.inventory || {};
+  host.innerHTML = `
+    <div class="sa-operation-reset-grid">
+      <article><span><i class="ph-bold ph-receipt"></i> Ventas</span><b>${Number(sales.orders || 0)}</b><small>pedidos · ${Number(sales.posSessions || 0)} cortes/cajas · importe ${Number(sales.total || 0).toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</small></article>
+      <article><span><i class="ph-bold ph-shopping-cart"></i> Compras</span><b>${Number(purchases.orders || 0)}</b><small>órdenes · ${Number(purchases.items || 0)} partidas</small></article>
+      <article><span><i class="ph-bold ph-package"></i> Inventario</span><b>${Number(inventory.movements || 0)}</b><small>movimientos · ${Number(inventory.transfers || 0)} transferencias · ${Number(inventory.counts || 0)} conteos</small></article>
+    </div>
+    <div class="sa-operation-reset-detail">
+      <span>${Number(sales.tableAccounts || 0)} cuentas de mesa</span>
+      <span>${Number(sales.kdsStates || 0)} estados KDS</span>
+      <span>${Number(sales.selfServicePayments || 0)} pagos de autoservicio</span>
+      <span>${Number(inventory.branchStockRows || 0)} existencias por sucursal a poner en cero</span>
+    </div>`;
+
+  const blockersHost = $('#saOperationResetBlockers');
+  const messages = Array.isArray(data.blockerMessages) ? data.blockerMessages : [];
+  if (blockersHost) {
+    blockersHost.hidden = messages.length === 0;
+    blockersHost.innerHTML = messages.length
+      ? `<b><i class="ph-bold ph-warning-circle"></i> Reinicio bloqueado</b><ul>${messages.map((message) => `<li>${esc(message)}</li>`).join('')}</ul>`
+      : '';
+  }
+}
+
+function closeOperationResetModal() {
+  if (SA_OPERATION_RESET?.processing) return;
+  $('#saOperationResetModal')?.classList.remove('show');
+  SA_OPERATION_RESET = null;
+  if ($('#saOperationResetPhrase')) $('#saOperationResetPhrase').value = '';
+  if ($('#saOperationResetAck')) $('#saOperationResetAck').checked = false;
+}
+
+async function openOperationResetModal(tenantId) {
+  const tenant = findBusiness(tenantId);
+  if (!tenant) throw new Error('Tenant no encontrado en la lista actual');
+  SA_OPERATION_RESET = { tenantId: Number(tenantId), processing: false, canReset: false, confirmationPhrase: '' };
+  $('#saOperationResetTenant').textContent = `${tenant.business_name} · /${tenant.slug}`;
+  $('#saOperationResetExpected').textContent = 'cargando…';
+  $('#saOperationResetPhrase').value = '';
+  $('#saOperationResetAck').checked = false;
+  $('#saOperationResetPreview').innerHTML = '<div class="sa-operation-reset-loading"><i class="ph-bold ph-circle-notch"></i> Revisando información del tenant…</div>';
+  $('#saOperationResetBlockers').hidden = true;
+  $('#saOperationResetBlockers').innerHTML = '';
+  $('#saOperationResetModal')?.classList.add('show');
+  syncOperationResetConfirm();
+
+  try {
+    const data = await api(`/api/superadmin/tenants/${tenantId}/operation-reset-preview`);
+    if (Number(SA_OPERATION_RESET?.tenantId) !== Number(tenantId)) return;
+    SA_OPERATION_RESET = {
+      ...SA_OPERATION_RESET,
+      data,
+      canReset: Boolean(data.canReset),
+      confirmationPhrase: String(data.confirmationPhrase || ''),
+    };
+    $('#saOperationResetExpected').textContent = SA_OPERATION_RESET.confirmationPhrase;
+    renderOperationResetPreview(data);
+    syncOperationResetConfirm();
+  } catch (error) {
+    closeOperationResetModal();
+    throw error;
+  }
+}
+
+async function confirmOperationReset() {
+  const state = SA_OPERATION_RESET;
+  if (!state || !state.canReset || state.processing) return;
+  const confirmation = String($('#saOperationResetPhrase')?.value || '').trim();
+  if (confirmation !== state.confirmationPhrase || !$('#saOperationResetAck')?.checked) return;
+
+  state.processing = true;
+  const button = $('#saOperationResetConfirm');
+  const originalHtml = button?.innerHTML || '';
+  if (button) {
+    button.disabled = true;
+    button.innerHTML = '<i class="ph-bold ph-circle-notch spin"></i> Reiniciando…';
+  }
+  try {
+    const result = await api(`/api/superadmin/tenants/${state.tenantId}/operation-reset`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ confirmation, acknowledge: true }),
+    });
+    state.processing = false;
+    closeOperationResetModal();
+    toast(result.message || 'Ventas y operación reiniciadas correctamente');
+    await Promise.all([loadTenants(), loadClients()]);
+  } catch (error) {
+    state.processing = false;
+    if (button) button.innerHTML = originalHtml;
+    syncOperationResetConfirm();
+    throw error;
+  }
+}
+
 function closeDeleteModal() {
   $('#saDeleteModal')?.classList.remove('show');
   SA_DELETE_TARGET = null;
@@ -1216,6 +1334,9 @@ function openDeleteModal(type, id) {
 
 function openBulkDelete(subjects) {
   if (!Array.isArray(subjects) || !subjects.length) return;
+  if (subjects.some((item) => item.type === 'tenant')) {
+    return toast('Los prospectos se eliminan individualmente desde Higiene de almacenamiento para incluir sus archivos', true);
+  }
   if (!subjects.every((item) => SA_DELETABLE_STAGES.has(String(item.entity.sales_stage || 'new')))) {
     return toast('Solo puedes eliminar en masa contactos marcados como No interesado o Cierre no exitoso', true);
   }
@@ -1895,8 +2016,219 @@ async function uploadSuperAdminLogo(fileParam, options = {}) {
   if (!options.suppressToast) toast('Logo de SuperAdmin actualizado');
 }
 
+function fmtBytes(value) {
+  const bytes = Math.max(0, Number(value || 0));
+  if (bytes < 1024) return `${bytes} B`;
+  const units = ['KB', 'MB', 'GB', 'TB'];
+  let amount = bytes;
+  let unit = -1;
+  do { amount /= 1024; unit += 1; } while (amount >= 1024 && unit < units.length - 1);
+  return `${amount >= 10 ? amount.toFixed(1) : amount.toFixed(2)} ${units[unit]}`;
+}
+
+function storageStatusLabel(status) {
+  const labels = {
+    preparing: 'Preparando', database_deleting: 'Eliminando datos', database_deleted: 'Datos eliminados',
+    quarantined: 'En cuarentena', completed_no_files: 'Completado sin archivos', cleanup_pending: 'Limpieza pendiente', purged: 'Purgado',
+  };
+  return labels[status] || status || 'Desconocido';
+}
+
+function renderStorageSummary() {
+  const summary = SA_STORAGE_REPORT?.summary || {};
+  const target = $('#saStorageSummary');
+  if (!target) return;
+  const cards = [
+    ['ph-shield-check', 'Clientes protegidos', Number(summary.protectedClients || 0), 'green'],
+    ['ph-users-three', 'Prospectos revisables', Number(summary.prospects || 0), 'cyan'],
+    ['ph-warning-circle', 'Revisión recomendada', Number(summary.recommendedProspects || 0), 'amber'],
+    ['ph-folder-dashed', 'Carpetas huérfanas', Number(summary.orphanScopes || 0), 'violet'],
+    ['ph-trash', 'Espacio recuperable', fmtBytes(summary.recoverableBytes), 'red'],
+  ];
+  target.innerHTML = cards.map(([icon, label, value, tone]) => `<article class="tone-${tone}"><i class="ph-bold ${icon}"></i><span>${label}</span><strong>${value}</strong></article>`).join('');
+}
+
+function filteredStorageProspects() {
+  const query = String($('#saStorageSearch')?.value || '').trim().toLowerCase();
+  const rows = Array.isArray(SA_STORAGE_REPORT?.prospects) ? SA_STORAGE_REPORT.prospects : [];
+  return query ? rows.filter((item) => `${item.businessName} ${item.slug}`.toLowerCase().includes(query)) : rows;
+}
+
+function renderStorageProspects() {
+  const target = $('#saStorageProspects');
+  if (!target) return;
+  const rows = filteredStorageProspects();
+  if (!SA_STORAGE_REPORT) {
+    target.innerHTML = '<div class="sa-storage-loading"><i class="ph-bold ph-circle-notch spin"></i> Ejecuta el análisis para comenzar.</div>';
+    return;
+  }
+  if (!rows.length) {
+    target.innerHTML = '<div class="empty"><i class="ph-bold ph-check-circle"></i><b>Sin prospectos en esta vista</b><p>No hay cuentas candidatas con este filtro.</p></div>';
+    return;
+  }
+  target.innerHTML = `<div class="table-wrap"><table class="sa-storage-table"><thead><tr><th>Prospecto</th><th>Actividad</th><th>Almacenamiento</th><th>Huérfanos</th><th>Evaluación</th><th>Acciones</th></tr></thead><tbody>${rows.map((item) => {
+    const storage = item.storage;
+    const status = item.scanComplete ? (item.recommended ? '<span class="tag warn">Revisar</span>' : '<span class="tag ok">Manual</span>') : '<span class="tag danger">Bloqueado</span>';
+    const actions = item.scanComplete
+      ? `<button class="btn btn-ghost" type="button" data-storage-clean="${item.id}" ${Number(storage?.orphanFiles || 0) ? '' : 'disabled'}><i class="ph-bold ph-broom"></i> Limpiar huérfanos</button><button class="btn btn-danger" type="button" data-storage-delete="${item.id}"><i class="ph-bold ph-trash"></i> Eliminar prospecto</button>`
+      : '<span class="sa-storage-blocked"><i class="ph-bold ph-lock"></i> Revisión incompleta</span>';
+    return `<tr><td><b>${esc(item.businessName)}</b><div class="meta">/${esc(item.slug)} · #${item.id}</div></td><td>${fmtDateTime(item.lastActivityAt)}<div class="meta">${item.inactiveDays === null ? 'Sin actividad registrada' : `${item.inactiveDays} días desde actividad`}</div></td><td>${storage ? `<b>${fmtBytes(storage.bytes)}</b><div class="meta">${storage.files} archivo(s) · ${storage.referencedFiles} vigente(s)</div>` : '<span class="meta">No disponible</span>'}</td><td>${storage ? `<b>${storage.orphanFiles}</b><div class="meta">${fmtBytes(storage.orphanBytes)} recuperables</div>${storage.recentUnreferencedFiles ? `<div class="meta">${storage.recentUnreferencedFiles} reciente(s), protegidos 24 h</div>` : ''}` : '—'}</td><td>${status}<div class="meta">${esc(item.scanError || item.reason)}</div></td><td><div class="sa-storage-actions">${actions}</div></td></tr>`;
+  }).join('')}</tbody></table></div>`;
+  document.querySelectorAll('[data-storage-delete]').forEach((button) => button.onclick = () => openStorageAction('delete-prospect', { id: Number(button.dataset.storageDelete) }).catch((error) => toast(error.message, true)));
+  document.querySelectorAll('[data-storage-clean]').forEach((button) => button.onclick = () => openStorageAction('clean-files', { id: Number(button.dataset.storageClean) }).catch((error) => toast(error.message, true)));
+}
+
+function renderStorageOrphans() {
+  const target = $('#saStorageOrphans');
+  if (!target) return;
+  const rows = Array.isArray(SA_STORAGE_REPORT?.orphanScopes) ? SA_STORAGE_REPORT.orphanScopes : [];
+  if (!rows.length) {
+    target.innerHTML = '<div class="sa-storage-empty"><i class="ph-bold ph-check-circle"></i><span>No se detectaron carpetas de tenants eliminados.</span></div>';
+    return;
+  }
+  target.innerHTML = `<div class="sa-storage-list">${rows.map((item) => `<article><div><b><i class="ph-bold ph-folder"></i> /${esc(item.scope)}</b><span>${item.files} archivo(s) · ${fmtBytes(item.bytes)}</span>${item.scanError ? `<small>${esc(item.scanError)}</small>` : ''}</div><button type="button" class="btn btn-danger" data-storage-orphan="${esc(item.scope)}" ${item.scanComplete ? '' : 'disabled'}><i class="ph-bold ph-archive"></i> Cuarentena</button></article>`).join('')}</div>`;
+  document.querySelectorAll('[data-storage-orphan]').forEach((button) => button.onclick = () => openStorageAction('orphan-scope', { scope: button.dataset.storageOrphan }).catch((error) => toast(error.message, true)));
+}
+
+function renderStorageJobs() {
+  const target = $('#saStorageJobs');
+  if (!target) return;
+  const jobs = Array.isArray(SA_STORAGE_REPORT?.jobs) ? SA_STORAGE_REPORT.jobs : [];
+  if (!jobs.length) {
+    target.innerHTML = '<div class="sa-storage-empty"><i class="ph-bold ph-clock"></i><span>Todavía no hay operaciones de limpieza.</span></div>';
+    return;
+  }
+  target.innerHTML = `<div class="sa-storage-jobs">${jobs.map((job) => {
+    const due = job.status === 'quarantined' && job.purge_after && new Date(job.purge_after).getTime() <= Date.now();
+    return `<article><div><b>#${job.id} · ${esc(job.tenant_slug || job.business_name || 'carpeta')}</b><span>${storageStatusLabel(job.status)} · ${fmtBytes(job.total_bytes)}</span><small>${fmtDateTime(job.created_at)}${job.purge_after && job.status === 'quarantined' ? ` · purga desde ${fmtDateTime(job.purge_after)}` : ''}</small>${job.error ? `<small class="error">${esc(job.error)}</small>` : ''}</div>${due ? `<button class="btn btn-danger" type="button" data-storage-purge="${job.id}"><i class="ph-bold ph-trash"></i> Purgar</button>` : ''}</article>`;
+  }).join('')}</div>`;
+  document.querySelectorAll('[data-storage-purge]').forEach((button) => button.onclick = () => openStorageAction('purge', { id: Number(button.dataset.storagePurge) }).catch((error) => toast(error.message, true)));
+}
+
+function renderStorageHygiene() {
+  renderStorageSummary();
+  renderStorageProspects();
+  renderStorageOrphans();
+  renderStorageJobs();
+  const warnings = [...(SA_STORAGE_REPORT?.warnings || [])];
+  if (Number(SA_STORAGE_REPORT?.summary?.incompleteScans || 0)) warnings.push(`${SA_STORAGE_REPORT.summary.incompleteScans} revisión(es) quedaron bloqueadas por seguridad.`);
+  const box = $('#saStorageWarnings');
+  if (box) {
+    box.hidden = warnings.length === 0;
+    box.innerHTML = warnings.length ? `<i class="ph-bold ph-warning"></i><div><b>Atención</b>${warnings.map((warning) => `<span>${esc(warning)}</span>`).join('')}</div>` : '';
+  }
+}
+
+async function loadStorageHygiene() {
+  if (SA_STORAGE_LOADING) return;
+  SA_STORAGE_LOADING = true;
+  const button = $('#saStorageAnalyze');
+  const original = button?.innerHTML || '';
+  if (button) { button.disabled = true; button.innerHTML = '<i class="ph-bold ph-circle-notch spin"></i> Analizando…'; }
+  if ($('#saStorageProspects') && !SA_STORAGE_REPORT) $('#saStorageProspects').innerHTML = '<div class="sa-storage-loading"><i class="ph-bold ph-circle-notch spin"></i> Revisando bases privadas e imágenes…</div>';
+  try {
+    SA_STORAGE_REPORT = await api('/api/superadmin/storage-hygiene');
+    renderStorageHygiene();
+  } finally {
+    SA_STORAGE_LOADING = false;
+    if (button) { button.disabled = false; button.innerHTML = original || '<i class="ph-bold ph-magnifying-glass"></i> Analizar almacenamiento'; }
+  }
+}
+
+function closeStorageAction() {
+  $('#saStorageActionModal')?.classList.remove('show');
+  SA_STORAGE_ACTION = null;
+  if ($('#saStorageActionPhrase')) $('#saStorageActionPhrase').value = '';
+  if ($('#saStorageActionAck')) $('#saStorageActionAck').checked = false;
+}
+
+function syncStorageActionConfirm() {
+  const button = $('#saStorageActionConfirm');
+  if (!button) return;
+  button.disabled = !SA_STORAGE_ACTION || SA_STORAGE_ACTION.processing || String($('#saStorageActionPhrase')?.value || '').trim() !== SA_STORAGE_ACTION.phrase || !$('#saStorageActionAck')?.checked;
+}
+
+async function openStorageAction(kind, subject) {
+  let action;
+  if (kind === 'delete-prospect' || kind === 'clean-files') {
+    const payload = await api(`/api/superadmin/storage-hygiene/prospects/${Number(subject.id)}`);
+    const preview = payload.preview;
+    if (!preview.scanComplete) throw new Error(preview.scanError || 'La revisión del prospecto está incompleta');
+    const deleting = kind === 'delete-prospect';
+    action = {
+      kind, endpoint: `/api/superadmin/storage-hygiene/prospects/${preview.id}/${deleting ? 'delete' : 'orphan-files'}`,
+      phrase: deleting ? payload.confirmationPhrases.delete : payload.confirmationPhrases.orphanFiles,
+      title: deleting ? 'Eliminar prospecto y sus archivos' : 'Limpiar archivos huérfanos',
+      subject: `${preview.businessName} · /${preview.slug}`,
+      summary: deleting
+        ? `<article><span>Archivos</span><b>${preview.storage?.files || 0}</b></article><article><span>Espacio</span><b>${fmtBytes(preview.storage?.bytes)}</b></article><article><span>Destino</span><b>Cuarentena 7 días</b></article>`
+        : `<article><span>Huérfanos</span><b>${preview.storage?.orphanFiles || 0}</b></article><article><span>Espacio</span><b>${fmtBytes(preview.storage?.orphanBytes)}</b></article><article><span>Vigentes protegidos</span><b>${preview.storage?.referencedFiles || 0}</b></article>`,
+      safety: deleting ? 'Se eliminarán su base privada, usuarios y carpeta. Si registra un pago antes de confirmar, el servidor cancelará la operación.' : 'Solo se moverán archivos sin referencia y con más de 24 horas. El prospecto y sus imágenes vigentes permanecen intactos.',
+      ack: deleting ? 'Entiendo que este prospecto nunca fue cliente y que se eliminarán definitivamente su cuenta y base privada.' : 'Entiendo que los archivos señalados saldrán del acceso público y permanecerán 7 días en cuarentena.',
+      button: deleting ? '<i class="ph-bold ph-trash"></i> Eliminar prospecto' : '<i class="ph-bold ph-broom"></i> Limpiar huérfanos',
+    };
+  } else if (kind === 'orphan-scope') {
+    const item = (SA_STORAGE_REPORT?.orphanScopes || []).find((row) => row.scope === subject.scope);
+    if (!item || !item.scanComplete) throw new Error('La carpeta huérfana necesita un nuevo análisis');
+    action = {
+      kind, endpoint: `/api/superadmin/storage-hygiene/orphan-scopes/${encodeURIComponent(item.scope)}/quarantine`, phrase: `CUARENTENA ${item.scope}`,
+      title: 'Poner carpeta huérfana en cuarentena', subject: `/${item.scope}`,
+      summary: `<article><span>Archivos</span><b>${item.files}</b></article><article><span>Espacio</span><b>${fmtBytes(item.bytes)}</b></article><article><span>Tenant actual</span><b>No existe</b></article>`,
+      safety: 'El servidor volverá a comprobar que ningún tenant utiliza este slug antes de mover la carpeta.',
+      ack: 'Entiendo que la carpeta dejará de ser pública y se podrá purgar después de 7 días.', button: '<i class="ph-bold ph-archive"></i> Enviar a cuarentena',
+    };
+  } else if (kind === 'purge') {
+    const job = (SA_STORAGE_REPORT?.jobs || []).find((row) => Number(row.id) === Number(subject.id));
+    if (!job) throw new Error('Operación de cuarentena no encontrada');
+    action = {
+      kind, endpoint: `/api/superadmin/storage-hygiene/jobs/${job.id}/purge`, phrase: `PURGAR ${job.id}`,
+      title: 'Liberar espacio definitivamente', subject: `Operación #${job.id} · /${job.tenant_slug}`,
+      summary: `<article><span>Archivos</span><b>${job.file_count}</b></article><article><span>Espacio</span><b>${fmtBytes(job.total_bytes)}</b></article><article><span>Cuarentena</span><b>Finalizada</b></article>`,
+      safety: 'Esta es la única etapa irreversible sobre archivos. No afecta ninguna base de datos activa.',
+      ack: 'Entiendo que los archivos en cuarentena se eliminarán definitivamente y ya no podrán recuperarse.', button: '<i class="ph-bold ph-trash"></i> Purgar definitivamente',
+    };
+  }
+  if (!action) return;
+  SA_STORAGE_ACTION = action;
+  $('#saStorageActionTitle').textContent = action.title;
+  $('#saStorageActionSubject').textContent = action.subject;
+  $('#saStorageActionSummary').innerHTML = action.summary;
+  $('#saStorageActionSafety').textContent = action.safety;
+  $('#saStorageActionExpected').textContent = action.phrase;
+  $('#saStorageActionAckText').textContent = action.ack;
+  $('#saStorageActionPhrase').value = '';
+  $('#saStorageActionAck').checked = false;
+  $('#saStorageActionConfirm').innerHTML = action.button;
+  syncStorageActionConfirm();
+  $('#saStorageActionModal')?.classList.add('show');
+}
+
+async function confirmStorageAction() {
+  const action = SA_STORAGE_ACTION;
+  if (!action || action.processing) return;
+  if (String($('#saStorageActionPhrase')?.value || '').trim() !== action.phrase || !$('#saStorageActionAck')?.checked) return;
+  action.processing = true;
+  const button = $('#saStorageActionConfirm');
+  const original = button.innerHTML;
+  button.disabled = true;
+  button.innerHTML = '<i class="ph-bold ph-circle-notch spin"></i> Procesando…';
+  try {
+    const result = await api(action.endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ confirmation: action.phrase, acknowledge: true }) });
+    closeStorageAction();
+    toast(result.message || 'Operación completada');
+    await loadStorageHygiene();
+    if (action.kind === 'delete-prospect') await Promise.all([loadTenants(), loadFollowUp()]);
+  } catch (error) {
+    action.processing = false;
+    button.innerHTML = original;
+    syncStorageActionConfirm();
+    throw error;
+  }
+}
+
 function setView(view) {
   const isTenants = view === 'tenants';
+  const isStorageHygiene = view === 'storage-hygiene';
   const isClients = view === 'clients';
   const isInvoicing = view === 'invoicing';
   const isDemoLeads = view === 'demo-leads';
@@ -1922,7 +2254,11 @@ function setView(view) {
   } else if (isResellers) {
     title = '<i class="ph-bold ph-users-four"></i> Resellers';
     subtitle = 'Accesos, enlaces de captación y resultados por revendedor.';
+  } else if (isStorageHygiene) {
+    title = '<i class="ph-bold ph-hard-drives"></i> Higiene de almacenamiento';
+    subtitle = 'Revisión manual de prospectos, archivos huérfanos y cuarentena.';
   }
+  SA_ACTIVE_VIEW = view;
   $('#saViewTenants').hidden = !isTenants;
   $('#saViewTenants').classList.toggle('active', isTenants);
   $('#saViewClients').hidden = !isClients;
@@ -1935,8 +2271,10 @@ function setView(view) {
   $('#saViewFollowUp').classList.toggle('active', isFollowUp);
   $('#saViewResellers').hidden = !isResellers;
   $('#saViewResellers').classList.toggle('active', isResellers);
-  $('#saViewIntegrations').hidden = isTenants || isClients || isInvoicing || isDemoLeads || isFollowUp || isResellers;
-  $('#saViewIntegrations').classList.toggle('active', !isTenants && !isClients && !isInvoicing && !isDemoLeads && !isFollowUp && !isResellers);
+  $('#saViewStorageHygiene').hidden = !isStorageHygiene;
+  $('#saViewStorageHygiene').classList.toggle('active', isStorageHygiene);
+  $('#saViewIntegrations').hidden = isTenants || isStorageHygiene || isClients || isInvoicing || isDemoLeads || isFollowUp || isResellers;
+  $('#saViewIntegrations').classList.toggle('active', !isTenants && !isStorageHygiene && !isClients && !isInvoicing && !isDemoLeads && !isFollowUp && !isResellers);
   $('#saTitle').innerHTML = title;
   $('#saSub').textContent = subtitle;
   document.querySelectorAll('[data-sa-view]').forEach((a) => a.classList.toggle('active', a.dataset.saView === view));
@@ -1949,6 +2287,7 @@ async function boot() {
     startSuperAdminClock();
     initSalesStageControls();
     await Promise.all([loadTenants(), loadClients(), loadInvoicingBusinesses(), loadDemoLeads(), loadFollowUp(), loadResellers(), loadIntegrations(), loadDeployStatus(), loadGitDeployStatus()]);
+    if (SA_ACTIVE_VIEW === 'storage-hygiene') await loadStorageHygiene();
   } catch (err) {
     toast(err.message, true);
   }
@@ -1967,6 +2306,8 @@ $('#saTenantStageFilter')?.addEventListener('change', () => { SA_TENANT_PAGE = 1
 $('#saTenantCountryFilter')?.addEventListener('change', () => { SA_TENANT_PAGE = 1; renderTenantTable(); });
 $('#saTenantResellerFilter')?.addEventListener('change', () => { SA_TENANT_PAGE = 1; renderTenantTable(); });
 $('#saReloadTenants')?.addEventListener('click', () => { SA_TENANT_PAGE = 1; loadTenants().catch((e) => toast(e.message, true)); });
+$('#saStorageAnalyze')?.addEventListener('click', () => loadStorageHygiene().catch((e) => toast(e.message, true)));
+$('#saStorageSearch')?.addEventListener('input', renderStorageProspects);
 $('#saClientSearch')?.addEventListener('input', renderClientsTable);
 $('#saReloadClients')?.addEventListener('click', () => loadClients().catch((e) => toast(e.message, true)));
 $('#saReloadInvoicing')?.addEventListener('click', () => loadInvoicingBusinesses().catch((e) => toast(e.message, true)));
@@ -2000,6 +2341,7 @@ document.querySelectorAll('[data-sa-view]').forEach((a) => {
     e.preventDefault();
     setView(a.dataset.saView);
     history.replaceState(null, '', `#${a.dataset.saView}`);
+    if (a.dataset.saView === 'storage-hygiene' && !SA_STORAGE_REPORT) loadStorageHygiene().catch((error) => toast(error.message, true));
   });
 });
 
@@ -2050,6 +2392,18 @@ $('#saPaymentsClose')?.addEventListener('click', closePaymentsModal);
 $('#saPaymentsModal')?.addEventListener('click', (e) => {
   if (e.target?.id === 'saPaymentsModal') closePaymentsModal();
 });
+$('#saOperationResetPhrase')?.addEventListener('input', syncOperationResetConfirm);
+$('#saOperationResetAck')?.addEventListener('change', syncOperationResetConfirm);
+$('#saOperationResetCancel')?.addEventListener('click', closeOperationResetModal);
+$('#saOperationResetConfirm')?.addEventListener('click', () => confirmOperationReset().catch((err) => toast(err.message, true)));
+$('#saOperationResetModal')?.addEventListener('click', (e) => {
+  if (e.target?.id === 'saOperationResetModal') closeOperationResetModal();
+});
+$('#saStorageActionPhrase')?.addEventListener('input', syncStorageActionConfirm);
+$('#saStorageActionAck')?.addEventListener('change', syncStorageActionConfirm);
+$('#saStorageActionCancel')?.addEventListener('click', closeStorageAction);
+$('#saStorageActionConfirm')?.addEventListener('click', () => confirmStorageAction().catch((error) => toast(error.message, true)));
+$('#saStorageActionModal')?.addEventListener('click', (event) => { if (event.target?.id === 'saStorageActionModal') closeStorageAction(); });
 $('#saDeleteCancel')?.addEventListener('click', closeDeleteModal);
 $('#saDeleteConfirm')?.addEventListener('click', () => confirmDelete().catch((err) => toast(err.message, true)));
 $('#saDeleteModal')?.addEventListener('click', (e) => {
@@ -2075,7 +2429,7 @@ $('#saResellerCancel')?.addEventListener('click', closeResellerModal);
 $('#saResellerModal')?.addEventListener('click', (event) => { if (event.target?.id === 'saResellerModal') closeResellerModal(); });
 $('#saResellerForm')?.addEventListener('submit', (event) => saveReseller(event).catch((error) => toast(error.message, true)));
 
-const SA_INITIAL_VIEW = ['tenants', 'clients', 'invoicing', 'demo-leads', 'follow-up', 'resellers', 'integrations'].includes((location.hash || '#tenants').slice(1))
+const SA_INITIAL_VIEW = ['tenants', 'storage-hygiene', 'clients', 'invoicing', 'demo-leads', 'follow-up', 'resellers', 'integrations'].includes((location.hash || '#tenants').slice(1))
   ? (location.hash || '#tenants').slice(1)
   : 'tenants';
 setView(SA_INITIAL_VIEW);

@@ -290,19 +290,16 @@ async function resolveDeliveryFee(geo, address, rules, zones = []) {
   // Si hay zonas dibujadas, la resolución es 100% por polígono para evitar latencia innecesaria.
   if (activeZones.length) {
     const zoneMatch = activeZones.find((zone) => pointInPolygon([geo.lat, geo.lng], zone.points));
-    const reverseGeo = await reverseGeocodeLocation(geo.lat, geo.lng);
-    const colony = extractColonyLabel(reverseGeo);
-    const resolvedLabel = colony || reverseGeo?.display_name || (zoneMatch ? zoneMatch.name : '');
     if (zoneMatch) {
       return {
         fee: zoneMatch.fee,
         zoneName: zoneMatch.name,
         branchId: zoneMatch.branchId != null && zoneMatch.branchId !== '' ? Number(zoneMatch.branchId) : null,
         branchName: zoneMatch.branchName || '',
-        resolvedLabel,
+        resolvedLabel: zoneMatch.name,
       };
     }
-    return { fee: 0, zoneName: '', branchId: null, branchName: '', resolvedLabel };
+    return { fee: 0, zoneName: '', branchId: null, branchName: '', resolvedLabel: '' };
   }
 
   if (!rules.length) {
@@ -561,7 +558,8 @@ async function saveState(t, sessionId, state) {
 async function activeProducts(t, promotions = null, availabilityDate = new Date()) {
   const taxConfig = await loadProductTaxConfig(t);
   const rows = await t.all(
-    `SELECT p.id, p.category_id, p.name, p.description, p.price::float AS price, p.image, p.sale_days, c.name AS category
+    `SELECT p.id, p.category_id, p.name, p.description, p.price::float AS price, p.image, p.sale_days,
+            c.name AS category, c.sort AS category_sort
      FROM {s}.products p LEFT JOIN {s}.categories c ON c.id = p.category_id
      WHERE p.active = 1 ORDER BY c.sort, c.name, p.name`
   );
@@ -576,6 +574,68 @@ async function activeProducts(t, promotions = null, availabilityDate = new Date(
   }, taxConfig));
   const applicablePromotions = Array.isArray(promotions) ? promotions : await getActivePromotions(t, 'chatbot');
   return decorateCatalogProducts(catalog, applicablePromotions);
+}
+
+function normalizeCatalogSortMode(mode) {
+  const value = String(mode || '').trim();
+  return ['top_sold', 'alphabetical', 'category'].includes(value) ? value : 'top_sold';
+}
+
+function sortCatalogProducts(products, mode, soldQtyByProduct = new Map()) {
+  const sorted = [...(products || [])];
+  const normalizedMode = normalizeCatalogSortMode(mode);
+  const byName = (a, b) => String(a?.name || '').localeCompare(String(b?.name || ''), 'es', { sensitivity: 'base' });
+
+  if (normalizedMode === 'alphabetical') return sorted.sort(byName);
+
+  if (normalizedMode === 'category') {
+    return sorted.sort((a, b) => {
+      const sortA = a?.category_sort !== null && a?.category_sort !== undefined && Number.isFinite(Number(a.category_sort))
+        ? Number(a.category_sort)
+        : Number.MAX_SAFE_INTEGER;
+      const sortB = b?.category_sort !== null && b?.category_sort !== undefined && Number.isFinite(Number(b.category_sort))
+        ? Number(b.category_sort)
+        : Number.MAX_SAFE_INTEGER;
+      const categoryDiff = sortA - sortB;
+      if (categoryDiff !== 0) return categoryDiff;
+      const categoryNameDiff = String(a?.category || '').localeCompare(String(b?.category || ''), 'es', { sensitivity: 'base' });
+      return categoryNameDiff || byName(a, b);
+    });
+  }
+
+  return sorted.sort((a, b) => {
+    const soldDiff = Number(soldQtyByProduct.get(Number(b?.id)) || 0) - Number(soldQtyByProduct.get(Number(a?.id)) || 0);
+    return soldDiff || byName(a, b);
+  });
+}
+
+async function orderFullMenuCatalog(t, products, mode) {
+  const normalizedMode = normalizeCatalogSortMode(mode);
+  let soldQtyByProduct = new Map();
+  if (normalizedMode === 'top_sold') {
+    const rows = await t.all(
+      `SELECT product_id, SUM(qty)::int AS sold_qty
+       FROM (
+         SELECT
+           CASE
+             WHEN (it.item->>'productId') ~ '^[0-9]+$' THEN (it.item->>'productId')::int
+             WHEN (it.item->>'id') ~ '^[0-9]+$' THEN (it.item->>'id')::int
+             ELSE NULL
+           END AS product_id,
+           CASE
+             WHEN (it.item->>'qty') ~ '^[0-9]+$' THEN GREATEST((it.item->>'qty')::int, 1)
+             ELSE 1
+           END AS qty
+         FROM {s}.orders o
+         CROSS JOIN LATERAL jsonb_array_elements(COALESCE(o.items::jsonb, '[]'::jsonb)) AS it(item)
+         WHERE o.status <> 'cancelado' AND o.channel IN ('pos', 'chatbot')
+       ) sold
+       WHERE product_id IS NOT NULL
+       GROUP BY product_id`
+    );
+    soldQtyByProduct = new Map(rows.map((row) => [Number(row.product_id), Number(row.sold_qty || 0)]));
+  }
+  return sortCatalogProducts(products, normalizedMode, soldQtyByProduct);
 }
 
 function cartTotal(cart) {
@@ -881,14 +941,16 @@ async function findReturningCustomerByPhone(t, phoneRaw) {
   };
 }
 
-async function showMenu(t, state, labels = RESTAURANT_LABELS, activePromotions = null, showFullMenu = false) {
+async function showMenu(t, state, labels = RESTAURANT_LABELS, activePromotions = null, showFullMenu = false, catalogSortMode = 'top_sold') {
   const cats = await t.all('SELECT * FROM {s}.categories ORDER BY sort, name');
   const products = await activeProducts(t, activePromotions);
   if (!products.length) {
     return { messages: [labels.emptyCatalog || 'Por ahora no tenemos productos en el menú. ¡Vuelve pronto! 🙏'], options: [] };
   }
   if (showFullMenu) {
-    return showProducts(t, state, null, labels, { catalogProducts: products });
+    const normalizedMode = normalizeCatalogSortMode(catalogSortMode);
+    const orderedProducts = await orderFullMenuCatalog(t, products, normalizedMode);
+    return showProducts(t, state, null, labels, { catalogProducts: orderedProducts, catalogSortMode: normalizedMode });
   }
   const catsWithProducts = cats.filter((c) => products.some((p) => p.category === c.name));
   if (catsWithProducts.length > 1) {
@@ -927,7 +989,7 @@ async function showPromotions(t, state, labels = RESTAURANT_LABELS, activePromot
   return showProducts(t, state, catsWithPromotions[0]?.id || null, labels, { promotionsOnly: true, catalogProducts: promotedProducts });
 }
 
-async function showProducts(t, state, categoryId, labels = RESTAURANT_LABELS, { promotionsOnly = false, activePromotions = null, catalogProducts = null } = {}) {
+async function showProducts(t, state, categoryId, labels = RESTAURANT_LABELS, { promotionsOnly = false, activePromotions = null, catalogProducts = null, catalogSortMode = '' } = {}) {
   let products = Array.isArray(catalogProducts) ? catalogProducts : await activeProducts(t, activePromotions);
   if (promotionsOnly) products = products.filter((product) => (product.activePromotions || []).length);
   state.currentCategoryId = Number.isFinite(Number(categoryId)) ? Number(categoryId) : null;
@@ -951,8 +1013,10 @@ async function showProducts(t, state, categoryId, labels = RESTAURANT_LABELS, { 
       originalPriceLabel: p.activePromotion && Number(p.promotionalPrice) < Number(p.originalPrice) ? money(p.originalPrice, currency) : '',
       promotion: p.activePromotion,
       image: p.image,
+      category: p.category || '',
       qty: qtyById.get(Number(p.id)) || 0,
     })),
+    catalogSortMode: catalogSortMode ? normalizeCatalogSortMode(catalogSortMode) : '',
     options: [{ label: '⬅️ Volver', value: promotionsOnly ? (state.currentCategoryId ? 'promotions' : 'start') : (state.currentCategoryId ? 'menu' : 'start') }, ...(state.cart.length ? mainOptions(state.cart, [], labels).slice(1) : [])],
   };
 }
@@ -1780,6 +1844,9 @@ async function handleMessage(t, slug, sessionId, rawInput, runtime = {}) {
   const dineInEnabled = (await getSetting(t, 'dine_in_enabled', '1')) !== '0';
   const locationEnabled = (await getSetting(t, 'location_enabled', '1')) === '1';
   const showFullMenu = (await getSetting(t, 'chatbot_full_menu_enabled', '0')) === '1';
+  const catalogSortMode = showFullMenu
+    ? normalizeCatalogSortMode(await getSetting(t, 'pos_catalog_sort_mode', 'top_sold'))
+    : 'category';
   const timeZone = await getSetting(t, 'timezone', t.timezone || 'America/Mexico_City');
   const businessHoursEnabled = (await getSetting(t, 'business_hours_enabled', '0')) === '1';
   const preordersEnabled = (await getSetting(t, 'chatbot_preorders_enabled', '0')) === '1';
@@ -1934,6 +2001,59 @@ async function handleMessage(t, slug, sessionId, rawInput, runtime = {}) {
   };
 
   const isAddressDelivery = () => state.receivingMode?.behavior === 'delivery' || state.delivery === 'domicilio';
+  const activeDeliveryZones = deliveryZones.filter((zone) => zone.active && Array.isArray(zone.points) && zone.points.length >= 3);
+  const deliveryCoordinatesRequired = activeDeliveryZones.length > 0;
+
+  const refreshDeliveryQuote = async () => {
+    if (!isAddressDelivery()) return { valid: true, changed: false, reason: '' };
+    const rawLat = state.customer?.locationLat;
+    const rawLng = state.customer?.locationLng;
+    const lat = Number(rawLat);
+    const lng = Number(rawLng);
+    const hasCoordinates = rawLat !== null && rawLat !== undefined && rawLat !== ''
+      && rawLng !== null && rawLng !== undefined && rawLng !== ''
+      && Number.isFinite(lat) && Number.isFinite(lng);
+    if (!hasCoordinates) {
+      return { valid: !deliveryCoordinatesRequired, changed: false, reason: 'missing_coordinates' };
+    }
+
+    const previous = {
+      fee: Number(state.customer.deliveryFee || 0),
+      zoneName: String(state.customer.deliveryZoneName || ''),
+      branchId: Number.isInteger(Number(state.customer.deliveryBranchId)) && Number(state.customer.deliveryBranchId) > 0
+        ? Number(state.customer.deliveryBranchId)
+        : null,
+      branchName: String(state.customer.deliveryBranchName || ''),
+    };
+    const feeInfo = await resolveDeliveryFee(
+      { lat, lng, label: state.customer.locationText || '' },
+      state.customer.address || '',
+      deliveryFeeRules,
+      deliveryZones
+    );
+    state.customer.deliveryFee = Number(feeInfo.fee || 0);
+    state.customer.deliveryZoneName = feeInfo.zoneName || '';
+    state.customer.deliveryBranchId = Number.isInteger(Number(feeInfo.branchId)) && Number(feeInfo.branchId) > 0
+      ? Number(feeInfo.branchId)
+      : null;
+    state.customer.deliveryBranchName = feeInfo.branchName || '';
+    state.customer.locationResolved = feeInfo.resolvedLabel || '';
+
+    const valid = !deliveryCoordinatesRequired || Boolean(feeInfo.zoneName);
+    const changed = previous.fee !== state.customer.deliveryFee
+      || previous.zoneName !== state.customer.deliveryZoneName
+      || previous.branchId !== state.customer.deliveryBranchId
+      || previous.branchName !== state.customer.deliveryBranchName;
+    return { valid, changed, reason: valid ? '' : 'outside_delivery_zones' };
+  };
+
+  const requestValidDeliveryLocation = (reason = 'missing_coordinates') => {
+    state.step = 'ask_location_optional';
+    reply.messages = [reason === 'outside_delivery_zones'
+      ? 'La ubicación compartida está fuera de las zonas de entrega configuradas por el negocio. Comparte una ubicación dentro de la cobertura para continuar.'
+      : 'Para calcular el servicio a domicilio, necesitamos tu ubicación exacta porque el negocio cobra el envío según sus zonas de entrega.'];
+    reply.options = [{ label: '📍 Compartir ubicación', value: 'share_location' }];
+  };
 
   const askCashChange = () => {
     const total = cartTotal(state.cart) + Number(state.customer?.deliveryFee || 0);
@@ -1993,7 +2113,7 @@ async function handleMessage(t, slug, sessionId, rawInput, runtime = {}) {
     if (mode.behavior === 'delivery') {
       state.step = 'ask_address';
       reply.messages = ['¿Cuál es tu *domicilio* de entrega? Incluye calle/edificio 📍'];
-      if (locationEnabled) reply.options = [{ label: '📍 Compartir ubicación', value: 'share_location' }];
+      if (locationEnabled || deliveryCoordinatesRequired) reply.options = [{ label: '📍 Compartir ubicación', value: 'share_location' }];
       return;
     }
     if (mode.behavior === 'branch') {
@@ -2184,7 +2304,7 @@ async function handleMessage(t, slug, sessionId, rawInput, runtime = {}) {
   }
   if (lower === 'menu' || lower === 'menú') {
     cancelPendingProductConfiguration(state);
-    Object.assign(reply, await showMenu(t, state, labels, activeChatbotPromotions, showFullMenu));
+    Object.assign(reply, await showMenu(t, state, labels, activeChatbotPromotions, showFullMenu, catalogSortMode));
     return finish();
   }
   if (state.step === 'ask_scheduled_order') {
@@ -2746,13 +2866,18 @@ async function handleMessage(t, slug, sessionId, rawInput, runtime = {}) {
       state.receivingMode = { id: 'domicilio', label: 'A domicilio', behavior: 'delivery' };
       state.customer.receivingModeLabel = state.receivingMode.label;
       state.customer.receivingModeBehavior = 'delivery';
+      const deliveryQuote = await refreshDeliveryQuote();
+      if (!deliveryQuote.valid) {
+        requestValidDeliveryLocation(deliveryQuote.reason);
+        return finish();
+      }
       if (state.cart.length) {
         reply.messages = ['¡Perfecto! Ya usaré tus mismos datos de ubicación para este pedido 🚀'];
         goToPaymentOrConfirm();
       } else {
         state.step = 'start';
         const quickMessages = ['¡Perfecto! Ya usaré tus mismos datos de ubicación para este pedido 🚀', 'Ahora solo elige del menú y será más rápido.'];
-        const menuReply = await showMenu(t, state, labels, null, showFullMenu);
+        const menuReply = await showMenu(t, state, labels, null, showFullMenu, catalogSortMode);
         Object.assign(reply, menuReply);
         reply.messages = [...quickMessages, ...(menuReply.messages || [])];
       }
@@ -3100,10 +3225,10 @@ async function handleMessage(t, slug, sessionId, rawInput, runtime = {}) {
       reply.messages = [
         'No pude obtener tu ubicación automáticamente. Activa el permiso del navegador o escribe tu dirección/coordenadas para continuar.',
       ];
-      reply.options = locationEnabled
+      reply.options = (locationEnabled || deliveryCoordinatesRequired)
         ? [
             { label: '📍 Compartir ubicación', value: 'share_location' },
-            { label: 'Omitir', value: 'skip_location' },
+            ...(!deliveryCoordinatesRequired ? [{ label: 'Omitir', value: 'skip_location' }] : []),
           ]
         : [];
       return finish();
@@ -3115,12 +3240,12 @@ async function handleMessage(t, slug, sessionId, rawInput, runtime = {}) {
       state.customer.locationLng = geo.lng;
       state.customer.locationText = geo.label || `${geo.lat.toFixed(5)}, ${geo.lng.toFixed(5)}`;
       if (isAddressDelivery()) {
-        const feeInfo = await resolveDeliveryFee(geo, state.customer.address, deliveryFeeRules, deliveryZones);
-        state.customer.deliveryFee = feeInfo.fee;
-        state.customer.deliveryZoneName = feeInfo.zoneName;
-        state.customer.deliveryBranchId = Number.isFinite(Number(feeInfo.branchId)) ? Number(feeInfo.branchId) : null;
-        state.customer.deliveryBranchName = feeInfo.branchName || '';
-        state.customer.locationResolved = feeInfo.resolvedLabel;
+        const quote = await refreshDeliveryQuote();
+        if (!quote.valid) {
+          requestValidDeliveryLocation(quote.reason);
+          state.step = 'ask_address';
+          return finish();
+        }
       }
       state.step = 'ask_address_after_location';
       reply.messages = [
@@ -3132,7 +3257,7 @@ async function handleMessage(t, slug, sessionId, rawInput, runtime = {}) {
 
     if (input.length < 5) {
       reply.messages = ['Necesito una dirección un poco más completa 🙏'];
-      if (locationEnabled) reply.options = [{ label: '📍 Compartir ubicación', value: 'share_location' }];
+      if (locationEnabled || deliveryCoordinatesRequired) reply.options = [{ label: '📍 Compartir ubicación', value: 'share_location' }];
       return finish();
     }
     state.customer.address = input.slice(0, 200);
@@ -3160,14 +3285,19 @@ async function handleMessage(t, slug, sessionId, rawInput, runtime = {}) {
       return finish();
     }
     state.customer.neighborhood = neighborhood.slice(0, 160);
-    const alreadyHasLocation = Number.isFinite(Number(state.customer.locationLat))
-      && Number.isFinite(Number(state.customer.locationLng));
-    if (locationEnabled && !alreadyHasLocation) {
+    const rawLocationLat = state.customer.locationLat;
+    const rawLocationLng = state.customer.locationLng;
+    const alreadyHasLocation = rawLocationLat !== null && rawLocationLat !== undefined && rawLocationLat !== ''
+      && rawLocationLng !== null && rawLocationLng !== undefined && rawLocationLng !== ''
+      && Number.isFinite(Number(rawLocationLat)) && Number.isFinite(Number(rawLocationLng));
+    if ((locationEnabled || deliveryCoordinatesRequired) && !alreadyHasLocation) {
       state.step = 'ask_location_optional';
-      reply.messages = ['¿Quieres compartir también tu ubicación exacta? (Opcional)'];
+      reply.messages = [deliveryCoordinatesRequired
+        ? 'Comparte tu ubicación exacta para validar la zona de entrega y calcular el costo del servicio.'
+        : '¿Quieres compartir también tu ubicación exacta? (Opcional)'];
       reply.options = [
         { label: '📍 Compartir ubicación', value: 'share_location' },
-        { label: 'Omitir', value: 'skip_location' },
+        ...(!deliveryCoordinatesRequired ? [{ label: 'Omitir', value: 'skip_location' }] : []),
       ];
     } else {
       state.step = 'ask_reference';
@@ -3179,6 +3309,10 @@ async function handleMessage(t, slug, sessionId, rawInput, runtime = {}) {
 
   if (state.step === 'ask_location_optional') {
     if (lower === 'skip_location') {
+      if (isAddressDelivery() && deliveryCoordinatesRequired) {
+        requestValidDeliveryLocation('missing_coordinates');
+        return finish();
+      }
       if (isAddressDelivery()) {
         state.step = 'ask_reference';
         reply.messages = ['¿Alguna referencia de tu domicilio? (ejemplo: portón negro, casa esquina).'];
@@ -3194,7 +3328,7 @@ async function handleMessage(t, slug, sessionId, rawInput, runtime = {}) {
       ];
       reply.options = [
         { label: '📍 Compartir ubicación', value: 'share_location' },
-        { label: 'Omitir', value: 'skip_location' },
+        ...(!deliveryCoordinatesRequired ? [{ label: 'Omitir', value: 'skip_location' }] : []),
       ];
       return finish();
     }
@@ -3202,7 +3336,7 @@ async function handleMessage(t, slug, sessionId, rawInput, runtime = {}) {
       reply.messages = ['Activa la ubicación en tu celular para compartirla 📍'];
       reply.options = [
         { label: '📍 Compartir ubicación', value: 'share_location' },
-        { label: 'Omitir', value: 'skip_location' },
+        ...(!deliveryCoordinatesRequired ? [{ label: 'Omitir', value: 'skip_location' }] : []),
       ];
       return finish();
     }
@@ -3212,12 +3346,11 @@ async function handleMessage(t, slug, sessionId, rawInput, runtime = {}) {
       state.customer.locationLng = geo.lng;
       state.customer.locationText = geo.label || `${geo.lat.toFixed(5)}, ${geo.lng.toFixed(5)}`;
       if (isAddressDelivery()) {
-        const feeInfo = await resolveDeliveryFee(geo, state.customer.address, deliveryFeeRules, deliveryZones);
-        state.customer.deliveryFee = feeInfo.fee;
-        state.customer.deliveryZoneName = feeInfo.zoneName;
-        state.customer.deliveryBranchId = Number.isFinite(Number(feeInfo.branchId)) ? Number(feeInfo.branchId) : null;
-        state.customer.deliveryBranchName = feeInfo.branchName || '';
-        state.customer.locationResolved = feeInfo.resolvedLabel;
+        const quote = await refreshDeliveryQuote();
+        if (!quote.valid) {
+          requestValidDeliveryLocation(quote.reason);
+          return finish();
+        }
       }
       if (isAddressDelivery()) {
         state.step = 'ask_reference';
@@ -3237,7 +3370,7 @@ async function handleMessage(t, slug, sessionId, rawInput, runtime = {}) {
     reply.messages = ['Elige una opción para continuar:'];
     reply.options = [
       { label: '📍 Compartir ubicación', value: 'share_location' },
-      { label: 'Omitir', value: 'skip_location' },
+      ...(!deliveryCoordinatesRequired ? [{ label: 'Omitir', value: 'skip_location' }] : []),
     ];
     return finish();
   }
@@ -3367,6 +3500,20 @@ async function handleMessage(t, slug, sessionId, rawInput, runtime = {}) {
 
   if (state.step === 'confirm') {
     if (lower === 'confirm_yes') {
+      const deliveryQuote = await refreshDeliveryQuote();
+      if (!deliveryQuote.valid) {
+        requestValidDeliveryLocation(deliveryQuote.reason);
+        return finish();
+      }
+      if (deliveryQuote.changed) {
+        state.step = 'confirm';
+        reply.messages = [
+          `Actualizamos el costo de envío según tu ubicación${state.customer.deliveryZoneName ? ` en *${state.customer.deliveryZoneName}*` : ''}.`,
+          confirmText(state, businessName, currency, labels),
+        ];
+        reply.options = confirmOptions(labels);
+        return finish();
+      }
       const currentTotal = roundMoney(cartTotal(state.cart) + Number(state.customer?.deliveryFee || 0));
       if (state.customer?.paymentMethod === 'cash'
           && state.customer.cashChangePreference === 'change'
@@ -3733,6 +3880,11 @@ module.exports = {
   getLabels,
   handleMessage,
   newSessionId,
+  normalizeCatalogSortMode,
   parseCashAmount,
+  parseDeliveryZones,
+  pointInPolygon,
+  resolveDeliveryFee,
+  sortCatalogProducts,
   toggleModifierOptionSelection,
 };

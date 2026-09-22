@@ -49,7 +49,8 @@ ensureVapidKeys();
 const DATA_DIR = path.join(ROOT, 'data');
 const TENANTS_DIR = path.join(DATA_DIR, 'tenants');
 const UPLOADS_DIR = path.join(ROOT, 'uploads');
-[DATA_DIR, TENANTS_DIR, UPLOADS_DIR].forEach((d) => fs.mkdirSync(d, { recursive: true }));
+const STORAGE_QUARANTINE_DIR = path.join(DATA_DIR, 'storage-quarantine');
+[DATA_DIR, TENANTS_DIR, UPLOADS_DIR, STORAGE_QUARANTINE_DIR].forEach((d) => fs.mkdirSync(d, { recursive: true }));
 
 const legacyFacturamaEnvironment = String(process.env.FACTURAMA_ENVIRONMENT || 'sandbox').trim().toLowerCase() === 'production' ? 'production' : 'sandbox';
 const legacyFacturamaUsername = String(process.env.FACTURAMA_USERNAME || '').trim();
@@ -101,7 +102,7 @@ module.exports = {
     if (envEnabled('PG_SSL_REJECT_UNAUTHORIZED', true)) cleanUrl = cleanUrl.replace(/([?&]sslmode=)require(?=&|$)/i, '$1verify-full');
     return cleanUrl;
   })(),
-  ROOT, DATA_DIR, TENANTS_DIR, UPLOADS_DIR,
+  ROOT, DATA_DIR, TENANTS_DIR, UPLOADS_DIR, STORAGE_QUARANTINE_DIR,
   SMTP_HOST: (process.env.SMTP_HOST || 'smtp.gmail.com').trim(),
   SMTP_PORT: Number(process.env.SMTP_PORT) || 587,
   SMTP_USER: (process.env.SMTP_USER || '').trim(),

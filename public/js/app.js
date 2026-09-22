@@ -381,7 +381,26 @@ function setManagedPosBranchId(branchId) {
 
 function normalizePosSortMode(mode) {
   const value = String(mode || '').trim();
-  return value === 'alphabetical' || value === 'top_sold' ? value : 'top_sold';
+  return ['alphabetical', 'top_sold', 'category'].includes(value) ? value : 'top_sold';
+}
+
+function sortCatalogItems(items, categories, mode) {
+  const sorted = [...(items || [])];
+  const normalizedMode = normalizePosSortMode(mode);
+  const byName = (a, b) => String(a?.name || '').localeCompare(String(b?.name || ''), 'es', { sensitivity: 'base' });
+
+  if (normalizedMode === 'alphabetical') return sorted.sort(byName);
+
+  if (normalizedMode === 'category') {
+    const categoryRank = new Map((categories || []).map((category, index) => [Number(category.id), index]));
+    return sorted.sort((a, b) => {
+      const rankA = categoryRank.get(Number(a?.category_id)) ?? Number.MAX_SAFE_INTEGER;
+      const rankB = categoryRank.get(Number(b?.category_id)) ?? Number.MAX_SAFE_INTEGER;
+      return rankA - rankB || byName(a, b);
+    });
+  }
+
+  return sorted.sort((a, b) => Number(b?.soldQty || 0) - Number(a?.soldQty || 0) || byName(a, b));
 }
 
 function posSortStorageKey() {
@@ -4543,19 +4562,7 @@ function getVisiblePosProducts() {
   const filtered = POS_CATEGORY_FILTER === 'all'
     ? products
     : products.filter((product) => String(product.category_id || 'none') === POS_CATEGORY_FILTER);
-
-  const sorted = [...filtered];
-  if (normalizePosSortMode(POS_PRODUCT_SORT) === 'alphabetical') {
-    sorted.sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''), 'es', { sensitivity: 'base' }));
-    return sorted;
-  }
-
-  sorted.sort((a, b) => {
-    const soldDiff = Number(b.soldQty || 0) - Number(a.soldQty || 0);
-    if (soldDiff !== 0) return soldDiff;
-    return String(a.name || '').localeCompare(String(b.name || ''), 'es', { sensitivity: 'base' });
-  });
-  return sorted;
+  return sortCatalogItems(filtered, POS_OVERVIEW?.categories || [], POS_PRODUCT_SORT);
 }
 
 function syncPosCartFromCatalog() {
@@ -8548,17 +8555,7 @@ function renderProductsGrid() {
   const filtered = PRODUCT_CAT_FILTER === 'all'
     ? PRODUCTS_CACHE
     : PRODUCTS_CACHE.filter((p) => String(p.category_id || '') === String(PRODUCT_CAT_FILTER));
-  const visible = [...filtered];
-
-  if (normalizePosSortMode(POS_PRODUCT_SORT) === 'alphabetical') {
-    visible.sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''), 'es', { sensitivity: 'base' }));
-  } else {
-    visible.sort((a, b) => {
-      const soldDiff = Number(b.soldQty || 0) - Number(a.soldQty || 0);
-      if (soldDiff !== 0) return soldDiff;
-      return String(a.name || '').localeCompare(String(b.name || ''), 'es', { sensitivity: 'base' });
-    });
-  }
+  const visible = sortCatalogItems(filtered, CATS, POS_PRODUCT_SORT);
 
   grid.classList.remove('view-card', 'view-detail', 'view-compact');
   grid.classList.add(`view-${PRODUCT_VIEW_MODE}`);

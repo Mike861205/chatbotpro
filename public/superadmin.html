@@ -7,7 +7,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/regular/style.css" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/bold/style.css" />
-  <link rel="stylesheet" href="/static/css/styles.css?v=20260823satplan" />
+  <link rel="stylesheet" href="/static/css/styles.css?v=20260921-storage-hygiene" />
   <link rel="icon" type="image/svg+xml" href="/static/favicon.svg?v=20260623" />
   <link rel="icon" type="image/png" href="/static/chatbotpro100.png?v=20260623" />
   <link rel="shortcut icon" href="/static/chatbotpro100.png?v=20260623" />
@@ -24,6 +24,7 @@
       </div>
       <nav>
         <a href="#tenants" data-sa-view="tenants" data-color="cyan" class="active"><span class="nav-ic"><i class="ph-fill ph-buildings"></i></span><span>Prospectos</span><span class="sa-module-icon"><i class="ph-bold ph-users-three"></i></span></a>
+        <a href="#storage-hygiene" data-sa-view="storage-hygiene" data-color="amber"><span class="nav-ic"><i class="ph-fill ph-broom"></i></span><span>Higiene</span><span class="sa-module-icon"><i class="ph-bold ph-hard-drives"></i></span></a>
         <a href="#clients" data-sa-view="clients" data-color="green"><span class="nav-ic"><i class="ph-fill ph-handshake"></i></span><span>Clientes</span><span class="sa-module-icon"><i class="ph-bold ph-identification-card"></i></span></a>
         <a href="#invoicing" data-sa-view="invoicing" data-color="amber"><span class="nav-ic"><i class="ph-fill ph-file-text"></i></span><span>Facturación</span><span class="sa-module-icon"><i class="ph-bold ph-stamp"></i></span></a>
         <a href="#demo-leads" data-sa-view="demo-leads" data-color="violet"><span class="nav-ic"><i class="ph-fill ph-rocket-launch"></i></span><span>Leads demo</span><span class="sa-module-icon"><i class="ph-bold ph-phone-call"></i></span></a>
@@ -85,6 +86,38 @@
           </div>
           <div id="saTenantBulkBar" class="sa-bulk-bar" hidden></div>
           <div id="saTenantsTable"></div>
+        </div>
+      </section>
+
+      <section id="saViewStorageHygiene" class="section" hidden>
+        <div class="card sa-storage-hero">
+          <div>
+            <span class="clients-hero-kicker"><i class="ph-bold ph-shield-check"></i> Limpieza segura</span>
+            <h3>Higiene de almacenamiento</h3>
+            <p>Revisa prospectos y carpetas huérfanas. Los clientes con pagos están protegidos y nunca aparecen como candidatos.</p>
+          </div>
+          <button type="button" class="btn btn-primary" id="saStorageAnalyze"><i class="ph-bold ph-magnifying-glass"></i> Analizar almacenamiento</button>
+        </div>
+        <div id="saStorageSummary" class="sa-storage-summary"></div>
+        <div id="saStorageWarnings" class="sa-storage-warnings" hidden></div>
+
+        <div class="card sa-storage-card">
+          <div class="sa-storage-card-head">
+            <div><h3><i class="ph-bold ph-users-three"></i> Prospectos</h3><p>Solo cuentas sin primer pago ni historial de cobros.</p></div>
+            <input id="saStorageSearch" type="search" placeholder="Buscar prospecto o slug" aria-label="Buscar prospectos en almacenamiento" />
+          </div>
+          <div id="saStorageProspects"><div class="sa-storage-loading"><i class="ph-bold ph-circle-notch spin"></i> Ejecuta el análisis para comenzar.</div></div>
+        </div>
+
+        <div class="sa-storage-two-columns">
+          <div class="card sa-storage-card">
+            <div class="sa-storage-card-head"><div><h3><i class="ph-bold ph-folder-dashed"></i> Carpetas huérfanas</h3><p>Carpetas cuyo tenant ya no existe.</p></div></div>
+            <div id="saStorageOrphans"></div>
+          </div>
+          <div class="card sa-storage-card">
+            <div class="sa-storage-card-head"><div><h3><i class="ph-bold ph-clock-counter-clockwise"></i> Historial y cuarentena</h3><p>La purga definitiva se habilita después de 7 días.</p></div></div>
+            <div id="saStorageJobs"></div>
+          </div>
         </div>
       </section>
 
@@ -474,6 +507,59 @@
     </div>
   </div>
 
+  <div class="modal-bg" id="saOperationResetModal" role="dialog" aria-modal="true" aria-labelledby="saOperationResetTitle">
+    <div class="modal sa-operation-reset-modal">
+      <div class="sa-operation-reset-head">
+        <span class="sa-operation-reset-icon"><i class="ph-bold ph-arrow-counter-clockwise"></i></span>
+        <div>
+          <span>Acción exclusiva de SuperAdmin</span>
+          <h3 id="saOperationResetTitle">Reiniciar ventas y operación</h3>
+          <p id="saOperationResetTenant">Selecciona un tenant.</p>
+        </div>
+      </div>
+      <div id="saOperationResetPreview" class="sa-operation-reset-preview">
+        <div class="sa-operation-reset-loading"><i class="ph-bold ph-circle-notch"></i> Revisando información del tenant…</div>
+      </div>
+      <div class="sa-operation-reset-preserves">
+        <b><i class="ph-bold ph-shield-check"></i> Se conservarán</b>
+        <p>Catálogo, productos, imágenes, clientes, usuarios, sucursales, configuración y promociones.</p>
+      </div>
+      <div id="saOperationResetBlockers" class="sa-operation-reset-blockers" hidden></div>
+      <div class="field sa-operation-reset-confirm">
+        <label for="saOperationResetPhrase">Para confirmar, escribe exactamente: <strong id="saOperationResetExpected">—</strong></label>
+        <input id="saOperationResetPhrase" type="text" autocomplete="off" spellcheck="false" />
+      </div>
+      <label class="sa-operation-reset-ack">
+        <input id="saOperationResetAck" type="checkbox" />
+        <span>Entiendo que se eliminarán definitivamente todas las ventas, compras e inventario existentes de este tenant y que el siguiente pedido iniciará en #1.</span>
+      </label>
+      <div class="modal-actions">
+        <button type="button" class="btn btn-ghost" id="saOperationResetCancel">Cancelar</button>
+        <button type="button" class="btn btn-danger" id="saOperationResetConfirm" disabled><i class="ph-bold ph-arrow-counter-clockwise"></i> Reiniciar ventas y operación</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal-bg" id="saStorageActionModal" role="dialog" aria-modal="true" aria-labelledby="saStorageActionTitle">
+    <div class="modal sa-storage-action-modal">
+      <div class="sa-storage-action-head">
+        <span><i class="ph-bold ph-shield-warning"></i></span>
+        <div><small>Acción exclusiva de SuperAdmin</small><h3 id="saStorageActionTitle">Revisar almacenamiento</h3><p id="saStorageActionSubject"></p></div>
+      </div>
+      <div id="saStorageActionSummary" class="sa-storage-action-summary"></div>
+      <div class="sa-storage-safety-note"><i class="ph-bold ph-lock-key"></i><span id="saStorageActionSafety">Los clientes con pagos están protegidos por el servidor.</span></div>
+      <div class="field">
+        <label for="saStorageActionPhrase">Para confirmar, escribe exactamente: <strong id="saStorageActionExpected">—</strong></label>
+        <input id="saStorageActionPhrase" type="text" autocomplete="off" spellcheck="false" />
+      </div>
+      <label class="sa-storage-action-ack"><input id="saStorageActionAck" type="checkbox" /><span id="saStorageActionAckText">Entiendo el alcance de esta operación.</span></label>
+      <div class="modal-actions">
+        <button type="button" class="btn btn-ghost" id="saStorageActionCancel">Cancelar</button>
+        <button type="button" class="btn btn-danger" id="saStorageActionConfirm" disabled><i class="ph-bold ph-archive"></i> Confirmar</button>
+      </div>
+    </div>
+  </div>
+
   <div class="modal-bg" id="saDeleteModal">
     <div class="modal" style="max-width:520px;text-align:center">
       <div class="sa-delete-icon"><i class="ph-bold ph-trash"></i></div>
@@ -540,6 +626,6 @@
       </form>
     </div>
   </div>
-  <script src="/static/js/superadmin.js?v=20260825country2"></script>
+  <script src="/static/js/superadmin.js?v=20260921-storage-hygiene"></script>
 </body>
 </html>

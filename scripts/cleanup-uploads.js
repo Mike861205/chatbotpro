@@ -4,7 +4,10 @@ const config = require('../src/config');
 const { pool, q, tdb } = require('../src/db');
 const { resolve } = path;
 
-const dryRun = process.argv.includes('--dry-run');
+// Esta herramienta queda deliberadamente en modo de solo lectura. La limpieza
+// destructiva se ejecuta únicamente desde SuperAdmin > Higiene, donde se
+// revalida que el tenant nunca haya sido cliente y se usa cuarentena.
+const dryRun = true;
 const fsPromises = fs.promises;
 const uploadsRoot = resolve(config.UPLOADS_DIR);
 
@@ -69,6 +72,7 @@ async function main() {
     console.log(`[cleanup] Referenciados: ${referenced.size}`);
     console.log(`[cleanup] Encontrados en disco: ${existing.length}`);
     console.log(`[cleanup] Huerfanos: ${orphaned.length}`);
+    console.log('[cleanup] Modo diagnóstico obligatorio. Para limpiar usa SuperAdmin > Higiene de almacenamiento.');
 
     for (const file of orphaned) {
       const publicPath = toPublicPath(file);

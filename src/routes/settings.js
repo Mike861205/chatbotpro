@@ -231,6 +231,12 @@ router.put('/', upload.single('logo'), async (req, res, next) => {
       }
       body.product_tax_rate = String(productTaxRate);
     }
+    if (body.pos_catalog_sort_mode !== undefined) {
+      body.pos_catalog_sort_mode = String(body.pos_catalog_sort_mode || '').trim();
+      if (!['top_sold', 'alphabetical', 'category'].includes(body.pos_catalog_sort_mode)) {
+        return res.status(400).json({ error: 'Selecciona un orden de catálogo válido' });
+      }
+    }
     if (body.currency_conversion_mode === 'automatic') {
       const currentRows = await req.tdb.all(
         "SELECT key,value FROM {s}.settings WHERE key=ANY($1::text[])",

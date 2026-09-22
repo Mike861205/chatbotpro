@@ -11,6 +11,24 @@ const { createRateLimiter } = require('../middleware/security');
 const { describeStoredPhone, normalizeInternationalPhone } = require('../utils/phone');
 const { buildClientSummary } = require('../utils/customerLifecycle');
 const { isMexicoIdentity } = require('../utils/invoicing');
+const {
+  loadTenantOperationResetPreview,
+  resetBlockerMessages,
+  resetTenantOperations,
+} = require('../utils/tenantOperationReset');
+const {
+  inspectScope,
+  inspectProspectTenant,
+  scanStorageHygiene,
+  tenantIsProtected,
+  moveScopeToQuarantine,
+  moveOrphanFilesToQuarantine,
+  restoreQuarantinedScope,
+  restoreQuarantinedFiles,
+  purgeQuarantine,
+  purgeAfterDate,
+  assertSafeScope,
+} = require('../utils/storageHygiene');
 const { createConfiguredFacturamaClients } = require('../services/facturama');
 const {
   signSuperAdminToken,
@@ -31,6 +49,42 @@ const superadminLoginLimiter = createRateLimiter({
   max: 10,
   message: 'Demasiados intentos de acceso administrativo.',
 });
+
+function storageTenantSql(whereSql = 't.id = $1') {
+  return `SELECT t.id,t.slug,t.business_name,t.logo,t.account_status,t.trial_status,t.sales_stage,
+                 t.sales_updated_at,t.created_at,t.customer_since,
+                 COALESCE((SELECT COUNT(*) FROM tenant_payments tp WHERE tp.tenant_id=t.id),0)::int AS payment_count,
+                 (SELECT MAX(last_seen_at) FROM module_usage mu WHERE mu.tenant_id=t.id) AS module_last_seen
+          FROM tenants t WHERE ${whereSql}`;
+}
+
+function cleanupManifest(inspection) {
+  const storage = inspection?._inspection;
+  if (!storage) return { scanComplete: false };
+  return {
+    scanComplete: Boolean(inspection.scanComplete),
+    storage: inspection.storage,
+    files: storage.files.slice(0, 5000).map((file) => ({ path: file.relativePath, bytes: file.size })),
+    truncated: storage.files.length > 5000,
+  };
+}
+
+async function createCleanupJob(client, data) {
+  const result = await client.query(
+    `INSERT INTO storage_cleanup_jobs
+      (subject_type,tenant_id,tenant_slug,business_name,action,status,file_count,total_bytes,
+       orphan_file_count,orphan_bytes,manifest_json,created_by,purge_after)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+     RETURNING id`,
+    [
+      data.subjectType, data.tenantId || null, data.slug || '', data.businessName || '', data.action,
+      data.status || 'preparing', Number(data.files || 0), Number(data.bytes || 0),
+      Number(data.orphanFiles || 0), Number(data.orphanBytes || 0), JSON.stringify(data.manifest || {}),
+      data.createdBy || '', data.purgeAfter || purgeAfterDate(),
+    ]
+  );
+  return Number(result.rows[0].id);
+}
 
 const deployState = {
   running: false,
@@ -1126,20 +1180,13 @@ router.delete('/follow-up/bulk', requireSuperAdmin, async (req, res, next) => {
 
   const tenantIds = subjects.filter((item) => item.type === 'tenant').map((item) => item.id);
   const leadIds = subjects.filter((item) => item.type === 'demo_lead').map((item) => item.id);
+  if (tenantIds.length) {
+    return res.status(409).json({ error: 'Los prospectos con base privada deben eliminarse individualmente desde Higiene de almacenamiento' });
+  }
   const client = await pool.connect();
-  const removedUploads = [];
   try {
     await client.query('BEGIN');
-    let tenantRows = [];
     let leadRows = [];
-    if (tenantIds.length) {
-      const found = await client.query(
-        `SELECT id, slug, logo, sales_stage FROM tenants
-         WHERE id = ANY($1::int[]) AND customer_since IS NULL FOR UPDATE`,
-        [tenantIds]
-      );
-      tenantRows = found.rows;
-    }
     if (leadIds.length) {
       const found = await client.query(
         'SELECT id, sales_stage FROM demo_leads WHERE id = ANY($1::int[]) FOR UPDATE',
@@ -1147,26 +1194,14 @@ router.delete('/follow-up/bulk', requireSuperAdmin, async (req, res, next) => {
       );
       leadRows = found.rows;
     }
-    if (tenantRows.length !== tenantIds.length || leadRows.length !== leadIds.length) {
+    if (leadRows.length !== leadIds.length) {
       throw Object.assign(new Error('Uno o más contactos ya no existen o ya son clientes'), { status: 409 });
     }
-    const unsafe = [...tenantRows, ...leadRows].find((row) => !BULK_DELETE_STAGES.has(row.sales_stage));
+    const unsafe = leadRows.find((row) => !BULK_DELETE_STAGES.has(row.sales_stage));
     if (unsafe) throw Object.assign(new Error('La eliminación masiva solo permite contactos en No interesado o Cierre no exitoso'), { status: 409 });
 
-    if (tenantIds.length) {
-      await client.query('DELETE FROM tenant_payments WHERE tenant_id = ANY($1::int[])', [tenantIds]);
-      await client.query('DELETE FROM users WHERE tenant_id = ANY($1::int[])', [tenantIds]);
-      await client.query('DELETE FROM tenants WHERE id = ANY($1::int[])', [tenantIds]);
-      for (const tenant of tenantRows) {
-        await client.query(`DROP SCHEMA IF EXISTS "${schemaName(tenant.slug)}" CASCADE`);
-        if (tenant.logo) removedUploads.push(tenant.logo);
-      }
-    }
     if (leadIds.length) await client.query('DELETE FROM demo_leads WHERE id = ANY($1::int[])', [leadIds]);
     await client.query('COMMIT');
-    for (const upload of removedUploads) {
-      try { await deleteManagedUpload(upload); } catch {}
-    }
     res.json({ ok: true, deleted: subjects.length });
   } catch (e) {
     try { await client.query('ROLLBACK'); } catch {}
@@ -1189,6 +1224,214 @@ router.delete('/demo-leads/:id', requireSuperAdmin, async (req, res, next) => {
   }
 });
 
+router.get('/storage-hygiene', requireSuperAdmin, async (req, res, next) => {
+  try {
+    const report = await scanStorageHygiene({ query: q, tenantDbFactory: tdb });
+    res.json(report);
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.get('/storage-hygiene/prospects/:id', requireSuperAdmin, async (req, res, next) => {
+  try {
+    const tenantId = Number(req.params.id);
+    if (!Number.isInteger(tenantId) || tenantId <= 0) return res.status(400).json({ error: 'Prospecto inválido' });
+    const found = await q(storageTenantSql(), [tenantId]);
+    const tenant = found.rows[0];
+    if (!tenant) return res.status(404).json({ error: 'Prospecto no encontrado' });
+    if (tenantIsProtected(tenant)) return res.status(409).json({ error: 'Cliente protegido: su almacenamiento no puede revisarse ni eliminarse desde esta herramienta' });
+    const inspection = await inspectProspectTenant(tenant, tdb);
+    const { _inspection, ...preview } = inspection;
+    res.json({ preview, confirmationPhrases: { delete: `ELIMINAR PROSPECTO ${tenant.slug}`, orphanFiles: `LIMPIAR ARCHIVOS ${tenant.slug}` } });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post('/storage-hygiene/prospects/:id/delete', requireSuperAdmin, async (req, res, next) => {
+  const tenantId = Number(req.params.id);
+  if (!Number.isInteger(tenantId) || tenantId <= 0) return res.status(400).json({ error: 'Prospecto inválido' });
+  const client = await pool.connect();
+  let committed = false;
+  let tenant;
+  let jobId;
+  let inspection;
+  try {
+    await client.query('BEGIN ISOLATION LEVEL SERIALIZABLE');
+    await client.query('SELECT pg_advisory_xact_lock($1)', [tenantId]);
+    const found = await client.query(`${storageTenantSql()} FOR UPDATE OF t`, [tenantId]);
+    tenant = found.rows[0];
+    if (!tenant) throw Object.assign(new Error('Prospecto no encontrado'), { status: 404 });
+    if (tenantIsProtected(tenant)) throw Object.assign(new Error('Cliente protegido: este tenant tuvo un pago o ya fue convertido y no puede eliminarse'), { status: 409 });
+    const expected = `ELIMINAR PROSPECTO ${tenant.slug}`;
+    if (req.body?.confirmation !== expected || req.body?.acknowledge !== true) {
+      throw Object.assign(new Error(`Escribe exactamente “${expected}” y acepta la confirmación`), { status: 400 });
+    }
+
+    inspection = await inspectProspectTenant(tenant, tdb);
+    if (!inspection.scanComplete) throw Object.assign(new Error(`Revisión incompleta: ${inspection.scanError || 'no se pudo validar su almacenamiento'}`), { status: 409 });
+    jobId = await createCleanupJob(client, {
+      subjectType: 'prospect', tenantId, slug: tenant.slug, businessName: tenant.business_name,
+      action: 'delete_prospect', status: 'database_deleting', files: inspection.storage?.files,
+      bytes: inspection.storage?.bytes, orphanFiles: inspection.storage?.orphanFiles,
+      orphanBytes: inspection.storage?.orphanBytes, manifest: cleanupManifest(inspection), createdBy: req.superadmin.username,
+    });
+
+    await client.query('DELETE FROM tenant_payments WHERE tenant_id=$1', [tenantId]);
+    await client.query('DELETE FROM users WHERE tenant_id=$1', [tenantId]);
+    await client.query('DELETE FROM tenants WHERE id=$1', [tenantId]);
+    await client.query(`DROP SCHEMA IF EXISTS "${schemaName(tenant.slug)}" CASCADE`);
+    await client.query("UPDATE storage_cleanup_jobs SET status='database_deleted' WHERE id=$1", [jobId]);
+    await client.query('COMMIT');
+    committed = true;
+  } catch (error) {
+    try { if (!committed) await client.query('ROLLBACK'); } catch {}
+    client.release();
+    if (error.status) return res.status(error.status).json({ error: error.message });
+    return next(error);
+  }
+  client.release();
+
+  try {
+    const moved = await moveScopeToQuarantine(tenant.slug, jobId);
+    await q(
+      `UPDATE storage_cleanup_jobs
+       SET status=$1,quarantine_key=$2,quarantined_at=CASE WHEN $3 THEN now() ELSE NULL END,
+           purge_after=CASE WHEN $3 THEN now()+INTERVAL '7 days' ELSE NULL END
+       WHERE id=$4`,
+      [moved.moved ? 'quarantined' : 'completed_no_files', moved.key, moved.moved, jobId]
+    );
+    res.json({
+      ok: true,
+      deleted: { id: tenant.id, slug: tenant.slug, businessName: tenant.business_name },
+      jobId,
+      quarantine: moved.moved,
+      purgeAfterDays: moved.moved ? 7 : 0,
+      message: moved.moved ? 'Prospecto eliminado y archivos enviados a cuarentena por 7 días' : 'Prospecto eliminado; no tenía archivos físicos',
+    });
+  } catch (error) {
+    await q("UPDATE storage_cleanup_jobs SET status='cleanup_pending',error=$1 WHERE id=$2", [String(error.message || error), jobId]).catch(() => {});
+    res.status(202).json({
+      ok: true, jobId, cleanupPending: true,
+      message: 'El prospecto fue eliminado de la base, pero su carpeta quedó pendiente de cuarentena. El analizador volverá a mostrarla como huérfana.',
+    });
+  }
+});
+
+router.post('/storage-hygiene/prospects/:id/orphan-files', requireSuperAdmin, async (req, res, next) => {
+  const tenantId = Number(req.params.id);
+  if (!Number.isInteger(tenantId) || tenantId <= 0) return res.status(400).json({ error: 'Prospecto inválido' });
+  const client = await pool.connect();
+  let tenant;
+  let inspection;
+  let jobId;
+  let moved = null;
+  try {
+    await client.query('BEGIN ISOLATION LEVEL SERIALIZABLE');
+    await client.query('SELECT pg_advisory_xact_lock($1)', [tenantId]);
+    const found = await client.query(`${storageTenantSql()} FOR UPDATE OF t`, [tenantId]);
+    tenant = found.rows[0];
+    if (!tenant) throw Object.assign(new Error('Prospecto no encontrado'), { status: 404 });
+    if (tenantIsProtected(tenant)) throw Object.assign(new Error('Cliente protegido: no se pueden limpiar sus archivos'), { status: 409 });
+    const expected = `LIMPIAR ARCHIVOS ${tenant.slug}`;
+    if (req.body?.confirmation !== expected || req.body?.acknowledge !== true) throw Object.assign(new Error(`Escribe exactamente “${expected}” y acepta la confirmación`), { status: 400 });
+    inspection = await inspectProspectTenant(tenant, tdb);
+    if (!inspection.scanComplete) throw Object.assign(new Error(`Revisión incompleta: ${inspection.scanError || 'no se pudo validar su almacenamiento'}`), { status: 409 });
+    const orphanFiles = inspection._inspection?.orphanFiles || [];
+    if (!orphanFiles.length) throw Object.assign(new Error('Este prospecto no tiene archivos huérfanos con más de 24 horas'), { status: 409 });
+    jobId = await createCleanupJob(client, {
+      subjectType: 'prospect', tenantId, slug: tenant.slug, businessName: tenant.business_name,
+      action: 'quarantine_orphan_files', status: 'preparing', files: orphanFiles.length,
+      bytes: inspection.storage.orphanBytes, orphanFiles: orphanFiles.length, orphanBytes: inspection.storage.orphanBytes,
+      manifest: { files: orphanFiles.slice(0, 5000).map((file) => ({ path: file.relativePath, bytes: file.size })), truncated: orphanFiles.length > 5000 },
+      createdBy: req.superadmin.username,
+    });
+    moved = await moveOrphanFilesToQuarantine(tenant.slug, jobId, orphanFiles);
+    await client.query(
+      "UPDATE storage_cleanup_jobs SET status='quarantined',quarantine_key=$1,quarantined_at=now(),purge_after=now()+INTERVAL '7 days' WHERE id=$2",
+      [moved.key, jobId]
+    );
+    await client.query('COMMIT');
+    res.json({ ok: true, jobId, files: moved.moved, bytes: inspection.storage.orphanBytes, message: `${moved.moved} archivo(s) huérfano(s) enviados a cuarentena por 7 días` });
+  } catch (error) {
+    try { await client.query('ROLLBACK'); } catch {}
+    if (moved?.key) {
+      // Una falla de auditoría no debe dejar fuera archivos de un prospecto que sigue activo.
+      await restoreQuarantinedFiles(tenant.slug, moved.key).catch(() => {});
+    }
+    if (error.status) return res.status(error.status).json({ error: error.message });
+    next(error);
+  } finally {
+    client.release();
+  }
+});
+
+router.post('/storage-hygiene/orphan-scopes/:scope/quarantine', requireSuperAdmin, async (req, res, next) => {
+  let scope;
+  try { scope = assertSafeScope(req.params.scope); } catch (error) { return res.status(error.status || 400).json({ error: error.message }); }
+  const expected = `CUARENTENA ${scope}`;
+  if (req.body?.confirmation !== expected || req.body?.acknowledge !== true) return res.status(400).json({ error: `Escribe exactamente “${expected}” y acepta la confirmación` });
+  const client = await pool.connect();
+  let jobId;
+  let moved = null;
+  try {
+    await client.query('BEGIN ISOLATION LEVEL SERIALIZABLE');
+    await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`storage:${scope}`]);
+    const exists = await client.query('SELECT id FROM tenants WHERE lower(slug)=lower($1) LIMIT 1', [scope]);
+    if (exists.rows[0]) throw Object.assign(new Error('La carpeta ya pertenece a un tenant existente y quedó protegida'), { status: 409 });
+    const storage = await inspectScope(scope, []);
+    if (!storage.exists) throw Object.assign(new Error('La carpeta huérfana ya no existe'), { status: 404 });
+    if (storage.warnings.length) throw Object.assign(new Error(`Revisión incompleta: ${storage.warnings.join('. ')}`), { status: 409 });
+    jobId = await createCleanupJob(client, {
+      subjectType: 'orphan_scope', slug: scope, businessName: 'Tenant eliminado', action: 'quarantine_orphan_scope',
+      files: storage.fileCount, bytes: storage.totalBytes, orphanFiles: storage.fileCount, orphanBytes: storage.totalBytes,
+      manifest: { files: storage.files.slice(0, 5000).map((file) => ({ path: file.relativePath, bytes: file.size })), truncated: storage.files.length > 5000 },
+      createdBy: req.superadmin.username,
+    });
+    moved = await moveScopeToQuarantine(scope, jobId);
+    if (!moved.moved) throw Object.assign(new Error('La carpeta huérfana ya no existe'), { status: 404 });
+    await client.query(
+      "UPDATE storage_cleanup_jobs SET status='quarantined',quarantine_key=$1,quarantined_at=now(),purge_after=now()+INTERVAL '7 days' WHERE id=$2",
+      [moved.key, jobId]
+    );
+    await client.query('COMMIT');
+    res.json({ ok: true, jobId, files: storage.fileCount, bytes: storage.totalBytes, message: 'Carpeta huérfana enviada a cuarentena por 7 días' });
+  } catch (error) {
+    try { await client.query('ROLLBACK'); } catch {}
+    if (moved?.key) await restoreQuarantinedScope(scope, moved.key).catch(() => {});
+    if (error.status) return res.status(error.status).json({ error: error.message });
+    next(error);
+  } finally {
+    client.release();
+  }
+});
+
+router.post('/storage-hygiene/jobs/:id/purge', requireSuperAdmin, async (req, res, next) => {
+  const jobId = Number(req.params.id);
+  if (!Number.isInteger(jobId) || jobId <= 0) return res.status(400).json({ error: 'Operación de limpieza inválida' });
+  if (req.body?.confirmation !== `PURGAR ${jobId}` || req.body?.acknowledge !== true) return res.status(400).json({ error: `Escribe exactamente “PURGAR ${jobId}” y acepta la confirmación` });
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const found = await client.query('SELECT * FROM storage_cleanup_jobs WHERE id=$1 FOR UPDATE', [jobId]);
+    const job = found.rows[0];
+    if (!job) throw Object.assign(new Error('Operación de limpieza no encontrada'), { status: 404 });
+    if (job.status !== 'quarantined' || !job.quarantine_key) throw Object.assign(new Error('Esta operación no tiene archivos listos para purgar'), { status: 409 });
+    if (!job.purge_after || new Date(job.purge_after).getTime() > Date.now()) throw Object.assign(new Error('La cuarentena de 7 días todavía no termina'), { status: 409 });
+    await purgeQuarantine(job.quarantine_key);
+    await client.query("UPDATE storage_cleanup_jobs SET status='purged',purged_at=now(),error='' WHERE id=$1", [jobId]);
+    await client.query('COMMIT');
+    res.json({ ok: true, jobId, bytes: Number(job.total_bytes || 0), message: 'Archivos eliminados definitivamente y espacio liberado' });
+  } catch (error) {
+    try { await client.query('ROLLBACK'); } catch {}
+    if (error.status) return res.status(error.status).json({ error: error.message });
+    next(error);
+  } finally {
+    client.release();
+  }
+});
+
 router.delete('/tenants/:id', requireSuperAdmin, async (req, res, next) => {
   const tenantId = Number(req.params.id);
   if (!Number.isInteger(tenantId) || tenantId <= 0) return res.status(400).json({ error: 'Tenant inválido' });
@@ -1197,23 +1440,25 @@ router.delete('/tenants/:id', requireSuperAdmin, async (req, res, next) => {
   let tenant = null;
   try {
     await client.query('BEGIN');
-    const found = await client.query('SELECT id, slug, business_name, logo FROM tenants WHERE id = $1 FOR UPDATE', [tenantId]);
+    const found = await client.query(
+      `SELECT t.id,t.slug,t.business_name,t.logo,t.customer_since,
+              EXISTS(SELECT 1 FROM tenant_payments tp WHERE tp.tenant_id=t.id) AS has_payment
+       FROM tenants t WHERE t.id=$1 FOR UPDATE OF t`,
+      [tenantId]
+    );
     tenant = found.rows[0] || null;
     if (!tenant) {
       await client.query('ROLLBACK');
       return res.status(404).json({ error: 'Tenant no encontrado' });
     }
 
-    await client.query('DELETE FROM tenant_payments WHERE tenant_id = $1', [tenantId]);
-    await client.query('DELETE FROM users WHERE tenant_id = $1', [tenantId]);
-    await client.query('DELETE FROM tenants WHERE id = $1', [tenantId]);
-    await client.query(`DROP SCHEMA IF EXISTS "${schemaName(tenant.slug)}" CASCADE`);
-    await client.query('COMMIT');
-
-    if (tenant.logo) {
-      try { await deleteManagedUpload(tenant.logo); } catch {}
+    if (tenant.customer_since || tenant.has_payment) {
+      await client.query('ROLLBACK');
+      return res.status(409).json({ error: 'Cliente protegido: los tenants que tuvieron pagos no pueden eliminarse' });
     }
-    res.json({ ok: true, deleted: { id: tenant.id, slug: tenant.slug, business_name: tenant.business_name } });
+    await client.query('ROLLBACK');
+    return res.status(409).json({ error: 'Elimina este prospecto desde Higiene de almacenamiento para incluir su esquema e imágenes en cuarentena' });
+
   } catch (e) {
     try { await client.query('ROLLBACK'); } catch {}
     next(e);
@@ -1238,6 +1483,54 @@ router.post('/billing/refresh', requireSuperAdmin, async (req, res, next) => {
     });
   } catch (e) {
     next(e);
+  }
+});
+
+router.get('/tenants/:id/operation-reset-preview', requireSuperAdmin, async (req, res, next) => {
+  try {
+    const tenantId = Number(req.params.id);
+    if (!Number.isInteger(tenantId) || tenantId <= 0) return res.status(400).json({ error: 'Tenant inválido' });
+    const tenant = await getTenantById(tenantId);
+    if (!tenant) return res.status(404).json({ error: 'Tenant no encontrado' });
+
+    const preview = await loadTenantOperationResetPreview(tdb(tenant.slug));
+    const blockerMessages = resetBlockerMessages(preview);
+    res.json({
+      tenant: { id: tenant.id, slug: tenant.slug, businessName: tenant.business_name },
+      preview,
+      canReset: blockerMessages.length === 0,
+      blockerMessages,
+      confirmationPhrase: `REINICIAR ${tenant.slug}`,
+      preserves: ['Catálogo y productos', 'Imágenes', 'Clientes', 'Usuarios', 'Sucursales', 'Configuración', 'Promociones'],
+    });
+  } catch (error) { next(error); }
+});
+
+router.post('/tenants/:id/operation-reset', requireSuperAdmin, async (req, res, next) => {
+  try {
+    const tenantId = Number(req.params.id);
+    if (!Number.isInteger(tenantId) || tenantId <= 0) return res.status(400).json({ error: 'Tenant inválido' });
+    const tenant = await getTenantById(tenantId);
+    if (!tenant) return res.status(404).json({ error: 'Tenant no encontrado' });
+
+    const expectedPhrase = `REINICIAR ${tenant.slug}`;
+    if (req.body?.acknowledge !== true || String(req.body?.confirmation || '').trim() !== expectedPhrase) {
+      return res.status(400).json({ error: `Escribe exactamente “${expectedPhrase}” para confirmar.` });
+    }
+
+    const cleared = await resetTenantOperations(tdb(tenant.slug), tenant, req.superadmin.username);
+    res.json({
+      ok: true,
+      tenant: { id: tenant.id, slug: tenant.slug, businessName: tenant.business_name },
+      cleared,
+      message: 'Todas las ventas, compras e inventario existentes fueron reiniciados. El siguiente pedido comenzará en #1.',
+    });
+  } catch (error) {
+    if (error?.code === '40001') {
+      return res.status(409).json({ error: 'Hubo actividad concurrente en el tenant. Intenta el reinicio nuevamente.' });
+    }
+    if (error.status) return res.status(error.status).json({ error: error.message, blockers: error.blockers || undefined });
+    next(error);
   }
 });
 

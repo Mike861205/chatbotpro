@@ -231,6 +231,8 @@
     }
     /* ── Product cards ── */
     .prods { display: flex; flex-direction: column; gap: 9px; align-self: stretch; animation: popIn 0.3s var(--ease); }
+    .product-category-heading { display:flex;align-items:center;gap:8px;margin:8px 2px 0;padding:7px 10px;border-radius:11px;background:color-mix(in srgb,var(--primary) 11%,#fff);color:color-mix(in srgb,var(--primary) 78%,#172031);font-size:12px;font-weight:900;letter-spacing:.02em; }
+    .product-category-heading::before { content:'\1F4C1';font-size:14px; }
     .prod {
       background: #fff; border-radius: 18px; padding: 11px 13px; display: flex; gap: 13px;
       align-items: center; box-shadow: 0 2px 8px rgba(15,18,32,0.06);
@@ -1089,7 +1091,18 @@
           bulkBtn.disabled = pendingChanges.size === 0;
         }
 
+        let currentCategory = null;
         data.products.forEach((p) => {
+          if (data.catalogSortMode === 'category') {
+            const category = String(p.category || 'Sin categoría').trim() || 'Sin categoría';
+            if (category !== currentCategory) {
+              currentCategory = category;
+              const categoryHeading = document.createElement('div');
+              categoryHeading.className = 'product-category-heading';
+              categoryHeading.textContent = category;
+              wrap.appendChild(categoryHeading);
+            }
+          }
           const card = document.createElement('div');
           card.className = p.promotion ? 'prod has-promotion' : 'prod';
           const serverQty = Number(p.qty || 0);
