@@ -12,6 +12,7 @@ const { cropAiMenuProductImage, prepareAiMenuImage } = require('../utils/aiMenuI
 const { buildProductImagePrompt, normalizeImageStyle } = require('../utils/productImageGeneration');
 const { createImageUpload, deleteManagedUpload, optimizeUploadedImage, saveImageBuffer, safeUnlink } = require('../utils/uploads');
 const { normalizeProductSaleDays, productAvailabilityFields } = require('../utils/productAvailability');
+const { normalizeProductBarcode, isValidProductBarcode } = require('../utils/barcode');
 
 const router = express.Router();
 router.use(requireAuth);
@@ -135,6 +136,19 @@ async function buildAiImagePayload(file, detailTiles = 0) {
       },
       details: [],
     };
+  }
+}
+
+async function assertBarcodeAvailable(tdb, barcode, excludeId = null) {
+  if (!barcode) return;
+  const row = await tdb.get(
+    `SELECT id, name FROM {s}.products WHERE barcode = $1 ${excludeId ? 'AND id <> $2' : ''} LIMIT 1`,
+    excludeId ? [barcode, excludeId] : [barcode]
+  );
+  if (row) {
+    const error = new Error(`El cÃ³digo de barras ya estÃ¡ asignado a ${row.name}`);
+    error.statusCode = 409;
+    throw error;
   }
 }
 
@@ -515,7 +529,7 @@ async function listSoldQtyByProduct(tdb) {
 router.get('/', async (req, res, next) => {
   try {
     const rows = await req.tdb.all(
-      `SELECT p.id, p.category_id, p.name, p.description, p.price::float AS price, p.image, p.active, p.sale_days,
+      `SELECT p.id, p.category_id, p.name, p.description, p.price::float AS price, p.image, p.active, p.sale_days, p.barcode,
               p.sat_product_code, p.sat_unit_code, p.sat_unit_name, p.tax_object,
               p.iva_rate::float AS iva_rate, p.isr_rate::float AS isr_rate,
               c.name AS category_name
@@ -845,6 +859,10 @@ router.post('/ai/import', uploadAiProductImages.array('productImages', 60), asyn
       let createdModifierOptions = 0;
 
       for (const product of products) {
+        if (product.barcode && !isValidProductBarcode(product.barcode)) {
+          throw Object.assign(new Error(`El cÃ³digo de barras de ${product.name} no es vÃ¡lido`), { statusCode: 400 });
+        }
+        await assertBarcodeAvailable(tx, product.barcode);
         let categoryId = null;
         if (product.categoryName) {
           const existingCat = pickExistingCategory(categoryMap, product.categoryName);
@@ -872,8 +890,8 @@ router.post('/ai/import', uploadAiProductImages.array('productImages', 60), asyn
         if (image) usedImages.add(image);
 
         const inserted = await tx.get(
-          'INSERT INTO {s}.products (name, description, price, category_id, image, active) VALUES ($1,$2,$3,$4,$5,$6) RETURNING id',
-          [product.name, product.description, basePrice, categoryId, image, defaultActive]
+          'INSERT INTO {s}.products (name, description, price, category_id, image, active, barcode) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id',
+          [product.name, product.description, basePrice, categoryId, image, defaultActive, product.barcode || null]
         );
 
         for (let index = 0; index < product.variants.length; index += 1) {
@@ -1128,6 +1146,9 @@ router.post('/', upload.single('image'), async (req, res, next) => {
   let img = null;
   try {
     const { name, description, price, categoryId, active } = req.body || {};
+    const barcode = normalizeProductBarcode(req.body?.barcode);
+    if (!isValidProductBarcode(barcode)) return res.status(400).json({ error: 'El cÃ³digo de barras debe tener entre 3 y 64 caracteres alfanumÃ©ricos' });
+    await assertBarcodeAvailable(req.tdb, barcode);
     const fiscal = normalizeProductFiscal(req.body || {});
     const saleDays = normalizeProductSaleDays(req.body?.saleDays, { strict: true });
     if (!name || !name.trim() || price === undefined || price === '') {
@@ -1136,10 +1157,10 @@ router.post('/', upload.single('image'), async (req, res, next) => {
     img = req.file ? await optimizeUploadedImage(req.file, { scope: req.tenant.slug, outputPrefix: 'prod' }) : null;
     const row = await req.tdb.get(
       `INSERT INTO {s}.products
-       (name,description,price,category_id,image,active,sale_days,sat_product_code,sat_unit_code,sat_unit_name,tax_object,iva_rate,isr_rate)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING id`,
+       (name,description,price,category_id,image,active,sale_days,barcode,sat_product_code,sat_unit_code,sat_unit_name,tax_object,iva_rate,isr_rate)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) RETURNING id`,
       [name.trim(), description || '', Number(price) || 0, categoryId || null, img, active === '0' ? 0 : 1,
-        JSON.stringify(saleDays), fiscal.productCode, fiscal.unitCode, fiscal.unitName, fiscal.taxObject, fiscal.ivaRate, fiscal.isrRate]
+        JSON.stringify(saleDays), barcode, fiscal.productCode, fiscal.unitCode, fiscal.unitName, fiscal.taxObject, fiscal.ivaRate, fiscal.isrRate]
     );
     res.json(row);
   } catch (e) {
@@ -1157,6 +1178,11 @@ router.put('/:id', upload.single('image'), async (req, res, next) => {
     const existing = await req.tdb.get('SELECT * FROM {s}.products WHERE id = $1', [req.params.id]);
     if (!existing) return res.status(404).json({ error: 'Producto no encontrado' });
     const { name, description, price, categoryId, active } = req.body || {};
+    const barcode = Object.prototype.hasOwnProperty.call(req.body || {}, 'barcode')
+      ? normalizeProductBarcode(req.body.barcode)
+      : normalizeProductBarcode(existing.barcode);
+    if (!isValidProductBarcode(barcode)) return res.status(400).json({ error: 'El cÃ³digo de barras debe tener entre 3 y 64 caracteres alfanumÃ©ricos' });
+    await assertBarcodeAvailable(req.tdb, barcode, req.params.id);
     const fiscal = normalizeProductFiscal(req.body || {}, existing);
     const saleDays = Object.prototype.hasOwnProperty.call(req.body || {}, 'saleDays')
       ? normalizeProductSaleDays(req.body.saleDays, { strict: true })
@@ -1164,7 +1190,7 @@ router.put('/:id', upload.single('image'), async (req, res, next) => {
     img = req.file ? await optimizeUploadedImage(req.file, { scope: req.tenant.slug, outputPrefix: 'prod' }) : existing.image;
     await req.tdb.run(
       `UPDATE {s}.products SET name=$1,description=$2,price=$3,category_id=$4,image=$5,active=$6,
-       sale_days=$7,sat_product_code=$8,sat_unit_code=$9,sat_unit_name=$10,tax_object=$11,iva_rate=$12,isr_rate=$13 WHERE id=$14`,
+       sale_days=$7,barcode=$8,sat_product_code=$9,sat_unit_code=$10,sat_unit_name=$11,tax_object=$12,iva_rate=$13,isr_rate=$14 WHERE id=$15`,
       [
         (name || existing.name).trim(),
         description ?? existing.description,
@@ -1172,7 +1198,7 @@ router.put('/:id', upload.single('image'), async (req, res, next) => {
         categoryId !== undefined ? categoryId || null : existing.category_id,
         img,
         active !== undefined ? (active === '0' ? 0 : 1) : existing.active,
-        JSON.stringify(saleDays),
+        JSON.stringify(saleDays), barcode,
         fiscal.productCode, fiscal.unitCode, fiscal.unitName, fiscal.taxObject, fiscal.ivaRate, fiscal.isrRate,
         req.params.id,
       ]

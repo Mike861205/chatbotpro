@@ -289,6 +289,8 @@ function normalizeAiCatalogProducts(inputProducts = [], options = {}) {
       description: cleanText(raw?.description, 1000),
       price: moneyValue(raw?.price),
       categoryName,
+      barcode: cleanText(raw?.barcode ?? raw?.barCode ?? raw?.ean ?? raw?.upc, 64)
+        .toUpperCase().replace(/\s+/g, '').replace(/[^A-Z0-9._\-/]/g, ''),
       variants: [],
       modifierGroups,
       warnings: (Array.isArray(raw?.warnings) ? raw.warnings : []).map((item) => cleanText(item, 240)).filter(Boolean).slice(0, 10),
@@ -315,6 +317,7 @@ function normalizeAiCatalogProducts(inputProducts = [], options = {}) {
       && normalizedKey(candidate.categoryName) === normalizedKey(product.categoryName));
     if (existing) {
       if (product.description.length > existing.description.length) existing.description = product.description;
+      if (!existing.barcode && product.barcode) existing.barcode = product.barcode;
       if (!existing.price || (product.price && product.price < existing.price)) existing.price = product.price;
       mergeUniqueByName(existing.variants, product.variants);
       mergeUniqueByName(existing.modifierGroups, product.modifierGroups, (group, addition) => {
@@ -341,6 +344,7 @@ function buildAiCatalogPrompt(businessType, categoryNames = []) {
     '- El giro configurado es una referencia, no una restricción: si el contenido visible pertenece claramente a otro giro (por ejemplo, un menú de comida), prioriza siempre el documento real y adapta productos, categorías y opciones a lo que muestra.',
     `Genera cada ${profile.item} listo para cargar en el sistema POS/chatbot, siguiendo exactamente la estructura del alta manual.`,
     'Formato JSON requerido:',
+    'Cada producto puede incluir barcode con el cÃ³digo de barras visible y asociado a ese producto. Devuelve el valor completo, sin espacios; no inventes cÃ³digos y usa una cadena vacÃ­a si no es legible.',
     '{"products":[{"name":"string","description":"string","price":123.45,"categoryName":"string","sourceSection":"encabezado visible del bloque","imageIndex":0,"imageRegion":{"imageIndex":0,"x":10,"y":20,"width":30,"height":25,"confidence":0.9},"variants":[{"name":"string","price":123.45}],"modifierGroups":[{"name":"string","minSelections":0,"maxSelections":1,"options":[{"name":"string","extraPrice":0}]}],"confidence":0.95,"warnings":["string"]}],"notes":["string"]}',
     'Reglas de lectura:',
     '- Antes de generar el JSON, haz una auditoría visual silenciosa de cada columna y bloque: título, renglones pequeños debajo o al costado, precios, separadores y siguiente encabezado. No omitas texto pequeño legible.',

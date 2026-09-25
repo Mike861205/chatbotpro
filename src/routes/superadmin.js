@@ -1276,6 +1276,7 @@ router.post('/storage-hygiene/prospects/:id/delete', requireSuperAdmin, async (r
       action: 'delete_prospect', status: 'database_deleting', files: inspection.storage?.files,
       bytes: inspection.storage?.bytes, orphanFiles: inspection.storage?.orphanFiles,
       orphanBytes: inspection.storage?.orphanBytes, manifest: cleanupManifest(inspection), createdBy: req.superadmin.username,
+      purgeAfter: new Date(),
     });
 
     await client.query('DELETE FROM tenant_payments WHERE tenant_id=$1', [tenantId]);
@@ -1293,28 +1294,62 @@ router.post('/storage-hygiene/prospects/:id/delete', requireSuperAdmin, async (r
   }
   client.release();
 
+  let moved = null;
   try {
-    const moved = await moveScopeToQuarantine(tenant.slug, jobId);
-    await q(
-      `UPDATE storage_cleanup_jobs
-       SET status=$1,quarantine_key=$2,quarantined_at=CASE WHEN $3 THEN now() ELSE NULL END,
-           purge_after=CASE WHEN $3 THEN now()+INTERVAL '7 days' ELSE NULL END
-       WHERE id=$4`,
-      [moved.moved ? 'quarantined' : 'completed_no_files', moved.key, moved.moved, jobId]
-    );
+    // El prospecto ya fue validado y eliminado de la base. La carpeta se saca
+    // primero del área pública y enseguida se purga de forma definitiva.
+    moved = await moveScopeToQuarantine(tenant.slug, jobId);
+    if (moved.moved) {
+      await q(
+        `UPDATE storage_cleanup_jobs
+         SET status='quarantined',quarantine_key=$1,quarantined_at=now(),purge_after=now(),error=''
+         WHERE id=$2`,
+        [moved.key, jobId]
+      );
+      await purgeQuarantine(moved.key);
+      await q(
+        `UPDATE storage_cleanup_jobs
+         SET status='purged',purged_at=now(),error=''
+         WHERE id=$1`,
+        [jobId]
+      );
+    } else {
+      await q(
+        `UPDATE storage_cleanup_jobs
+         SET status='completed_no_files',quarantine_key='',quarantined_at=NULL,purge_after=NULL,error=''
+         WHERE id=$1`,
+        [jobId]
+      );
+    }
     res.json({
       ok: true,
       deleted: { id: tenant.id, slug: tenant.slug, businessName: tenant.business_name },
       jobId,
-      quarantine: moved.moved,
-      purgeAfterDays: moved.moved ? 7 : 0,
-      message: moved.moved ? 'Prospecto eliminado y archivos enviados a cuarentena por 7 días' : 'Prospecto eliminado; no tenía archivos físicos',
+      quarantine: false,
+      purged: moved.moved,
+      purgeAfterDays: 0,
+      message: moved.moved ? 'Prospecto, base privada y archivos eliminados definitivamente' : 'Prospecto eliminado; no tenía archivos físicos',
     });
   } catch (error) {
-    await q("UPDATE storage_cleanup_jobs SET status='cleanup_pending',error=$1 WHERE id=$2", [String(error.message || error), jobId]).catch(() => {});
+    const cleanupError = String(error.message || error);
+    if (moved?.key) {
+      // Si la purga falla, los archivos permanecen fuera del acceso público y
+      // se habilita la purga manual inmediata desde el historial.
+      await q(
+        `UPDATE storage_cleanup_jobs
+         SET status='quarantined',quarantine_key=$1,quarantined_at=COALESCE(quarantined_at,now()),
+             purge_after=now(),error=$2
+         WHERE id=$3`,
+        [moved.key, cleanupError, jobId]
+      ).catch(() => {});
+    } else {
+      await q("UPDATE storage_cleanup_jobs SET status='cleanup_pending',error=$1 WHERE id=$2", [cleanupError, jobId]).catch(() => {});
+    }
     res.status(202).json({
       ok: true, jobId, cleanupPending: true,
-      message: 'El prospecto fue eliminado de la base, pero su carpeta quedó pendiente de cuarentena. El analizador volverá a mostrarla como huérfana.',
+      message: moved?.key
+        ? 'El prospecto fue eliminado y sus archivos salieron del acceso público, pero la purga definitiva quedó pendiente y ya puede reintentarse desde el historial.'
+        : 'El prospecto fue eliminado de la base, pero su carpeta quedó pendiente de eliminación. El analizador volverá a mostrarla como huérfana.',
     });
   }
 });
@@ -1418,7 +1453,10 @@ router.post('/storage-hygiene/jobs/:id/purge', requireSuperAdmin, async (req, re
     const job = found.rows[0];
     if (!job) throw Object.assign(new Error('Operación de limpieza no encontrada'), { status: 404 });
     if (job.status !== 'quarantined' || !job.quarantine_key) throw Object.assign(new Error('Esta operación no tiene archivos listos para purgar'), { status: 409 });
-    if (!job.purge_after || new Date(job.purge_after).getTime() > Date.now()) throw Object.assign(new Error('La cuarentena de 7 días todavía no termina'), { status: 409 });
+    const isDeletedProspect = job.action === 'delete_prospect';
+    if (!isDeletedProspect && (!job.purge_after || new Date(job.purge_after).getTime() > Date.now())) {
+      throw Object.assign(new Error('La cuarentena de 7 días todavía no termina'), { status: 409 });
+    }
     await purgeQuarantine(job.quarantine_key);
     await client.query("UPDATE storage_cleanup_jobs SET status='purged',purged_at=now(),error='' WHERE id=$1", [jobId]);
     await client.query('COMMIT');
@@ -1869,6 +1907,96 @@ router.post('/tenants/:id/access', requireSuperAdmin, async (req, res, next) => 
     res.json({ ok: true, redirect: '/app' });
   } catch (e) {
     next(e);
+  }
+});
+
+router.get('/tenants/:id/users', requireSuperAdmin, async (req, res, next) => {
+  try {
+    const tenantId = Number(req.params.id);
+    if (!Number.isInteger(tenantId) || tenantId <= 0) return res.status(400).json({ error: 'Tenant inválido' });
+
+    const tenant = await getTenantById(tenantId);
+    if (!tenant) return res.status(404).json({ error: 'Tenant no encontrado' });
+
+    const users = await q(
+      `SELECT id, username, role, display_name, job_title, branch_id, cashier_slug, active, created_at
+       FROM users WHERE tenant_id = $1
+       ORDER BY CASE WHEN role = 'owner' THEN 0 WHEN role = 'staff' THEN 1 ELSE 2 END, active DESC, id ASC`,
+      [tenantId]
+    );
+    res.json({
+      tenant: { id: tenant.id, slug: tenant.slug, businessName: tenant.business_name },
+      users: users.rows.map((user) => ({
+        id: Number(user.id),
+        username: user.username,
+        role: user.role || 'owner',
+        displayName: user.display_name || user.username,
+        jobTitle: user.job_title || '',
+        branchId: user.branch_id ? Number(user.branch_id) : null,
+        cashierSlug: user.cashier_slug || '',
+        active: Boolean(Number(user.active)),
+        createdAt: user.created_at,
+      })),
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.patch('/tenants/:tenantId/users/:userId', requireSuperAdmin, async (req, res, next) => {
+  try {
+    const tenantId = Number(req.params.tenantId);
+    const userId = Number(req.params.userId);
+    if (!Number.isInteger(tenantId) || tenantId <= 0 || !Number.isInteger(userId) || userId <= 0) {
+      return res.status(400).json({ error: 'Tenant o usuario inválido' });
+    }
+
+    const tenant = await getTenantById(tenantId);
+    if (!tenant) return res.status(404).json({ error: 'Tenant no encontrado' });
+
+    const current = await q('SELECT id, username, role, active FROM users WHERE id = $1 AND tenant_id = $2', [userId, tenantId]);
+    const user = current.rows[0];
+    if (!user) return res.status(404).json({ error: 'Usuario no encontrado en este tenant' });
+
+    const updates = [];
+    const values = [];
+    if (req.body?.active !== undefined) {
+      if (![true, false, 0, 1].includes(req.body.active)) return res.status(400).json({ error: 'Estado de usuario inválido' });
+      values.push(req.body.active === true || req.body.active === 1 ? 1 : 0);
+      updates.push(`active = $${values.length}`);
+    }
+    if (req.body?.newPassword !== undefined) {
+      const newPassword = String(req.body.newPassword || '').trim();
+      if (newPassword.length < 8 || newPassword.length > 128) {
+        return res.status(400).json({ error: 'La contraseña debe tener entre 8 y 128 caracteres' });
+      }
+      values.push(await bcrypt.hash(newPassword, 12));
+      updates.push(`password_hash = $${values.length}`);
+    }
+    if (!updates.length) return res.status(400).json({ error: 'Indica una contraseña o un estado para actualizar' });
+
+    values.push(userId, tenantId);
+    const updated = await q(
+      `UPDATE users SET ${updates.join(', ')} WHERE id = $${values.length - 1} AND tenant_id = $${values.length}
+       RETURNING id, username, role, display_name, job_title, branch_id, cashier_slug, active, created_at`,
+      values
+    );
+    res.json({
+      ok: true,
+      user: {
+        id: Number(updated.rows[0].id),
+        username: updated.rows[0].username,
+        role: updated.rows[0].role || 'owner',
+        displayName: updated.rows[0].display_name || updated.rows[0].username,
+        jobTitle: updated.rows[0].job_title || '',
+        branchId: updated.rows[0].branch_id ? Number(updated.rows[0].branch_id) : null,
+        cashierSlug: updated.rows[0].cashier_slug || '',
+        active: Boolean(Number(updated.rows[0].active)),
+        createdAt: updated.rows[0].created_at,
+      },
+    });
+  } catch (error) {
+    next(error);
   }
 });
 

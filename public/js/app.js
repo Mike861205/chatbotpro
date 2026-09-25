@@ -81,6 +81,8 @@ let KDS_PRODUCT_SELECTED = new Set();
 let POS_CART = [];
 let POS_CATEGORY_FILTER = 'all';
 let POS_PRODUCT_SORT = 'top_sold';
+let POS_BARCODE_BUFFER = '';
+let POS_BARCODE_LAST_KEY_AT = 0;
 let POS_PAYMENT_METHOD = 'cash';
 let POS_CHECKOUT_IN_FLIGHT = false;
 let POS_CHECKOUT_IDEMPOTENCY_KEY = '';
@@ -4231,6 +4233,65 @@ $('#ordersSoundToggle')?.addEventListener('click', () => {
 });
 
 /* ===== Punto de venta ===== */
+function normalizePosBarcode(value) {
+  return String(value || '').trim().toUpperCase().replace(/\s+/g, '');
+}
+
+function barcodeFeatureEnabled() {
+  return Boolean(POS_OVERVIEW?.barcodeEnabled);
+}
+
+function syncPosBarcodeInput() {
+  const wrap = $('#posBarcodeSearch');
+  const input = $('#posBarcodeInput');
+  if (!wrap || !input) return;
+  const enabled = barcodeFeatureEnabled();
+  wrap.hidden = !enabled;
+  if (!enabled) {
+    input.value = '';
+    POS_BARCODE_BUFFER = '';
+    return;
+  }
+  if (CURRENT_VIEW === 'pos' && !document.activeElement?.matches?.('input,textarea,select,button')) input.focus();
+}
+
+function addPosProductByBarcode(rawBarcode) {
+  if (!barcodeFeatureEnabled()) return false;
+  const barcode = normalizePosBarcode(rawBarcode);
+  if (!barcode) return false;
+  const product = (POS_OVERVIEW?.products || []).find((item) => normalizePosBarcode(item.barcode) === barcode);
+  if (!product) {
+    toast(`No encontrÃ© un producto con el cÃ³digo ${barcode}`, true);
+    return false;
+  }
+  addPosProduct(product.id);
+  const input = $('#posBarcodeInput');
+  if (input) input.value = '';
+  return true;
+}
+
+$('#posBarcodeInput')?.addEventListener('keydown', (event) => {
+  if (event.key !== 'Enter') return;
+  event.preventDefault();
+  addPosProductByBarcode(event.currentTarget.value);
+  event.currentTarget.value = '';
+});
+
+document.addEventListener('keydown', (event) => {
+  if (!barcodeFeatureEnabled() || CURRENT_VIEW !== 'pos') return;
+  const target = event.target;
+  if (target?.id === 'posBarcodeInput' || target?.matches?.('input,textarea,select,[contenteditable="true"]')) return;
+  const now = Date.now();
+  if (now - POS_BARCODE_LAST_KEY_AT > 120) POS_BARCODE_BUFFER = '';
+  POS_BARCODE_LAST_KEY_AT = now;
+  if (event.key === 'Enter') {
+    if (POS_BARCODE_BUFFER.length >= 3) addPosProductByBarcode(POS_BARCODE_BUFFER);
+    POS_BARCODE_BUFFER = '';
+    return;
+  }
+  if (event.key.length === 1 && POS_BARCODE_BUFFER.length < 64) POS_BARCODE_BUFFER += event.key;
+});
+
 function moneyNum(value) {
   const num = Number(value);
   return Number.isFinite(num) ? Number(num.toFixed(2)) : 0;
@@ -5385,6 +5446,7 @@ function printPosCloseReport(closeResult) {
 
 async function loadPos() {
   POS_OVERVIEW = await api('/api/pos/overview');
+  syncPosBarcodeInput();
   const managedBranchId = getManagedPosBranchId();
   const managedSessionStillOpen = (POS_OVERVIEW?.openSessions || [])
     .some((session) => Number(session.branch_id) === Number(managedBranchId));
@@ -9065,7 +9127,7 @@ function renderAiDraftRows() {
   const rows = $('#aiProductRows');
   if (!rows) return;
   if (!AI_PRODUCTS_DRAFT.length) {
-    rows.innerHTML = '<tr><td colspan="6"><span class="hint">No hay productos detectados.</span></td></tr>';
+    rows.innerHTML = '<tr><td colspan="7"><span class="hint">No hay productos detectados.</span></td></tr>';
     $('#aiProductImport').disabled = true;
     updateAiImageWorkflowStatus();
     return;
@@ -9123,6 +9185,7 @@ function renderAiDraftRows() {
           ${item.variants.length ? `<div class="ai-variant-price-list" aria-label="Precios por variante">${variantPrices}</div><small class="ai-price-explanation">Al vender se cobra la variante elegida.</small>` : ''}
         </td>
         <td><input type="text" class="ai-cat" value="${esc(item.categoryName || '')}" placeholder="Categoría" /></td>
+        <td><input type="text" class="ai-barcode" maxlength="64" value="${esc(item.barcode || '')}" placeholder="Opcional" inputmode="numeric" autocomplete="off" /></td>
         <td>
           <div class="ai-config-summary">
             ${renderAiImageReview(item)}
@@ -9131,7 +9194,7 @@ function renderAiDraftRows() {
         </td>
         <td><button type="button" class="btn btn-danger btn-icon ai-del" title="Quitar"><i class="ph-bold ph-trash"></i></button></td>
       </tr>
-      <tr id="ai-draft-detail-${idx}" class="ai-config-detail" data-ai-detail="${idx}" ${item._expanded ? '' : 'hidden'}><td colspan="6">${configRows}</td></tr>`;
+      <tr id="ai-draft-detail-${idx}" class="ai-config-detail" data-ai-detail="${idx}" ${item._expanded ? '' : 'hidden'}><td colspan="7">${configRows}</td></tr>`;
   }).join('');
 
   rows.querySelectorAll('.ai-name').forEach((input) => {
@@ -9150,6 +9213,12 @@ function renderAiDraftRows() {
     input.addEventListener('input', (e) => {
       const i = Number(e.target.closest('[data-ai-row]').dataset.aiRow);
       AI_PRODUCTS_DRAFT[i].price = Number(e.target.value) || 0;
+    });
+  });
+  rows.querySelectorAll('.ai-barcode').forEach((input) => {
+    input.addEventListener('input', (e) => {
+      const i = Number(e.target.closest('[data-ai-row]').dataset.aiRow);
+      AI_PRODUCTS_DRAFT[i].barcode = e.target.value.toUpperCase().replace(/\s+/g, '');
     });
   });
   rows.querySelectorAll('.ai-cat').forEach((input) => {
@@ -9400,6 +9469,7 @@ function openProdModal(p = null) {
   $('#pId').value = p ? p.id : '';
   $('#pName').value = p ? p.name : '';
   $('#pDesc').value = p ? p.description || '' : '';
+  $('#pBarcode').value = p ? p.barcode || '' : '';
   $('#pPrice').value = p ? p.price : '';
   $('#pCat').value = p && p.category_id ? p.category_id : '';
   $('#pActive').checked = p ? !!p.active : true;
@@ -9897,6 +9967,7 @@ $('#aiProductImport')?.addEventListener('click', async () => {
       description: String(p.description || '').trim(),
       price: Number(p.price) || 0,
       categoryName: String(p.categoryName || '').trim(),
+      barcode: String(p.barcode || '').trim().toUpperCase().replace(/\s+/g, ''),
       variants: (p.variants || []).map((variant) => ({
         name: String(variant.name || '').trim(),
         price: Number(variant.price) || 0,
@@ -9973,6 +10044,7 @@ $('#prodForm').addEventListener('submit', async (e) => {
   const fd = new FormData();
   fd.append('name', $('#pName').value);
   fd.append('description', $('#pDesc').value);
+  fd.append('barcode', $('#pBarcode').value.trim());
   fd.append('price', $('#pPrice').value);
   fd.append('categoryId', $('#pCat').value);
   fd.append('active', $('#pActive').checked ? '1' : '0');
@@ -12073,6 +12145,7 @@ async function fillConfigForm() {
   renderBankAccounts();
   syncBankAccountsVisibility();
   $('#cfgPosChatIntegration').checked = (SETTINGS.chatbot_pos_integration_enabled || '0') === '1';
+  $('#cfgBarcodeEnabled').checked = (SETTINGS.barcode_enabled || '0') === '1';
   $('#cfgSelfServiceEnabled').checked = (SETTINGS.self_service_enabled || '0') === '1';
   $('#cfgSelfServiceAutoPrint').checked = (SETTINGS.self_service_auto_print || '0') === '1';
   $('#cfgSelfServicePayCash').checked = (SETTINGS.self_service_payment_cash || '1') === '1';
@@ -12684,6 +12757,27 @@ $('#cfgPosChatIntegration')?.addEventListener('change', async (event) => {
     await api('/api/settings', { method: 'PUT', body: fd });
     SETTINGS.chatbot_pos_integration_enabled = value;
     toast(checkbox.checked ? 'Integración con punto de venta activada' : 'Integración con punto de venta desactivada');
+  } catch (error) {
+    checkbox.checked = previousValue === '1';
+    toast(error.message, true);
+  } finally {
+    checkbox.disabled = false;
+  }
+});
+
+$('#cfgBarcodeEnabled')?.addEventListener('change', async (event) => {
+  const checkbox = event.currentTarget;
+  const previousValue = SETTINGS?.barcode_enabled || '0';
+  const value = checkbox.checked ? '1' : '0';
+  checkbox.disabled = true;
+  try {
+    const fd = new FormData();
+    fd.append('barcode_enabled', value);
+    await api('/api/settings', { method: 'PUT', body: fd });
+    SETTINGS.barcode_enabled = value;
+    if (POS_OVERVIEW) POS_OVERVIEW.barcodeEnabled = checkbox.checked;
+    syncPosBarcodeInput();
+    toast(checkbox.checked ? 'Lector de cÃ³digos activado' : 'Lector de cÃ³digos desactivado');
   } catch (error) {
     checkbox.checked = previousValue === '1';
     toast(error.message, true);

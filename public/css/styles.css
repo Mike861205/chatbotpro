@@ -7419,6 +7419,21 @@ body.empty-catalog-ai-open { overflow:hidden; }
 .sa-operation-reset-confirm input { font-family: Consolas, monospace; font-weight: 800; letter-spacing: .02em; }
 .sa-operation-reset-ack { display: flex; align-items: flex-start; gap: 9px; padding: 10px 11px; border: 1px solid var(--line); border-radius: 12px; color: var(--ink-2); background: #f8fafc; font-size: 10px; font-weight: 700; line-height: 1.5; cursor: pointer; }
 .sa-operation-reset-ack input { width: 17px; height: 17px; flex: 0 0 17px; margin-top: 1px; accent-color: #dc2626; }
+.sa-users-modal { max-width: 780px; }
+.sa-users-modal > h3 { display: flex; align-items: center; gap: 8px; }
+.sa-users-list { display: grid; gap: 8px; max-height: min(58vh, 520px); overflow-y: auto; margin: 16px 0; }
+.sa-user-admin-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 12px; padding: 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--soft); }
+.sa-user-admin-main { min-width: 0; display: grid; gap: 3px; }
+.sa-user-admin-main b { color: var(--ink); font-size: 13px; overflow-wrap: anywhere; }
+.sa-user-admin-main span, .sa-user-admin-main small { color: var(--ink-2); font-size: 11px; overflow-wrap: anywhere; }
+.sa-user-admin-actions { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+.sa-user-admin-actions .btn { min-height: 30px; padding: 6px 9px; font-size: 11px; }
+@media (max-width: 700px) {
+  .sa-user-admin-row { grid-template-columns: 1fr auto; }
+  .sa-user-admin-actions { grid-column: 1 / -1; justify-content: stretch; }
+  .sa-user-admin-actions .btn { flex: 1 1 180px; }
+  .sa-users-modal { max-height: calc(100dvh - 24px); overflow-y: auto; }
+}
 @media (max-width: 620px) {
   .sa-operation-reset-grid { grid-template-columns: 1fr; }
   .sa-operation-reset-modal { max-height: calc(100dvh - 24px); overflow-y: auto; }

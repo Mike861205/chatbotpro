@@ -29,6 +29,11 @@ const aiClientCache = new Map();
 const reverseGeoCache = new Map();
 let aiKeyDecryptWarningShown = false;
 
+function normalizeBranchId(value) {
+  const id = Number(value);
+  return Number.isInteger(id) && id > 0 ? id : null;
+}
+
 const SPANISH_STOPWORDS = new Set([
   'de', 'la', 'el', 'los', 'las', 'un', 'una', 'unos', 'unas', 'por', 'para', 'con', 'sin', 'que',
   'quiero', 'quisiera', 'puedo', 'puedes', 'tienen', 'tienes', 'hay', 'me', 'mi', 'del', 'al',
@@ -175,9 +180,7 @@ function parseDeliveryZones(raw) {
           name,
           fee,
           color: String(props?.color || zone?.color || '#0ea5e9'),
-          branchId: Number.isInteger(Number(props?.branchId ?? zone?.branchId)) && Number(props?.branchId ?? zone?.branchId) > 0
-            ? Number(props?.branchId ?? zone?.branchId)
-            : null,
+          branchId: normalizeBranchId(props?.branchId ?? zone?.branchId),
           branchName: String(props?.branchName || zone?.branchName || '').trim(),
           points,
           active: props?.active !== false,
@@ -294,7 +297,7 @@ async function resolveDeliveryFee(geo, address, rules, zones = []) {
       return {
         fee: zoneMatch.fee,
         zoneName: zoneMatch.name,
-        branchId: zoneMatch.branchId != null && zoneMatch.branchId !== '' ? Number(zoneMatch.branchId) : null,
+        branchId: normalizeBranchId(zoneMatch.branchId),
         branchName: zoneMatch.branchName || '',
         resolvedLabel: zoneMatch.name,
       };
@@ -935,7 +938,7 @@ async function findReturningCustomerByPhone(t, phoneRaw) {
     reference: String(row.customer_reference || '').trim(),
     deliveryFee: Number(row.delivery_fee || 0),
     deliveryZoneName: row.delivery_zone_name || '',
-    deliveryBranchId: Number.isFinite(Number(row.service_branch_id)) ? Number(row.service_branch_id) : null,
+    deliveryBranchId: normalizeBranchId(row.service_branch_id),
     deliveryBranchName: row.service_branch_name || '',
     lastDeliveryAt: row.last_delivery_at || '',
   };
@@ -2020,9 +2023,7 @@ async function handleMessage(t, slug, sessionId, rawInput, runtime = {}) {
     const previous = {
       fee: Number(state.customer.deliveryFee || 0),
       zoneName: String(state.customer.deliveryZoneName || ''),
-      branchId: Number.isInteger(Number(state.customer.deliveryBranchId)) && Number(state.customer.deliveryBranchId) > 0
-        ? Number(state.customer.deliveryBranchId)
-        : null,
+      branchId: normalizeBranchId(state.customer.deliveryBranchId),
       branchName: String(state.customer.deliveryBranchName || ''),
     };
     const feeInfo = await resolveDeliveryFee(
@@ -2033,9 +2034,7 @@ async function handleMessage(t, slug, sessionId, rawInput, runtime = {}) {
     );
     state.customer.deliveryFee = Number(feeInfo.fee || 0);
     state.customer.deliveryZoneName = feeInfo.zoneName || '';
-    state.customer.deliveryBranchId = Number.isInteger(Number(feeInfo.branchId)) && Number(feeInfo.branchId) > 0
-      ? Number(feeInfo.branchId)
-      : null;
+    state.customer.deliveryBranchId = normalizeBranchId(feeInfo.branchId);
     state.customer.deliveryBranchName = feeInfo.branchName || '';
     state.customer.locationResolved = feeInfo.resolvedLabel || '';
 
@@ -3613,12 +3612,19 @@ async function handleMessage(t, slug, sessionId, rawInput, runtime = {}) {
       const subtotal = cartTotal(state.cart);
       const deliveryFee = Number(state.customer.deliveryFee || 0);
       const total = subtotal + deliveryFee;
-      const serviceBranchId = isAddressDelivery()
-        ? (Number.isFinite(Number(state.customer.deliveryBranchId)) ? Number(state.customer.deliveryBranchId) : null)
-        : (Number.isFinite(Number(state.customer.branchId)) ? Number(state.customer.branchId) : null);
-      const serviceBranchName = isAddressDelivery()
+      let serviceBranchId = isAddressDelivery()
+        ? normalizeBranchId(state.customer.deliveryBranchId)
+        : normalizeBranchId(state.customer.branchId);
+      let serviceBranchName = isAddressDelivery()
         ? (state.customer.deliveryBranchName || null)
         : (state.customer.branchName || null);
+      if (!serviceBranchId) {
+        const activeBranches = await t.all('SELECT id, name FROM {s}.branches WHERE active = 1 ORDER BY id LIMIT 2');
+        if (activeBranches.length === 1) {
+          serviceBranchId = Number(activeBranches[0].id);
+          serviceBranchName = activeBranches[0].name || serviceBranchName;
+        }
+      }
       const orderRow = await t.get(
         `INSERT INTO {s}.orders
          (customer_id, items, subtotal, total, status, channel, source_channel, delivery, receiving_mode_label, receiving_mode_behavior, notes, order_notes, pickup_branch_id, pickup_branch_name, customer_location_lat, customer_location_lng, customer_location_text, customer_location_resolved, delivery_fee, delivery_zone_name, service_branch_id, service_branch_name, delivery_address, delivery_neighborhood, delivery_reference, scheduled_for)
@@ -3881,6 +3887,7 @@ module.exports = {
   handleMessage,
   newSessionId,
   normalizeCatalogSortMode,
+  normalizeBranchId,
   parseCashAmount,
   parseDeliveryZones,
   pointInPolygon,

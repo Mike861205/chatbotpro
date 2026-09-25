@@ -115,7 +115,7 @@
             <div id="saStorageOrphans"></div>
           </div>
           <div class="card sa-storage-card">
-            <div class="sa-storage-card-head"><div><h3><i class="ph-bold ph-clock-counter-clockwise"></i> Historial y cuarentena</h3><p>La purga definitiva se habilita después de 7 días.</p></div></div>
+            <div class="sa-storage-card-head"><div><h3><i class="ph-bold ph-clock-counter-clockwise"></i> Historial y cuarentena</h3><p>Eliminar un prospecto purga sus archivos al instante; las limpiezas parciales conservan 7 días de seguridad.</p></div></div>
             <div id="saStorageJobs"></div>
           </div>
         </div>
@@ -540,6 +540,17 @@
     </div>
   </div>
 
+  <div class="modal-bg" id="saUsersModal" role="dialog" aria-modal="true" aria-labelledby="saUsersTitle">
+    <div class="modal sa-users-modal">
+      <h3><i class="ph-bold ph-users-three"></i> <span id="saUsersTitle">Usuarios del tenant</span></h3>
+      <p class="hint">Restablece la contraseña o reactiva el acceso de cualquier usuario sin ver su contraseña actual.</p>
+      <div id="saUsersList" class="sa-users-list"></div>
+      <div class="modal-actions">
+        <button type="button" class="btn btn-primary" id="saUsersClose">Cerrar</button>
+      </div>
+    </div>
+  </div>
+
   <div class="modal-bg" id="saStorageActionModal" role="dialog" aria-modal="true" aria-labelledby="saStorageActionTitle">
     <div class="modal sa-storage-action-modal">
       <div class="sa-storage-action-head">
@@ -626,6 +637,6 @@
       </form>
     </div>
   </div>
-  <script src="/static/js/superadmin.js?v=20260921-storage-hygiene"></script>
+  <script src="/static/js/superadmin.js?v=20260922-direct-prospect-purge"></script>
 </body>
 </html>

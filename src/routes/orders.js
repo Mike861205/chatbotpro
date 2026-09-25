@@ -192,7 +192,7 @@ router.get('/:id/comanda-areas', async (req, res, next) => {
        LEFT JOIN {s}.kds_area_categories ac ON ac.area_id = a.id
        LEFT JOIN {s}.kds_area_products   ap ON ap.area_id = a.id
        WHERE a.active = 1
-        AND (a.branch_id IS NULL OR a.branch_id = COALESCE($1::int, $2::int))
+        AND (a.branch_id IS NULL OR a.branch_id = COALESCE(NULLIF($1::int, 0), NULLIF($2::int, 0)))
        GROUP BY a.id, a.name, a.color, a.branch_id
        ORDER BY (a.branch_id IS NULL) ASC, a.id ASC`,
       [orderRow.service_branch_id, orderRow.pickup_branch_id]

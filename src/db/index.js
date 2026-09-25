@@ -616,6 +616,9 @@ async function createTenantSchema(slug) {
     );
     ALTER TABLE "${s}".products ADD COLUMN IF NOT EXISTS unit_cost NUMERIC(12,4) DEFAULT 0;
     ALTER TABLE "${s}".products ADD COLUMN IF NOT EXISTS sale_days TEXT NOT NULL DEFAULT '[]';
+    ALTER TABLE "${s}".products ADD COLUMN IF NOT EXISTS barcode TEXT;
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_${s}_products_barcode
+      ON "${s}".products(barcode) WHERE barcode IS NOT NULL AND barcode <> '';
     CREATE TABLE IF NOT EXISTS "${s}".restaurant_tables (
       id SERIAL PRIMARY KEY,
       table_number INTEGER NOT NULL,

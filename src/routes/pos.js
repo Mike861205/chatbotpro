@@ -1303,7 +1303,7 @@ router.get('/overview', async (req, res, next) => {
        ORDER BY ps.opened_at DESC`
     );
     const products = await req.tdb.all(
-      `SELECT p.id, p.category_id, p.name, p.description, p.price::float AS price, p.image, p.sale_days, c.name AS category_name
+      `SELECT p.id, p.category_id, p.name, p.description, p.price::float AS price, p.image, p.sale_days, p.barcode, c.name AS category_name
        FROM {s}.products p
        LEFT JOIN {s}.categories c ON c.id = p.category_id
        WHERE p.active = 1
@@ -1337,6 +1337,7 @@ router.get('/overview', async (req, res, next) => {
     const lastClosedSession = await getLastClosedSession(req.tdb, ctx);
     const chatbotIntegrationEnabled = await isChatbotPosIntegrationEnabled(req.tdb);
     const policy = await getPosPolicy(req.tdb);
+    const barcodeEnabled = (await getSetting(req.tdb, 'barcode_enabled', '0')) === '1';
 
     // Sucursales bloqueadas por otras sesiones abiertas (distintas al usuario actual)
     const blockedBranchIds = allOpenSessions
@@ -1348,6 +1349,7 @@ router.get('/overview', async (req, res, next) => {
       branches,
       products: productsWithPromotions,
       productTax: taxConfig,
+      barcodeEnabled,
       activeSession,
       lastClosedSession,
       chatbotIntegrationEnabled,

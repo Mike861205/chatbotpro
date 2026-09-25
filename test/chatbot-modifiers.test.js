@@ -120,7 +120,11 @@ test('confirmar por texto guarda el pedido que leen Pedidos y POS', async () => 
       if (sql.includes('INSERT INTO {s}.orders')) { savedOrder = { sql, params }; return { id: 321 }; }
       throw new Error(`Consulta get inesperada: ${sql}`);
     },
-    async all(sql) { if (sql.includes('settings')) return []; throw new Error(`Consulta all inesperada: ${sql}`); },
+    async all(sql) {
+      if (sql.includes('settings')) return [];
+      if (sql.includes('FROM {s}.branches WHERE active = 1')) return [];
+      throw new Error(`Consulta all inesperada: ${sql}`);
+    },
     async run(sql, params) {
       if (sql.includes('chat_sessions')) state = JSON.parse(params[1]);
       else if (!sql.includes('UPDATE {s}.orders SET payment_method')) throw new Error(`Consulta run inesperada: ${sql}`);

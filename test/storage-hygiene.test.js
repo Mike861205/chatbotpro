@@ -40,6 +40,12 @@ test('SuperAdmin expone Higiene, cuarentena y protege visualmente a los clientes
   assert.match(route, /router\.post\('\/storage-hygiene\/prospects\/:id\/delete'/);
   assert.match(route, /router\.post\('\/storage-hygiene\/jobs\/:id\/purge'/);
   assert.match(route, /tenant\.customer_since \|\| tenant\.has_payment/);
+  assert.match(route, /await purgeQuarantine\(moved\.key\)/);
+  assert.match(route, /SET status='purged',purged_at=now\(\)/);
+  assert.match(route, /job\.action === 'delete_prospect'/);
+  assert.match(client, /Eliminación inmediata/);
+  assert.match(client, /base privada y todos sus archivos/);
+  assert.match(client, /Purgar ahora/);
   assert.match(database, /CREATE TABLE IF NOT EXISTS storage_cleanup_jobs/);
   assert.match(legacyCleanup, /const dryRun = true/);
 });

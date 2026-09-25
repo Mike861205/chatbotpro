@@ -65,6 +65,7 @@ const SETTING_KEYS = [
   'chatbot_full_menu_enabled',
   'chatbot_pos_integration_enabled',
   'chatbot_pos_global_orders_enabled',
+  'barcode_enabled',
   'self_service_enabled',
   'self_service_auto_print',
   'self_service_payment_cash',

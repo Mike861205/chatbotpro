@@ -492,6 +492,7 @@ function renderTenantTable() {
           <button type="button" class="btn btn-sa-manage" data-sa-manage="tenant:${t.id}"><i class="ph-bold ph-note-pencil"></i> Gestionar</button>
           ${waUrl ? `<a class="btn btn-ghost" href="${waUrl}" target="_blank" rel="noopener noreferrer"><i class="ph-bold ph-whatsapp-logo" style="color:#22c55e"></i> WhatsApp</a>` : '<button type="button" class="btn btn-ghost" disabled style="opacity:.3"><i class="ph-bold ph-whatsapp-logo"></i> WhatsApp</button>'}
           <button type="button" class="btn btn-ghost" data-sa-password="${t.id}"><i class="ph-bold ph-key"></i> Clave</button>
+          <button type="button" class="btn btn-ghost" data-sa-users="${t.id}"><i class="ph-bold ph-users-three"></i> Usuarios</button>
           <button type="button" class="btn btn-ghost" data-sa-payment="${t.id}"><i class="ph-bold ph-currency-circle-dollar"></i> Pago</button>
           ${(t.phone_country === 'MX' || String(t.phone_calling_code || '').replace('+', '') === '52') ? `<button type="button" class="btn btn-ghost" data-sa-stamps="${t.id}"><i class="ph-bold ph-stamp"></i> ${Number(t.invoicing_enabled) ? 'Facturación activa' : 'Activar facturación'}</button>` : ''}
           ${t.phone_valid && t.phone_e164 ? `<button type="button" class="btn btn-ghost" data-sa-copy-phone="${esc(t.phone_e164)}"><i class="ph-bold ph-copy"></i> Copiar</button>` : '<button type="button" class="btn btn-ghost" disabled style="opacity:.3"><i class="ph-bold ph-copy"></i> Copiar</button>'}
@@ -512,6 +513,9 @@ function renderTenantTable() {
   });
   document.querySelectorAll('[data-sa-password]').forEach((btn) => {
     btn.addEventListener('click', () => changeTenantPassword(Number(btn.dataset.saPassword)).catch((err) => toast(err.message, true)));
+  });
+  document.querySelectorAll('[data-sa-users]').forEach((btn) => {
+    btn.addEventListener('click', () => manageTenantUsers(Number(btn.dataset.saUsers)).catch((err) => toast(err.message, true)));
   });
   document.querySelectorAll('[data-sa-payment]').forEach((btn) => {
     btn.addEventListener('click', () => addTenantPayment(Number(btn.dataset.saPayment)).catch((err) => toast(err.message, true)));
@@ -1100,7 +1104,8 @@ function renderClientsTable() {
       <td><b>${fmtMoney(client.total_paid)}</b><div class="meta">${Number(client.payment_count || 0)} pago${Number(client.payment_count || 0) === 1 ? '' : 's'}</div></td>
       <td><div class="sa-actions-grid">
         <button type="button" class="btn btn-ghost" data-sa-access="${client.id}"><i class="ph-bold ph-sign-in"></i> Entrar</button>
-        <button type="button" class="btn btn-ghost" data-sa-password="${client.id}"><i class="ph-bold ph-key"></i> Clave</button>
+          <button type="button" class="btn btn-ghost" data-sa-password="${client.id}"><i class="ph-bold ph-key"></i> Clave</button>
+          <button type="button" class="btn btn-ghost" data-sa-users="${client.id}"><i class="ph-bold ph-users-three"></i> Usuarios</button>
         <button type="button" class="btn btn-ghost" data-sa-payment="${client.id}"><i class="ph-bold ph-currency-circle-dollar"></i> Pago</button>
         <button type="button" class="btn btn-ghost" data-sa-payments="${client.id}"><i class="ph-bold ph-receipt"></i> Historial</button>
         <button type="button" class="btn btn-ghost" data-sa-licenses="${client.id}"><i class="ph-bold ph-key"></i> Licencias</button>
@@ -1119,6 +1124,7 @@ function renderClientsTable() {
 
   document.querySelectorAll('#saClientsTable [data-sa-access]').forEach((button) => button.onclick = () => accessTenant(Number(button.dataset.saAccess)).catch((error) => toast(error.message, true)));
   document.querySelectorAll('#saClientsTable [data-sa-password]').forEach((button) => button.onclick = () => changeTenantPassword(Number(button.dataset.saPassword)).catch((error) => toast(error.message, true)));
+  document.querySelectorAll('#saClientsTable [data-sa-users]').forEach((button) => button.onclick = () => manageTenantUsers(Number(button.dataset.saUsers)).catch((error) => toast(error.message, true)));
   document.querySelectorAll('#saClientsTable [data-sa-payment]').forEach((button) => button.onclick = () => addTenantPayment(Number(button.dataset.saPayment)).catch((error) => toast(error.message, true)));
   document.querySelectorAll('#saClientsTable [data-sa-payments]').forEach((button) => button.onclick = () => openPaymentsModal(Number(button.dataset.saPayments)).catch((error) => toast(error.message, true)));
   document.querySelectorAll('#saClientsTable [data-sa-licenses]').forEach((button) => button.onclick = () => changeClientLicenses(Number(button.dataset.saLicenses)).catch((error) => toast(error.message, true)));
@@ -1546,6 +1552,66 @@ async function changeTenantPassword(id) {
     body: JSON.stringify({ newPassword: pass }),
   });
   toast('Contraseña actualizada');
+}
+
+const SA_USER_ROLE_LABELS = { owner: 'Propietario', staff: 'Personal', cashier: 'Cajero' };
+let SA_USERS_TENANT_ID = null;
+let SA_TENANT_USERS = [];
+
+async function manageTenantUsers(tenantId) {
+  const data = await api(`/api/superadmin/tenants/${tenantId}/users`);
+  SA_USERS_TENANT_ID = tenantId;
+  SA_TENANT_USERS = data.users || [];
+  $('#saUsersTitle').textContent = `Usuarios · ${data.tenant?.businessName || data.tenant?.slug || 'Tenant'}`;
+  renderTenantUsers();
+  $('#saUsersModal')?.classList.add('show');
+}
+
+function renderTenantUsers() {
+  const target = $('#saUsersList');
+  if (!target) return;
+  target.innerHTML = SA_TENANT_USERS.length
+    ? SA_TENANT_USERS.map((user) => `<div class="sa-user-admin-row">
+        <div class="sa-user-admin-main"><b>${esc(user.displayName || user.username)}</b><span>@${esc(user.username)} · ${esc(SA_USER_ROLE_LABELS[user.role] || user.role)}</span>${user.jobTitle ? `<small>${esc(user.jobTitle)}</small>` : ''}</div>
+        <span class="tag ${user.active ? 'ok' : 'err'}">${user.active ? 'Activo' : 'Bloqueado'}</span>
+        <div class="sa-user-admin-actions">
+          <button type="button" class="btn btn-ghost" data-sa-user-password="${user.id}"><i class="ph-bold ph-key"></i> Restablecer clave</button>
+          <button type="button" class="btn ${user.active ? 'btn-danger' : 'btn-primary'}" data-sa-user-active="${user.id}" data-active="${user.active ? '0' : '1'}"><i class="ph-bold ${user.active ? 'ph-lock' : 'ph-lock-open'}"></i> ${user.active ? 'Bloquear' : 'Desbloquear'}</button>
+        </div>
+      </div>`).join('')
+    : '<div class="empty-mini">Este tenant no tiene usuarios registrados.</div>';
+  target.querySelectorAll('[data-sa-user-password]').forEach((button) => button.addEventListener('click', () => resetTenantUserPassword(Number(button.dataset.saUserPassword)).catch((error) => toast(error.message, true))));
+  target.querySelectorAll('[data-sa-user-active]').forEach((button) => button.addEventListener('click', () => setTenantUserActive(Number(button.dataset.saUserActive), button.dataset.active === '1').catch((error) => toast(error.message, true))));
+}
+
+function closeTenantUsersModal() {
+  $('#saUsersModal')?.classList.remove('show');
+  SA_USERS_TENANT_ID = null;
+  SA_TENANT_USERS = [];
+}
+
+async function resetTenantUserPassword(userId) {
+  const user = SA_TENANT_USERS.find((item) => Number(item.id) === userId);
+  if (!user || !SA_USERS_TENANT_ID) return;
+  const password = String(prompt(`Nueva contraseña para @${user.username} (mínimo 8 caracteres):`, '') || '').trim();
+  if (!password) return;
+  if (password.length < 8) return toast('La contraseña debe tener al menos 8 caracteres', true);
+  await api(`/api/superadmin/tenants/${SA_USERS_TENANT_ID}/users/${userId}`, {
+    method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ newPassword: password }),
+  });
+  toast(`Contraseña actualizada para @${user.username}`);
+}
+
+async function setTenantUserActive(userId, active) {
+  if (!SA_USERS_TENANT_ID) return;
+  const user = SA_TENANT_USERS.find((item) => Number(item.id) === userId);
+  if (!user) return;
+  await api(`/api/superadmin/tenants/${SA_USERS_TENANT_ID}/users/${userId}`, {
+    method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ active }),
+  });
+  user.active = active;
+  renderTenantUsers();
+  toast(`${active ? 'Acceso activado' : 'Usuario bloqueado'} para @${user.username}`);
 }
 
 async function toggleTenantSuspend(id) {
@@ -2099,8 +2165,10 @@ function renderStorageJobs() {
     return;
   }
   target.innerHTML = `<div class="sa-storage-jobs">${jobs.map((job) => {
-    const due = job.status === 'quarantined' && job.purge_after && new Date(job.purge_after).getTime() <= Date.now();
-    return `<article><div><b>#${job.id} · ${esc(job.tenant_slug || job.business_name || 'carpeta')}</b><span>${storageStatusLabel(job.status)} · ${fmtBytes(job.total_bytes)}</span><small>${fmtDateTime(job.created_at)}${job.purge_after && job.status === 'quarantined' ? ` · purga desde ${fmtDateTime(job.purge_after)}` : ''}</small>${job.error ? `<small class="error">${esc(job.error)}</small>` : ''}</div>${due ? `<button class="btn btn-danger" type="button" data-storage-purge="${job.id}"><i class="ph-bold ph-trash"></i> Purgar</button>` : ''}</article>`;
+    const deletedProspect = job.action === 'delete_prospect';
+    const due = job.status === 'quarantined' && (deletedProspect || (job.purge_after && new Date(job.purge_after).getTime() <= Date.now()));
+    const purgeDate = !deletedProspect && job.purge_after && job.status === 'quarantined' ? ` · purga desde ${fmtDateTime(job.purge_after)}` : '';
+    return `<article><div><b>#${job.id} · ${esc(job.tenant_slug || job.business_name || 'carpeta')}</b><span>${storageStatusLabel(job.status)} · ${fmtBytes(job.total_bytes)}</span><small>${fmtDateTime(job.created_at)}${purgeDate}</small>${job.error ? `<small class="error">${esc(job.error)}</small>` : ''}</div>${due ? `<button class="btn btn-danger" type="button" data-storage-purge="${job.id}"><i class="ph-bold ph-trash"></i> ${deletedProspect ? 'Purgar ahora' : 'Purgar'}</button>` : ''}</article>`;
   }).join('')}</div>`;
   document.querySelectorAll('[data-storage-purge]').forEach((button) => button.onclick = () => openStorageAction('purge', { id: Number(button.dataset.storagePurge) }).catch((error) => toast(error.message, true)));
 }
@@ -2161,10 +2229,10 @@ async function openStorageAction(kind, subject) {
       title: deleting ? 'Eliminar prospecto y sus archivos' : 'Limpiar archivos huérfanos',
       subject: `${preview.businessName} · /${preview.slug}`,
       summary: deleting
-        ? `<article><span>Archivos</span><b>${preview.storage?.files || 0}</b></article><article><span>Espacio</span><b>${fmtBytes(preview.storage?.bytes)}</b></article><article><span>Destino</span><b>Cuarentena 7 días</b></article>`
+        ? `<article><span>Archivos</span><b>${preview.storage?.files || 0}</b></article><article><span>Espacio</span><b>${fmtBytes(preview.storage?.bytes)}</b></article><article><span>Destino</span><b>Eliminación inmediata</b></article>`
         : `<article><span>Huérfanos</span><b>${preview.storage?.orphanFiles || 0}</b></article><article><span>Espacio</span><b>${fmtBytes(preview.storage?.orphanBytes)}</b></article><article><span>Vigentes protegidos</span><b>${preview.storage?.referencedFiles || 0}</b></article>`,
-      safety: deleting ? 'Se eliminarán su base privada, usuarios y carpeta. Si registra un pago antes de confirmar, el servidor cancelará la operación.' : 'Solo se moverán archivos sin referencia y con más de 24 horas. El prospecto y sus imágenes vigentes permanecen intactos.',
-      ack: deleting ? 'Entiendo que este prospecto nunca fue cliente y que se eliminarán definitivamente su cuenta y base privada.' : 'Entiendo que los archivos señalados saldrán del acceso público y permanecerán 7 días en cuarentena.',
+      safety: deleting ? 'Se eliminarán definitivamente su base privada, usuarios, imágenes y carpeta. Si registra un pago antes de confirmar, el servidor cancelará la operación.' : 'Solo se moverán archivos sin referencia y con más de 24 horas. El prospecto y sus imágenes vigentes permanecen intactos.',
+      ack: deleting ? 'Entiendo que este prospecto nunca fue cliente y que se eliminarán definitivamente su cuenta, base privada y todos sus archivos.' : 'Entiendo que los archivos señalados saldrán del acceso público y permanecerán 7 días en cuarentena.',
       button: deleting ? '<i class="ph-bold ph-trash"></i> Eliminar prospecto' : '<i class="ph-bold ph-broom"></i> Limpiar huérfanos',
     };
   } else if (kind === 'orphan-scope') {
@@ -2298,6 +2366,7 @@ $('#saBrandLogoFile')?.addEventListener('change', (e) => {
   if (!file) return;
   applySuperAdminLogoFromFile(file);
 });
+$('#saUsersClose')?.addEventListener('click', closeTenantUsersModal);
 $('#saUploadBrandLogo')?.addEventListener('click', () => uploadSuperAdminLogo().catch((e) => toast(e.message, true)));
 
 $('#saTenantSearch')?.addEventListener('input', () => { SA_TENANT_PAGE = 1; renderTenantTable(); });

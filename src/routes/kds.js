@@ -131,13 +131,14 @@ async function buildKdsPayload(tenant, tenantDb, area) {
          AND (o.scheduled_for IS NULL OR o.scheduled_for <= now() + INTERVAL '30 minutes')
          AND (
            $2::int IS NULL
-           OR o.service_branch_id = $2
-           OR o.pickup_branch_id = $2
+           OR NULLIF(o.service_branch_id, 0) = $2
+           OR NULLIF(o.pickup_branch_id, 0) = $2
            OR (
              $3::boolean = TRUE
+             AND $2::int IS NULL
              AND o.channel = 'chatbot'
-             AND o.service_branch_id IS NULL
-             AND o.pickup_branch_id IS NULL
+             AND NULLIF(o.service_branch_id, 0) IS NULL
+             AND NULLIF(o.pickup_branch_id, 0) IS NULL
              AND (
                o.receiving_mode_behavior = 'delivery'
                OR o.delivery = 'domicilio'
@@ -163,7 +164,7 @@ async function buildKdsPayload(tenant, tenantDb, area) {
        LEFT JOIN {s}.branches b ON b.id = NULLIF(ta.branch_id, 0)
        LEFT JOIN {s}.kds_ticket_states s ON s.order_id = -tr.id AND s.area_id = $1
        WHERE (tr.created_at AT TIME ZONE '${tenant.timezone}')::date = (now() AT TIME ZONE '${tenant.timezone}')::date
-         AND ($2::int IS NULL OR ta.branch_id = $2)
+         AND ($2::int IS NULL OR NULLIF(ta.branch_id, 0) = $2)
        ORDER BY tr.created_at ASC`,
       [area.id, area.branch_id || null]
     ),
@@ -230,7 +231,11 @@ async function buildKdsPayload(tenant, tenantDb, area) {
     if (!areaItems.length) continue;
     const ownStatus = KDS_STATUSES.has(order.kds_status) ? order.kds_status : 'pending';
     if (ownStatus === 'completed') continue;
-    const orderBranchId = Number(order.service_branch_id || order.pickup_branch_id) || null;
+    const orderBranchId = Number(order.service_branch_id) > 0
+      ? Number(order.service_branch_id)
+      : (Number(order.pickup_branch_id) > 0
+        ? Number(order.pickup_branch_id)
+        : null);
     const applicableAreaRules = areaRules.filter((rule) => !rule.branchId || rule.branchId === orderBranchId);
     const routedAreas = applicableAreaRules
       .filter((rule) => order.parsedItems.some((item) => itemBelongsToArea(item, productById, rule)))
