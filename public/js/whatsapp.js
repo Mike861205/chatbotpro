@@ -18,8 +18,6 @@ function whatsappEntryNumber(row) {
 }
 
 function whatsappEntryLink(number) {
-  const slug = String(ME?.tenant?.slug || '').trim().toLowerCase();
-  if (number && /^[a-z0-9-]{3,40}$/.test(slug)) return `${window.location.origin}/w/${encodeURIComponent(slug)}`;
   return number ? `https://wa.me/${number}?text=${encodeURIComponent('Hola, quiero hacer un pedido')}` : '';
 }
 
@@ -44,7 +42,7 @@ function renderWhatsAppCustomerEntry(row = WHATSAPP_SELECTED_CONNECTION) {
   $('#whatsappCustomerEntryNumber').textContent = numberLabel;
   $('#whatsappCustomerEntryBusiness').textContent = businessName ? `Pide por ${businessName}` : 'Pide por WhatsApp';
   $('#whatsappCustomerEntryHint').textContent = link
-    ? 'Comparte este QR o enlace; abrirá directamente el WhatsApp de pedidos.'
+    ? 'Comparte este QR o enlace directo; abrirá WhatsApp con un mensaje listo para enviar.'
     : 'Captura el número conectado o activa el teléfono para generar el enlace.';
   if (input) input.value = link;
   if (qr) {

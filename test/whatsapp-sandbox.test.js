@@ -45,7 +45,6 @@ test('la bandeja conserva el cliente y no usa el nombre del negocio en mensajes 
 
 test('WhatsApp ofrece sandbox Zernio y conserva el flujo real de pedidos', () => {
   const route = source('src/routes/whatsapp.js');
-  const server = source('server.js');
   const html = source('public/app.html');
   const client = source('public/js/whatsapp.js');
   const engine = source('src/chatbot/engine.js');
@@ -93,10 +92,8 @@ test('WhatsApp ofrece sandbox Zernio y conserva el flujo real de pedidos', () =>
   assert.match(html, /whatsappCustomerEntryLogo/);
   assert.match(html, /whatsappSyncProfilePhotoBtn/);
   assert.match(html, /sandbox de Zernio/);
-  assert.match(client, /window\.location\.origin.*\/w\//);
+  assert.match(client, /https:\/\/wa\.me\/\$\{number\}\?text=/);
   assert.match(client, /profile-photo/);
-  assert.match(server, /app\.get\('\/w\/:slug'/);
-  assert.match(server, /wa\.me\/\$\{number\}/);
   assert.match(client, /whatsappSandboxActivateBtn/);
   assert.match(client, /whatsappSandboxStartBtn/);
   assert.match(client, /whatsappCustomerShareBtn/);
