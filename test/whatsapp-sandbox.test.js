@@ -74,7 +74,7 @@ test('WhatsApp muestra las acciones como botones completos y separa el catálogo
   });
   assert.ok(actionMessages.every((message) => message.kind === 'buttons'));
   assert.deepEqual(actionMessages.flatMap((message) => message.buttons.map((button) => button.title)), [
-    '✅ Confirmar', '✏️ Editar pedido', '📝 Editar nota', '↩️ Regresar',
+    '👉 ✅ Confirmar', '👉 ✏️ Editar pedido', '👉 📝 Editar nota', '👉 Regresar',
   ]);
   assert.ok(actionMessages.every((message) => message.buttons.length <= 3));
 
@@ -89,5 +89,28 @@ test('WhatsApp muestra las acciones como botones completos y separa el catálogo
   });
   assert.equal(catalogMessages[0].kind, 'list');
   assert.equal(catalogMessages[1].kind, 'buttons');
-  assert.deepEqual(catalogMessages[1].buttons.map((button) => button.title), ['➕ Agregar otro', '🛒 Ver carrito']);
+  assert.deepEqual(catalogMessages[1].buttons.map((button) => button.title), ['👉 ➕ Agregar otro', '👉 🛒 Ver carrito']);
+});
+
+test('WhatsApp separa upsell, acciones de salida y solicitud nativa de ubicación', () => {
+  const route = require('../src/routes/whatsapp');
+  const buildMessages = route.whatsappInteractiveMessages;
+  const messages = buildMessages({
+    options: [
+      { label: '➕ Aros de Cebolla ($15.00)', value: 'upsell_add|promo-1|21' },
+      { label: '➕ Tocino ($25.00)', value: 'upsell_add|promo-1|22' },
+      { label: '➡️ Siguiente ofrecimiento', value: 'upsell_next|promo-1' },
+      { label: '✅ Sería todo, gracias.', value: 'upsell_continue' },
+      { label: '📍 Compartir ubicación', value: 'share_location' },
+    ],
+  });
+
+  assert.equal(messages.filter((message) => message.kind === 'list').length, 1);
+  const list = messages.find((message) => message.kind === 'list');
+  assert.equal(list.interactive.action.button, 'Ver complementos');
+  assert.equal(list.interactive.action.sections[0].rows.length, 2);
+  assert.equal(messages.filter((message) => message.kind === 'location-request').length, 1);
+  assert.equal(messages.find((message) => message.kind === 'location-request').interactive.type, 'locationrequestmessage');
+  const actionButtons = messages.filter((message) => message.kind === 'buttons').flatMap((message) => message.buttons);
+  assert.deepEqual(actionButtons.map((button) => button.title), ['👉 ➡️ Siguiente', '👉 Finalizar']);
 });

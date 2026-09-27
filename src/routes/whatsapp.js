@@ -271,6 +271,15 @@ function whatsappDisplayText(value, max = 1000) {
     .slice(0, max);
 }
 
+function whatsappPromptText(value) {
+  const text = String(value || '').trim();
+  if (/^Elige una opción para continuar:?$/i.test(text)) return '*Selecciona una opción:*';
+  if (/^Selecciona una opción para continuar:?$/i.test(text)) return '*Selecciona una opción:*';
+  if (/^Elige un producto para continuar:?$/i.test(text)) return '*Selecciona un producto:*';
+  if (/^Selecciona un producto para continuar:?$/i.test(text)) return '*Selecciona un producto:*';
+  return value;
+}
+
 // WhatsApp reply buttons have a much smaller title limit than the web
 // assistant. Prefer a complete, clear label over cutting the last character
 // of a sentence such as "gracias" or "productos".
@@ -287,10 +296,17 @@ function whatsappButtonTitle(value) {
     .replace(/^❌\s*No, continuar\.?$/i, '↩️ Continuar')
     .replace(/^📍\s*Compartir ubicación\.?$/i, '📍 Ubicación')
     .replace(/^⏭️\s*Omitir referencia\.?$/i, '⏭️ Omitir referencia')
+    .replace(/^Omitir\.?$/i, 'Omitir')
     .replace(/^Capturar nueva dirección de entrega$/i, 'Nueva dirección')
     .replace(/^👤\s*Soy cliente nuevo$/i, '👤 Cliente nuevo')
     .replace(/^🔁\s*Ya he pedido$/i, '🔁 Ya he pedido');
-  return whatsappDisplayText(compact, 20);
+  const short = compact
+    .replace(/^⏭️\s*Omitir referencia$/i, 'Omitir ref.')
+    .replace(/^📍\s*Ubicación$/i, 'Ubicación')
+    .replace(/^✅\s*Finalizar pedido$/i, 'Finalizar')
+    .replace(/^↩️\s*Continuar$/i, 'Continuar')
+    .replace(/^↩️\s*Regresar$/i, 'Regresar');
+  return whatsappDisplayText(`👉 ${short}`, 20);
 }
 
 function whatsappTransportId(value) {
@@ -391,10 +407,34 @@ function whatsappProductRows(reply) {
   return rows;
 }
 
+function whatsappUpsellRows(reply) {
+  const rows = [];
+  const seen = new Set();
+  for (const option of (Array.isArray(reply.options) ? reply.options : [])) {
+    if (!String(option?.value || '').toLowerCase().startsWith('upsell_add|')) continue;
+    const id = whatsappTransportId(option.value);
+    const raw = whatsappDisplayText(option.label, 120);
+    const match = raw.match(/^➕\s*(.*?)\s*\(([^()]*)\)$/);
+    const name = match?.[1] || raw.replace(/^➕\s*/i, '');
+    const price = match?.[2] || '';
+    const title = whatsappDisplayText(`👉 ${name}`, 24);
+    if (!id || !title || seen.has(id)) continue;
+    seen.add(id);
+    rows.push({
+      id,
+      title,
+      ...(price ? { description: whatsappDisplayText(`${price} · Agregar al pedido`, 72) } : {}),
+    });
+  }
+  return rows;
+}
+
 function whatsappOptionRows(reply) {
   const rows = [];
   const seen = new Set();
   for (const option of (Array.isArray(reply.options) ? reply.options : [])) {
+    if (String(option?.value || '').toLowerCase() === 'share_location') continue;
+    if (String(option?.value || '').toLowerCase().startsWith('upsell_add|')) continue;
     const id = whatsappTransportId(option.value);
     const title = whatsappButtonTitle(option.label);
     if (!id || !title || seen.has(id)) continue;
@@ -407,7 +447,16 @@ function whatsappOptionRows(reply) {
 function whatsappInteractiveMessages(reply) {
   const messages = [];
   const productRows = whatsappProductRows(reply);
+  const upsellRows = whatsappUpsellRows(reply);
   const optionRows = whatsappOptionRows(reply);
+
+  if ((reply.options || []).some((option) => String(option?.value || '').toLowerCase() === 'share_location')) {
+    messages.push({
+      kind: 'location-request',
+      bodyText: '*Selecciona una opción:*',
+      interactive: { type: 'locationrequestmessage' },
+    });
+  }
 
   const addButtonMessages = (rows, bodyText) => {
     for (let index = 0; index < rows.length; index += 3) {
@@ -420,8 +469,26 @@ function whatsappInteractiveMessages(reply) {
     }
   };
 
-  if (productRows.length) {
-    const bodyText = 'Selecciona un producto para continuar:';
+  if (upsellRows.length) {
+    const bodyText = '*Selecciona una opción:*';
+    for (let index = 0; index < upsellRows.length; index += 10) {
+      const chunk = upsellRows.slice(index, index + 10);
+      const pageLabel = upsellRows.length > 10 ? ` ${Math.floor(index / 10) + 1}/${Math.ceil(upsellRows.length / 10)}` : '';
+      messages.push({
+        kind: 'list',
+        bodyText,
+        interactive: {
+          type: 'list',
+          body: { text: bodyText },
+          action: {
+            button: whatsappDisplayText(`Ver complementos${pageLabel}`, 20),
+            sections: [{ rows: chunk }],
+          },
+        },
+      });
+    }
+  } else if (productRows.length) {
+    const bodyText = '*Selecciona un producto:*';
     // Up to three products can be shown as visible buttons. Larger catalogs
     // use WhatsApp's native list so the customer can browse without receiving
     // a long wall of button messages.
@@ -447,11 +514,10 @@ function whatsappInteractiveMessages(reply) {
     }
   }
 
-  // Actions are deliberately kept out of the product list. Confirmation,
-  // cart and navigation choices are always visible as reply buttons; when
-  // there are more than three, WhatsApp receives consecutive button cards.
+  // Keep exit/confirmation actions outside product lists so the customer can
+  // always see how to continue or leave the current step.
   if (optionRows.length) {
-    addButtonMessages(optionRows, productRows.length ? 'Acciones del pedido:' : 'Elige una opción para continuar:');
+    addButtonMessages(optionRows, '*Selecciona una opción:*');
   }
   return messages;
 }
@@ -461,6 +527,8 @@ async function sendInteractive(t, connection, conversation, message, source = 'b
     accountId: connection.zernio_account_id,
     ...(message.kind === 'buttons'
       ? { message: message.bodyText, buttons: message.buttons }
+      : message.kind === 'location-request'
+        ? { message: message.bodyText, interactive: message.interactive }
       : { interactive: message.interactive }),
   };
   const data = await zernioRequest({
@@ -543,9 +611,19 @@ async function sendProductImage(t, connection, conversation, productId) {
 }
 
 async function sendBotReply(t, connection, conversation, reply) {
-  for (const message of (reply.messages || [])) await sendText(t, connection, conversation, message, 'bot');
+  for (const message of (reply.messages || [])) {
+    try {
+      await sendText(t, connection, conversation, whatsappPromptText(message), 'bot');
+    } catch (error) {
+      console.warn('[whatsapp][send-text]', error.message);
+    }
+  }
   for (const interactive of whatsappInteractiveMessages(reply)) {
-    await sendInteractive(t, connection, conversation, interactive, 'bot');
+    try {
+      await sendInteractive(t, connection, conversation, interactive, 'bot');
+    } catch (error) {
+      console.warn('[whatsapp][send-interactive]', error.message);
+    }
   }
 }
 

@@ -51,10 +51,12 @@ test('una coordenada fuera de las zonas no obtiene cargo ni cobertura', async ()
   assert.equal(quote.zoneName, '');
 });
 
-test('pedidos normales y programados revalidan la zona antes de guardarse', () => {
+test('pedidos normales y programados conservan la validación, pero fuera de zona quedan pendientes', () => {
   assert.match(engineSource, /const deliveryCoordinatesRequired = activeDeliveryZones\.length > 0/);
   assert.match(engineSource, /if \(state\.step === 'confirm'\)[\s\S]+const deliveryQuote = await refreshDeliveryQuote\(\)/);
   assert.match(engineSource, /requestValidDeliveryLocation\(deliveryQuote\.reason\)/);
   assert.match(engineSource, /const total = subtotal \+ deliveryFee[\s\S]+state\.customer\.scheduledFor \|\| null/);
-  assert.match(engineSource, /!deliveryCoordinatesRequired \? \[\{ label: 'Omitir', value: 'skip_location' \}\] : \[\]/);
+  assert.match(engineSource, /deliveryPendingReview/);
+  assert.match(engineSource, /Omitir por ahora/);
+  assert.doesNotMatch(engineSource, /if \(isAddressDelivery\(\) && deliveryCoordinatesRequired\) \{\s*requestValidDeliveryLocation\('missing_coordinates'\)/);
 });

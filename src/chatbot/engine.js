@@ -324,6 +324,10 @@ function deliveryZoneServiceLabel(customer) {
   return zoneName || branchName;
 }
 
+function deliveryPendingReview(customer) {
+  return Boolean(customer?.deliveryPendingReview);
+}
+
 async function getAiRuntimeConfig() {
   const now = Date.now();
   if (aiConfigCache.expiresAt > now && aiConfigCache.value) return aiConfigCache.value;
@@ -819,6 +823,9 @@ function pricingSummary(state, currency, labels = RESTAURANT_LABELS) {
     '',
     `*Subtotal: ${money(subtotal, currency)}*`,
     ...(deliveryFee > 0 ? [`*Envío${deliveryLabel ? ` (${deliveryLabel})` : ''}: ${money(deliveryFee, currency)}*`] : []),
+    ...(deliveryPendingReview(state.customer)
+      ? ['*Servicio a domicilio: pendiente de validar por el restaurante (costo por confirmar)*']
+      : []),
     `*Total: ${money(subtotal + deliveryFee, currency)}*`,
     ...conversionSummaryLines(subtotal + deliveryFee, state.currencyConversion),
     ...(orderNote ? [`*🧾 Nota del pedido: ${orderNote}*`] : []),
@@ -1404,6 +1411,9 @@ function buildOrderText(businessName, cart, customer, delivery, currency, labels
     '',
     `*Subtotal: ${money(subtotal, currency)}*`,
     ...(deliveryFee > 0 ? [`*Envío${deliveryLabel ? ` (${deliveryLabel})` : ''}: ${money(deliveryFee, currency)}*`] : []),
+    ...(deliveryPendingReview(customer)
+      ? ['*Servicio a domicilio: pendiente de validar por el restaurante (costo por confirmar)*']
+      : []),
     `*Total: ${money(total, currency)}*`,
     ...conversionSummaryLines(total, conversion),
     ...(orderNote ? [`*🧾 Nota del pedido: ${orderNote}*`] : []),
@@ -2037,7 +2047,15 @@ async function handleMessage(t, slug, sessionId, rawInput, runtime = {}) {
       && rawLng !== null && rawLng !== undefined && rawLng !== ''
       && Number.isFinite(lat) && Number.isFinite(lng);
     if (!hasCoordinates) {
-      return { valid: !deliveryCoordinatesRequired, changed: false, reason: 'missing_coordinates' };
+      const changed = !state.customer.deliveryPendingReview
+        || Number(state.customer.deliveryFee || 0) !== 0
+        || String(state.customer.deliveryZoneName || '') !== '';
+      state.customer.deliveryPendingReview = deliveryCoordinatesRequired;
+      state.customer.deliveryFee = 0;
+      state.customer.deliveryZoneName = deliveryCoordinatesRequired ? 'Pendiente de validar' : '';
+      state.customer.deliveryBranchId = null;
+      state.customer.deliveryBranchName = '';
+      return { valid: true, changed, pendingReview: deliveryCoordinatesRequired, reason: deliveryCoordinatesRequired ? 'missing_coordinates' : '' };
     }
 
     const previous = {
@@ -2045,6 +2063,7 @@ async function handleMessage(t, slug, sessionId, rawInput, runtime = {}) {
       zoneName: String(state.customer.deliveryZoneName || ''),
       branchId: normalizeBranchId(state.customer.deliveryBranchId),
       branchName: String(state.customer.deliveryBranchName || ''),
+      pendingReview: Boolean(state.customer.deliveryPendingReview),
     };
     const feeInfo = await resolveDeliveryFee(
       { lat, lng, label: state.customer.locationText || '' },
@@ -2058,12 +2077,18 @@ async function handleMessage(t, slug, sessionId, rawInput, runtime = {}) {
     state.customer.deliveryBranchName = feeInfo.branchName || '';
     state.customer.locationResolved = feeInfo.resolvedLabel || '';
 
-    const valid = !deliveryCoordinatesRequired || Boolean(feeInfo.zoneName);
+    // A location outside the configured polygons is still a valid customer
+    // request. Leave the order in a reviewable state instead of forcing the
+    // customer into an endless location loop.
+    state.customer.deliveryPendingReview = deliveryCoordinatesRequired && !feeInfo.zoneName;
+    if (state.customer.deliveryPendingReview) state.customer.deliveryZoneName = 'Pendiente de validar';
+    const valid = true;
     const changed = previous.fee !== state.customer.deliveryFee
       || previous.zoneName !== state.customer.deliveryZoneName
       || previous.branchId !== state.customer.deliveryBranchId
-      || previous.branchName !== state.customer.deliveryBranchName;
-    return { valid, changed, reason: valid ? '' : 'outside_delivery_zones' };
+      || previous.branchName !== state.customer.deliveryBranchName
+      || previous.pendingReview !== Boolean(state.customer.deliveryPendingReview);
+    return { valid, changed, pendingReview: Boolean(state.customer.deliveryPendingReview), reason: state.customer.deliveryPendingReview ? 'outside_delivery_zones' : '' };
   };
 
   const requestValidDeliveryLocation = (reason = 'missing_coordinates') => {
@@ -2116,6 +2141,7 @@ async function handleMessage(t, slug, sessionId, rawInput, runtime = {}) {
     state.customer.branchName = '';
     state.customer.branchAddress = '';
     state.customer.branchReference = '';
+    state.customer.deliveryPendingReview = false;
     if (mode.behavior !== 'delivery') {
       state.customer.address = '';
       state.customer.neighborhood = '';
@@ -2946,6 +2972,7 @@ async function handleMessage(t, slug, sessionId, rawInput, runtime = {}) {
       state.customer.locationResolved = '';
       state.customer.deliveryFee = 0;
       state.customer.deliveryZoneName = '';
+      state.customer.deliveryPendingReview = false;
       state.customer.deliveryBranchId = null;
       state.customer.deliveryBranchName = '';
       state.customer.reference = '';
@@ -3248,7 +3275,10 @@ async function handleMessage(t, slug, sessionId, rawInput, runtime = {}) {
   if (state.step === 'ask_address') {
     if (lower === 'share_location') {
       reply.messages = ['Activa la ubicación en tu celular para compartirla 📍'];
-      reply.options = [{ label: '📍 Compartir ubicación', value: 'share_location' }];
+      reply.options = [
+        { label: '📍 Compartir ubicación', value: 'share_location' },
+        { label: 'Omitir por ahora', value: 'skip_location' },
+      ];
       return finish();
     }
     if (lower === 'location_error') {
@@ -3258,7 +3288,7 @@ async function handleMessage(t, slug, sessionId, rawInput, runtime = {}) {
       reply.options = (locationEnabled || deliveryCoordinatesRequired)
         ? [
             { label: '📍 Compartir ubicación', value: 'share_location' },
-            ...(!deliveryCoordinatesRequired ? [{ label: 'Omitir', value: 'skip_location' }] : []),
+            { label: 'Omitir por ahora', value: 'skip_location' },
           ]
         : [];
       return finish();
@@ -3323,11 +3353,11 @@ async function handleMessage(t, slug, sessionId, rawInput, runtime = {}) {
     if ((locationEnabled || deliveryCoordinatesRequired) && !alreadyHasLocation) {
       state.step = 'ask_location_optional';
       reply.messages = [deliveryCoordinatesRequired
-        ? 'Comparte tu ubicación exacta para validar la zona de entrega y calcular el costo del servicio.'
+        ? 'Puedes compartir tu ubicación exacta para calcular el costo del servicio. Si no está dentro de una zona configurada, el restaurante validará el envío manualmente.'
         : '¿Quieres compartir también tu ubicación exacta? (Opcional)'];
       reply.options = [
         { label: '📍 Compartir ubicación', value: 'share_location' },
-        ...(!deliveryCoordinatesRequired ? [{ label: 'Omitir', value: 'skip_location' }] : []),
+        { label: 'Omitir por ahora', value: 'skip_location' },
       ];
     } else {
       state.step = 'ask_reference';
@@ -3339,11 +3369,11 @@ async function handleMessage(t, slug, sessionId, rawInput, runtime = {}) {
 
   if (state.step === 'ask_location_optional') {
     if (lower === 'skip_location') {
-      if (isAddressDelivery() && deliveryCoordinatesRequired) {
-        requestValidDeliveryLocation('missing_coordinates');
-        return finish();
-      }
       if (isAddressDelivery()) {
+        if (deliveryCoordinatesRequired) {
+          state.customer.deliveryPendingReview = true;
+          state.customer.deliveryZoneName = 'Pendiente de validar';
+        }
         state.step = 'ask_reference';
         reply.messages = ['¿Alguna referencia de tu domicilio? (ejemplo: portón negro, casa esquina).'];
         reply.options = [{ label: 'Omitir referencia', value: 'skip_reference' }];
@@ -3358,7 +3388,7 @@ async function handleMessage(t, slug, sessionId, rawInput, runtime = {}) {
       ];
       reply.options = [
         { label: '📍 Compartir ubicación', value: 'share_location' },
-        ...(!deliveryCoordinatesRequired ? [{ label: 'Omitir', value: 'skip_location' }] : []),
+        { label: 'Omitir por ahora', value: 'skip_location' },
       ];
       return finish();
     }
@@ -3366,7 +3396,7 @@ async function handleMessage(t, slug, sessionId, rawInput, runtime = {}) {
       reply.messages = ['Activa la ubicación en tu celular para compartirla 📍'];
       reply.options = [
         { label: '📍 Compartir ubicación', value: 'share_location' },
-        ...(!deliveryCoordinatesRequired ? [{ label: 'Omitir', value: 'skip_location' }] : []),
+        { label: 'Omitir por ahora', value: 'skip_location' },
       ];
       return finish();
     }
@@ -3400,7 +3430,7 @@ async function handleMessage(t, slug, sessionId, rawInput, runtime = {}) {
     reply.messages = ['Elige una opción para continuar:'];
     reply.options = [
       { label: '📍 Compartir ubicación', value: 'share_location' },
-      ...(!deliveryCoordinatesRequired ? [{ label: 'Omitir', value: 'skip_location' }] : []),
+      { label: 'Omitir por ahora', value: 'skip_location' },
     ];
     return finish();
   }
