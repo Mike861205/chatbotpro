@@ -237,6 +237,116 @@ async function sendText(t, connection, conversation, text, source = 'bot') {
   return { messageId, data };
 }
 
+function whatsappDisplayText(value, max = 1000) {
+  return String(value ?? '')
+    .replace(/[\*_`~]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, max);
+}
+
+function whatsappInteractiveRows(reply) {
+  const rows = [];
+  const seen = new Set();
+  const add = (id, title, description = '') => {
+    const normalizedId = whatsappDisplayText(id, 200);
+    const normalizedTitle = whatsappDisplayText(title, 24);
+    if (!normalizedId || !normalizedTitle || seen.has(normalizedId)) return;
+    seen.add(normalizedId);
+    rows.push({
+      id: normalizedId,
+      title: normalizedTitle,
+      ...(description ? { description: whatsappDisplayText(description, 72) } : {}),
+    });
+  };
+
+  for (const product of (Array.isArray(reply.products) ? reply.products : [])) {
+    add(`prod_${product.id}`, product.name, product.priceLabel || product.description || '');
+  }
+  for (const option of (Array.isArray(reply.options) ? reply.options : [])) {
+    add(option.value, option.label);
+  }
+  return rows;
+}
+
+function whatsappInteractiveMessages(reply) {
+  const rows = whatsappInteractiveRows(reply);
+  if (!rows.length) return [];
+
+  const bodyText = whatsappDisplayText(
+    Array.isArray(reply.products) && reply.products.length
+      ? 'Selecciona un producto para continuar:'
+      : 'Elige una opción para continuar:',
+    1024
+  );
+
+  // WhatsApp reply buttons are the closest equivalent to the web assistant's
+  // visible buttons, but Meta/Zernio limit them to three per message.
+  if (rows.length <= 3) {
+    return [{
+      kind: 'buttons',
+      bodyText,
+      buttons: rows.map((row) => ({ type: 'postback', title: row.title, payload: row.id })),
+    }];
+  }
+
+  // Native WhatsApp lists allow up to ten rows. Keep every option available
+  // by splitting larger engine replies into multiple list messages.
+  const messages = [];
+  for (let index = 0; index < rows.length; index += 10) {
+    const chunk = rows.slice(index, index + 10);
+    const pageLabel = rows.length > 10 ? ` (${Math.floor(index / 10) + 1}/${Math.ceil(rows.length / 10)})` : '';
+    const opener = Array.isArray(reply.products) && reply.products.length
+      ? 'Ver productos'
+      : rows.some((row) => /men[uú]/i.test(row.title)) ? 'Ver menú' : 'Ver opciones';
+    messages.push({
+      kind: 'list',
+      bodyText,
+      interactive: {
+        type: 'list',
+        body: { text: bodyText },
+        action: {
+          button: whatsappDisplayText(`${opener}${pageLabel}`, 20),
+          sections: [{ rows: chunk }],
+        },
+      },
+    });
+  }
+  return messages;
+}
+
+async function sendInteractive(t, connection, conversation, message, source = 'bot') {
+  const body = {
+    accountId: connection.zernio_account_id,
+    ...(message.kind === 'buttons'
+      ? { message: message.bodyText, buttons: message.buttons }
+      : { interactive: message.interactive }),
+  };
+  const data = await zernioRequest({
+    apiKey: decrypt(connection.api_key_enc),
+    path: `/v1/inbox/conversations/${encodeURIComponent(conversation.external_id)}/messages`,
+    method: 'POST',
+    body,
+  });
+  const messageId = clean(firstValue(data, ['data.messageId', 'messageId', 'data.id', 'id']) || `out_${sha256(`${Date.now()}_${JSON.stringify(body)}`)}`, 180);
+  await t.run(
+    `INSERT INTO {s}.whatsapp_messages
+      (conversation_id, external_message_id, direction, message_type, body, source, status, payload_json)
+     VALUES ($1,$2,'outbound','interactive',$3,$4,'sent',$5)
+     ON CONFLICT (external_message_id) DO NOTHING`,
+    [conversation.id, messageId, message.bodyText, source, safePayload({ request: body, response: data })]
+  );
+  await t.run('UPDATE {s}.whatsapp_conversations SET last_message_at = now(), updated_at = now() WHERE id = $1', [conversation.id]);
+  return { messageId, data };
+}
+
+async function sendBotReply(t, connection, conversation, reply) {
+  for (const message of (reply.messages || [])) await sendText(t, connection, conversation, message, 'bot');
+  for (const interactive of whatsappInteractiveMessages(reply)) {
+    await sendInteractive(t, connection, conversation, interactive, 'bot');
+  }
+}
+
 function webhookMessage(payload) {
   const eventType = clean(firstValue(payload, ['event', 'type', 'eventType', 'data.event', 'data.type']), 80).toLowerCase();
   const messageId = clean(firstValue(payload, [
@@ -258,11 +368,24 @@ function webhookMessage(payload) {
   const messageValue = firstValue(payload, [
     'message.text', 'message.body', 'data.message.text', 'data.message.body', 'text', 'body', 'data.text',
   ]);
-  const text = typeof messageValue === 'object' ? clean(messageValue?.body || messageValue?.text || '') : clean(messageValue, 10000);
+  const interactiveId = clean(firstValue(payload, [
+    'metadata.interactiveId', 'message.metadata.interactiveId', 'data.metadata.interactiveId', 'data.message.metadata.interactiveId',
+  ]), 200);
+  const interactiveType = clean(firstValue(payload, [
+    'metadata.interactiveType', 'message.metadata.interactiveType', 'data.metadata.interactiveType', 'data.message.metadata.interactiveType',
+  ]), 80);
+  const interactiveTitle = clean(firstValue(payload, [
+    'metadata.interactiveTitle', 'message.metadata.interactiveTitle', 'data.metadata.interactiveTitle', 'data.message.metadata.interactiveTitle',
+  ]), 200);
+  const textValue = typeof messageValue === 'object' ? clean(messageValue?.body || messageValue?.text || '') : clean(messageValue, 10000);
+  // Zernio returns list/button taps in metadata rather than message text. The
+  // ID is intentionally passed to the existing chatbot engine because its
+  // machine commands are already the canonical option values.
+  const text = textValue || interactiveId || interactiveTitle;
   const source = clean(firstValue(payload, ['source', 'data.source', 'metadata.source']), 80);
   const incoming = eventType.includes('received') || eventType.includes('inbound') || eventType === 'message.new';
   const outgoing = eventType.includes('sent') || eventType.includes('outbound') || eventType.includes('outgoing');
-  return { eventType, messageId, conversationId, participant, recipient, senderName, text, source, incoming, outgoing };
+  return { eventType, messageId, conversationId, participant, recipient, senderName, text, interactiveId, interactiveType, interactiveTitle, source, incoming, outgoing };
 }
 
 async function handleWebhook(req, res, next) {
@@ -324,9 +447,9 @@ async function handleWebhook(req, res, next) {
         await t.run(
           `INSERT INTO {s}.whatsapp_messages
             (conversation_id,external_message_id,direction,message_type,body,source,status,payload_json)
-           VALUES($1,$2,$3,'text',$4,$5,$6,$7)
+           VALUES($1,$2,$3,$4,$5,$6,$7,$8)
            ON CONFLICT(external_message_id) DO NOTHING`,
-          [conversation.id, parsed.messageId, parsed.incoming ? 'inbound' : 'outbound', parsed.text, parsed.source || (parsed.incoming ? 'whatsapp' : 'cellular'), parsed.incoming ? 'received' : 'sent', safePayload(payload)]
+          [conversation.id, parsed.messageId, parsed.incoming ? 'inbound' : 'outbound', parsed.interactiveId ? 'interactive' : 'text', parsed.interactiveTitle || parsed.text, parsed.source || (parsed.incoming ? 'whatsapp' : 'cellular'), parsed.incoming ? 'received' : 'sent', safePayload(payload)]
         );
       }
 
@@ -339,7 +462,7 @@ async function handleWebhook(req, res, next) {
             customerPhone: parsed.participant,
             customerName: parsed.senderName,
           });
-          for (const message of (reply.messages || [])) await sendText(t, connection, conversation, message, 'bot');
+          await sendBotReply(t, connection, conversation, reply);
           if (reply.order?.id) {
             await t.run(
               `UPDATE {s}.orders
