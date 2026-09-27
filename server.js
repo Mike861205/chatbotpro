@@ -172,8 +172,8 @@ app.get('/w/:slug', validSlug, async (req, res, next) => {
       const metadata = JSON.parse(connection?.metadata_json || '{}');
       connectionWhatsapp = connectionWhatsapp || metadata?.sandbox?.number || '';
     } catch {}
-    const number = normalizePublicWhatsappNumber(configuredWhatsapp)
-      || normalizePublicWhatsappNumber(connectionWhatsapp);
+    const number = normalizePublicWhatsappNumber(connectionWhatsapp)
+      || normalizePublicWhatsappNumber(configuredWhatsapp);
     if (!number) return res.status(404).send('Este negocio todavía no tiene un número de WhatsApp activo.');
 
     const text = String(req.query.text || 'Hola, quiero hacer un pedido').trim().slice(0, 300) || 'Hola, quiero hacer un pedido';

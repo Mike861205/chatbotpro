@@ -57,8 +57,8 @@ router.get('/:slug/info', findTenant, async (req, res, next) => {
       primaryColor: req.tenant.primary_color,
       address: await getSetting(req.tdb, 'address'),
       hours: await getSetting(req.tdb, 'hours'),
-      whatsapp: normalizeWhatsappNumber(configuredWhatsapp)
-        || normalizeWhatsappNumber(zernioWhatsapp)
+      whatsapp: normalizeWhatsappNumber(zernioWhatsapp)
+        || normalizeWhatsappNumber(configuredWhatsapp)
         || normalizeWhatsappNumber(fallbackWhatsapp),
       floatingIcons: parseFloatingIcons(await getSetting(req.tdb, 'chatbot_floating_icons_json')),
     });
