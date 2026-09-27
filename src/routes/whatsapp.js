@@ -182,7 +182,9 @@ async function ensureZernioWebhook({ req, t, connection }) {
     url,
     events: WEBHOOK_EVENTS,
     secret,
-    ...(connection.zernio_account_id ? { accountIds: [connection.zernio_account_id] } : {}),
+    // La cuenta compartida del sandbox no pertenece al equipo de Zernio y
+    // rechaza el filtro accountIds; en producción sí aislamos por cuenta.
+    ...(connection.zernio_account_id && connection.mode !== 'sandbox' ? { accountIds: [connection.zernio_account_id] } : {}),
     ...(connection.profile_id && connection.mode !== 'sandbox' ? { profileIds: [connection.profile_id] } : {}),
   };
   const result = await zernioRequest({
