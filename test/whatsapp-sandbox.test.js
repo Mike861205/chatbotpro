@@ -20,6 +20,9 @@ test('WhatsApp ofrece sandbox Zernio y conserva el flujo real de pedidos', () =>
   assert.match(route, /metadata\.oauthState === state/);
   assert.match(route, /legacyCallbackIsValid/);
   assert.match(route, /profile_id=COALESCE\(NULLIF\(\$1,''\),profile_id\)/);
+  assert.match(route, /isActive: true/);
+  assert.match(route, /setImmediate\(\(\) =>/);
+  assert.match(route, /status IN \('active','connected'\)/);
   assert.match(route, /interactive: \{/);
   assert.match(route, /buttons: rows\.map/);
   assert.match(route, /metadata\.interactiveId/);

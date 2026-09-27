@@ -207,6 +207,7 @@ async function ensureZernioWebhook({ req, t, connection }) {
     url,
     events: WEBHOOK_EVENTS,
     secret,
+    isActive: true,
     // La cuenta compartida del sandbox no pertenece al equipo de Zernio y
     // rechaza el filtro accountIds; en producción sí aislamos por cuenta.
     ...(connection.zernio_account_id && connection.mode !== 'sandbox' ? { accountIds: [connection.zernio_account_id] } : {}),
@@ -484,6 +485,44 @@ async function sendBotReply(t, connection, conversation, reply) {
   }
 }
 
+// Zernio expects a webhook response within five seconds. Persisting the event
+// and the inbound message happens in the request; the potentially slow AI and
+// outbound WhatsApp calls continue after the 2xx response.
+async function processWhatsAppBotReply({ t, tenantSlug, connection, conversation, parsed, externalConversationId }) {
+  try {
+    const sessionId = `wa_${connection.id}_${sha256(externalConversationId).slice(0, 42)}`;
+    const reply = await handleMessage(t, tenantSlug, sessionId, parsed.text, {
+      orderChannel: 'chatbot',
+      sourceChannel: 'whatsapp',
+      customerPhone: parsed.participant,
+      customerName: parsed.senderName,
+    });
+    const selectedProductId = whatsappProductIdFromInput(parsed.text);
+    if (selectedProductId) await sendProductImage(t, connection, conversation, selectedProductId);
+    await sendBotReply(t, connection, conversation, reply);
+    if (reply.order?.id) {
+      await t.run(
+        `UPDATE {s}.orders
+         SET source_channel='whatsapp', whatsapp_conversation_id=$1, whatsapp_external_id=$2
+         WHERE id=$3`,
+        [conversation.id, externalConversationId, reply.order.id]
+      );
+    }
+  } catch (error) {
+    // A transient provider limit or one failed outbound message must not make
+    // an otherwise connected channel appear disconnected in the UI.
+    await t.run(
+      `UPDATE {s}.whatsapp_connections
+       SET last_error=$1,
+           status=CASE WHEN status IN ('active','connected') THEN status ELSE 'error' END,
+           updated_at=now()
+       WHERE id=$2`,
+      [clean(error.message, 500), connection.id]
+    ).catch(() => {});
+    console.error('[whatsapp][bot]', tenantSlug, error.message);
+  }
+}
+
 function webhookMessage(payload) {
   const eventType = clean(firstValue(payload, ['event', 'type', 'eventType', 'data.event', 'data.type']), 80).toLowerCase();
   const messageId = clean(firstValue(payload, [
@@ -599,29 +638,11 @@ async function handleWebhook(req, res, next) {
       }
 
       if (parsed.incoming && parsed.text && Number(conversation.bot_enabled) === 1 && Number(connection.enabled) === 1) {
-        const sessionId = `wa_${connection.id}_${sha256(externalConversationId).slice(0, 42)}`;
-        try {
-          const reply = await handleMessage(t, tenantSlug, sessionId, parsed.text, {
-            orderChannel: 'chatbot',
-            sourceChannel: 'whatsapp',
-            customerPhone: parsed.participant,
-            customerName: parsed.senderName,
+        setImmediate(() => {
+          processWhatsAppBotReply({ t, tenantSlug, connection, conversation, parsed, externalConversationId }).catch((error) => {
+            console.error('[whatsapp][bot-queue]', tenantSlug, error.message);
           });
-          const selectedProductId = whatsappProductIdFromInput(parsed.text);
-          if (selectedProductId) await sendProductImage(t, connection, conversation, selectedProductId);
-          await sendBotReply(t, connection, conversation, reply);
-          if (reply.order?.id) {
-            await t.run(
-              `UPDATE {s}.orders
-               SET source_channel='whatsapp', whatsapp_conversation_id=$1, whatsapp_external_id=$2
-               WHERE id=$3`,
-              [conversation.id, externalConversationId, reply.order.id]
-            );
-          }
-        } catch (error) {
-          await t.run('UPDATE {s}.whatsapp_connections SET last_error=$1, status=CASE WHEN status=\'active\' THEN status ELSE \'error\' END, updated_at=now() WHERE id=$2', [clean(error.message, 500), connection.id]);
-          console.error('[whatsapp][bot]', tenantSlug, error.message);
-        }
+        });
       }
       emitWhatsAppUpdate(tenantSlug, { conversationId: Number(conversation.id), event: 'message' });
     }
