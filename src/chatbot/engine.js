@@ -1004,6 +1004,19 @@ async function showProducts(t, state, categoryId, labels = RESTAURANT_LABELS, { 
   state.browseMode = promotionsOnly ? 'promotions' : 'menu';
   const currency = state.currency;
   const qtyById = new Map((state.cart || []).map((it) => [Number(it.id), Number(it.qty || 0)]));
+  const productIds = products.map((product) => Number(product.id)).filter((id) => Number.isInteger(id) && id > 0);
+  const variantRows = productIds.length
+    ? await t.all(
+      'SELECT product_id, name, price::float AS price FROM {s}.product_variants WHERE product_id = ANY($1::int[]) AND active = 1 ORDER BY product_id, sort, id',
+      [productIds]
+    )
+    : [];
+  const variantsByProduct = new Map();
+  for (const variant of variantRows) {
+    const id = Number(variant.product_id);
+    if (!variantsByProduct.has(id)) variantsByProduct.set(id, []);
+    variantsByProduct.get(id).push({ name: variant.name, price: Number(variant.price) });
+  }
   return {
     messages: [promotionsOnly ? '🔥 Elige una promoción para agregarla a tu pedido:' : (labels.browseTitle || 'Elige un producto para agregarlo a tu pedido:')],
     products: products.map((p) => ({
@@ -1017,6 +1030,7 @@ async function showProducts(t, state, categoryId, labels = RESTAURANT_LABELS, { 
       promotion: p.activePromotion,
       image: p.image,
       category: p.category || '',
+      variants: variantsByProduct.get(Number(p.id)) || [],
       qty: qtyById.get(Number(p.id)) || 0,
     })),
     catalogSortMode: catalogSortMode ? normalizeCatalogSortMode(catalogSortMode) : '',

@@ -299,10 +299,11 @@ function fakeMenuTenantDb(initialState) {
       if (sql.includes('SELECT name FROM {s}.categories')) return categories.find((row) => row.id === Number(params[0])) || null;
       throw new Error(`Consulta get inesperada: ${sql}`);
     },
-    async all(sql) {
+    async all(sql, params) {
       if (sql.includes('settings')) return [];
       if (sql.includes('SELECT * FROM {s}.categories')) return categories;
       if (sql.includes('FROM {s}.products p LEFT JOIN {s}.categories')) return products;
+      if (sql.includes('FROM {s}.product_variants')) return [];
       throw new Error(`Consulta all inesperada: ${sql}`);
     },
     async run(sql, params) {

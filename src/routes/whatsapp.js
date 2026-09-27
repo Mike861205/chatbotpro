@@ -288,7 +288,11 @@ function whatsappInteractiveRows(reply) {
   };
 
   for (const product of (Array.isArray(reply.products) ? reply.products : [])) {
-    add(`prod_${product.id}`, product.name, product.priceLabel || product.description || '');
+    const variants = Array.isArray(product.variants) ? product.variants.filter((variant) => variant?.name) : [];
+    const variantHint = variants.length > 1
+      ? `${variants.length} variantes · desde ${whatsappDisplayText(product.priceLabel || '', 48)}`
+      : '';
+    add(`prod_${product.id}`, product.name, variantHint || product.priceLabel || product.description || '');
   }
   for (const option of (Array.isArray(reply.options) ? reply.options : [])) {
     add(option.value, option.label);
