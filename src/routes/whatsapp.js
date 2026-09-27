@@ -1156,6 +1156,47 @@ router.post('/connections/:id/test', requireOwner, async (req, res, next) => {
   }
 });
 
+router.post('/connections/:id/profile-photo', requireOwner, async (req, res, next) => {
+  try {
+    const connection = await connectionWithSecret(req.tdb, Number(req.params.id));
+    if (connection.mode === 'sandbox') return res.status(400).json({ error: 'El sandbox no tiene un perfil de WhatsApp propio' });
+    if (!connection.zernio_account_id) return res.status(400).json({ error: 'Captura el Account ID de Zernio antes de sincronizar la foto' });
+    const apiKey = decrypt(connection.api_key_enc);
+    if (!apiKey) return res.status(400).json({ error: 'Guarda primero la API key de Zernio' });
+    const logo = String(req.tenant.logo || '').trim();
+    if (!logo) return res.status(400).json({ error: 'Configura primero el logo en Mi negocio' });
+    const publicBase = String(config.WHATSAPP_PUBLIC_URL || '').replace(/\/+$/, '');
+    const photoUrl = /^https:\/\//i.test(logo)
+      ? logo
+      : publicBase ? `${publicBase}/${logo.replace(/^\/+/, '')}` : '';
+    if (!/^https:\/\//i.test(photoUrl)) {
+      return res.status(400).json({ error: 'Configura PUBLIC_APP_URL o WHATSAPP_PUBLIC_URL con HTTPS para publicar el logo' });
+    }
+
+    let data;
+    try {
+      data = await zernioRequest({
+        apiKey,
+        path: '/v1/whatsapp/business-profile/photo',
+        method: 'POST',
+        body: { accountId: connection.zernio_account_id, url: photoUrl },
+      });
+    } catch (error) {
+      if (Number(error.providerStatus) === 422) {
+        return res.status(409).json({ error: 'La foto está bloqueada por coexistencia. Cámbiala desde la app WhatsApp Business del teléfono.' });
+      }
+      throw error;
+    }
+
+    const metadata = safeJson(connection.metadata_json, {});
+    const updated = await req.tdb.get(
+      'UPDATE {s}.whatsapp_connections SET metadata_json=$1,last_error=\'\',updated_at=now() WHERE id=$2 RETURNING *',
+      [JSON.stringify({ ...metadata, profilePhotoUrl: photoUrl, profilePhotoSyncedAt: new Date().toISOString() }), connection.id]
+    );
+    res.json({ ok: true, connection: connectionPublic(updated || connection, req), profilePhoto: data });
+  } catch (error) { next(error); }
+});
+
 router.post('/connections/:id/toggle', requireOwner, async (req, res, next) => {
   try {
     const id = Number(req.params.id);

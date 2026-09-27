@@ -17,6 +17,12 @@ function whatsappEntryNumber(row) {
     || normalizeWhatsAppEntryNumber(row?.sandbox?.number);
 }
 
+function whatsappEntryLink(number) {
+  const slug = String(ME?.tenant?.slug || '').trim().toLowerCase();
+  if (number && /^[a-z0-9-]{3,40}$/.test(slug)) return `${window.location.origin}/w/${encodeURIComponent(slug)}`;
+  return number ? `https://wa.me/${number}?text=${encodeURIComponent('Hola, quiero hacer un pedido')}` : '';
+}
+
 function renderWhatsAppCustomerEntry(row = WHATSAPP_SELECTED_CONNECTION) {
   const card = $('#whatsappCustomerEntryCard');
   if (!card) return;
@@ -24,13 +30,19 @@ function renderWhatsAppCustomerEntry(row = WHATSAPP_SELECTED_CONNECTION) {
   if (!row) return;
   const number = whatsappEntryNumber(row);
   const numberLabel = number ? `+${number}` : 'Número pendiente';
-  const link = number ? `https://wa.me/${number}?text=${encodeURIComponent('Hola, quiero hacer un pedido')}` : '';
+  const link = whatsappEntryLink(number);
   const input = $('#whatsappCustomerLink');
   const qr = $('#whatsappCustomerQr');
   const open = $('#whatsappCustomerOpenBtn');
   const copy = $('#whatsappCustomerCopyBtn');
   const share = $('#whatsappCustomerShareBtn');
+  const syncPhoto = $('#whatsappSyncProfilePhotoBtn');
+  const logo = String(ME?.tenant?.logo || '').trim();
+  const logoImage = $('#whatsappCustomerEntryLogo');
+  const logoFallback = $('#whatsappCustomerEntryLogoFallback');
+  const businessName = String(ME?.tenant?.businessName || '').trim();
   $('#whatsappCustomerEntryNumber').textContent = numberLabel;
+  $('#whatsappCustomerEntryBusiness').textContent = businessName ? `Pide por ${businessName}` : 'Pide por WhatsApp';
   $('#whatsappCustomerEntryHint').textContent = link
     ? 'Comparte este QR o enlace; abrirá directamente el WhatsApp de pedidos.'
     : 'Captura el número conectado o activa el teléfono para generar el enlace.';
@@ -42,6 +54,22 @@ function renderWhatsAppCustomerEntry(row = WHATSAPP_SELECTED_CONNECTION) {
   if (open) { open.href = link || '#'; open.classList.toggle('disabled', !link); open.setAttribute('aria-disabled', String(!link)); }
   if (copy) copy.disabled = !link;
   if (share) share.disabled = !link;
+  if (logoImage) {
+    logoImage.hidden = !logo;
+    logoImage.src = logo || '';
+    logoImage.alt = businessName ? `Logo de ${businessName}` : 'Logo del negocio';
+    logoImage.onerror = () => { logoImage.hidden = true; if (logoFallback) logoFallback.hidden = false; };
+  }
+  if (logoFallback) logoFallback.hidden = Boolean(logo);
+  if (syncPhoto) syncPhoto.disabled = !row?.id || !logo || row?.mode !== 'api';
+  const profilePhotoHint = $('#whatsappProfilePhotoHint');
+  if (profilePhotoHint) {
+    profilePhotoHint.innerHTML = row?.mode === 'business_app'
+      ? '<i class="ph-bold ph-info"></i><span>La foto se toma del logo configurado en <b>Mi negocio</b>. En coexistencia, WhatsApp exige cambiarla desde la app del teléfono.</span>'
+      : logo
+        ? '<i class="ph-bold ph-check-circle"></i><span>Usa el logo de <b>Mi negocio</b>. Pulsa <b>Sincronizar foto</b> para enviarlo al perfil de WhatsApp.</span>'
+        : '<i class="ph-bold ph-info"></i><span>Configura primero el logo en <b>Mi negocio</b> para poder sincronizar la foto del perfil.</span>';
+  }
 }
 
 function whatsappConnectionStatus(status, enabled, mode) {
@@ -235,6 +263,17 @@ async function loadWhatsApp() {
   });
   $('#whatsappConnectMetaBtn')?.addEventListener('click', async () => { try { const row = WHATSAPP_SELECTED_CONNECTION; if (!row) return; const result = await api(`/api/whatsapp/connections/${row.id}/connect-url`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }); window.open(result.authUrl, '_blank', 'noopener,noreferrer'); toast('Se abrió la conexión segura de Meta'); } catch (error) { toast(error.message, true); } });
   $('#whatsappTestBtn')?.addEventListener('click', async () => { try { const row = WHATSAPP_SELECTED_CONNECTION; if (!row) return; const result = await api(`/api/whatsapp/connections/${row.id}/test`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }); WHATSAPP_SELECTED_CONNECTION = result.connection; toast('Canal validado correctamente'); await loadWhatsApp(); fillWhatsAppConnectionForm(result.connection); } catch (error) { toast(error.message, true); } });
+  $('#whatsappSyncProfilePhotoBtn')?.addEventListener('click', async () => {
+    try {
+      const row = WHATSAPP_SELECTED_CONNECTION;
+      if (!row) return;
+      const result = await api(`/api/whatsapp/connections/${row.id}/profile-photo`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+      WHATSAPP_SELECTED_CONNECTION = result.connection;
+      await loadWhatsApp();
+      fillWhatsAppConnectionForm(result.connection);
+      toast('Foto de perfil sincronizada');
+    } catch (error) { toast(error.message, true); }
+  });
   $('#whatsappSandboxDiscoverBtn')?.addEventListener('click', async () => { try { const row = WHATSAPP_SELECTED_CONNECTION; if (!row) throw new Error('Guarda primero la conexión en modo sandbox'); const result = await api(`/api/whatsapp/connections/${row.id}/sandbox/discover`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }); WHATSAPP_SELECTED_CONNECTION = result.connection; await loadWhatsApp(); fillWhatsAppConnectionForm(result.connection); toast('Sandbox detectado'); } catch (error) { toast(error.message, true); } });
   $('#whatsappSandboxActivateBtn')?.addEventListener('click', async () => { try { const row = WHATSAPP_SELECTED_CONNECTION; const phone = $('#whatsappSandboxPhone').value.trim(); if (!row) throw new Error('Guarda primero la conexión en modo sandbox'); const result = await api(`/api/whatsapp/connections/${row.id}/sandbox/session`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ phone }) }); WHATSAPP_SELECTED_CONNECTION = result.connection; await loadWhatsApp(); fillWhatsAppConnectionForm(result.connection); toast('Revisa WhatsApp y responde el mensaje de activación'); } catch (error) { toast(error.message, true); } });
   $('#whatsappSandboxRefreshBtn')?.addEventListener('click', async () => { try { const row = WHATSAPP_SELECTED_CONNECTION; if (!row) return; const result = await api(`/api/whatsapp/connections/${row.id}/sandbox/session`); WHATSAPP_SELECTED_CONNECTION = result.connection; await loadWhatsApp(); fillWhatsAppConnectionForm(result.connection); toast(result.connection?.sandbox?.status === 'active' ? 'Teléfono sandbox activo' : 'La sesión sigue pendiente'); } catch (error) { toast(error.message, true); } });

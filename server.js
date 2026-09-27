@@ -5,7 +5,7 @@ const { Server: SocketIO } = require('socket.io');
 const cookieParser = require('cookie-parser');
 const multer = require('multer');
 const config = require('./src/config');
-const { initMaster, refreshTenantBillingStatuses, q, tdb } = require('./src/db');
+const { initMaster, refreshTenantBillingStatuses, q, tdb, getSetting } = require('./src/db');
 const { setIo } = require('./src/notifications');
 const { verifyNotificationMailer } = require('./src/utils/mailer');
 const jwt = require('jsonwebtoken');
@@ -119,6 +119,14 @@ const isInvoicingHost = (req) => String(req.hostname || '').toLowerCase().starts
 const productPage = (defaultPage, invoicingPage) => (req, res) => page(isInvoicingHost(req) ? invoicingPage : defaultPage)(req, res);
 const validSlug = (req, res, next) => /^[a-z0-9-]{3,40}$/.test(String(req.params.slug || '')) ? next() : res.status(404).end();
 const validKdsToken = (req, res, next) => /^[A-Za-z0-9_-]{20,80}$/.test(String(req.params.token || '')) ? next() : res.status(404).end();
+
+function normalizePublicWhatsappNumber(value) {
+  let digits = String(value || '').replace(/\D/g, '').replace(/^00+/, '');
+  if (digits.length === 13 && digits.startsWith('521')) digits = `52${digits.slice(3)}`;
+  if (digits.length === 10) digits = `52${digits}`;
+  return digits.length >= 11 && digits.length <= 15 ? digits : '';
+}
+
 app.get('/', productPage('index.html', 'invoicing-home.html'));
 app.get('/login', productPage('login.html', 'invoicing-login.html'));
 app.get('/register', productPage('register.html', 'invoicing-register.html'));
@@ -137,6 +145,43 @@ app.get('/resellers/:slug', validSlug, page('reseller-login.html'));
 app.get('/c/:slug', validSlug, page('chat.html'));
 app.get('/facturacion/:slug', validSlug, page('invoice.html'));
 app.get('/autoservicio/:slug/:token', validSlug, validKdsToken, page('self-service.html'));
+// Liga corta y personalizada por tenant. Mantiene el branding del negocio y
+// resuelve el número vigente antes de enviarlo a WhatsApp.
+app.get('/w/:slug', validSlug, async (req, res, next) => {
+  try {
+    const tenantResult = await q(
+      `SELECT slug
+       FROM tenants
+       WHERE slug = $1 AND account_status = 'active' AND billing_status <> 'suspended'
+       LIMIT 1`,
+      [req.params.slug]
+    );
+    const tenant = tenantResult.rows[0];
+    if (!tenant) return res.status(404).send('El canal de WhatsApp no está disponible.');
+
+    const tenantDb = tdb(tenant.slug);
+    const configuredWhatsapp = await getSetting(tenantDb, 'whatsapp');
+    const connection = await tenantDb.get(
+      `SELECT phone_number, mode, metadata_json
+       FROM {s}.whatsapp_connections
+       WHERE enabled = 1 AND (status IN ('active','connected') OR mode = 'sandbox')
+       ORDER BY id DESC LIMIT 1`
+    );
+    let connectionWhatsapp = connection?.phone_number || '';
+    try {
+      const metadata = JSON.parse(connection?.metadata_json || '{}');
+      connectionWhatsapp = connectionWhatsapp || metadata?.sandbox?.number || '';
+    } catch {}
+    const number = normalizePublicWhatsappNumber(configuredWhatsapp)
+      || normalizePublicWhatsappNumber(connectionWhatsapp);
+    if (!number) return res.status(404).send('Este negocio todavía no tiene un número de WhatsApp activo.');
+
+    const text = String(req.query.text || 'Hola, quiero hacer un pedido').trim().slice(0, 300) || 'Hola, quiero hacer un pedido';
+    return res.redirect(302, `https://wa.me/${number}?text=${encodeURIComponent(text)}`);
+  } catch (error) {
+    return next(error);
+  }
+});
 app.get('/:slug', validSlug, async (req, res, next) => {
   try {
     const hostname = String(req.hostname || '').toLowerCase();
