@@ -2103,11 +2103,24 @@ async function handleMessage(t, slug, sessionId, rawInput, runtime = {}) {
   };
 
   const requestValidDeliveryLocation = (reason = 'missing_coordinates') => {
+    if (reason === 'outside_delivery_zones') {
+      // Fuera de una zona no significa que el cliente no pueda terminar.
+      // Se registra el envío para revisión manual del restaurante.
+      state.customer.deliveryPendingReview = true;
+      state.customer.deliveryZoneName = 'Pendiente de validar';
+      state.step = 'ask_reference';
+      reply.messages = [
+        'La ubicación está fuera de las zonas configuradas. El restaurante validará el servicio y su costo antes de enviarlo.',
+        '¿Alguna referencia de tu domicilio? (ejemplo: portón negro, casa esquina).',
+      ];
+      reply.options = [{ label: 'Omitir referencia', value: 'skip_reference' }];
+      return;
+    }
     state.step = 'ask_location_optional';
     reply.messages = [reason === 'outside_delivery_zones'
       ? 'La ubicación compartida está fuera de las zonas de entrega configuradas por el negocio. Comparte una ubicación dentro de la cobertura para continuar.'
       : 'Para calcular el servicio a domicilio, necesitamos tu ubicación exacta porque el negocio cobra el envío según sus zonas de entrega.'];
-    reply.options = [{ label: '📍 Compartir ubicación', value: 'share_location' }];
+    reply.options = [{ label: '📍 Comparte tu ubicación', value: 'share_location' }];
   };
 
   const askCashChange = () => {
@@ -2169,7 +2182,7 @@ async function handleMessage(t, slug, sessionId, rawInput, runtime = {}) {
     if (mode.behavior === 'delivery') {
       state.step = 'ask_address';
       reply.messages = ['¿Cuál es tu *domicilio* de entrega? Incluye calle/edificio 📍'];
-      if (locationEnabled || deliveryCoordinatesRequired) reply.options = [{ label: '📍 Compartir ubicación', value: 'share_location' }];
+      if (locationEnabled || deliveryCoordinatesRequired) reply.options = [{ label: '📍 Comparte tu ubicación', value: 'share_location' }];
       return;
     }
     if (mode.behavior === 'branch') {
@@ -2952,9 +2965,31 @@ async function handleMessage(t, slug, sessionId, rawInput, runtime = {}) {
     }
 
     if (lower === 'returning_address_no') {
+      const p = state.returningProfile || {};
+      // El cliente ya fue identificado por su teléfono y por su pedido previo.
+      // Al capturar otra dirección no debemos volver a pedir nombre ni teléfono.
+      state.customer.name = p.name || state.customer.name || '';
+      state.customer.phone = String(p.phone || '').replace(/\D/g, '') || state.customer.phone || '';
+      state.delivery = 'domicilio';
+      state.receivingMode = { id: 'domicilio', label: 'A domicilio', behavior: 'delivery' };
+      state.customer.receivingModeLabel = state.receivingMode.label;
+      state.customer.receivingModeBehavior = 'delivery';
+      state.customer.address = '';
+      state.customer.neighborhood = '';
+      state.customer.reference = '';
+      state.customer.locationLat = null;
+      state.customer.locationLng = null;
+      state.customer.locationText = '';
+      state.customer.locationResolved = '';
+      state.customer.deliveryFee = 0;
+      state.customer.deliveryZoneName = '';
+      state.customer.deliveryPendingReview = false;
+      state.customer.deliveryBranchId = null;
+      state.customer.deliveryBranchName = '';
       state.returningProfile = null;
-      state.step = 'ask_name';
-      reply.messages = ['Sin problema. Vamos a registrar tus datos para este pedido. ¿Cuál es tu *nombre*?'];
+      state.step = 'ask_address';
+      reply.messages = ['Perfecto. Conservamos tu nombre y teléfono. Comparte tu nueva ubicación y después indícame el domicilio de entrega. 📍'];
+      if (locationEnabled || deliveryCoordinatesRequired) reply.options = [{ label: '📍 Comparte tu ubicación', value: 'share_location' }];
       return finish();
     }
 
@@ -3001,7 +3036,7 @@ async function handleMessage(t, slug, sessionId, rawInput, runtime = {}) {
       if (locationEnabled) {
         reply.messages = ['Perfecto, no hay sucursales configuradas. ¿Quieres compartir tu ubicación para ubicarte más fácil? (Opcional)'];
         reply.options = [
-          { label: '📍 Compartir ubicación', value: 'share_location' },
+          { label: '📍 Comparte tu ubicación', value: 'share_location' },
           { label: 'Omitir', value: 'skip_location' },
         ];
       } else {
@@ -3287,7 +3322,7 @@ async function handleMessage(t, slug, sessionId, rawInput, runtime = {}) {
     if (lower === 'share_location') {
       reply.messages = ['Activa la ubicación en tu celular para compartirla 📍'];
       reply.options = [
-        { label: '📍 Compartir ubicación', value: 'share_location' },
+        { label: '📍 Comparte tu ubicación', value: 'share_location' },
         { label: 'Omitir por ahora', value: 'skip_location' },
       ];
       return finish();
@@ -3298,7 +3333,7 @@ async function handleMessage(t, slug, sessionId, rawInput, runtime = {}) {
       ];
       reply.options = (locationEnabled || deliveryCoordinatesRequired)
         ? [
-            { label: '📍 Compartir ubicación', value: 'share_location' },
+            { label: '📍 Comparte tu ubicación', value: 'share_location' },
             { label: 'Omitir por ahora', value: 'skip_location' },
           ]
         : [];
@@ -3310,10 +3345,11 @@ async function handleMessage(t, slug, sessionId, rawInput, runtime = {}) {
       state.customer.locationLat = geo.lat;
       state.customer.locationLng = geo.lng;
       state.customer.locationText = geo.label || `${geo.lat.toFixed(5)}, ${geo.lng.toFixed(5)}`;
+      let deliveryQuote = null;
       if (isAddressDelivery()) {
-        const quote = await refreshDeliveryQuote();
-        if (!quote.valid) {
-          requestValidDeliveryLocation(quote.reason);
+        deliveryQuote = await refreshDeliveryQuote();
+        if (!deliveryQuote.valid) {
+          requestValidDeliveryLocation(deliveryQuote.reason);
           state.step = 'ask_address';
           return finish();
         }
@@ -3321,14 +3357,15 @@ async function handleMessage(t, slug, sessionId, rawInput, runtime = {}) {
       state.step = 'ask_address_after_location';
       reply.messages = [
         `🗺️ Ubicación recibida. Abrir en Maps: ${mapsUrl(geo.lat, geo.lng)}${Number(state.customer.deliveryFee || 0) > 0 ? `\n🛵 Envío detectado: ${money(state.customer.deliveryFee, currency)}${state.customer.deliveryZoneName ? ` (${state.customer.deliveryZoneName})` : ''}` : ''}`,
+        deliveryQuote?.pendingReview ? '🚚 El servicio a domicilio y su costo quedan pendientes de validar por el restaurante.' : '',
         'Ahora escribe el *domicilio*: calle/edificio.',
-      ];
+      ].filter(Boolean);
       return finish();
     }
 
     if (input.length < 5) {
       reply.messages = ['Necesito una dirección un poco más completa 🙏'];
-      if (locationEnabled || deliveryCoordinatesRequired) reply.options = [{ label: '📍 Compartir ubicación', value: 'share_location' }];
+      if (locationEnabled || deliveryCoordinatesRequired) reply.options = [{ label: '📍 Comparte tu ubicación', value: 'share_location' }];
       return finish();
     }
     state.customer.address = input.slice(0, 200);
@@ -3367,7 +3404,7 @@ async function handleMessage(t, slug, sessionId, rawInput, runtime = {}) {
         ? 'Puedes compartir tu ubicación exacta para calcular el costo del servicio. Si no está dentro de una zona configurada, el restaurante validará el envío manualmente.'
         : '¿Quieres compartir también tu ubicación exacta? (Opcional)'];
       reply.options = [
-        { label: '📍 Compartir ubicación', value: 'share_location' },
+        { label: '📍 Comparte tu ubicación', value: 'share_location' },
         { label: 'Omitir por ahora', value: 'skip_location' },
       ];
     } else {
@@ -3398,7 +3435,7 @@ async function handleMessage(t, slug, sessionId, rawInput, runtime = {}) {
         'No pude obtener tu ubicación automáticamente. Activa el permiso del navegador o escribe tu dirección/coordenadas para continuar.',
       ];
       reply.options = [
-        { label: '📍 Compartir ubicación', value: 'share_location' },
+        { label: '📍 Comparte tu ubicación', value: 'share_location' },
         { label: 'Omitir por ahora', value: 'skip_location' },
       ];
       return finish();
@@ -3406,7 +3443,7 @@ async function handleMessage(t, slug, sessionId, rawInput, runtime = {}) {
     if (lower === 'share_location') {
       reply.messages = ['Activa la ubicación en tu celular para compartirla 📍'];
       reply.options = [
-        { label: '📍 Compartir ubicación', value: 'share_location' },
+        { label: '📍 Comparte tu ubicación', value: 'share_location' },
         { label: 'Omitir por ahora', value: 'skip_location' },
       ];
       return finish();
@@ -3416,10 +3453,11 @@ async function handleMessage(t, slug, sessionId, rawInput, runtime = {}) {
       state.customer.locationLat = geo.lat;
       state.customer.locationLng = geo.lng;
       state.customer.locationText = geo.label || `${geo.lat.toFixed(5)}, ${geo.lng.toFixed(5)}`;
+      let deliveryQuote = null;
       if (isAddressDelivery()) {
-        const quote = await refreshDeliveryQuote();
-        if (!quote.valid) {
-          requestValidDeliveryLocation(quote.reason);
+        deliveryQuote = await refreshDeliveryQuote();
+        if (!deliveryQuote.valid) {
+          requestValidDeliveryLocation(deliveryQuote.reason);
           return finish();
         }
       }
@@ -3427,8 +3465,9 @@ async function handleMessage(t, slug, sessionId, rawInput, runtime = {}) {
         state.step = 'ask_reference';
         reply.messages = [
           `🗺️ Ubicación recibida. Abrir en Maps: ${mapsUrl(geo.lat, geo.lng)}${Number(state.customer.deliveryFee || 0) > 0 ? `\n🛵 Envío detectado: ${money(state.customer.deliveryFee, currency)}${state.customer.deliveryZoneName ? ` (${state.customer.deliveryZoneName})` : ''}` : ''}`,
+          deliveryQuote?.pendingReview ? '🚚 El servicio a domicilio y su costo quedan pendientes de validar por el restaurante.' : '',
           '¿Alguna referencia de tu domicilio? (ejemplo: portón negro, casa esquina).',
-        ];
+        ].filter(Boolean);
         reply.options = [{ label: 'Omitir referencia', value: 'skip_reference' }];
       } else {
         reply.messages = [
@@ -3440,7 +3479,7 @@ async function handleMessage(t, slug, sessionId, rawInput, runtime = {}) {
     }
     reply.messages = ['Elige una opción para continuar:'];
     reply.options = [
-      { label: '📍 Compartir ubicación', value: 'share_location' },
+      { label: '📍 Comparte tu ubicación', value: 'share_location' },
       { label: 'Omitir por ahora', value: 'skip_location' },
     ];
     return finish();
@@ -3769,7 +3808,9 @@ async function handleMessage(t, slug, sessionId, rawInput, runtime = {}) {
       ];
       attachAccountsForPayment(state.customer.paymentMethod);
       reply.order = { id: orderRow.id, total, totalLabel: money(total, currency), convertedTotalLabel: convertedMoney(total, state.currencyConversion), exchangeRateLabel: conversionRateLabel(state.currencyConversion), scheduledFor: state.customer.scheduledFor || null, scheduledForLabel: state.customer.scheduledForLabel || '', whatsappLink: waLink, summary: orderText };
-      if (waLink) reply.messages.push('👇 Toca el botón para enviar el resumen de tu pedido por WhatsApp y agilizar la atención.');
+      if (waLink && String(runtime.sourceChannel || '').toLowerCase() !== 'whatsapp') {
+        reply.messages.push('👇 Toca el botón para enviar el resumen de tu pedido por WhatsApp y agilizar la atención.');
+      }
       if (!waLink) reply.messages.push('⚠️ El negocio aún no tiene un WhatsApp válido para envío automático. Tu pedido ya quedó registrado.');
       state = { step: 'order_complete', cart: [], customer: {}, currency, lastOrderId: orderRow.id };
       reply.options = [{ label: '🆕 Hacer otro pedido', value: 'start' }];

@@ -7,6 +7,26 @@ function source(relativePath) {
   return fs.readFileSync(path.join(__dirname, '..', relativePath), 'utf8');
 }
 
+test('WhatsApp presenta ubicación y cuentas bancarias en formatos accionables', () => {
+  const route = require('../src/routes/whatsapp');
+  const engine = source('src/chatbot/engine.js');
+  const location = route.whatsappInteractiveMessages({
+    options: [{ label: '📍 Comparte tu ubicación', value: 'share_location' }],
+  }).find((message) => message.kind === 'location-request');
+  assert.equal(location.bodyText, '📍 *Comparte tu ubicación*');
+
+  const bankText = route.whatsappBankAccountsText([
+    { fields: [
+      { label: 'Banco', value: 'Bancomer' },
+      { label: 'CLABE', value: '012345678901234567' },
+    ] },
+  ], 'Datos para Transferencia');
+  assert.match(bankText, /Mantén presionado/);
+  assert.match(bankText, /`012345678901234567`/);
+  assert.match(bankText, /Conserva tu comprobante/);
+  assert.match(engine, /waLink && String\(runtime\.sourceChannel \|\| ''\)\.toLowerCase\(\) !== 'whatsapp'/);
+});
+
 test('WhatsApp conserva el valor interno de botones y listas de Zernio', () => {
   const route = require('../src/routes/whatsapp');
   const parseWebhook = route.webhookMessage;

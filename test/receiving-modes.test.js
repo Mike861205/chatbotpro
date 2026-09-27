@@ -70,6 +70,7 @@ test('un cliente con pedidos solo para recoger conserva su identidad y captura d
   assert.match(chatbot, /hasDeliveryHistory: false/);
   assert.match(chatbot, /if \(!profile\.hasDeliveryHistory\)/);
   assert.match(chatbot, /Conservaré tu nombre y teléfono/);
+  assert.match(chatbot, /if \(lower === 'returning_address_no'\) \{[\s\S]*state\.customer\.name = p\.name[\s\S]*state\.customer\.phone[\s\S]*state\.step = 'ask_address'/);
 });
 
 test('solo comer en sucursal abre una cuenta de mesa al importar', () => {

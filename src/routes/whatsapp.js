@@ -294,7 +294,7 @@ function whatsappButtonTitle(value) {
     .replace(/^✅\s*Sí, confirmar\.?$/i, '✅ Confirmar')
     .replace(/^✅\s*Sí, agregar nota\.?$/i, '✅ Agregar nota')
     .replace(/^❌\s*No, continuar\.?$/i, '↩️ Continuar')
-    .replace(/^📍\s*Compartir ubicación\.?$/i, '📍 Ubicación')
+    .replace(/^📍\s*(?:Compartir|Comparte tu) ubicación\.?$/i, '📍 Ubicación')
     .replace(/^⏭️\s*Omitir referencia\.?$/i, '⏭️ Omitir referencia')
     .replace(/^Omitir\.?$/i, 'Omitir')
     .replace(/^Capturar nueva dirección de entrega$/i, 'Nueva dirección')
@@ -444,6 +444,26 @@ function whatsappOptionRows(reply) {
   return rows;
 }
 
+function whatsappBankAccountsText(accounts, title = 'Datos para transferencia') {
+  const list = Array.isArray(accounts) ? accounts : [];
+  if (!list.length) return '';
+  const sections = list.map((account, index) => {
+    const heading = list.length > 1 ? `🏦 *Cuenta ${index + 1}*` : '🏦 *Datos de la cuenta*';
+    const fields = (Array.isArray(account?.fields) ? account.fields : [])
+      .filter((field) => field?.label && field?.value)
+      .map((field) => `*${String(field.label).trim()}:* \`${String(field.value).trim()}\``)
+      .join('\n');
+    return [heading, fields].filter(Boolean).join('\n');
+  }).filter(Boolean);
+  if (!sections.length) return '';
+  return [
+    `💳 *${String(title || 'Datos para transferencia').trim()}*`,
+    'Mantén presionado cada dato para copiarlo y pegarlo en tu transferencia:',
+    ...sections,
+    'Conserva tu comprobante de pago.',
+  ].join('\n\n');
+}
+
 function whatsappInteractiveMessages(reply) {
   const messages = [];
   const productRows = whatsappProductRows(reply);
@@ -453,7 +473,7 @@ function whatsappInteractiveMessages(reply) {
   if ((reply.options || []).some((option) => String(option?.value || '').toLowerCase() === 'share_location')) {
     messages.push({
       kind: 'location-request',
-      bodyText: '*Selecciona una opción:*',
+      bodyText: '📍 *Comparte tu ubicación*',
       interactive: { type: 'locationrequestmessage' },
     });
   }
@@ -611,11 +631,23 @@ async function sendProductImage(t, connection, conversation, productId) {
 }
 
 async function sendBotReply(t, connection, conversation, reply) {
+  const bankText = whatsappBankAccountsText(reply.bankAccounts, reply.bankAccountTitle);
+  const hasBankCard = Boolean(bankText);
   for (const message of (reply.messages || [])) {
+    // The web assistant renders bankAccounts as a visual card. WhatsApp gets
+    // one copy-friendly text card instead of receiving the fallback twice.
+    if (hasBankCard && /^Datos para realizar tu pago con /i.test(String(message || '').trim())) continue;
     try {
       await sendText(t, connection, conversation, whatsappPromptText(message), 'bot');
     } catch (error) {
       console.warn('[whatsapp][send-text]', error.message);
+    }
+  }
+  if (bankText) {
+    try {
+      await sendText(t, connection, conversation, bankText, 'bot');
+    } catch (error) {
+      console.warn('[whatsapp][send-bank-details]', error.message);
     }
   }
   for (const interactive of whatsappInteractiveMessages(reply)) {
@@ -1254,6 +1286,7 @@ router.post('/conversations/:id/send', async (req, res, next) => {
 // Express router itself.
 router.whatsappInteractiveMessages = whatsappInteractiveMessages;
 router.whatsappButtonTitle = whatsappButtonTitle;
+router.whatsappBankAccountsText = whatsappBankAccountsText;
 router.webhookMessage = webhookMessage;
 router.whatsappConversationCustomerName = whatsappConversationCustomerName;
 
