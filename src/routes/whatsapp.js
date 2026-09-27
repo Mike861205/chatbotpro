@@ -294,6 +294,26 @@ function whatsappEngineInput(value) {
   // lossless encoding was introduced (e.g. cat4 -> cat_4).
   const legacy = raw.match(/^(cat|prod|variant|branch|modifier)(\d+)$/i);
   if (legacy) return `${legacy[1].toLowerCase()}_${legacy[2]}`;
+
+  // Zernio can compact underscores from older WhatsApp button payloads
+  // (share_location -> sharelocation). Restore the canonical commands so an
+  // old button still advances the same engine state instead of repeating the
+  // menu prompt.
+  const compactAliases = {
+    sharelocation: 'share_location',
+    skiplocation: 'skip_location',
+    skipreference: 'skip_reference',
+    checkoutnewcustomer: 'checkout_new_customer',
+    receivingmodedomicilio: 'receiving_mode_domicilio',
+    receivingmodepickup: 'receiving_mode_pickup',
+    receivingmodedinein: 'receiving_mode_dinein',
+    cashchangeneeded: 'cash_change_needed',
+    cashexact: 'cash_exact',
+    ordernoteskip: 'order_note_skip',
+    upsellcontinue: 'upsell_continue',
+    upsellnext: 'upsell_next',
+  };
+  if (compactAliases[raw.toLowerCase()]) return compactAliases[raw.toLowerCase()];
   return raw;
 }
 

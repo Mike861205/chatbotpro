@@ -576,6 +576,10 @@
     }
     .input-bar button:hover { transform: scale(1.06); }
     .input-bar button:active { transform: scale(0.94); }
+    .whatsapp-fab { position: fixed; right: 22px; bottom: 22px; z-index: 20; display: inline-flex; align-items: center; gap: 9px; padding: 11px 15px 11px 12px; border-radius: 999px; background: #25d366; color: #fff; text-decoration: none; font-weight: 800; font-size: 12px; box-shadow: 0 10px 24px rgba(37,211,102,.34); transition: transform .18s ease, box-shadow .18s ease; }
+    .whatsapp-fab i { font-size: 23px; }
+    .whatsapp-fab:hover { transform: translateY(-3px) scale(1.02); box-shadow: 0 14px 28px rgba(37,211,102,.42); }
+    @media (max-width: 560px) { .whatsapp-fab { right: 14px; bottom: 14px; padding: 12px; } .whatsapp-fab span { display: none; } }
     /* Scrollbar */
     .messages::-webkit-scrollbar { width: 5px; }
     .messages::-webkit-scrollbar-thumb { background: #c9cede; border-radius: 99px; }
@@ -612,6 +616,8 @@
       <button id="sendBtn" title="Enviar"><i class="ph-fill ph-paper-plane-tilt"></i></button>
     </div>
   </div>
+
+  <a class="whatsapp-fab" id="whatsappFab" href="#" target="_blank" rel="noopener noreferrer" hidden><i class="ph-fill ph-whatsapp-logo"></i><span>Pedir por WhatsApp</span></a>
 
   <div class="product-detail-modal" id="productDetailModal" role="dialog" aria-modal="true" aria-labelledby="productDetailName" aria-describedby="productDetailDescription" hidden>
     <button class="product-detail-backdrop" type="button" data-product-detail-close tabindex="-1" aria-label="Cerrar detalle del producto"></button>
@@ -1326,6 +1332,11 @@
         if (info.primaryColor) document.documentElement.style.setProperty('--primary', info.primaryColor);
         if (info.logo) document.getElementById('bizLogo').innerHTML = `<img src="${esc(info.logo)}" alt="">`;
         renderFloatingBackground(info.floatingIcons);
+        if (info.whatsapp) {
+          const whatsappFab = document.getElementById('whatsappFab');
+          whatsappFab.href = `https://wa.me/${info.whatsapp}?text=${encodeURIComponent('Hola, quiero hacer un pedido')}`;
+          whatsappFab.hidden = false;
+        }
         send('start', null);
       } catch {
         document.getElementById('bizName').textContent = 'Negocio no encontrado';

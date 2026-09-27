@@ -20,6 +20,7 @@ test('WhatsApp ofrece sandbox Zernio y conserva el flujo real de pedidos', () =>
   assert.match(route, /buttons: rows\.map/);
   assert.match(route, /metadata\.interactiveId/);
   assert.match(route, /metadata\.location/);
+  assert.match(route, /sharelocation: 'share_location'/);
   assert.match(route, /geo:\$\{location\.lat\}/);
   assert.match(route, /parsed\.location \? 'location'/);
   assert.match(route, /whatsappTransportId/);
@@ -39,7 +40,11 @@ test('WhatsApp ofrece sandbox Zernio y conserva el flujo real de pedidos', () =>
   assert.match(html, /class="optional-label">OPCIONAL/);
   assert.match(html, /class="required-label">OBLIGATORIA/);
   assert.match(html, /whatsapp-setup-guide/);
+  assert.match(html, /whatsappCustomerEntryCard/);
+  assert.match(html, /whatsappCustomerQr/);
   assert.match(client, /whatsappSandboxActivateBtn/);
   assert.match(client, /whatsappSandboxStartBtn/);
+  assert.match(client, /whatsappCustomerShareBtn/);
+  assert.match(client, /visibleMessages/);
   assert.match(engine, /runtime\.sourceChannel/);
 });

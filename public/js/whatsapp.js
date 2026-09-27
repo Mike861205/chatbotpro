@@ -5,6 +5,45 @@ let WHATSAPP_SELECTED_CONVERSATION = null;
 let WHATSAPP_BOUND = false;
 let WHATSAPP_SOCKET = null;
 
+function normalizeWhatsAppEntryNumber(value) {
+  let digits = String(value || '').replace(/\D/g, '').replace(/^00+/, '');
+  if (digits.length === 13 && digits.startsWith('521')) digits = `52${digits.slice(3)}`;
+  if (digits.length === 10) digits = `52${digits}`;
+  return digits.length >= 11 && digits.length <= 15 ? digits : '';
+}
+
+function whatsappEntryNumber(row) {
+  return normalizeWhatsAppEntryNumber(row?.phoneNumber)
+    || normalizeWhatsAppEntryNumber(row?.sandbox?.number);
+}
+
+function renderWhatsAppCustomerEntry(row = WHATSAPP_SELECTED_CONNECTION) {
+  const card = $('#whatsappCustomerEntryCard');
+  if (!card) return;
+  card.hidden = !row;
+  if (!row) return;
+  const number = whatsappEntryNumber(row);
+  const numberLabel = number ? `+${number}` : 'Número pendiente';
+  const link = number ? `https://wa.me/${number}?text=${encodeURIComponent('Hola, quiero hacer un pedido')}` : '';
+  const input = $('#whatsappCustomerLink');
+  const qr = $('#whatsappCustomerQr');
+  const open = $('#whatsappCustomerOpenBtn');
+  const copy = $('#whatsappCustomerCopyBtn');
+  const share = $('#whatsappCustomerShareBtn');
+  $('#whatsappCustomerEntryNumber').textContent = numberLabel;
+  $('#whatsappCustomerEntryHint').textContent = link
+    ? 'Comparte este QR o enlace; abrirá directamente el WhatsApp de pedidos.'
+    : 'Captura el número conectado o activa el teléfono para generar el enlace.';
+  if (input) input.value = link;
+  if (qr) {
+    qr.hidden = !link;
+    qr.src = link ? `https://api.qrserver.com/v1/create-qr-code/?size=240x240&margin=8&data=${encodeURIComponent(link)}` : '';
+  }
+  if (open) { open.href = link || '#'; open.classList.toggle('disabled', !link); open.setAttribute('aria-disabled', String(!link)); }
+  if (copy) copy.disabled = !link;
+  if (share) share.disabled = !link;
+}
+
 function whatsappConnectionStatus(status, enabled, mode) {
   const key = String(status || '').toLowerCase();
   if (!enabled) return { label: 'Desactivada', tone: 'muted' };
@@ -59,6 +98,7 @@ function fillWhatsAppConnectionForm(row) {
   if (sandboxPanel) sandboxPanel.hidden = row?.mode !== 'sandbox';
   if ($('#whatsappSandboxPhone')) $('#whatsappSandboxPhone').value = sandbox.phone || '';
   renderWhatsAppSandbox(row);
+  renderWhatsAppCustomerEntry(row);
   const productionConnect = $('#whatsappConnectMetaBtn');
   const productionTest = $('#whatsappTestBtn');
   if (productionConnect) { productionConnect.hidden = row?.mode === 'sandbox'; productionConnect.disabled = !row?.id || row?.mode === 'sandbox'; }
@@ -98,8 +138,17 @@ async function loadWhatsAppMessages() {
   const list = $('#whatsappMessageList');
   if (!list || !WHATSAPP_SELECTED_CONVERSATION) return;
   const messages = await api(`/api/whatsapp/conversations/${WHATSAPP_SELECTED_CONVERSATION.id}/messages`);
-  list.innerHTML = messages.length
-    ? messages.map((message) => `<div class="whatsapp-message ${message.direction === 'outbound' ? 'outbound' : 'inbound'}"><span>${esc(message.body || '')}</span><small>${esc(message.source || message.direction || '')} · ${esc(message.created_at || '')}</small></div>`).join('')
+  const visibleMessages = messages.filter((message, index) => {
+    const previous = messages[index - 1];
+    // Zernio represents the prompt and its interactive payload separately.
+    // Hide only the repeated prompt in this inbox; keep both records and the
+    // real WhatsApp delivery intact.
+    return !(message.message_type === 'interactive'
+      && previous?.direction === message.direction
+      && previous?.body === message.body);
+  });
+  list.innerHTML = visibleMessages.length
+    ? visibleMessages.map((message) => `<div class="whatsapp-message ${message.direction === 'outbound' ? 'outbound' : 'inbound'}"><span>${esc(message.body || '')}</span><small>${esc(message.source || message.direction || '')} · ${esc(message.created_at || '')}</small></div>`).join('')
     : `<div class="whatsapp-empty-state"><i class="ph-duotone ph-chat-circle-dots"></i><b>Conversación sin mensajes</b><span>El siguiente mensaje quedará registrado aquí.</span></div>`;
   list.scrollTop = list.scrollHeight;
 }
@@ -144,6 +193,7 @@ async function loadWhatsApp() {
   const active = WHATSAPP_DATA.connections?.find((row) => row.enabled) || WHATSAPP_DATA.connections?.[0] || null;
   if (active && !WHATSAPP_SELECTED_CONNECTION) fillWhatsAppConnectionForm(active);
   if (!active) fillWhatsAppConnectionForm(null);
+  renderWhatsAppCustomerEntry(WHATSAPP_SELECTED_CONNECTION || active);
   const pill = $('#whatsappConnectionPill');
   if (pill) {
     const state = active ? whatsappConnectionStatus(active.status, active.enabled, active.mode) : { label: 'Sin conectar', tone: 'muted' };
@@ -168,6 +218,15 @@ async function loadWhatsApp() {
     $('#whatsappTestBtn').hidden = sandboxMode;
   });
   $('#whatsappCopyWebhookBtn')?.addEventListener('click', async () => { try { await navigator.clipboard.writeText($('#whatsappWebhookUrl').textContent); toast('URL de webhook copiada'); } catch { toast('No se pudo copiar la URL', true); } });
+  $('#whatsappCustomerCopyBtn')?.addEventListener('click', async () => { try { await navigator.clipboard.writeText($('#whatsappCustomerLink').value); toast('Liga de WhatsApp copiada'); } catch { toast('No se pudo copiar la liga', true); } });
+  $('#whatsappCustomerShareBtn')?.addEventListener('click', async () => {
+    const link = $('#whatsappCustomerLink')?.value || '';
+    if (!link) return;
+    try {
+      if (navigator.share) await navigator.share({ title: 'WhatsApp de pedidos', text: 'Haz tu pedido por WhatsApp', url: link });
+      else { await navigator.clipboard.writeText(link); toast('Liga de WhatsApp copiada'); }
+    } catch (error) { if (error?.name !== 'AbortError') toast('No se pudo compartir la liga', true); }
+  });
   $('#whatsappConnectionForm')?.addEventListener('submit', async (event) => {
     event.preventDefault();
     const id = Number($('#whatsappConnectionId').value || 0);

@@ -1219,6 +1219,15 @@
             </div>
           </div>
           <div class="card whatsapp-webhook-card" id="whatsappWebhookCard" hidden><div><span class="whatsapp-section-kicker">Eventos en tiempo real</span><h3><i class="ph-bold ph-webhooks-logo"></i> Webhook del tenant</h3><p class="hint">Registra esta URL en Zernio para recibir mensajes, estados y desconexiones. La URL incluye un token exclusivo de este tenant.</p></div><div class="whatsapp-webhook-copy"><code id="whatsappWebhookUrl">—</code><button class="btn btn-ghost btn-sm" id="whatsappCopyWebhookBtn" type="button"><i class="ph-bold ph-copy"></i> Copiar</button></div></div>
+          <div class="card whatsapp-customer-entry-card" id="whatsappCustomerEntryCard" hidden>
+            <div class="whatsapp-card-heading"><div><span class="whatsapp-section-kicker">Comparte tu canal de pedidos</span><h3><i class="ph-bold ph-qr-code"></i> Lleva a tus clientes a WhatsApp</h3></div><span class="whatsapp-status-pill success"><i class="ph-bold ph-check-circle"></i> Listo para compartir</span></div>
+            <p class="hint">Genera un QR o copia la liga para que tus clientes abran directamente el WhatsApp del negocio. El bot atenderá con el flujo configurado por este tenant.</p>
+            <div class="whatsapp-customer-entry-grid">
+              <div class="whatsapp-entry-preview"><div class="whatsapp-entry-fab"><i class="ph-fill ph-whatsapp-logo"></i></div><b>Pide por WhatsApp</b><span id="whatsappCustomerEntryNumber">Número pendiente</span></div>
+              <div class="whatsapp-entry-qr"><img id="whatsappCustomerQr" alt="Código QR para pedir por WhatsApp" /><small>Escanea para iniciar un pedido</small></div>
+              <div class="whatsapp-entry-actions"><label for="whatsappCustomerLink">Liga directa de pedidos</label><div class="share-box whatsapp-entry-link-box"><input id="whatsappCustomerLink" type="text" readonly placeholder="Conecta un número para generar la liga" /><button class="btn btn-primary btn-sm" id="whatsappCustomerCopyBtn" type="button"><i class="ph-bold ph-copy"></i> Copiar</button></div><div class="whatsapp-form-actions"><a class="btn btn-primary" id="whatsappCustomerOpenBtn" target="_blank" rel="noopener noreferrer" href="#"><i class="ph-bold ph-whatsapp-logo"></i> Abrir WhatsApp</a><button class="btn btn-ghost" id="whatsappCustomerShareBtn" type="button"><i class="ph-bold ph-share-network"></i> Compartir</button></div><small id="whatsappCustomerEntryHint" class="hint">El enlace se genera con el número activo de Zernio.</small></div>
+            </div>
+          </div>
         </div>
 
         <div id="whatsappPanelInbox" hidden>

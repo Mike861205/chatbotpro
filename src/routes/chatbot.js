@@ -38,6 +38,17 @@ async function findTenant(req, res, next) {
 router.get('/:slug/info', findTenant, async (req, res, next) => {
   try {
     const configuredWhatsapp = await getSetting(req.tdb, 'whatsapp');
+    const whatsappConnection = await req.tdb.get(
+      `SELECT phone_number,metadata_json
+       FROM {s}.whatsapp_connections
+       WHERE enabled=1 AND status IN ('active','connected')
+       ORDER BY id DESC LIMIT 1`
+    );
+    let zernioWhatsapp = whatsappConnection?.phone_number || '';
+    try {
+      const metadata = JSON.parse(whatsappConnection?.metadata_json || '{}');
+      zernioWhatsapp = zernioWhatsapp || metadata?.sandbox?.number || '';
+    } catch {}
     const fallbackWhatsapp = decrypt(req.tenant.phone_enc || '') || '';
     res.json({
       slug: req.tenant.slug,
@@ -46,7 +57,9 @@ router.get('/:slug/info', findTenant, async (req, res, next) => {
       primaryColor: req.tenant.primary_color,
       address: await getSetting(req.tdb, 'address'),
       hours: await getSetting(req.tdb, 'hours'),
-      whatsapp: normalizeWhatsappNumber(configuredWhatsapp) || normalizeWhatsappNumber(fallbackWhatsapp),
+      whatsapp: normalizeWhatsappNumber(configuredWhatsapp)
+        || normalizeWhatsappNumber(zernioWhatsapp)
+        || normalizeWhatsappNumber(fallbackWhatsapp),
       floatingIcons: parseFloatingIcons(await getSetting(req.tdb, 'chatbot_floating_icons_json')),
     });
   } catch (e) { next(e); }
