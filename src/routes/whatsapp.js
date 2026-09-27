@@ -639,24 +639,46 @@ router.get('/oauth/callback', async (req, res, next) => {
     const tenantSlug = clean(req.query.tenant, 80).toLowerCase();
     const connectionId = Number(req.query.connectionId);
     const state = clean(req.query.state, 180);
-    if (!tenantSlug || !Number.isInteger(connectionId) || connectionId <= 0 || !state) return res.status(400).send('Solicitud de conexión incompleta.');
+    const callbackProfileId = clean(req.query.profileId || req.query.profile_id, 120);
+    const connected = clean(req.query.connected, 40).toLowerCase();
+    if (!tenantSlug || !Number.isInteger(connectionId) || connectionId <= 0) return res.status(400).send('Solicitud de conexión incompleta.');
     const t = tdb(tenantSlug);
     const connection = await t.get('SELECT * FROM {s}.whatsapp_connections WHERE id=$1 LIMIT 1', [connectionId]);
+    if (!connection) return res.status(400).send('La conexión ya no existe o pertenece a otro negocio.');
     const metadata = safeJson(connection?.metadata_json, {});
     const nextMetadata = { ...metadata };
     delete nextMetadata.oauthState;
     delete nextMetadata.oauthStartedAt;
-    if (!connection || metadata.oauthState !== state) return res.status(400).send('La sesión de conexión expiró o no es válida.');
+    const oauthStartedAt = Date.parse(String(metadata.oauthStartedAt || ''));
+    const oauthIsFresh = Number.isFinite(oauthStartedAt)
+      && oauthStartedAt <= Date.now()
+      && Date.now() - oauthStartedAt <= 30 * 60 * 1000;
+    const stateIsValid = Boolean(state && metadata.oauthState && metadata.oauthState === state);
+    // Compatibilidad acotada para callbacks iniciados antes de que se incluyera
+    // state en redirect_url: exige la misma cuenta, perfil, conexión reciente y
+    // respuesta exitosa de WhatsApp. Los nuevos flujos siempre usan state.
+    const legacyCallbackIsValid = !state
+      && !req.query.error
+      && connected === 'whatsapp'
+      && Boolean(callbackProfileId && connection.profile_id && callbackProfileId === connection.profile_id)
+      && oauthIsFresh;
+    if (!stateIsValid && !legacyCallbackIsValid) return res.status(400).send('La sesión de conexión expiró o no es válida.');
+    if (callbackProfileId && connection.profile_id && callbackProfileId !== connection.profile_id) {
+      return res.status(400).send('El Profile ID recibido no coincide con esta conexión.');
+    }
     if (req.query.error) {
       await t.run('UPDATE {s}.whatsapp_connections SET metadata_json=$1,status=\'error\', last_error=$2, updated_at=now() WHERE id=$3', [JSON.stringify(nextMetadata), clean(req.query.error_description || req.query.error, 500), connectionId]);
       return res.send('<!doctype html><meta charset="utf-8"><title>WhatsApp</title><p>No se completó la conexión. Puedes cerrar esta ventana.</p>');
     }
     const accountId = clean(req.query.accountId || req.query.account_id, 180);
+    if (!accountId) return res.status(400).send('Zernio no devolvió el Account ID de la conexión.');
     await t.run(
       `UPDATE {s}.whatsapp_connections
-       SET zernio_account_id=COALESCE(NULLIF($1,''),zernio_account_id), metadata_json=$2, status='connected', last_error='', updated_at=now()
-       WHERE id=$3`,
-      [accountId, JSON.stringify(nextMetadata), connectionId]
+       SET profile_id=COALESCE(NULLIF($1,''),profile_id),
+           zernio_account_id=COALESCE(NULLIF($2,''),zernio_account_id),
+           metadata_json=$3, status='connected', enabled=1, last_error='', last_health_check=now(), updated_at=now()
+       WHERE id=$4`,
+      [callbackProfileId, accountId, JSON.stringify(nextMetadata), connectionId]
     );
     emitWhatsAppUpdate(tenantSlug, { connectionId, event: 'connection' });
     return res.send('<!doctype html><meta charset="utf-8"><title>WhatsApp conectado</title><style>body{font-family:system-ui;padding:32px;color:#172033}b{color:#087f5b}</style><h2><b>WhatsApp conectado</b></h2><p>La conexión fue recibida. Regresa a ChatBotPro para probarla.</p>');
@@ -768,9 +790,13 @@ router.post('/connections/:id/connect-url', requireOwner, async (req, res, next)
     const state = crypto.randomBytes(24).toString('base64url');
     const metadata = { ...safeJson(connection.metadata_json, {}), oauthState: state, oauthStartedAt: new Date().toISOString() };
     await req.tdb.run('UPDATE {s}.whatsapp_connections SET metadata_json=$1,updated_at=now() WHERE id=$2', [JSON.stringify(metadata), connection.id]);
+    const callbackUrl = new URL(`${publicBaseUrl(req)}/api/whatsapp/oauth/callback`);
+    callbackUrl.searchParams.set('tenant', req.tenant.slug);
+    callbackUrl.searchParams.set('connectionId', String(connection.id));
+    callbackUrl.searchParams.set('state', state);
     const params = new URLSearchParams({
       profileId: connection.profile_id,
-      redirect_url: `${req.protocol}://${req.get('host')}/api/whatsapp/oauth/callback?tenant=${encodeURIComponent(req.tenant.slug)}&connectionId=${connection.id}`,
+      redirect_url: callbackUrl.toString(),
       onboarding: connection.mode || 'business_app',
     });
     const data = await zernioRequest({ apiKey, path: `/v1/connect/whatsapp?${params.toString()}` });
