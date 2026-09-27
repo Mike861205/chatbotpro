@@ -176,3 +176,23 @@ test('WhatsApp separa upsell, acciones de salida y solicitud nativa de ubicació
   const actionButtons = messages.filter((message) => message.kind === 'buttons').flatMap((message) => message.buttons);
   assert.deepEqual(actionButtons.map((button) => button.title), ['👉 ➡️ Siguiente', '👉 Finalizar']);
 });
+
+test('WhatsApp expone un resumen analítico filtrable por fechas', () => {
+  const route = source('src/routes/whatsapp.js');
+  const html = source('public/app.html');
+  const client = source('public/js/whatsapp.js');
+  const styles = source('public/css/styles.css');
+  assert.match(route, /router\.get\('\/analytics'/);
+  assert.match(route, /COUNT\(DISTINCT m\.conversation_id\)/);
+  assert.match(route, /messages_with_cost/);
+  assert.match(route, /source_channel, ''\)\) = 'whatsapp'/);
+  assert.match(html, /data-whatsapp-tab="analytics"/);
+  assert.match(html, /whatsappAnalyticsRange/);
+  assert.match(html, /whatsappMetricChats/);
+  assert.match(html, /whatsappMetricMessages/);
+  assert.match(html, /whatsappMetricOrders/);
+  assert.match(client, /\/api\/whatsapp\/analytics/);
+  assert.match(client, /whatsappAnalyticsLocalKey/);
+  assert.match(styles, /whatsapp-analytics-grid/);
+  assert.match(styles, /whatsapp-metric-card\.messages/);
+});

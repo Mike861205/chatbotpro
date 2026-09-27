@@ -5,6 +5,77 @@ let WHATSAPP_SELECTED_CONVERSATION = null;
 let WHATSAPP_BOUND = false;
 let WHATSAPP_SOCKET = null;
 
+function whatsappAnalyticsDateKey(date = new Date()) {
+  const timezone = ME?.tenant?.timezone || undefined;
+  const parts = new Intl.DateTimeFormat('en-US', { timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(date);
+  const values = Object.fromEntries(parts.filter((part) => part.type !== 'literal').map((part) => [part.type, part.value]));
+  return `${values.year}-${values.month}-${values.day}`;
+}
+
+function whatsappAnalyticsLocalKey(date) {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+}
+
+function whatsappAnalyticsRange() {
+  const preset = $('#whatsappAnalyticsRange')?.value || 'today';
+  const today = whatsappAnalyticsDateKey();
+  if (preset === 'custom') {
+    const from = $('#whatsappAnalyticsFrom')?.value || today;
+    const to = $('#whatsappAnalyticsTo')?.value || from;
+    return { from, to };
+  }
+  const date = new Date(`${today}T12:00:00`);
+  let from = today;
+  if (preset === 'week') {
+    const day = date.getDay() || 7;
+    date.setDate(date.getDate() - day + 1);
+    from = whatsappAnalyticsLocalKey(date);
+  } else if (preset === 'month') {
+    from = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-01`;
+  } else if (preset === 'year') {
+    from = `${date.getFullYear()}-01-01`;
+  }
+  return { from, to: today };
+}
+
+function whatsappAnalyticsDateLabel(value) {
+  if (!value) return '—';
+  const date = new Date(`${value}T12:00:00`);
+  return Number.isNaN(date.getTime()) ? value : new Intl.DateTimeFormat('es-MX', { day: '2-digit', month: 'short', year: 'numeric' }).format(date);
+}
+
+function syncWhatsAppAnalyticsFilterVisibility() {
+  const custom = $('#whatsappAnalyticsRange')?.value === 'custom';
+  if ($('#whatsappAnalyticsFromField')) $('#whatsappAnalyticsFromField').hidden = !custom;
+  if ($('#whatsappAnalyticsToField')) $('#whatsappAnalyticsToField').hidden = !custom;
+  if (custom) {
+    const range = whatsappAnalyticsRange();
+    if ($('#whatsappAnalyticsFrom') && !$('#whatsappAnalyticsFrom').value) $('#whatsappAnalyticsFrom').value = range.from;
+    if ($('#whatsappAnalyticsTo') && !$('#whatsappAnalyticsTo').value) $('#whatsappAnalyticsTo').value = range.to;
+  }
+}
+
+async function loadWhatsAppAnalytics() {
+  const range = whatsappAnalyticsRange();
+  if (range.from > range.to) throw new Error('La fecha inicial no puede ser posterior a la fecha final');
+  const query = new URLSearchParams({ from: range.from, to: range.to });
+  const result = await api(`/api/whatsapp/analytics?${query.toString()}`);
+  const totals = result?.totals || {};
+  const number = new Intl.NumberFormat('es-MX');
+  const chats = $('#whatsappMetricChats');
+  const messages = $('#whatsappMetricMessages');
+  const orders = $('#whatsappMetricOrders');
+  if (chats) chats.textContent = number.format(Number(totals.chats || 0));
+  if (messages) messages.textContent = number.format(Number(totals.messagesWithCost || 0));
+  if (orders) orders.textContent = number.format(Number(totals.successfulOrders || 0));
+  const label = $('#whatsappAnalyticsRangeLabel');
+  if (label) label.textContent = `Del ${whatsappAnalyticsDateLabel(result?.from || range.from)} al ${whatsappAnalyticsDateLabel(result?.to || range.to)}`;
+  const messagesHint = $('#whatsappMetricMessagesHint');
+  if (messagesHint) messagesHint.textContent = 'Enviados por la API sin error';
+  const ordersHint = $('#whatsappMetricOrdersHint');
+  if (ordersHint) ordersHint.textContent = 'Pedidos WhatsApp no cancelados';
+}
+
 function normalizeWhatsAppEntryNumber(value) {
   let digits = String(value || '').replace(/\D/g, '').replace(/^00+/, '');
   if (digits.length === 13 && digits.startsWith('521')) digits = `52${digits.slice(3)}`;
@@ -203,7 +274,8 @@ async function selectWhatsAppConversation(id) {
 
 function setWhatsAppTab(tab) {
   document.querySelectorAll('[data-whatsapp-tab]').forEach((button) => button.classList.toggle('on', button.dataset.whatsappTab === tab));
-  ['connection', 'inbox', 'orders', 'help'].forEach((key) => { const panel = $(`#whatsappPanel${key[0].toUpperCase()}${key.slice(1)}`); if (panel) panel.hidden = key !== tab; });
+  ['analytics', 'connection', 'inbox', 'orders', 'help'].forEach((key) => { const panel = $(`#whatsappPanel${key[0].toUpperCase()}${key.slice(1)}`); if (panel) panel.hidden = key !== tab; });
+  if (tab === 'analytics') loadWhatsAppAnalytics().catch((error) => toast(error.message, true));
 }
 
 async function selectWhatsAppConnection(id) {
@@ -226,9 +298,17 @@ async function loadWhatsApp() {
     pill.textContent = state.label;
     pill.className = `whatsapp-status-pill ${state.tone}`;
   }
+  syncWhatsAppAnalyticsFilterVisibility();
+  loadWhatsAppAnalytics().catch((error) => {
+    const label = $('#whatsappAnalyticsRangeLabel');
+    if (label) label.textContent = error.message;
+  });
   if (WHATSAPP_BOUND) return;
   WHATSAPP_BOUND = true;
   document.querySelectorAll('[data-whatsapp-tab]').forEach((button) => button.addEventListener('click', () => setWhatsAppTab(button.dataset.whatsappTab)));
+  $('#whatsappAnalyticsRange')?.addEventListener('change', () => { syncWhatsAppAnalyticsFilterVisibility(); if ($('#whatsappAnalyticsRange').value !== 'custom') loadWhatsAppAnalytics().catch((error) => toast(error.message, true)); });
+  $('#whatsappAnalyticsApplyBtn')?.addEventListener('click', () => loadWhatsAppAnalytics().catch((error) => toast(error.message, true)));
+  $('#whatsappAnalyticsRefreshBtn')?.addEventListener('click', () => loadWhatsAppAnalytics().catch((error) => toast(error.message, true)));
   $('#whatsappRefreshBtn')?.addEventListener('click', () => loadWhatsApp().catch((error) => toast(error.message, true)));
   $('#whatsappInboxRefreshBtn')?.addEventListener('click', () => loadWhatsApp().catch((error) => toast(error.message, true)));
   if (typeof window.io === 'function') {

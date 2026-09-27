@@ -1165,10 +1165,30 @@
         </div>
 
         <div class="whatsapp-tabs" id="whatsappTabs">
-          <button type="button" class="on" data-whatsapp-tab="connection"><i class="ph-bold ph-plugs-connected"></i> Conexión</button>
+          <button type="button" class="on" data-whatsapp-tab="analytics"><i class="ph-bold ph-chart-line-up"></i> Resumen</button>
+          <button type="button" data-whatsapp-tab="connection"><i class="ph-bold ph-plugs-connected"></i> Conexión</button>
           <button type="button" data-whatsapp-tab="inbox"><i class="ph-bold ph-chats-circle"></i> Bandeja</button>
           <button type="button" data-whatsapp-tab="orders"><i class="ph-bold ph-receipt"></i> Pedidos de WhatsApp</button>
           <button type="button" data-whatsapp-tab="help"><i class="ph-bold ph-shield-check"></i> Seguridad y reglas</button>
+        </div>
+
+        <div id="whatsappPanelAnalytics">
+          <div class="card whatsapp-analytics-filter-card">
+            <div class="whatsapp-card-heading"><div><span class="whatsapp-section-kicker">Indicadores del canal</span><h3><i class="ph-bold ph-chart-line-up"></i> Resumen de WhatsApp</h3><p class="hint">Consulta rápidamente la actividad y los pedidos del negocio.</p></div><button class="btn btn-ghost btn-sm" id="whatsappAnalyticsRefreshBtn" type="button" title="Actualizar resumen"><i class="ph-bold ph-arrows-clockwise"></i></button></div>
+            <div class="whatsapp-analytics-filters">
+              <div class="field"><label for="whatsappAnalyticsRange">Periodo</label><select id="whatsappAnalyticsRange"><option value="today">Hoy</option><option value="week">Esta semana</option><option value="month">Este mes</option><option value="year">Este año</option><option value="custom">Personalizado</option></select></div>
+              <div class="field whatsapp-analytics-custom-field" id="whatsappAnalyticsFromField" hidden><label for="whatsappAnalyticsFrom">Desde</label><input id="whatsappAnalyticsFrom" type="date" /></div>
+              <div class="field whatsapp-analytics-custom-field" id="whatsappAnalyticsToField" hidden><label for="whatsappAnalyticsTo">Hasta</label><input id="whatsappAnalyticsTo" type="date" /></div>
+              <button class="btn btn-primary" id="whatsappAnalyticsApplyBtn" type="button"><i class="ph-bold ph-funnel"></i> Aplicar filtro</button>
+              <span class="whatsapp-analytics-range-label" id="whatsappAnalyticsRangeLabel">Cargando periodo…</span>
+            </div>
+          </div>
+          <div class="whatsapp-analytics-grid" aria-live="polite">
+            <article class="whatsapp-metric-card chats"><div class="whatsapp-metric-icon"><i class="ph-duotone ph-chats-circle"></i></div><div><span class="whatsapp-metric-label">Total de chats</span><strong id="whatsappMetricChats">—</strong><small id="whatsappMetricChatsHint">Conversaciones con actividad</small></div></article>
+            <article class="whatsapp-metric-card messages"><div class="whatsapp-metric-icon"><i class="ph-duotone ph-chat-teardrop-text"></i></div><div><span class="whatsapp-metric-label">Mensajes con costo</span><strong id="whatsappMetricMessages">—</strong><small id="whatsappMetricMessagesHint">Enviados por la API</small></div></article>
+            <article class="whatsapp-metric-card orders"><div class="whatsapp-metric-icon"><i class="ph-duotone ph-receipt"></i></div><div><span class="whatsapp-metric-label">Pedidos exitosos</span><strong id="whatsappMetricOrders">—</strong><small id="whatsappMetricOrdersHint">Registrados sin cancelación</small></div></article>
+          </div>
+          <div class="whatsapp-analytics-note"><i class="ph-bold ph-info"></i><span>Los mensajes con costo muestran los envíos registrados por la API sin error. El importe final depende de las tarifas y conversaciones que reporte Zernio/Meta.</span></div>
         </div>
 
         <div id="whatsappPanelConnection">

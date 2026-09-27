@@ -925,6 +925,60 @@ router.get('/oauth/callback', async (req, res, next) => {
 router.use(requireAuth);
 router.use(requireModules('whatsapp'));
 
+function isAnalyticsDate(value) {
+  return /^\d{4}-\d{2}-\d{2}$/.test(String(value || ''));
+}
+
+router.get('/analytics', async (req, res, next) => {
+  try {
+    const timezone = String(req.timezone || 'UTC').replace(/'/g, "''");
+    const requestedFrom = String(req.query.from || '');
+    const requestedTo = String(req.query.to || '');
+    let from = isAnalyticsDate(requestedFrom) ? requestedFrom : '';
+    let to = isAnalyticsDate(requestedTo) ? requestedTo : '';
+    if (!from || !to) {
+      const today = await req.tdb.get(`SELECT (now() AT TIME ZONE '${timezone}')::date::text AS today`);
+      from = from || today?.today;
+      to = to || from;
+    }
+    if (!from || !to || from > to) return res.status(400).json({ error: 'El rango de fechas no es válido' });
+
+    const row = await req.tdb.get(
+      `SELECT
+        COALESCE((SELECT COUNT(DISTINCT m.conversation_id)
+          FROM {s}.whatsapp_messages m
+          WHERE (m.created_at AT TIME ZONE '${timezone}')::date BETWEEN $1::date AND $2::date), 0)::int AS chats,
+        COALESCE((SELECT COUNT(*)
+          FROM {s}.whatsapp_messages m
+          WHERE (m.created_at AT TIME ZONE '${timezone}')::date BETWEEN $1::date AND $2::date
+            AND m.direction = 'outbound'
+            AND LOWER(COALESCE(m.status, '')) NOT IN ('failed', 'error')), 0)::int AS messages_with_cost,
+        COALESCE((SELECT COUNT(*)
+          FROM {s}.orders o
+          WHERE LOWER(COALESCE(o.source_channel, '')) = 'whatsapp'
+            AND (o.created_at AT TIME ZONE '${timezone}')::date BETWEEN $1::date AND $2::date
+            AND LOWER(COALESCE(o.status, '')) NOT IN ('cancelado', 'cancelled', 'canceled', 'fallido', 'failed', 'anulado', 'void')), 0)::int AS successful_orders`,
+      [from, to]
+    );
+    res.set('Cache-Control', 'no-store');
+    res.json({
+      from,
+      to,
+      timezone: req.timezone,
+      totals: {
+        chats: Number(row?.chats || 0),
+        messagesWithCost: Number(row?.messages_with_cost || 0),
+        successfulOrders: Number(row?.successful_orders || 0),
+      },
+      definitions: {
+        chats: 'Conversaciones con actividad en el rango seleccionado.',
+        messagesWithCost: 'Mensajes enviados por la API y registrados sin error; el cargo real lo determina Zernio/Meta.',
+        successfulOrders: 'Pedidos de WhatsApp registrados que no están cancelados ni fallidos.',
+      },
+    });
+  } catch (error) { next(error); }
+});
+
 router.get('/', async (req, res, next) => {
   try {
     const connections = await req.tdb.all('SELECT * FROM {s}.whatsapp_connections ORDER BY id DESC');
