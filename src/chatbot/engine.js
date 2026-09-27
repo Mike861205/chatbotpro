@@ -1821,8 +1821,19 @@ function guidedCommandForText(state, rawInput) {
   if (state.step === 'ask_order_note_choice' && ['no gracias', 'no quiero nota', 'sin nota por favor'].includes(normalized)) return 'order_note_no';
   if (state.step === 'ask_order_note_choice' && ['si', 'no', 'sin nota', 'continuar', 'agregar nota'].includes(normalized)) return normalized === 'si' || normalized === 'agregar nota' ? 'order_note_yes' : 'order_note_no';
   if (state.step === 'checkout_identity_choice' && ['primera vez', 'nuevo cliente', 'soy nuevo'].includes(normalized)) return 'checkout_new_customer';
-  const exactLabel = (state.lastOptions || []).find((option) => normalizeSearchText(option.label) === normalized);
-  return exactLabel?.value || '';
+  const options = Array.isArray(state.lastOptions) ? state.lastOptions : [];
+  const exactLabel = options.find((option) => normalizeSearchText(option.label) === normalized);
+  if (exactLabel?.value) return exactLabel.value;
+
+  // Some WhatsApp providers return the compact button title instead of the
+  // complete label saved by the engine (for example "Horarios" for
+  // "Horarios de atención"). Only accept a boundary-safe prefix match so a
+  // short title cannot accidentally select a different option.
+  const compactLabel = options.find((option) => {
+    const label = normalizeSearchText(option.label);
+    return label && (label.startsWith(`${normalized} `) || normalized.startsWith(`${label} `));
+  });
+  return compactLabel?.value || '';
 }
 
 async function aiGuidedOption(state, rawInput) {

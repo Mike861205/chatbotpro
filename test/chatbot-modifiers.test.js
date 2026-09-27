@@ -219,6 +219,7 @@ function fakeTenantDb(initialState) {
       if (sql.includes('settings')) {
         if (params[0] === 'currency' && initialState.currency) return { value: initialState.currency };
         if (params[0] === 'whatsapp') return { value: '526141234567' };
+        if (params[0] === 'chatbot_extra_options_json' && initialState.chatbotInfoOptions) return { value: initialState.chatbotInfoOptions };
         return null;
       }
       throw new Error(`Consulta get inesperada: ${sql}`);
@@ -371,6 +372,31 @@ test('el chatbot actualiza opciones múltiples sin repetir la pregunta y avanza 
   await handleMessage(db, 'restaurante', 'session-2', 'mod_opt_23');
   assert.equal(db.savedState.step, 'start');
   assert.equal(db.savedState.cart[0].modifiers[0].options.length, 3);
+});
+
+test('una pregunta abierta conserva el flujo y usa la respuesta de IA configurada', async () => {
+  const db = fakeTenantDb({ step: 'start', cart: [], customer: {}, currency: 'MXN', aiHistory: [] });
+  const reply = await handleMessage(db, 'restaurante', 'session-open-question', 'Â¿QuÃ© horarios manejan?', {
+    aiFallback: async () => ({ text: 'Hoy atendemos de 10:00 a 22:00.' }),
+  });
+
+  assert.match(reply.messages[0], /10:00 a 22:00/);
+  assert.equal(db.savedState.step, 'start');
+  assert.deepEqual(db.savedState.aiHistory.slice(-2).map((item) => item.role), ['user', 'assistant']);
+  assert.equal(reply.options.some((option) => option.value === 'menu'), true);
+});
+
+test('un botÃ³n informativo abre su contenido aunque WhatsApp devuelva un tÃ­tulo abreviado', async () => {
+  const db = fakeTenantDb({
+    step: 'start', cart: [], customer: {}, currency: 'MXN', aiHistory: [],
+    chatbotInfoOptions: JSON.stringify([{ id: 'horarios', label: 'Horarios de atenciÃ³n', message: 'Abrimos de 10:00 a 22:00.' }]),
+  });
+
+  await handleMessage(db, 'restaurante', 'session-info-button', 'start');
+  const reply = await handleMessage(db, 'restaurante', 'session-info-button', 'Horarios');
+
+  assert.match(reply.messages.join(' '), /Abrimos de 10:00 a 22:00/);
+  assert.equal(db.savedState.step, 'start');
 });
 
 test('rechaza opciones que no pertenecen al grupo configurado', () => {

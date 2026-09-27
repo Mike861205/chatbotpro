@@ -7,6 +7,32 @@ function source(relativePath) {
   return fs.readFileSync(path.join(__dirname, '..', relativePath), 'utf8');
 }
 
+test('WhatsApp conserva el valor interno de botones y listas de Zernio', () => {
+  const route = require('../src/routes/whatsapp');
+  const parseWebhook = route.webhookMessage;
+  assert.equal(typeof parseWebhook, 'function');
+
+  const encoded = `cb${Buffer.from('info_horarios', 'utf8').toString('hex')}`;
+  const payloads = [
+    { event: 'message.received', metadata: { interactiveId: encoded } },
+    { event: 'message.received', message: { interactive: { button_reply: { id: encoded, title: 'Horarios' } } } },
+    { event: 'message.received', data: { message: { button: { payload: encoded, title: 'Horarios' } } } },
+  ];
+
+  for (const payload of payloads) {
+    const parsed = parseWebhook(payload);
+    assert.equal(parsed.interactiveId, 'info_horarios');
+    assert.equal(parsed.text, 'info_horarios');
+  }
+
+  const titleOnly = parseWebhook({
+    event: 'message.received',
+    message: { interactive: { list_reply: { title: 'Horarios de atención' } } },
+  });
+  assert.equal(titleOnly.interactiveTitle, 'Horarios de atención');
+  assert.equal(titleOnly.text, 'Horarios de atención');
+});
+
 test('WhatsApp ofrece sandbox Zernio y conserva el flujo real de pedidos', () => {
   const route = source('src/routes/whatsapp.js');
   const html = source('public/app.html');

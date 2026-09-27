@@ -688,12 +688,39 @@ function webhookMessage(payload) {
   ]);
   const interactiveId = whatsappEngineInput(firstValue(payload, [
     'metadata.interactiveId', 'message.metadata.interactiveId', 'data.metadata.interactiveId', 'data.message.metadata.interactiveId',
+    // Zernio has emitted interactive replies in several compatible shapes
+    // over time. Accept the provider's native button/list reply fields too;
+    // otherwise a visible button such as "Horarios" falls through as free
+    // text and the engine repeats its generic fallback.
+    'interactiveId', 'interactive_id', 'message.interactiveId', 'message.interactive_id',
+    'data.interactiveId', 'data.interactive_id', 'data.message.interactiveId', 'data.message.interactive_id',
+    'message.button.payload', 'message.button.id', 'message.button_reply.payload', 'message.button_reply.id',
+    'message.buttonReply.payload', 'message.buttonReply.id',
+    'message.interactive.button_reply.payload', 'message.interactive.button_reply.id',
+    'message.interactive.buttonReply.payload', 'message.interactive.buttonReply.id',
+    'message.interactive.list_reply.payload', 'message.interactive.list_reply.id',
+    'message.interactive.listReply.payload', 'message.interactive.listReply.id',
+    'data.message.button.payload', 'data.message.button.id', 'data.message.button_reply.payload', 'data.message.button_reply.id',
+    'data.message.interactive.button_reply.payload', 'data.message.interactive.button_reply.id',
+    'data.message.interactive.list_reply.payload', 'data.message.interactive.list_reply.id',
+    'button.payload', 'button.id', 'button_reply.payload', 'button_reply.id',
+    'interactive.button_reply.payload', 'interactive.button_reply.id', 'interactive.list_reply.payload', 'interactive.list_reply.id',
+    'data.interactive.button_reply.payload', 'data.interactive.button_reply.id',
+    'data.interactive.list_reply.payload', 'data.interactive.list_reply.id',
   ]), 200);
   const interactiveType = clean(firstValue(payload, [
     'metadata.interactiveType', 'message.metadata.interactiveType', 'data.metadata.interactiveType', 'data.message.metadata.interactiveType',
   ]), 80);
   const interactiveTitle = clean(firstValue(payload, [
     'metadata.interactiveTitle', 'message.metadata.interactiveTitle', 'data.metadata.interactiveTitle', 'data.message.metadata.interactiveTitle',
+    'interactiveTitle', 'interactive_title', 'message.interactiveTitle', 'message.interactive_title',
+    'message.button.title', 'message.button_reply.title', 'message.buttonReply.title',
+    'message.interactive.button_reply.title', 'message.interactive.buttonReply.title',
+    'message.interactive.list_reply.title', 'message.interactive.listReply.title',
+    'data.message.button.title', 'data.message.button_reply.title',
+    'data.message.interactive.button_reply.title', 'data.message.interactive.list_reply.title',
+    'button.title', 'button_reply.title', 'interactive.button_reply.title', 'interactive.list_reply.title',
+    'data.interactive.button_reply.title', 'data.interactive.list_reply.title',
   ]), 200);
   const location = whatsappLocation(payload);
   const textValue = typeof messageValue === 'object' ? clean(messageValue?.body || messageValue?.text || '') : clean(messageValue, 10000);
@@ -1171,5 +1198,6 @@ router.post('/conversations/:id/send', async (req, res, next) => {
 // Express router itself.
 router.whatsappInteractiveMessages = whatsappInteractiveMessages;
 router.whatsappButtonTitle = whatsappButtonTitle;
+router.webhookMessage = webhookMessage;
 
 module.exports = router;
