@@ -42,6 +42,7 @@ test('WhatsApp ofrece sandbox Zernio y conserva el flujo real de pedidos', () =>
   assert.match(html, /whatsapp-setup-guide/);
   assert.match(html, /whatsappCustomerEntryCard/);
   assert.match(html, /whatsappCustomerQr/);
+  assert.match(html, /sandbox de Zernio/);
   assert.match(client, /whatsappSandboxActivateBtn/);
   assert.match(client, /whatsappSandboxStartBtn/);
   assert.match(client, /whatsappCustomerShareBtn/);

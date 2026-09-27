@@ -23,6 +23,7 @@ let SA_OPERATION_RESET = null;
 let SA_STORAGE_REPORT = null;
 let SA_STORAGE_ACTION = null;
 let SA_STORAGE_LOADING = false;
+let SA_STORAGE_SORT = { key: 'bytes', dir: null };
 let SA_ACTIVE_VIEW = 'tenants';
 let SA_TENANT_SORT = { key: 'created_at', dir: 'desc' };
 let SA_TENANT_PAGE = 1;
@@ -2117,7 +2118,33 @@ function renderStorageSummary() {
 function filteredStorageProspects() {
   const query = String($('#saStorageSearch')?.value || '').trim().toLowerCase();
   const rows = Array.isArray(SA_STORAGE_REPORT?.prospects) ? SA_STORAGE_REPORT.prospects : [];
-  return query ? rows.filter((item) => `${item.businessName} ${item.slug}`.toLowerCase().includes(query)) : rows;
+  const filtered = query ? rows.filter((item) => `${item.businessName} ${item.slug}`.toLowerCase().includes(query)) : rows;
+  if (!SA_STORAGE_SORT.dir) return filtered;
+
+  return filtered
+    .map((item, index) => ({ item, index, bytes: item.storage ? Number(item.storage.bytes || 0) : null }))
+    .sort((left, right) => {
+      // Las revisiones incompletas no tienen una medida confiable; se mantienen al final.
+      if (left.bytes === null || right.bytes === null) {
+        if (left.bytes === right.bytes) return left.index - right.index;
+        return left.bytes === null ? 1 : -1;
+      }
+      const result = left.bytes - right.bytes;
+      return result === 0 ? left.index - right.index : (SA_STORAGE_SORT.dir === 'asc' ? result : -result);
+    })
+    .map(({ item }) => item);
+}
+
+function storageSortIcon() {
+  if (SA_STORAGE_SORT.dir === 'asc') return 'ph-arrow-up';
+  if (SA_STORAGE_SORT.dir === 'desc') return 'ph-arrow-down';
+  return 'ph-arrows-down-up';
+}
+
+function storageSortLabel() {
+  if (SA_STORAGE_SORT.dir === 'asc') return 'Ordenado de menor a mayor almacenamiento';
+  if (SA_STORAGE_SORT.dir === 'desc') return 'Ordenado de mayor a menor almacenamiento';
+  return 'Ordenar por almacenamiento';
 }
 
 function renderStorageProspects() {
@@ -2140,6 +2167,18 @@ function renderStorageProspects() {
       : '<span class="sa-storage-blocked"><i class="ph-bold ph-lock"></i> Revisión incompleta</span>';
     return `<tr><td><b>${esc(item.businessName)}</b><div class="meta">/${esc(item.slug)} · #${item.id}</div></td><td>${fmtDateTime(item.lastActivityAt)}<div class="meta">${item.inactiveDays === null ? 'Sin actividad registrada' : `${item.inactiveDays} días desde actividad`}</div></td><td>${storage ? `<b>${fmtBytes(storage.bytes)}</b><div class="meta">${storage.files} archivo(s) · ${storage.referencedFiles} vigente(s)</div>` : '<span class="meta">No disponible</span>'}</td><td>${storage ? `<b>${storage.orphanFiles}</b><div class="meta">${fmtBytes(storage.orphanBytes)} recuperables</div>${storage.recentUnreferencedFiles ? `<div class="meta">${storage.recentUnreferencedFiles} reciente(s), protegidos 24 h</div>` : ''}` : '—'}</td><td>${status}<div class="meta">${esc(item.scanError || item.reason)}</div></td><td><div class="sa-storage-actions">${actions}</div></td></tr>`;
   }).join('')}</tbody></table></div>`;
+  const storageHeader = target.querySelector('.sa-storage-table thead th:nth-child(3)');
+  if (storageHeader) {
+    const storageSort = SA_STORAGE_SORT.dir ? (SA_STORAGE_SORT.dir === 'asc' ? 'ascending' : 'descending') : 'none';
+    const label = storageSortLabel();
+    storageHeader.setAttribute('aria-sort', storageSort);
+    storageHeader.innerHTML = `<button type="button" class="sa-storage-sort" data-storage-sort="bytes" aria-label="${label}" title="${label}"><span>Almacenamiento</span><i class="ph-bold ${storageSortIcon()}" aria-hidden="true"></i></button>`;
+  }
+  document.querySelectorAll('[data-storage-sort]').forEach((button) => button.onclick = () => {
+    const nextDirection = SA_STORAGE_SORT.dir === 'desc' ? 'asc' : 'desc';
+    SA_STORAGE_SORT = { key: button.dataset.storageSort, dir: nextDirection };
+    renderStorageProspects();
+  });
   document.querySelectorAll('[data-storage-delete]').forEach((button) => button.onclick = () => openStorageAction('delete-prospect', { id: Number(button.dataset.storageDelete) }).catch((error) => toast(error.message, true)));
   document.querySelectorAll('[data-storage-clean]').forEach((button) => button.onclick = () => openStorageAction('clean-files', { id: Number(button.dataset.storageClean) }).catch((error) => toast(error.message, true)));
 }
