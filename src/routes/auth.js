@@ -46,6 +46,7 @@ const TRACKABLE_MODULES = new Set([
   'compras',
   'empleados',
   'chatbot',
+  'whatsapp',
   'config',
   'suscripciones',
   'instrucciones',

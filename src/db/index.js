@@ -244,6 +244,15 @@ async function initMaster(options = {}) {
         OR (tenant_id IS NULL AND demo_lead_id IS NOT NULL)
       )
     );
+    CREATE TABLE IF NOT EXISTS whatsapp_webhook_tokens (
+      token_hash TEXT PRIMARY KEY,
+      tenant_slug TEXT NOT NULL,
+      connection_id BIGINT NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      revoked_at TIMESTAMPTZ
+    );
+    CREATE INDEX IF NOT EXISTS idx_whatsapp_webhook_tokens_tenant
+      ON whatsapp_webhook_tokens(tenant_slug, connection_id);
   `);
 
   await q(`ALTER TABLE tenants ADD COLUMN IF NOT EXISTS account_status TEXT DEFAULT 'active'`);
@@ -781,6 +790,123 @@ async function createTenantSchema(slug) {
       created_at TIMESTAMPTZ DEFAULT now(),
       updated_at TIMESTAMPTZ DEFAULT now()
     );
+    CREATE TABLE IF NOT EXISTS "${s}".whatsapp_connections (
+      id BIGSERIAL PRIMARY KEY,
+      profile_id TEXT NOT NULL DEFAULT '',
+      zernio_account_id TEXT NOT NULL DEFAULT '',
+      waba_id TEXT NOT NULL DEFAULT '',
+      phone_number_id TEXT NOT NULL DEFAULT '',
+      phone_number TEXT NOT NULL DEFAULT '',
+      display_name TEXT NOT NULL DEFAULT '',
+      mode TEXT NOT NULL DEFAULT 'business_app',
+      status TEXT NOT NULL DEFAULT 'pending',
+      enabled INTEGER NOT NULL DEFAULT 0,
+      api_key_enc TEXT NOT NULL DEFAULT '',
+      meta_access_token_enc TEXT NOT NULL DEFAULT '',
+      webhook_secret_enc TEXT NOT NULL DEFAULT '',
+      webhook_token_enc TEXT NOT NULL DEFAULT '',
+      webhook_token_hash TEXT NOT NULL DEFAULT '',
+      metadata_json TEXT NOT NULL DEFAULT '{}',
+      last_error TEXT NOT NULL DEFAULT '',
+      last_health_check TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+    ALTER TABLE "${s}".whatsapp_connections ADD COLUMN IF NOT EXISTS profile_id TEXT NOT NULL DEFAULT '';
+    ALTER TABLE "${s}".whatsapp_connections ADD COLUMN IF NOT EXISTS zernio_account_id TEXT NOT NULL DEFAULT '';
+    ALTER TABLE "${s}".whatsapp_connections ADD COLUMN IF NOT EXISTS waba_id TEXT NOT NULL DEFAULT '';
+    ALTER TABLE "${s}".whatsapp_connections ADD COLUMN IF NOT EXISTS phone_number_id TEXT NOT NULL DEFAULT '';
+    ALTER TABLE "${s}".whatsapp_connections ADD COLUMN IF NOT EXISTS phone_number TEXT NOT NULL DEFAULT '';
+    ALTER TABLE "${s}".whatsapp_connections ADD COLUMN IF NOT EXISTS display_name TEXT NOT NULL DEFAULT '';
+    ALTER TABLE "${s}".whatsapp_connections ADD COLUMN IF NOT EXISTS mode TEXT NOT NULL DEFAULT 'business_app';
+    ALTER TABLE "${s}".whatsapp_connections ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'pending';
+    ALTER TABLE "${s}".whatsapp_connections ADD COLUMN IF NOT EXISTS enabled INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE "${s}".whatsapp_connections ADD COLUMN IF NOT EXISTS api_key_enc TEXT NOT NULL DEFAULT '';
+    ALTER TABLE "${s}".whatsapp_connections ADD COLUMN IF NOT EXISTS meta_access_token_enc TEXT NOT NULL DEFAULT '';
+    ALTER TABLE "${s}".whatsapp_connections ADD COLUMN IF NOT EXISTS webhook_secret_enc TEXT NOT NULL DEFAULT '';
+    ALTER TABLE "${s}".whatsapp_connections ADD COLUMN IF NOT EXISTS webhook_token_enc TEXT NOT NULL DEFAULT '';
+    ALTER TABLE "${s}".whatsapp_connections ADD COLUMN IF NOT EXISTS webhook_token_hash TEXT NOT NULL DEFAULT '';
+    ALTER TABLE "${s}".whatsapp_connections ADD COLUMN IF NOT EXISTS metadata_json TEXT NOT NULL DEFAULT '{}';
+    ALTER TABLE "${s}".whatsapp_connections ADD COLUMN IF NOT EXISTS last_error TEXT NOT NULL DEFAULT '';
+    ALTER TABLE "${s}".whatsapp_connections ADD COLUMN IF NOT EXISTS last_health_check TIMESTAMPTZ;
+    ALTER TABLE "${s}".whatsapp_connections ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT now();
+    ALTER TABLE "${s}".whatsapp_connections ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now();
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_${s}_whatsapp_connection_account
+      ON "${s}".whatsapp_connections(zernio_account_id) WHERE zernio_account_id <> '';
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_${s}_whatsapp_connection_phone
+      ON "${s}".whatsapp_connections(phone_number) WHERE phone_number <> '';
+    CREATE TABLE IF NOT EXISTS "${s}".whatsapp_conversations (
+      id BIGSERIAL PRIMARY KEY,
+      connection_id BIGINT NOT NULL,
+      external_id TEXT NOT NULL,
+      customer_phone_enc TEXT NOT NULL DEFAULT '',
+      customer_phone_hash TEXT NOT NULL DEFAULT '',
+      customer_name_enc TEXT NOT NULL DEFAULT '',
+      status TEXT NOT NULL DEFAULT 'open',
+      bot_enabled INTEGER NOT NULL DEFAULT 1,
+      assigned_user_id INTEGER,
+      context_json TEXT NOT NULL DEFAULT '{}',
+      last_message_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      UNIQUE(connection_id, external_id)
+    );
+    ALTER TABLE "${s}".whatsapp_conversations ADD COLUMN IF NOT EXISTS connection_id BIGINT NOT NULL DEFAULT 0;
+    ALTER TABLE "${s}".whatsapp_conversations ADD COLUMN IF NOT EXISTS external_id TEXT NOT NULL DEFAULT '';
+    ALTER TABLE "${s}".whatsapp_conversations ADD COLUMN IF NOT EXISTS customer_phone_enc TEXT NOT NULL DEFAULT '';
+    ALTER TABLE "${s}".whatsapp_conversations ADD COLUMN IF NOT EXISTS customer_phone_hash TEXT NOT NULL DEFAULT '';
+    ALTER TABLE "${s}".whatsapp_conversations ADD COLUMN IF NOT EXISTS customer_name_enc TEXT NOT NULL DEFAULT '';
+    ALTER TABLE "${s}".whatsapp_conversations ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'open';
+    ALTER TABLE "${s}".whatsapp_conversations ADD COLUMN IF NOT EXISTS bot_enabled INTEGER NOT NULL DEFAULT 1;
+    ALTER TABLE "${s}".whatsapp_conversations ADD COLUMN IF NOT EXISTS assigned_user_id INTEGER;
+    ALTER TABLE "${s}".whatsapp_conversations ADD COLUMN IF NOT EXISTS context_json TEXT NOT NULL DEFAULT '{}';
+    ALTER TABLE "${s}".whatsapp_conversations ADD COLUMN IF NOT EXISTS last_message_at TIMESTAMPTZ;
+    ALTER TABLE "${s}".whatsapp_conversations ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT now();
+    ALTER TABLE "${s}".whatsapp_conversations ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now();
+    CREATE INDEX IF NOT EXISTS idx_${s}_whatsapp_conversations_updated
+      ON "${s}".whatsapp_conversations(status, updated_at DESC);
+    CREATE TABLE IF NOT EXISTS "${s}".whatsapp_messages (
+      id BIGSERIAL PRIMARY KEY,
+      conversation_id BIGINT NOT NULL,
+      external_message_id TEXT NOT NULL,
+      direction TEXT NOT NULL,
+      message_type TEXT NOT NULL DEFAULT 'text',
+      body TEXT NOT NULL DEFAULT '',
+      source TEXT NOT NULL DEFAULT '',
+      status TEXT NOT NULL DEFAULT 'received',
+      payload_json TEXT NOT NULL DEFAULT '{}',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      UNIQUE(external_message_id)
+    );
+    ALTER TABLE "${s}".whatsapp_messages ADD COLUMN IF NOT EXISTS conversation_id BIGINT NOT NULL DEFAULT 0;
+    ALTER TABLE "${s}".whatsapp_messages ADD COLUMN IF NOT EXISTS external_message_id TEXT NOT NULL DEFAULT '';
+    ALTER TABLE "${s}".whatsapp_messages ADD COLUMN IF NOT EXISTS direction TEXT NOT NULL DEFAULT 'inbound';
+    ALTER TABLE "${s}".whatsapp_messages ADD COLUMN IF NOT EXISTS message_type TEXT NOT NULL DEFAULT 'text';
+    ALTER TABLE "${s}".whatsapp_messages ADD COLUMN IF NOT EXISTS body TEXT NOT NULL DEFAULT '';
+    ALTER TABLE "${s}".whatsapp_messages ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT '';
+    ALTER TABLE "${s}".whatsapp_messages ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'received';
+    ALTER TABLE "${s}".whatsapp_messages ADD COLUMN IF NOT EXISTS payload_json TEXT NOT NULL DEFAULT '{}';
+    ALTER TABLE "${s}".whatsapp_messages ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT now();
+    CREATE INDEX IF NOT EXISTS idx_${s}_whatsapp_messages_conversation
+      ON "${s}".whatsapp_messages(conversation_id, created_at ASC);
+    CREATE TABLE IF NOT EXISTS "${s}".whatsapp_events (
+      id BIGSERIAL PRIMARY KEY,
+      connection_id BIGINT NOT NULL,
+      external_event_id TEXT NOT NULL,
+      event_type TEXT NOT NULL DEFAULT '',
+      payload_json TEXT NOT NULL DEFAULT '{}',
+      processed INTEGER NOT NULL DEFAULT 0,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      UNIQUE(external_event_id)
+    );
+    ALTER TABLE "${s}".whatsapp_events ADD COLUMN IF NOT EXISTS connection_id BIGINT NOT NULL DEFAULT 0;
+    ALTER TABLE "${s}".whatsapp_events ADD COLUMN IF NOT EXISTS external_event_id TEXT NOT NULL DEFAULT '';
+    ALTER TABLE "${s}".whatsapp_events ADD COLUMN IF NOT EXISTS event_type TEXT NOT NULL DEFAULT '';
+    ALTER TABLE "${s}".whatsapp_events ADD COLUMN IF NOT EXISTS payload_json TEXT NOT NULL DEFAULT '{}';
+    ALTER TABLE "${s}".whatsapp_events ADD COLUMN IF NOT EXISTS processed INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE "${s}".whatsapp_events ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT now();
+    CREATE INDEX IF NOT EXISTS idx_${s}_whatsapp_events_connection
+      ON "${s}".whatsapp_events(connection_id, created_at DESC);
     ALTER TABLE "${s}".orders ADD COLUMN IF NOT EXISTS pickup_branch_id INTEGER;
     ALTER TABLE "${s}".orders ADD COLUMN IF NOT EXISTS pickup_branch_name TEXT;
     ALTER TABLE "${s}".orders ADD COLUMN IF NOT EXISTS customer_location_lat NUMERIC(10,7);
@@ -814,6 +940,8 @@ async function createTenantSchema(slug) {
     ALTER TABLE "${s}".orders ADD COLUMN IF NOT EXISTS payment_reference TEXT DEFAULT '';
     ALTER TABLE "${s}".orders ADD COLUMN IF NOT EXISTS source_channel TEXT DEFAULT '';
     ALTER TABLE "${s}".orders ADD COLUMN IF NOT EXISTS pos_idempotency_key TEXT DEFAULT '';
+    ALTER TABLE "${s}".orders ADD COLUMN IF NOT EXISTS whatsapp_conversation_id BIGINT;
+    ALTER TABLE "${s}".orders ADD COLUMN IF NOT EXISTS whatsapp_external_id TEXT DEFAULT '';
     ALTER TABLE "${s}".orders ADD COLUMN IF NOT EXISTS payment_status TEXT NOT NULL DEFAULT 'paid';
     ALTER TABLE "${s}".orders ADD COLUMN IF NOT EXISTS credit_paid_session_id INTEGER;
     ALTER TABLE "${s}".orders ADD COLUMN IF NOT EXISTS credit_paid_at TIMESTAMPTZ;

@@ -67,6 +67,7 @@
         <a href="#empleados" data-view="empleados" data-color="fuchsia"><span class="nav-ic"><i class="ph-duotone ph-users-three"></i></span><span>Productividad</span></a>
         <div class="nav-label nav-label-chatbot"><i class="ph-fill ph-chat-circle-dots"></i> Chatbot</div>
         <a href="#chatbot" data-view="chatbot" data-color="cyan"><span class="nav-ic"><i class="ph-duotone ph-robot"></i></span><span>Mi chatbot</span></a>
+        <a href="#whatsapp" data-view="whatsapp" data-color="emerald"><span class="nav-ic"><i class="ph-duotone ph-whatsapp-logo"></i></span><span>WhatsApp</span></a>
         <div class="nav-label nav-label-negocio"><i class="ph-fill ph-briefcase"></i> Negocio</div>
         <a href="#config" data-view="config" data-color="amber"><span class="nav-ic"><i class="ph-duotone ph-buildings"></i></span><span>Mi negocio</span></a>
         <a href="#suscripciones" data-view="suscripciones" data-color="violet"><span class="nav-ic"><i class="ph-duotone ph-seal-check"></i></span><span>Suscripciones</span></a>
@@ -1152,6 +1153,85 @@
       <div class="modal-bg" id="fiscalEmitterModal"><div class="modal" style="max-width:680px"><div style="display:flex;justify-content:space-between;align-items:center"><h3><i class="ph-bold ph-identification-badge"></i> <span id="fiscalEmitterModalTitle">Nuevo emisor fiscal</span></h3><button type="button" class="modal-close" id="fiscalEmitterClose"><i class="ph-bold ph-x"></i></button></div><form id="fiscalEmitterForm"><input type="hidden" id="fiscalEmitterId"/><div class="field"><label>Nombre interno</label><input id="fiscalEmitterLabel" maxlength="80" required placeholder="Ej. Empresa Guadalajara"/></div><div class="row-2"><div class="field"><label>RFC</label><input id="fiscalEmitterRfc" maxlength="13" required/></div><div class="field"><label>Régimen fiscal</label><select id="fiscalEmitterRegime" required><option value="">Selecciona el régimen</option><option value="601">601 · General de Ley Personas Morales</option><option value="603">603 · Personas Morales con Fines no Lucrativos</option><option value="605">605 · Sueldos y Salarios</option><option value="606">606 · Arrendamiento</option><option value="607">607 · Enajenación o Adquisición de Bienes</option><option value="608">608 · Demás ingresos</option><option value="610">610 · Residentes en el Extranjero sin Establecimiento Permanente</option><option value="611">611 · Ingresos por Dividendos</option><option value="612">612 · Actividades Empresariales y Profesionales</option><option value="614">614 · Ingresos por intereses</option><option value="615">615 · Obtención de premios</option><option value="616">616 · Sin obligaciones fiscales</option><option value="620">620 · Sociedades Cooperativas de Producción</option><option value="621">621 · Incorporación Fiscal</option><option value="622">622 · Actividades Agrícolas, Ganaderas, Silvícolas y Pesqueras</option><option value="623">623 · Opcional para Grupos de Sociedades</option><option value="624">624 · Coordinados</option><option value="625">625 · Actividades Empresariales vía Plataformas Tecnológicas</option><option value="626">626 · Régimen Simplificado de Confianza</option></select></div></div><div class="field"><label>Nombre o razón social</label><input id="fiscalEmitterLegalName" maxlength="254" required/></div><div class="row-2"><div class="field"><label>Código postal fiscal</label><input id="fiscalEmitterPostal" maxlength="5" required/></div><div class="field"><label>Serie</label><input id="fiscalEmitterSeries" maxlength="25" value="A" required/></div></div><div class="row-2"><div class="field"><label>Clave SAT predeterminada</label><input id="fiscalEmitterProductCode" maxlength="8" value="01010101" required/></div><div class="field"><label>Unidad SAT</label><input id="fiscalEmitterUnitCode" maxlength="3" value="E48" required/></div></div><div class="row-2"><div class="field"><label>Objeto de impuesto</label><select id="fiscalEmitterTaxObject"><option value="02">02 - Sí objeto</option><option value="01">01 - No objeto</option><option value="03">03 - Sí objeto, sin desglose</option></select></div><div class="field"><label>IVA</label><select id="fiscalEmitterIva"><option value="0.16">16%</option><option value="0.08">8%</option><option value="0">0%</option></select></div></div><div class="modal-actions"><button type="button" class="btn btn-ghost" id="fiscalEmitterCancel">Cancelar</button><button type="submit" class="btn btn-primary"><i class="ph-bold ph-floppy-disk"></i> Guardar emisor</button></div></form></div></div>
 
       <div class="modal-bg" id="cfdiCancelModal"><div class="modal cfdi-cancel-modal"><div class="cfdi-cancel-head"><div><span>Solicitud ante el SAT</span><h3><i class="ph-bold ph-file-x"></i> Cancelar <b id="cfdiCancelIdentity">CFDI</b></h3></div><button type="button" class="modal-close" id="cfdiCancelClose"><i class="ph-bold ph-x"></i></button></div><div class="cfdi-cancel-warning"><i class="ph-bold ph-info"></i><div><b>El CFDI no se eliminará.</b><span>Se conservará en el historial y su estado cambiará según la respuesta de Facturama y, cuando corresponda, la aceptación del receptor.</span></div></div><form id="cfdiCancelForm"><input type="hidden" id="cfdiCancelId"/><input type="hidden" id="cfdiCancelType"/><div class="field"><label>Motivo de cancelación</label><select id="cfdiCancelMotive"><option value="02">02 · Comprobante con errores sin relación</option><option value="01">01 · Comprobante con errores con relación</option><option value="03">03 · No se llevó a cabo la operación</option><option value="04">04 · Operación nominativa relacionada en factura global</option></select></div><div class="field" id="cfdiReplacementRow" hidden><label>UUID del CFDI que lo sustituye</label><input id="cfdiReplacementUuid" maxlength="36" placeholder="XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX"/><p class="hint">El nuevo CFDI debe estar relacionado con tipo de relación 04.</p></div><div class="cfdi-cancel-note"><i class="ph-bold ph-clock-countdown"></i><span>Si requiere aceptación, el receptor dispone del plazo fiscal aplicable para aceptar o rechazar. Mientras tanto aparecerá como pendiente.</span></div><div class="modal-actions"><button type="button" class="btn btn-ghost" id="cfdiCancelBack">Regresar</button><button class="btn btn-danger" type="submit"><i class="ph-bold ph-paper-plane-tilt"></i> Enviar solicitud</button></div></form></div></div>
+
+      <section class="section" id="view-whatsapp">
+        <div class="whatsapp-hero">
+          <div>
+            <span class="whatsapp-kicker"><i class="ph-bold ph-whatsapp-logo"></i> Canal oficial para pedidos y atención</span>
+            <h2>WhatsApp</h2>
+            <p>Conecta la cuenta Zernio de este negocio, atiende desde la plataforma o desde WhatsApp Business y conserva el flujo actual de pedidos, POS, KDS e inventario.</p>
+          </div>
+          <div class="whatsapp-brand-mark"><i class="ph-duotone ph-whatsapp-logo"></i><span id="whatsappConnectionPill">Sin conectar</span></div>
+        </div>
+
+        <div class="whatsapp-tabs" id="whatsappTabs">
+          <button type="button" class="on" data-whatsapp-tab="connection"><i class="ph-bold ph-plugs-connected"></i> Conexión</button>
+          <button type="button" data-whatsapp-tab="inbox"><i class="ph-bold ph-chats-circle"></i> Bandeja</button>
+          <button type="button" data-whatsapp-tab="orders"><i class="ph-bold ph-receipt"></i> Pedidos de WhatsApp</button>
+          <button type="button" data-whatsapp-tab="help"><i class="ph-bold ph-shield-check"></i> Seguridad y reglas</button>
+        </div>
+
+        <div id="whatsappPanelConnection">
+          <div class="grid-2 whatsapp-connection-grid">
+            <div class="card">
+              <div class="whatsapp-card-heading"><div><span class="whatsapp-section-kicker">Cuenta propia del tenant</span><h3><i class="ph-bold ph-key"></i> Conectar Zernio</h3></div><span class="whatsapp-secure-badge"><i class="ph-bold ph-lock-key"></i> Cifrado</span></div>
+              <p class="hint">La API key se guarda únicamente en el servidor de este negocio. ChatBotPro no comparte conexiones, números ni conversaciones entre tenants.</p>
+              <form id="whatsappConnectionForm" class="whatsapp-form">
+                <input type="hidden" id="whatsappConnectionId" />
+                <div class="row-2">
+                <div class="field"><label for="whatsappProfileId">Profile ID de Zernio <span class="optional-label">no requerido para sandbox</span></label><input id="whatsappProfileId" maxlength="120" placeholder="profile_..." autocomplete="off" /></div>
+                  <div class="field"><label for="whatsappAccountId">Account ID de Zernio</label><input id="whatsappAccountId" maxlength="180" placeholder="Se completa al conectar" autocomplete="off" /></div>
+                </div>
+                <div class="field"><label for="whatsappApiKey">API key de Zernio</label><input id="whatsappApiKey" type="password" maxlength="600" placeholder="Pégala sólo para guardarla de forma segura" autocomplete="new-password" /><div class="hint">Por seguridad nunca se vuelve a mostrar después de guardarla.</div></div>
+                <div class="row-2">
+                  <div class="field"><label for="whatsappWabaId">WABA ID <span class="optional-label">opcional</span></label><input id="whatsappWabaId" maxlength="180" placeholder="Business Account ID" /></div>
+                  <div class="field"><label for="whatsappPhoneNumberId">Phone Number ID <span class="optional-label">opcional</span></label><input id="whatsappPhoneNumberId" maxlength="180" placeholder="Phone Number ID" /></div>
+                </div>
+                <div class="row-2">
+                  <div class="field"><label for="whatsappPhoneNumber">Número conectado</label><input id="whatsappPhoneNumber" maxlength="40" placeholder="521..." /></div>
+                  <div class="field"><label for="whatsappDisplayName">Nombre visible</label><input id="whatsappDisplayName" maxlength="160" placeholder="Mi negocio" /></div>
+                </div>
+                <div class="field"><label for="whatsappMode">Modo de uso</label><select id="whatsappMode"><option value="business_app">API + WhatsApp Business en celular (coexistencia)</option><option value="api">Sólo Cloud API</option><option value="sandbox">Sandbox de pruebas con flujo real</option></select><div class="hint">Coexistencia permite atender desde el celular, pero tiene limitaciones de grupos y llamadas.</div></div>
+                <div class="field"><label for="whatsappWebhookSecret">Secreto de webhook <span class="optional-label">opcional</span></label><input id="whatsappWebhookSecret" type="password" maxlength="300" placeholder="Si Zernio permite firmar eventos" autocomplete="new-password" /></div>
+                <div class="whatsapp-form-actions"><button class="btn btn-primary" type="submit"><i class="ph-bold ph-floppy-disk"></i> Guardar conexión</button><button class="btn btn-ghost" type="button" id="whatsappConnectMetaBtn" disabled><i class="ph-bold ph-facebook-logo"></i> Abrir conexión Meta</button><button class="btn btn-ghost" type="button" id="whatsappTestBtn" disabled><i class="ph-bold ph-plugs-connected"></i> Probar canal</button></div>
+              </form>
+              <div id="whatsappSandboxPanel" class="whatsapp-sandbox-panel" hidden>
+                <div class="whatsapp-card-heading"><div><span class="whatsapp-section-kicker">Pruebas oficiales de Zernio</span><h3><i class="ph-bold ph-flask"></i> Sandbox</h3></div><span class="whatsapp-status-pill info">Sin cargos</span></div>
+                <p class="hint">Usa un teléfono real de WhatsApp. Zernio enviará la plantilla de activación y, al responder desde ese teléfono, podrás probar bot, pedidos, inventario, POS y KDS con el flujo real del negocio.</p>
+                <div class="field"><label for="whatsappSandboxPhone">Teléfono de prueba</label><input id="whatsappSandboxPhone" maxlength="20" placeholder="+52 1 555 123 4567" autocomplete="tel" /></div>
+                <div class="whatsapp-form-actions"><button class="btn btn-ghost" type="button" id="whatsappSandboxDiscoverBtn"><i class="ph-bold ph-magnifying-glass"></i> Detectar sandbox</button><button class="btn btn-primary" type="button" id="whatsappSandboxActivateBtn"><i class="ph-bold ph-paper-plane-tilt"></i> Activar teléfono</button><button class="btn btn-ghost" type="button" id="whatsappSandboxRefreshBtn"><i class="ph-bold ph-arrows-clockwise"></i> Revisar estado</button><button class="btn btn-ghost" type="button" id="whatsappSandboxStartBtn"><i class="ph-bold ph-chat-circle-dots"></i> Iniciar conversación</button><button class="btn btn-ghost" type="button" id="whatsappSandboxRevokeBtn"><i class="ph-bold ph-x-circle"></i> Revocar</button></div>
+                <div id="whatsappSandboxStatus" class="whatsapp-sandbox-status"><i class="ph-bold ph-info"></i><span>Guarda la API key y detecta el sandbox para comenzar.</span></div>
+              </div>
+            </div>
+            <div class="card">
+              <div class="whatsapp-card-heading"><div><span class="whatsapp-section-kicker">Estado de la integración</span><h3><i class="ph-bold ph-broadcast"></i> Conexiones</h3></div><button class="btn btn-ghost btn-sm" id="whatsappRefreshBtn" type="button"><i class="ph-bold ph-arrows-clockwise"></i></button></div>
+              <div id="whatsappConnectionsList" class="whatsapp-connections-list"></div>
+              <div class="whatsapp-tenant-note"><i class="ph-bold ph-info"></i><span>El tenant paga directamente Zernio y Meta. Esta vista sólo administra la conexión operativa y el canal de pedidos.</span></div>
+            </div>
+          </div>
+          <div class="card whatsapp-webhook-card" id="whatsappWebhookCard" hidden><div><span class="whatsapp-section-kicker">Eventos en tiempo real</span><h3><i class="ph-bold ph-webhooks-logo"></i> Webhook del tenant</h3><p class="hint">Registra esta URL en Zernio para recibir mensajes, estados y desconexiones. La URL incluye un token exclusivo de este tenant.</p></div><div class="whatsapp-webhook-copy"><code id="whatsappWebhookUrl">—</code><button class="btn btn-ghost btn-sm" id="whatsappCopyWebhookBtn" type="button"><i class="ph-bold ph-copy"></i> Copiar</button></div></div>
+        </div>
+
+        <div id="whatsappPanelInbox" hidden>
+          <div class="whatsapp-inbox-shell">
+            <div class="card whatsapp-conversation-list-card"><div class="whatsapp-card-heading"><div><span class="whatsapp-section-kicker">Atención unificada</span><h3><i class="ph-bold ph-chats-circle"></i> Conversaciones</h3></div><button class="btn btn-ghost btn-sm" id="whatsappInboxRefreshBtn" type="button"><i class="ph-bold ph-arrows-clockwise"></i></button></div><div id="whatsappConversationList" class="whatsapp-conversation-list"></div></div>
+            <div class="card whatsapp-chat-card"><div id="whatsappChatHeader" class="whatsapp-chat-header"><div><span>Selecciona una conversación</span><b>Los mensajes del bot y del equipo aparecerán aquí.</b></div></div><div id="whatsappMessageList" class="whatsapp-message-list"><div class="whatsapp-empty-state"><i class="ph-duotone ph-chat-circle-dots"></i><b>Bandeja lista</b><span>Cuando llegue un mensaje, aquí podrás responder y tomar control humano.</span></div></div><form id="whatsappSendForm" class="whatsapp-send-form"><input id="whatsappMessageInput" maxlength="10000" placeholder="Escribe una respuesta…" disabled /><button class="btn btn-primary" type="submit" disabled><i class="ph-bold ph-paper-plane-tilt"></i> Enviar</button></form></div>
+          </div>
+        </div>
+
+        <div id="whatsappPanelOrders" hidden>
+          <div class="card whatsapp-order-bridge"><div class="whatsapp-order-bridge-icon"><i class="ph-duotone ph-receipt"></i></div><div><span class="whatsapp-section-kicker">Mismo motor operativo</span><h3>Pedidos conectados con tu sistema</h3><p>Los pedidos que lleguen por WhatsApp usarán el catálogo, promociones, sucursales, entregas, pagos, inventario, POS y KDS que ya tienes configurados. En Pedidos aparecerán con origen <b>WhatsApp</b>.</p><button class="btn btn-primary" type="button" id="whatsappOpenOrdersBtn"><i class="ph-bold ph-arrow-square-out"></i> Ver pedidos</button></div></div>
+        </div>
+
+        <div id="whatsappPanelHelp" hidden>
+          <div class="grid-2">
+            <div class="card whatsapp-rule-card"><i class="ph-duotone ph-shield-check"></i><h3>Protección por tenant</h3><p>Cada negocio conserva su propia conexión, número, WABA, API key, conversaciones y reglas. Las credenciales nunca salen del backend.</p></div>
+            <div class="card whatsapp-rule-card"><i class="ph-duotone ph-robot"></i><h3>Bot y humano</h3><p>El bot se detiene cuando un agente toma control. Puedes responder desde la plataforma o desde WhatsApp Business si el número está en coexistencia.</p></div>
+            <div class="card whatsapp-rule-card"><i class="ph-duotone ph-receipt"></i><h3>Pedidos confiables</h3><p>La IA interpreta; el servidor valida productos, precios, inventario, sucursal y total antes de crear el pedido.</p></div>
+            <div class="card whatsapp-rule-card"><i class="ph-duotone ph-warning-circle"></i><h3>Reglas de WhatsApp</h3><p>Fuera de la ventana de atención se requieren plantillas aprobadas. El tenant es responsable del consentimiento y del contenido que envía.</p></div>
+          </div>
+        </div>
+      </section>
 
       <section class="section" id="view-config">
         <div class="grid-2">
@@ -3424,6 +3504,7 @@
 
   <script src="/socket.io/socket.io.js"></script>
   <script src="/static/vendor/qz-tray.js?v=2.3.0"></script>
+  <script src="/static/js/whatsapp.js?v=20260926-sandbox"></script>
   <script src="/static/js/app.js?v=20260921-scheduled-orders"></script>
 </body>
 </html>

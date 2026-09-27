@@ -151,4 +151,8 @@ function emitKdsUpdate(slug, update) {
   if (_io) _io.to(`tenant:${slug}`).emit('kds_update', update);
 }
 
-module.exports = { emitter, setIo, emitNewOrder, emitSessionUpdate, emitSelfServiceOrder, emitSelfServiceStatus, emitKdsUpdate, sendTenantPush };
+function emitWhatsAppUpdate(slug, update) {
+  if (_io) _io.to(`tenant:${slug}`).emit('whatsapp_update', update);
+}
+
+module.exports = { emitter, setIo, emitNewOrder, emitSessionUpdate, emitSelfServiceOrder, emitSelfServiceStatus, emitKdsUpdate, emitWhatsAppUpdate, sendTenantPush };

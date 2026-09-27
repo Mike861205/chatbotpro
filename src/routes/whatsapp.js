@@ -1,0 +1,709 @@
+const express = require('express');
+const crypto = require('node:crypto');
+const { q, tdb } = require('../db');
+const { encrypt, decrypt, lookupHash } = require('../utils/crypto');
+const { requireAuth, requireOwner, requireModules } = require('../middleware/auth');
+const { handleMessage } = require('../chatbot/engine');
+const { emitWhatsAppUpdate } = require('../notifications');
+const config = require('../config');
+
+const router = express.Router();
+const ZERNIO_BASE_URL = String(process.env.ZERNIO_API_BASE_URL || 'https://zernio.com/api').replace(/\/+$/, '');
+const WEBHOOK_MAX_PAYLOAD = 250000;
+const WEBHOOK_EVENTS = [
+  'message.received', 'message.sent', 'message.delivered', 'message.read', 'message.failed',
+  'conversation.started', 'whatsapp.template.status_updated',
+];
+
+function clean(value, max = 240) {
+  return String(value ?? '').trim().slice(0, max);
+}
+
+function safeJson(value, fallback = {}) {
+  try { return typeof value === 'string' ? JSON.parse(value || '{}') : (value ?? fallback); } catch { return fallback; }
+}
+
+function safePayload(value) {
+  const raw = JSON.stringify(value ?? {});
+  return raw.length > WEBHOOK_MAX_PAYLOAD ? `${raw.slice(0, WEBHOOK_MAX_PAYLOAD)}…` : raw;
+}
+
+function sha256(value) {
+  return crypto.createHash('sha256').update(String(value)).digest('hex');
+}
+
+function secretMatches(expected, supplied) {
+  const left = Buffer.from(String(expected || ''));
+  const right = Buffer.from(String(supplied || ''));
+  return left.length > 0 && left.length === right.length && crypto.timingSafeEqual(left, right);
+}
+
+function publicBaseUrl(req) {
+  return String(config.WHATSAPP_PUBLIC_URL || `${req.protocol}://${req.get('host') || ''}`)
+    .trim().replace(/\/+$/, '');
+}
+
+function webhookUrlFor(req, webhookToken) {
+  return `${publicBaseUrl(req)}/api/whatsapp/webhook/${encodeURIComponent(webhookToken)}`;
+}
+
+function isPublicWebhookUrl(value) {
+  try {
+    const url = new URL(String(value || ''));
+    return url.protocol === 'https:' && !['localhost', '127.0.0.1', '::1'].includes(url.hostname);
+  } catch { return false; }
+}
+
+function webhookSignatureMatches(req, secret) {
+  if (!secret) return true;
+  const supplied = String(req.get('x-zernio-signature') || '').trim().replace(/^sha256=/i, '');
+  if (!supplied || !req.rawBody) return false;
+  const expected = crypto.createHmac('sha256', secret).update(req.rawBody).digest('hex');
+  return secretMatches(expected, supplied);
+}
+
+function getPath(object, path) {
+  return String(path).split('.').reduce((current, key) => current == null ? undefined : current[key], object);
+}
+
+function firstValue(object, paths) {
+  for (const path of paths) {
+    const value = getPath(object, path);
+    if (value !== undefined && value !== null && String(value).trim() !== '') return value;
+  }
+  return '';
+}
+
+function normalizePhone(value) {
+  const digits = String(value || '').replace(/\D/g, '').replace(/^00+/, '');
+  return digits.length >= 8 && digits.length <= 15 ? digits : '';
+}
+
+function connectionPublic(row, req) {
+  if (!row) return null;
+  const webhookToken = decrypt(row.webhook_token_enc || '') || '';
+  const metadata = safeJson(row.metadata_json, {});
+  const sandbox = metadata.sandbox && typeof metadata.sandbox === 'object' ? metadata.sandbox : null;
+  const webhookUrl = webhookToken ? webhookUrlFor(req, webhookToken) : '';
+  return {
+    id: Number(row.id),
+    profileId: row.profile_id || '',
+    zernioAccountId: row.zernio_account_id || '',
+    wabaId: row.waba_id || '',
+    phoneNumberId: row.phone_number_id || '',
+    phoneNumber: row.phone_number || '',
+    displayName: row.display_name || '',
+    mode: row.mode || 'business_app',
+    isSandbox: row.mode === 'sandbox',
+    status: row.status || 'pending',
+    enabled: Boolean(Number(row.enabled)),
+    hasApiKey: Boolean(row.api_key_enc),
+    hasMetaAccessToken: Boolean(row.meta_access_token_enc),
+    lastError: row.last_error || '',
+    lastHealthCheck: row.last_health_check || null,
+    sandbox: sandbox ? {
+      number: sandbox.number || '',
+      accountId: sandbox.accountId || '',
+      sessionId: sandbox.sessionId || '',
+      phone: sandbox.phone || '',
+      status: sandbox.status || 'pending',
+      expiresAt: sandbox.expiresAt || null,
+      activatedAt: sandbox.activatedAt || null,
+      templateName: sandbox.templateName || 'sandbox_start',
+      templateLanguage: sandbox.templateLanguage || 'en',
+    } : null,
+    webhookUrl: req.user?.role === 'owner' ? webhookUrl : '',
+    webhookPublic: isPublicWebhookUrl(webhookUrl),
+    webhookRegistered: Boolean(metadata.zernioWebhookId),
+    webhookError: metadata.webhookError || '',
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+async function zernioRequest({ apiKey, path, method = 'GET', body }) {
+  const token = String(apiKey || '').trim();
+  if (!token) throw Object.assign(new Error('Falta la API key de Zernio'), { status: 400, code: 'ZERNIO_API_KEY_REQUIRED' });
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 15000);
+  try {
+    const response = await fetch(`${ZERNIO_BASE_URL}${path}`, {
+      method,
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+      },
+      body: body === undefined ? undefined : JSON.stringify(body),
+      signal: controller.signal,
+    });
+    const text = await response.text();
+    let data;
+    try { data = text ? JSON.parse(text) : {}; } catch { data = { raw: text.slice(0, 1000) }; }
+    if (!response.ok) {
+      const detail = data?.error?.message || data?.message || data?.error || `Zernio respondió ${response.status}`;
+      throw Object.assign(new Error(clean(detail, 300)), { status: response.status >= 500 ? 502 : 400, providerStatus: response.status, providerData: data });
+    }
+    return data;
+  } catch (error) {
+    if (error.name === 'AbortError') throw Object.assign(new Error('Zernio no respondió a tiempo'), { status: 504, code: 'ZERNIO_TIMEOUT' });
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function ensureZernioWebhook({ req, t, connection }) {
+  const apiKey = decrypt(connection.api_key_enc || '') || '';
+  const webhookToken = decrypt(connection.webhook_token_enc || '') || '';
+  const url = webhookToken ? webhookUrlFor(req, webhookToken) : '';
+  if (!apiKey || !url) return { registered: false, reason: 'Faltan credenciales o token de webhook' };
+  if (!isPublicWebhookUrl(url)) {
+    return {
+      registered: false,
+      reason: 'La URL de webhook no es pública HTTPS. Configura WHATSAPP_PUBLIC_URL con un dominio o túnel HTTPS.',
+      url,
+    };
+  }
+
+  const metadata = safeJson(connection.metadata_json, {});
+  const secret = decrypt(connection.webhook_secret_enc || '') || crypto.randomBytes(32).toString('hex');
+  const settings = await zernioRequest({ apiKey, path: '/v1/webhooks/settings' });
+  const payload = settings?.data && typeof settings.data === 'object' ? settings.data : settings;
+  const webhooks = Array.isArray(payload?.webhooks) ? payload.webhooks : [];
+  const existing = webhooks.find((hook) =>
+    String(hook?._id || hook?.id || '') === String(metadata.zernioWebhookId || '') ||
+    String(hook?.url || '') === url
+  );
+  const webhookId = existing?._id || existing?.id || '';
+  const body = {
+    ...(webhookId ? { webhookId } : {}),
+    name: `ChatBotPro WhatsApp ${req.tenant.slug}`.slice(0, 80),
+    url,
+    events: WEBHOOK_EVENTS,
+    secret,
+    ...(connection.zernio_account_id ? { accountIds: [connection.zernio_account_id] } : {}),
+    ...(connection.profile_id && connection.mode !== 'sandbox' ? { profileIds: [connection.profile_id] } : {}),
+  };
+  const result = await zernioRequest({
+    apiKey,
+    path: '/v1/webhooks/settings',
+    method: webhookId ? 'PUT' : 'POST',
+    body,
+  });
+  const webhook = result?.webhook || result?.data?.webhook || result?.data || {};
+  const nextMetadata = {
+    ...metadata,
+    zernioWebhookId: String(webhook?._id || webhook?.id || webhookId || ''),
+    webhookUrl: url,
+    webhookRegisteredAt: new Date().toISOString(),
+    webhookError: '',
+  };
+  const updated = await t.get(
+    `UPDATE {s}.whatsapp_connections
+     SET webhook_secret_enc=$1,metadata_json=$2,last_error='',updated_at=now()
+     WHERE id=$3 RETURNING *`,
+    [encrypt(secret), JSON.stringify(nextMetadata), connection.id]
+  );
+  return { registered: true, connection: updated || connection, webhook };
+}
+
+async function connectionWithSecret(t, id) {
+  const row = await t.get('SELECT * FROM {s}.whatsapp_connections WHERE id = $1 LIMIT 1', [id]);
+  if (!row) throw Object.assign(new Error('Conexión de WhatsApp no encontrada'), { status: 404 });
+  return row;
+}
+
+async function sendText(t, connection, conversation, text, source = 'bot') {
+  const body = clean(text, 10000);
+  if (!body) return null;
+  const data = await zernioRequest({
+    apiKey: decrypt(connection.api_key_enc),
+    path: `/v1/inbox/conversations/${encodeURIComponent(conversation.external_id)}/messages`,
+    method: 'POST',
+    body: { accountId: connection.zernio_account_id, message: body },
+  });
+  const messageId = clean(firstValue(data, ['data.messageId', 'messageId', 'data.id', 'id']) || `out_${sha256(`${Date.now()}_${body}`)}`, 180);
+  await t.run(
+    `INSERT INTO {s}.whatsapp_messages
+      (conversation_id, external_message_id, direction, message_type, body, source, status, payload_json)
+     VALUES ($1,$2,'outbound','text',$3,$4,'sent',$5)
+     ON CONFLICT (external_message_id) DO NOTHING`,
+    [conversation.id, messageId, body, source, safePayload(data)]
+  );
+  await t.run('UPDATE {s}.whatsapp_conversations SET last_message_at = now(), updated_at = now() WHERE id = $1', [conversation.id]);
+  return { messageId, data };
+}
+
+function webhookMessage(payload) {
+  const eventType = clean(firstValue(payload, ['event', 'type', 'eventType', 'data.event', 'data.type']), 80).toLowerCase();
+  const messageId = clean(firstValue(payload, [
+    'messageId', 'message.platformMessageId', 'message.id', 'data.messageId', 'data.message.platformMessageId', 'data.message.id', 'data.id', 'id',
+  ]), 180);
+  const conversationId = clean(firstValue(payload, [
+    'conversationId', 'conversation.id', 'data.conversationId', 'data.conversation.id', 'data.threadId',
+  ]), 180);
+  const participant = normalizePhone(firstValue(payload, [
+    'participantId', 'from', 'message.sender.phoneNumber', 'message.sender.phone', 'message.sender.id', 'sender.phoneNumber', 'sender.phone', 'sender.id', 'contact.phone', 'data.participantId',
+    'data.from', 'data.message.sender.phoneNumber', 'data.sender.phoneNumber', 'data.sender.phone', 'data.sender.id', 'data.contact.phone',
+  ]));
+  const recipient = normalizePhone(firstValue(payload, [
+    'to', 'message.recipient.phoneNumber', 'message.recipient.phone', 'message.recipient.id', 'recipient.phoneNumber', 'recipient.phone', 'recipient.id', 'data.to', 'data.message.recipient.phoneNumber', 'data.recipient.phoneNumber', 'data.recipient.phone', 'data.recipient.id',
+  ]));
+  const senderName = clean(firstValue(payload, [
+    'message.sender.name', 'sender.name', 'contact.name', 'data.message.sender.name', 'data.sender.name', 'data.contact.name', 'profile.name',
+  ]), 160);
+  const messageValue = firstValue(payload, [
+    'message.text', 'message.body', 'data.message.text', 'data.message.body', 'text', 'body', 'data.text',
+  ]);
+  const text = typeof messageValue === 'object' ? clean(messageValue?.body || messageValue?.text || '') : clean(messageValue, 10000);
+  const source = clean(firstValue(payload, ['source', 'data.source', 'metadata.source']), 80);
+  const incoming = eventType.includes('received') || eventType.includes('inbound') || eventType === 'message.new';
+  const outgoing = eventType.includes('sent') || eventType.includes('outbound') || eventType.includes('outgoing');
+  return { eventType, messageId, conversationId, participant, recipient, senderName, text, source, incoming, outgoing };
+}
+
+async function handleWebhook(req, res, next) {
+  try {
+    const rawToken = String(req.params.token || '').trim();
+    if (!rawToken || rawToken.length < 32) return res.status(404).json({ error: 'Webhook no encontrado' });
+    const tokenRow = await q(
+      `SELECT tenant_slug, connection_id
+       FROM whatsapp_webhook_tokens
+       WHERE token_hash = $1 AND revoked_at IS NULL LIMIT 1`,
+      [lookupHash(rawToken)]
+    );
+    if (!tokenRow.rows[0]) return res.status(404).json({ error: 'Webhook no encontrado' });
+
+    const tenantSlug = tokenRow.rows[0].tenant_slug;
+    const t = tdb(tenantSlug);
+    const connection = await t.get('SELECT * FROM {s}.whatsapp_connections WHERE id = $1 LIMIT 1', [tokenRow.rows[0].connection_id]);
+    if (!connection) return res.status(404).json({ error: 'Conexión no encontrada' });
+
+    const configuredSecret = decrypt(connection.webhook_secret_enc || '');
+    const suppliedSecret = configuredSecret && webhookSignatureMatches(req, configuredSecret) ? configuredSecret : '';
+    if (configuredSecret && !secretMatches(configuredSecret, suppliedSecret)) return res.status(401).json({ error: 'Firma de webhook inválida' });
+
+    const payload = req.body || {};
+    const parsed = webhookMessage(payload);
+    const externalEventId = clean(
+      String(req.get('x-zernio-event-id') || '') || firstValue(payload, ['eventId', 'event_id', 'id', 'data.eventId']) || `${parsed.messageId || 'event'}_${sha256(safePayload(payload)).slice(0, 24)}`,
+      180
+    );
+    const inserted = await t.get(
+      `INSERT INTO {s}.whatsapp_events(connection_id,external_event_id,event_type,payload_json,processed)
+       VALUES($1,$2,$3,$4,0)
+       ON CONFLICT(external_event_id) DO NOTHING
+       RETURNING id`,
+      [connection.id, externalEventId, parsed.eventType, safePayload(payload)]
+    );
+    if (!inserted) return res.json({ ok: true, duplicate: true });
+
+    const shouldStoreMessage = parsed.incoming
+      ? Boolean(parsed.text || parsed.participant || parsed.conversationId)
+      : Boolean(parsed.outgoing && parsed.text && (parsed.conversationId || parsed.recipient || parsed.participant));
+    if (shouldStoreMessage) {
+      const externalConversationId = parsed.conversationId || (parsed.incoming ? parsed.participant : (parsed.recipient || parsed.participant)) || `event_${inserted.id}`;
+      const customerPhone = parsed.incoming ? parsed.participant : (parsed.recipient || parsed.participant);
+      const conversation = await t.get(
+        `INSERT INTO {s}.whatsapp_conversations
+          (connection_id,external_id,customer_phone_enc,customer_phone_hash,customer_name_enc,status,bot_enabled,last_message_at,updated_at)
+         VALUES($1,$2,$3,$4,$5,'open',1,now(),now())
+         ON CONFLICT(connection_id,external_id) DO UPDATE SET
+           customer_phone_enc=CASE WHEN EXCLUDED.customer_phone_enc IS NULL THEN {s}.whatsapp_conversations.customer_phone_enc ELSE EXCLUDED.customer_phone_enc END,
+           customer_phone_hash=CASE WHEN EXCLUDED.customer_phone_hash='' THEN {s}.whatsapp_conversations.customer_phone_hash ELSE EXCLUDED.customer_phone_hash END,
+           customer_name_enc=CASE WHEN EXCLUDED.customer_name_enc IS NULL THEN {s}.whatsapp_conversations.customer_name_enc ELSE EXCLUDED.customer_name_enc END,
+           last_message_at=now(), updated_at=now()
+         RETURNING *`,
+        [connection.id, externalConversationId, encrypt(customerPhone), customerPhone ? lookupHash(customerPhone) : '', encrypt(parsed.senderName)]
+      );
+
+      if (parsed.messageId && parsed.text) {
+        await t.run(
+          `INSERT INTO {s}.whatsapp_messages
+            (conversation_id,external_message_id,direction,message_type,body,source,status,payload_json)
+           VALUES($1,$2,$3,'text',$4,$5,$6,$7)
+           ON CONFLICT(external_message_id) DO NOTHING`,
+          [conversation.id, parsed.messageId, parsed.incoming ? 'inbound' : 'outbound', parsed.text, parsed.source || (parsed.incoming ? 'whatsapp' : 'cellular'), parsed.incoming ? 'received' : 'sent', safePayload(payload)]
+        );
+      }
+
+      if (parsed.incoming && parsed.text && Number(conversation.bot_enabled) === 1 && Number(connection.enabled) === 1) {
+        const sessionId = `wa_${connection.id}_${sha256(externalConversationId).slice(0, 42)}`;
+        try {
+          const reply = await handleMessage(t, tenantSlug, sessionId, parsed.text, {
+            orderChannel: 'chatbot',
+            sourceChannel: 'whatsapp',
+            customerPhone: parsed.participant,
+            customerName: parsed.senderName,
+          });
+          for (const message of (reply.messages || [])) await sendText(t, connection, conversation, message, 'bot');
+          if (reply.order?.id) {
+            await t.run(
+              `UPDATE {s}.orders
+               SET source_channel='whatsapp', whatsapp_conversation_id=$1, whatsapp_external_id=$2
+               WHERE id=$3`,
+              [conversation.id, externalConversationId, reply.order.id]
+            );
+          }
+        } catch (error) {
+          await t.run('UPDATE {s}.whatsapp_connections SET last_error=$1, status=CASE WHEN status=\'active\' THEN status ELSE \'error\' END, updated_at=now() WHERE id=$2', [clean(error.message, 500), connection.id]);
+          console.error('[whatsapp][bot]', tenantSlug, error.message);
+        }
+      }
+      emitWhatsAppUpdate(tenantSlug, { conversationId: Number(conversation.id), event: 'message' });
+    }
+
+    await t.run('UPDATE {s}.whatsapp_events SET processed=1 WHERE id=$1', [inserted.id]);
+    return res.json({ ok: true });
+  } catch (error) { return next(error); }
+}
+
+// Webhook y callback OAuth son públicos; se protegen con token/estado, no con cookie de sesión.
+router.post('/webhook/:token', express.json({ limit: '1mb' }), handleWebhook);
+
+router.get('/oauth/callback', async (req, res, next) => {
+  try {
+    const tenantSlug = clean(req.query.tenant, 80).toLowerCase();
+    const connectionId = Number(req.query.connectionId);
+    const state = clean(req.query.state, 180);
+    if (!tenantSlug || !Number.isInteger(connectionId) || connectionId <= 0 || !state) return res.status(400).send('Solicitud de conexión incompleta.');
+    const t = tdb(tenantSlug);
+    const connection = await t.get('SELECT * FROM {s}.whatsapp_connections WHERE id=$1 LIMIT 1', [connectionId]);
+    const metadata = safeJson(connection?.metadata_json, {});
+    const nextMetadata = { ...metadata };
+    delete nextMetadata.oauthState;
+    delete nextMetadata.oauthStartedAt;
+    if (!connection || metadata.oauthState !== state) return res.status(400).send('La sesión de conexión expiró o no es válida.');
+    if (req.query.error) {
+      await t.run('UPDATE {s}.whatsapp_connections SET metadata_json=$1,status=\'error\', last_error=$2, updated_at=now() WHERE id=$3', [JSON.stringify(nextMetadata), clean(req.query.error_description || req.query.error, 500), connectionId]);
+      return res.send('<!doctype html><meta charset="utf-8"><title>WhatsApp</title><p>No se completó la conexión. Puedes cerrar esta ventana.</p>');
+    }
+    const accountId = clean(req.query.accountId || req.query.account_id, 180);
+    await t.run(
+      `UPDATE {s}.whatsapp_connections
+       SET zernio_account_id=COALESCE(NULLIF($1,''),zernio_account_id), metadata_json=$2, status='connected', last_error='', updated_at=now()
+       WHERE id=$3`,
+      [accountId, JSON.stringify(nextMetadata), connectionId]
+    );
+    emitWhatsAppUpdate(tenantSlug, { connectionId, event: 'connection' });
+    return res.send('<!doctype html><meta charset="utf-8"><title>WhatsApp conectado</title><style>body{font-family:system-ui;padding:32px;color:#172033}b{color:#087f5b}</style><h2><b>WhatsApp conectado</b></h2><p>La conexión fue recibida. Regresa a ChatBotPro para probarla.</p>');
+  } catch (error) { return next(error); }
+});
+
+router.use(requireAuth);
+router.use(requireModules('whatsapp'));
+
+router.get('/', async (req, res, next) => {
+  try {
+    const connections = await req.tdb.all('SELECT * FROM {s}.whatsapp_connections ORDER BY id DESC');
+    const conversations = await req.tdb.all(
+      `SELECT c.id,c.external_id,c.status,c.bot_enabled,c.last_message_at,c.updated_at,
+              c.customer_phone_enc,c.customer_name_enc,
+              (SELECT body FROM {s}.whatsapp_messages m WHERE m.conversation_id=c.id ORDER BY m.created_at DESC LIMIT 1) AS last_message
+       FROM {s}.whatsapp_conversations c
+       ORDER BY COALESCE(c.last_message_at,c.updated_at) DESC LIMIT 100`
+    );
+    res.json({
+      connections: connections.map((row) => connectionPublic(row, req)),
+      conversations: conversations.map((row) => ({
+        id: Number(row.id), externalId: row.external_id, status: row.status, botEnabled: Boolean(Number(row.bot_enabled)),
+        lastMessageAt: row.last_message_at, updatedAt: row.updated_at, lastMessage: row.last_message || '',
+        customerName: decrypt(row.customer_name_enc || '') || '', customerPhone: decrypt(row.customer_phone_enc || '') || '',
+      })),
+    });
+  } catch (error) { next(error); }
+});
+
+router.post('/connections', requireOwner, async (req, res, next) => {
+  try {
+    const body = req.body || {};
+    const id = Number(body.id || 0);
+    const profileId = clean(body.profileId, 120);
+    const zernioAccountId = clean(body.zernioAccountId, 180);
+    const wabaId = clean(body.wabaId, 180);
+    const phoneNumberId = clean(body.phoneNumberId, 180);
+    const phoneNumber = clean(body.phoneNumber, 40);
+    const displayName = clean(body.displayName, 160);
+    const mode = ['api', 'business_app', 'sandbox'].includes(body.mode) ? body.mode : 'business_app';
+    const apiKey = clean(body.apiKey, 600);
+    const metaAccessToken = clean(body.metaAccessToken, 1000);
+    const webhookSecret = clean(body.webhookSecret, 300);
+    if (mode !== 'sandbox' && !profileId && !zernioAccountId) return res.status(400).json({ error: 'Captura el Profile ID o el Account ID de Zernio' });
+    if (mode === 'sandbox' && !id && !apiKey) return res.status(400).json({ error: 'Captura la API key de Zernio para usar el sandbox' });
+    let row;
+    if (id) {
+      row = await connectionWithSecret(req.tdb, id);
+      const metadata = safeJson(row.metadata_json, {});
+      const nextMetadata = { ...metadata };
+      if (mode !== 'sandbox') delete nextMetadata.sandbox;
+      const updated = await req.tdb.get(
+        `UPDATE {s}.whatsapp_connections SET
+           profile_id=$1,zernio_account_id=$2,waba_id=$3,phone_number_id=$4,phone_number=$5,display_name=$6,mode=$7,
+           api_key_enc=CASE WHEN $8='' THEN api_key_enc ELSE $9 END,
+           meta_access_token_enc=CASE WHEN $10='' THEN meta_access_token_enc ELSE $11 END,
+           webhook_secret_enc=CASE WHEN $12='' THEN webhook_secret_enc ELSE $13 END,
+           metadata_json=$14,updated_at=now(),last_error=''
+         WHERE id=$15 RETURNING *`,
+        [profileId, zernioAccountId, wabaId, phoneNumberId, phoneNumber, displayName, mode, apiKey, apiKey ? encrypt(apiKey) : '', metaAccessToken, metaAccessToken ? encrypt(metaAccessToken) : '', webhookSecret, webhookSecret ? encrypt(webhookSecret) : '', JSON.stringify(nextMetadata), id]
+      );
+      row = updated || row;
+    } else {
+      const token = crypto.randomBytes(32).toString('base64url');
+      row = await req.tdb.get(
+        `INSERT INTO {s}.whatsapp_connections
+          (profile_id,zernio_account_id,waba_id,phone_number_id,phone_number,display_name,mode,status,enabled,api_key_enc,meta_access_token_enc,webhook_secret_enc,webhook_token_enc,webhook_token_hash)
+         VALUES($1,$2,$3,$4,$5,$6,$7,'pending',0,$8,$9,$10,$11,$12) RETURNING *`,
+        [profileId, zernioAccountId, wabaId, phoneNumberId, phoneNumber, displayName, mode, encrypt(apiKey) || '', encrypt(metaAccessToken) || '', encrypt(webhookSecret) || '', encrypt(token), lookupHash(token)]
+      );
+      await q(
+        `INSERT INTO whatsapp_webhook_tokens(token_hash,tenant_slug,connection_id)
+         VALUES($1,$2,$3) ON CONFLICT(token_hash) DO NOTHING`,
+        [lookupHash(token), req.tenant.slug, row.id]
+      );
+    }
+    let webhookSetup = { registered: false };
+    try {
+      webhookSetup = await ensureZernioWebhook({ req, t: req.tdb, connection: row });
+      if (webhookSetup.connection) row = webhookSetup.connection;
+    } catch (error) {
+      webhookSetup = { registered: false, reason: clean(error.message, 300) };
+      const metadata = safeJson(row.metadata_json, {});
+      await req.tdb.run(
+        'UPDATE {s}.whatsapp_connections SET metadata_json=$1,last_error=$2,updated_at=now() WHERE id=$3',
+        [JSON.stringify({ ...metadata, webhookError: webhookSetup.reason }), webhookSetup.reason, row.id]
+      ).catch(() => {});
+    }
+    res.status(id ? 200 : 201).json({ ok: true, connection: connectionPublic(row, req), webhookSetup });
+  } catch (error) { next(error); }
+});
+
+router.post('/connections/:id/webhook', requireOwner, async (req, res, next) => {
+  try {
+    const connection = await connectionWithSecret(req.tdb, Number(req.params.id));
+    const setup = await ensureZernioWebhook({ req, t: req.tdb, connection });
+    if (!setup.registered) return res.status(409).json({ error: setup.reason, connection: connectionPublic(connection, req) });
+    res.json({ ok: true, connection: connectionPublic(setup.connection || connection, req), webhook: setup.webhook });
+  } catch (error) { next(error); }
+});
+
+router.post('/connections/:id/connect-url', requireOwner, async (req, res, next) => {
+  try {
+    const connection = await connectionWithSecret(req.tdb, Number(req.params.id));
+    if (connection.mode === 'sandbox') return res.status(400).json({ error: 'Usa las acciones de Sandbox para esta conexión' });
+    const apiKey = decrypt(connection.api_key_enc);
+    if (!apiKey) return res.status(400).json({ error: 'Guarda primero la API key de Zernio' });
+    const state = crypto.randomBytes(24).toString('base64url');
+    const metadata = { ...safeJson(connection.metadata_json, {}), oauthState: state, oauthStartedAt: new Date().toISOString() };
+    await req.tdb.run('UPDATE {s}.whatsapp_connections SET metadata_json=$1,updated_at=now() WHERE id=$2', [JSON.stringify(metadata), connection.id]);
+    const params = new URLSearchParams({
+      profileId: connection.profile_id,
+      redirect_url: `${req.protocol}://${req.get('host')}/api/whatsapp/oauth/callback?tenant=${encodeURIComponent(req.tenant.slug)}&connectionId=${connection.id}`,
+      onboarding: connection.mode || 'business_app',
+    });
+    const data = await zernioRequest({ apiKey, path: `/v1/connect/whatsapp?${params.toString()}` });
+    const authUrl = firstValue(data, ['authUrl', 'data.authUrl', 'url', 'data.url']);
+    if (!authUrl) throw Object.assign(new Error('Zernio no devolvió una URL de conexión'), { status: 502 });
+    res.json({ authUrl, state });
+  } catch (error) { next(error); }
+});
+
+router.post('/connections/:id/sandbox/discover', requireOwner, async (req, res, next) => {
+  try {
+    const connection = await connectionWithSecret(req.tdb, Number(req.params.id));
+    const data = await zernioRequest({ apiKey: decrypt(connection.api_key_enc), path: '/v1/phone-numbers' });
+    const payload = data?.sandbox ? data : (data?.data || data);
+    const sandbox = payload?.sandbox;
+    if (!sandbox?.isSandbox && !sandbox?.accountId) return res.status(404).json({ error: 'Zernio no tiene sandbox disponible para esta cuenta' });
+    const metadata = safeJson(connection.metadata_json, {});
+    const current = metadata.sandbox || {};
+    const nextSandbox = {
+      ...current,
+      number: clean(sandbox.phoneNumber || current.number, 40),
+      accountId: clean(sandbox.accountId || current.accountId, 180),
+      templateName: clean(sandbox.template?.name || current.templateName || 'sandbox_start', 120),
+      templateLanguage: clean(sandbox.template?.language || current.templateLanguage || 'en', 30),
+    };
+    const updated = await req.tdb.get(
+      `UPDATE {s}.whatsapp_connections SET mode='sandbox',zernio_account_id=$1,metadata_json=$2,status='pending',enabled=0,last_error='',updated_at=now() WHERE id=$3 RETURNING *`,
+      [nextSandbox.accountId, JSON.stringify({ ...metadata, sandbox: nextSandbox }), connection.id]
+    );
+    let webhookSetup = { registered: false };
+    try { webhookSetup = await ensureZernioWebhook({ req, t: req.tdb, connection: updated }); } catch (error) { webhookSetup = { registered: false, reason: clean(error.message, 300) }; }
+    res.json({ ok: true, connection: connectionPublic(webhookSetup.connection || updated, req), webhookSetup });
+  } catch (error) { next(error); }
+});
+
+router.post('/connections/:id/sandbox/session', requireOwner, async (req, res, next) => {
+  try {
+    const connection = await connectionWithSecret(req.tdb, Number(req.params.id));
+    const phone = normalizePhone(req.body?.phone);
+    if (!phone) return res.status(400).json({ error: 'Captura un teléfono válido para la prueba' });
+    const data = await zernioRequest({
+      apiKey: decrypt(connection.api_key_enc),
+      path: '/v1/whatsapp/sandbox/sessions',
+      method: 'POST',
+      body: { phone: `+${phone}` },
+    });
+    const session = data?.session || data?.data?.session || {};
+    const metadata = safeJson(connection.metadata_json, {});
+    const current = metadata.sandbox || {};
+    const nextSandbox = {
+      ...current,
+      phone: clean(session.phoneE164 || phone, 40),
+      sessionId: clean(session.id || '', 180),
+      status: clean(session.status || 'pending', 30),
+      expiresAt: session.expiresAt || null,
+      activatedAt: session.activatedAt || null,
+      number: clean(firstValue(data, ['sandboxNumber', 'data.sandboxNumber']) || current.number, 40),
+    };
+    const updated = await req.tdb.get(
+      `UPDATE {s}.whatsapp_connections SET mode='sandbox',metadata_json=$1,status='pending',enabled=0,last_error='',updated_at=now() WHERE id=$2 RETURNING *`,
+      [JSON.stringify({ ...metadata, sandbox: nextSandbox }), connection.id]
+    );
+    let webhookSetup = { registered: false };
+    try { webhookSetup = await ensureZernioWebhook({ req, t: req.tdb, connection: updated }); } catch (error) { webhookSetup = { registered: false, reason: clean(error.message, 300) }; }
+    res.json({ ok: true, session, connection: connectionPublic(webhookSetup.connection || updated, req), webhookSetup });
+  } catch (error) { next(error); }
+});
+
+router.get('/connections/:id/sandbox/session', requireOwner, async (req, res, next) => {
+  try {
+    const connection = await connectionWithSecret(req.tdb, Number(req.params.id));
+    const data = await zernioRequest({ apiKey: decrypt(connection.api_key_enc), path: '/v1/whatsapp/sandbox/sessions' });
+    const payload = Array.isArray(data?.sessions) ? data : (data?.data || data);
+    const sessions = Array.isArray(payload?.sessions) ? payload.sessions : [];
+    const metadata = safeJson(connection.metadata_json, {});
+    const current = metadata.sandbox || {};
+    const session = sessions.find((item) => String(item.id) === String(current.sessionId)) || sessions[0] || null;
+    const nextSandbox = session ? { ...current, phone: clean(session.phoneE164 || current.phone, 40), sessionId: clean(session.id || current.sessionId, 180), status: clean(session.status || current.status || 'pending', 30), expiresAt: session.expiresAt || current.expiresAt || null, activatedAt: session.activatedAt || current.activatedAt || null } : current;
+    const active = connection.mode === 'sandbox' && nextSandbox.status === 'active';
+    const updated = await req.tdb.get(
+      `UPDATE {s}.whatsapp_connections SET mode='sandbox',metadata_json=$1,status=$2,enabled=$3,last_health_check=now(),updated_at=now() WHERE id=$4 RETURNING *`,
+      [JSON.stringify({ ...metadata, sandbox: nextSandbox }), active ? 'active' : 'pending', active ? 1 : 0, connection.id]
+    );
+    res.json({ ok: true, session, connection: connectionPublic(updated, req) });
+  } catch (error) { next(error); }
+});
+
+router.delete('/connections/:id/sandbox/session', requireOwner, async (req, res, next) => {
+  try {
+    const connection = await connectionWithSecret(req.tdb, Number(req.params.id));
+    const metadata = safeJson(connection.metadata_json, {});
+    const sessionId = clean(metadata.sandbox?.sessionId, 180);
+    if (sessionId) await zernioRequest({ apiKey: decrypt(connection.api_key_enc), path: `/v1/whatsapp/sandbox/sessions/${encodeURIComponent(sessionId)}`, method: 'DELETE' });
+    const nextMetadata = { ...metadata };
+    delete nextMetadata.sandbox;
+    const updated = await req.tdb.get(
+      `UPDATE {s}.whatsapp_connections SET mode='sandbox',metadata_json=$1,status='disabled',enabled=0,last_error='',updated_at=now() WHERE id=$2 RETURNING *`,
+      [JSON.stringify(nextMetadata), connection.id]
+    );
+    res.json({ ok: true, connection: connectionPublic(updated, req) });
+  } catch (error) { next(error); }
+});
+
+router.post('/connections/:id/sandbox/start-conversation', requireOwner, async (req, res, next) => {
+  try {
+    const connection = await connectionWithSecret(req.tdb, Number(req.params.id));
+    const metadata = safeJson(connection.metadata_json, {});
+    const sandbox = metadata.sandbox || {};
+    if (connection.mode !== 'sandbox' || sandbox.status !== 'active') return res.status(409).json({ error: 'Activa primero el teléfono de prueba del sandbox' });
+    const participantId = normalizePhone(sandbox.phone);
+    if (!participantId || !connection.zernio_account_id) return res.status(409).json({ error: 'El sandbox todavía no tiene cuenta o teléfono activo' });
+    const data = await zernioRequest({
+      apiKey: decrypt(connection.api_key_enc),
+      path: '/v1/inbox/conversations',
+      method: 'POST',
+      body: { accountId: connection.zernio_account_id, participantId, templateName: sandbox.templateName || 'sandbox_start', templateLanguage: sandbox.templateLanguage || 'en', templateParams: [] },
+    });
+    const conversationId = clean(firstValue(data, ['data.conversationId', 'conversationId']), 180);
+    const messageId = clean(firstValue(data, ['data.messageId', 'messageId']) || `sandbox_${sha256(`${Date.now()}_${participantId}`)}`, 180);
+    if (!conversationId) throw Object.assign(new Error('Zernio no devolvió el ID de la conversación sandbox'), { status: 502 });
+    const conversation = await req.tdb.get(
+      `INSERT INTO {s}.whatsapp_conversations(connection_id,external_id,customer_phone_enc,customer_phone_hash,customer_name_enc,status,bot_enabled,last_message_at,updated_at)
+       VALUES($1,$2,$3,$4,'','open',1,now(),now())
+       ON CONFLICT(connection_id,external_id) DO UPDATE SET customer_phone_enc=EXCLUDED.customer_phone_enc,customer_phone_hash=EXCLUDED.customer_phone_hash,last_message_at=now(),updated_at=now()
+       RETURNING *`,
+      [connection.id, conversationId, encrypt(participantId), lookupHash(participantId)]
+    );
+    await req.tdb.run(
+      `INSERT INTO {s}.whatsapp_messages(conversation_id,external_message_id,direction,message_type,body,source,status,payload_json)
+       VALUES($1,$2,'outbound','template',$3,'sandbox','sent',$4)
+       ON CONFLICT(external_message_id) DO NOTHING`,
+      [conversation.id, messageId, sandbox.templateName || 'sandbox_start', safePayload(data)]
+    );
+    emitWhatsAppUpdate(req.tenant.slug, { conversationId: Number(conversation.id), event: 'message' });
+    res.json({ ok: true, conversationId, messageId });
+  } catch (error) { next(error); }
+});
+
+router.post('/connections/:id/test', requireOwner, async (req, res, next) => {
+  try {
+    const connection = await connectionWithSecret(req.tdb, Number(req.params.id));
+    if (connection.mode === 'sandbox') return res.status(400).json({ error: 'Revisa la sesión desde las acciones de Sandbox' });
+    if (!connection.zernio_account_id) return res.status(400).json({ error: 'Captura el Account ID de Zernio antes de probar' });
+    const data = await zernioRequest({ apiKey: decrypt(connection.api_key_enc), path: `/v1/whatsapp/number-info?accountId=${encodeURIComponent(connection.zernio_account_id)}` });
+    const updated = await req.tdb.get(`UPDATE {s}.whatsapp_connections SET status='active',enabled=1,last_error='',last_health_check=now(),updated_at=now() WHERE id=$1 RETURNING *`, [connection.id]);
+    let webhookSetup = { registered: false };
+    try { webhookSetup = await ensureZernioWebhook({ req, t: req.tdb, connection: updated }); } catch (error) { webhookSetup = { registered: false, reason: clean(error.message, 300) }; }
+    res.json({ ok: true, connection: connectionPublic(webhookSetup.connection || updated, req), numberInfo: data, webhookSetup });
+  } catch (error) {
+    await req.tdb.run('UPDATE {s}.whatsapp_connections SET status=\'error\',last_error=$1,last_health_check=now(),updated_at=now() WHERE id=$2', [clean(error.message, 500), Number(req.params.id)]).catch(() => {});
+    next(error);
+  }
+});
+
+router.post('/connections/:id/toggle', requireOwner, async (req, res, next) => {
+  try {
+    const id = Number(req.params.id);
+    const row = await connectionWithSecret(req.tdb, id);
+    const enabled = req.body?.enabled === undefined ? !Boolean(Number(row.enabled)) : Boolean(req.body.enabled);
+    const updated = await req.tdb.get('UPDATE {s}.whatsapp_connections SET enabled=$1,status=CASE WHEN $1=1 THEN CASE WHEN status=\'error\' THEN \'connected\' ELSE status END ELSE \'disabled\' END,updated_at=now() WHERE id=$2 RETURNING *', [enabled ? 1 : 0, id]);
+    res.json({ ok: true, connection: connectionPublic(updated, req) });
+  } catch (error) { next(error); }
+});
+
+router.delete('/connections/:id', requireOwner, async (req, res, next) => {
+  try {
+    const id = Number(req.params.id);
+    await connectionWithSecret(req.tdb, id);
+    await q('UPDATE whatsapp_webhook_tokens SET revoked_at=now() WHERE tenant_slug=$1 AND connection_id=$2 AND revoked_at IS NULL', [req.tenant.slug, id]);
+    await req.tdb.run('DELETE FROM {s}.whatsapp_connections WHERE id=$1', [id]);
+    res.json({ ok: true });
+  } catch (error) { next(error); }
+});
+
+router.get('/conversations/:id/messages', async (req, res, next) => {
+  try {
+    const conversation = await req.tdb.get('SELECT id FROM {s}.whatsapp_conversations WHERE id=$1 LIMIT 1', [Number(req.params.id)]);
+    if (!conversation) return res.status(404).json({ error: 'Conversación no encontrada' });
+    const rows = await req.tdb.all('SELECT id,external_message_id,direction,message_type,body,source,status,created_at FROM {s}.whatsapp_messages WHERE conversation_id=$1 ORDER BY created_at ASC LIMIT 300', [conversation.id]);
+    res.json(rows);
+  } catch (error) { next(error); }
+});
+
+router.post('/conversations/:id/takeover', async (req, res, next) => {
+  try {
+    const botEnabled = req.body?.botEnabled === true ? 1 : 0;
+    const row = await req.tdb.get('UPDATE {s}.whatsapp_conversations SET bot_enabled=$1,status=$2,assigned_user_id=$3,updated_at=now() WHERE id=$4 RETURNING id,bot_enabled,status,assigned_user_id', [botEnabled, botEnabled ? 'open' : 'human', botEnabled ? null : req.user.uid, Number(req.params.id)]);
+    if (!row) return res.status(404).json({ error: 'Conversación no encontrada' });
+    res.json({ ok: true, conversation: row });
+  } catch (error) { next(error); }
+});
+
+router.post('/conversations/:id/send', async (req, res, next) => {
+  try {
+    const conversation = await req.tdb.get('SELECT * FROM {s}.whatsapp_conversations WHERE id=$1 LIMIT 1', [Number(req.params.id)]);
+    if (!conversation) return res.status(404).json({ error: 'Conversación no encontrada' });
+    const connection = await req.tdb.get('SELECT * FROM {s}.whatsapp_connections WHERE id=$1 LIMIT 1', [conversation.connection_id]);
+    if (!connection || !Number(connection.enabled)) return res.status(409).json({ error: 'La conexión de WhatsApp no está activa' });
+    const text = clean(req.body?.message, 10000);
+    if (!text) return res.status(400).json({ error: 'Escribe un mensaje' });
+    const sent = await sendText(req.tdb, connection, conversation, text, `human:${req.user.uid}`);
+    await req.tdb.run('UPDATE {s}.whatsapp_conversations SET bot_enabled=0,status=\'human\',assigned_user_id=$1,updated_at=now() WHERE id=$2', [req.user.uid, conversation.id]);
+    emitWhatsAppUpdate(req.tenant.slug, { conversationId: Number(conversation.id), event: 'message' });
+    res.json({ ok: true, messageId: sent.messageId });
+  } catch (error) { next(error); }
+});
+
+module.exports = router;

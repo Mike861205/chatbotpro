@@ -1926,6 +1926,12 @@ async function handleMessage(t, slug, sessionId, rawInput, runtime = {}) {
   labels = { ...labels, promotionsAvailable: activeChatbotPromotions.length > 0 };
   let state = (await getState(t, sessionId)) || { step: 'start', cart: [], customer: {}, currency, aiHistory: [] };
   if (!Array.isArray(state.aiHistory)) state.aiHistory = [];
+  // Los canales externos pueden aportar identidad básica ya verificada por el
+  // proveedor (por ejemplo, el número del remitente de WhatsApp). Se guarda
+  // en la sesión para no volver a preguntarla y se vuelve a validar al crear
+  // el pedido.
+  if (runtime.customerPhone && !state.customer?.phone) state.customer.phone = String(runtime.customerPhone).slice(0, 40);
+  if (runtime.customerName && !state.customer?.name) state.customer.name = String(runtime.customerName).slice(0, 160);
   state.currency = currency;
   state.currencyConversion = currencyConversion?.enabled ? currencyConversion : null;
   state.cart.currencyConversion = state.currencyConversion;
@@ -3635,7 +3641,9 @@ async function handleMessage(t, slug, sessionId, rawInput, runtime = {}) {
           subtotal,
           total,
           'pendiente',
-          'chatbot',
+          ['chatbot', 'whatsapp'].includes(String(runtime.sourceChannel || '').toLowerCase())
+            ? String(runtime.sourceChannel).toLowerCase()
+            : 'chatbot',
           state.delivery || 'recoger',
           state.receivingMode?.label || state.customer.receivingModeLabel || '',
           state.receivingMode?.behavior || state.customer.receivingModeBehavior || (state.delivery === 'domicilio' ? 'delivery' : 'branch'),

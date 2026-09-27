@@ -59,6 +59,9 @@ const legacyFacturamaPassword = String(process.env.FACTURAMA_PASSWORD || '');
 module.exports = {
   PORT: process.env.PORT || 3000,
   HOST: String(process.env.HOST || (process.env.NODE_ENV === 'production' ? '127.0.0.1' : '0.0.0.0')).trim(),
+  // URL pública HTTPS que Zernio puede alcanzar para entregar webhooks.
+  // En desarrollo puede ser la URL de un túnel (Cloudflare Tunnel/ngrok).
+  WHATSAPP_PUBLIC_URL: String(process.env.WHATSAPP_PUBLIC_URL || process.env.PUBLIC_APP_URL || '').trim().replace(/\/+$/, ''),
   NODE_ENV: String(process.env.NODE_ENV || 'development').trim().toLowerCase(),
   JWT_SECRET: ensureSecret('JWT_SECRET'),
   SUPERADMIN_JWT_SECRET: ensureSecret('SUPERADMIN_JWT_SECRET'),
