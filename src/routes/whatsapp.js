@@ -245,11 +245,38 @@ function whatsappDisplayText(value, max = 1000) {
     .slice(0, max);
 }
 
+function whatsappTransportId(value) {
+  const canonical = whatsappDisplayText(value, 180);
+  if (!canonical) return '';
+  // Zernio/WhatsApp may normalize punctuation from list-row IDs. Encode
+  // command values containing separators so the callback remains lossless.
+  if (/^[a-z0-9]+$/i.test(canonical)) return canonical;
+  return `cb${Buffer.from(canonical, 'utf8').toString('hex')}`;
+}
+
+function whatsappEngineInput(value) {
+  const raw = clean(value, 200);
+  if (!raw) return '';
+  const encoded = raw.match(/^cb([0-9a-f]+)$/i);
+  if (encoded && encoded[1].length % 2 === 0) {
+    try {
+      const decoded = Buffer.from(encoded[1], 'hex').toString('utf8');
+      if (decoded) return decoded;
+    } catch {}
+  }
+
+  // Backward compatibility for list messages already sent before the
+  // lossless encoding was introduced (e.g. cat4 -> cat_4).
+  const legacy = raw.match(/^(cat|prod|variant|branch|modifier)(\d+)$/i);
+  if (legacy) return `${legacy[1].toLowerCase()}_${legacy[2]}`;
+  return raw;
+}
+
 function whatsappInteractiveRows(reply) {
   const rows = [];
   const seen = new Set();
   const add = (id, title, description = '') => {
-    const normalizedId = whatsappDisplayText(id, 200);
+    const normalizedId = whatsappTransportId(id);
     const normalizedTitle = whatsappDisplayText(title, 24);
     if (!normalizedId || !normalizedTitle || seen.has(normalizedId)) return;
     seen.add(normalizedId);
@@ -429,7 +456,7 @@ function webhookMessage(payload) {
   const messageValue = firstValue(payload, [
     'message.text', 'message.body', 'data.message.text', 'data.message.body', 'text', 'body', 'data.text',
   ]);
-  const interactiveId = clean(firstValue(payload, [
+  const interactiveId = whatsappEngineInput(firstValue(payload, [
     'metadata.interactiveId', 'message.metadata.interactiveId', 'data.metadata.interactiveId', 'data.message.metadata.interactiveId',
   ]), 200);
   const interactiveType = clean(firstValue(payload, [
