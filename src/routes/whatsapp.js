@@ -340,6 +340,67 @@ async function sendInteractive(t, connection, conversation, message, source = 'b
   return { messageId, data };
 }
 
+function whatsappProductIdFromInput(value) {
+  const input = String(value || '').trim().toLowerCase();
+  const direct = input.match(/^prod_(\d+)$/);
+  if (direct) return Number(direct[1]);
+  const upsell = input.match(/^upsell_add\|[^|]+\|(\d+)$/);
+  return upsell ? Number(upsell[1]) : 0;
+}
+
+function whatsappMediaUrl(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  try {
+    if (/^https?:\/\//i.test(raw)) return new URL(raw).toString();
+    if (!config.WHATSAPP_PUBLIC_URL) return '';
+    return new URL(raw.startsWith('/') ? raw : `/${raw}`, `${config.WHATSAPP_PUBLIC_URL}/`).toString();
+  } catch {
+    return '';
+  }
+}
+
+async function sendProductImage(t, connection, conversation, productId) {
+  if (!Number.isInteger(Number(productId)) || Number(productId) <= 0) return null;
+  const product = await t.get('SELECT id, name, description, price::float AS price, image FROM {s}.products WHERE id=$1 AND active=1 LIMIT 1', [Number(productId)]);
+  const imageUrl = whatsappMediaUrl(product?.image);
+  if (!product || !imageUrl) return null;
+
+  const caption = [
+    whatsappDisplayText(product.name, 180),
+    product.price !== null && product.price !== undefined ? `Precio: ${Number(product.price).toFixed(2)}` : '',
+    whatsappDisplayText(product.description, 300),
+  ].filter(Boolean).join('\n');
+  const body = {
+    accountId: connection.zernio_account_id,
+    message: caption,
+    attachmentUrl: imageUrl,
+    attachmentType: 'image',
+  };
+  try {
+    const data = await zernioRequest({
+      apiKey: decrypt(connection.api_key_enc),
+      path: `/v1/inbox/conversations/${encodeURIComponent(conversation.external_id)}/messages`,
+      method: 'POST',
+      body,
+    });
+    const messageId = clean(firstValue(data, ['data.messageId', 'messageId', 'data.id', 'id']) || `out_${sha256(`${Date.now()}_${imageUrl}`)}`, 180);
+    await t.run(
+      `INSERT INTO {s}.whatsapp_messages
+        (conversation_id, external_message_id, direction, message_type, body, source, status, payload_json)
+       VALUES ($1,$2,'outbound','image',$3,'bot','sent',$4)
+       ON CONFLICT (external_message_id) DO NOTHING`,
+      [conversation.id, messageId, caption, safePayload({ request: body, response: data })]
+    );
+    await t.run('UPDATE {s}.whatsapp_conversations SET last_message_at = now(), updated_at = now() WHERE id = $1', [conversation.id]);
+    return { messageId, data };
+  } catch (error) {
+    // An unavailable image must never interrupt the tenant's order flow.
+    console.warn('[whatsapp][product-image]', productId, error.message);
+    return null;
+  }
+}
+
 async function sendBotReply(t, connection, conversation, reply) {
   for (const message of (reply.messages || [])) await sendText(t, connection, conversation, message, 'bot');
   for (const interactive of whatsappInteractiveMessages(reply)) {
@@ -381,7 +442,7 @@ function webhookMessage(payload) {
   // Zernio returns list/button taps in metadata rather than message text. The
   // ID is intentionally passed to the existing chatbot engine because its
   // machine commands are already the canonical option values.
-  const text = textValue || interactiveId || interactiveTitle;
+  const text = interactiveId || textValue || interactiveTitle;
   const source = clean(firstValue(payload, ['source', 'data.source', 'metadata.source']), 80);
   const incoming = eventType.includes('received') || eventType.includes('inbound') || eventType === 'message.new';
   const outgoing = eventType.includes('sent') || eventType.includes('outbound') || eventType.includes('outgoing');
@@ -462,6 +523,8 @@ async function handleWebhook(req, res, next) {
             customerPhone: parsed.participant,
             customerName: parsed.senderName,
           });
+          const selectedProductId = whatsappProductIdFromInput(parsed.text);
+          if (selectedProductId) await sendProductImage(t, connection, conversation, selectedProductId);
           await sendBotReply(t, connection, conversation, reply);
           if (reply.order?.id) {
             await t.run(
