@@ -23,6 +23,8 @@ test('WhatsApp ofrece sandbox Zernio y conserva el flujo real de pedidos', () =>
   assert.match(route, /isActive: true/);
   assert.match(route, /setImmediate\(\(\) =>/);
   assert.match(route, /status IN \('active','connected'\)/);
+  assert.match(route, /x-late-signature/);
+  assert.match(route, /x-late-event-id/);
   assert.match(route, /interactive: \{/);
   assert.match(route, /buttons: rows\.map/);
   assert.match(route, /metadata\.interactiveId/);

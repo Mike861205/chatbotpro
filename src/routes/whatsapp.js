@@ -56,7 +56,7 @@ function isPublicWebhookUrl(value) {
 
 function webhookSignatureMatches(req, secret) {
   if (!secret) return true;
-  const supplied = String(req.get('x-zernio-signature') || '').trim().replace(/^sha256=/i, '');
+  const supplied = String(req.get('x-zernio-signature') || req.get('x-late-signature') || '').trim().replace(/^sha256=/i, '');
   if (!supplied || !req.rawBody) return false;
   const expected = crypto.createHmac('sha256', secret).update(req.rawBody).digest('hex');
   return secretMatches(expected, supplied);
@@ -593,7 +593,7 @@ async function handleWebhook(req, res, next) {
     const payload = req.body || {};
     const parsed = webhookMessage(payload);
     const externalEventId = clean(
-      String(req.get('x-zernio-event-id') || '') || firstValue(payload, ['eventId', 'event_id', 'id', 'data.eventId']) || `${parsed.messageId || 'event'}_${sha256(safePayload(payload)).slice(0, 24)}`,
+      String(req.get('x-zernio-event-id') || req.get('x-late-event-id') || '') || firstValue(payload, ['eventId', 'event_id', 'id', 'data.eventId']) || `${parsed.messageId || 'event'}_${sha256(safePayload(payload)).slice(0, 24)}`,
       180
     );
     const inserted = await t.get(
