@@ -74,6 +74,31 @@ function firstValue(object, paths) {
   return '';
 }
 
+function whatsappLocation(payload) {
+  const candidates = [
+    getPath(payload, 'metadata.location'),
+    getPath(payload, 'message.metadata.location'),
+    getPath(payload, 'data.metadata.location'),
+    getPath(payload, 'data.message.metadata.location'),
+    getPath(payload, 'location'),
+    getPath(payload, 'message.location'),
+    getPath(payload, 'data.location'),
+    getPath(payload, 'data.message.location'),
+  ];
+  for (const candidate of candidates) {
+    const value = typeof candidate === 'string' ? safeJson(candidate, null) : candidate;
+    if (!value || typeof value !== 'object') continue;
+    const lat = Number(value.latitude ?? value.lat ?? value.latitud);
+    const lng = Number(value.longitude ?? value.lng ?? value.lon ?? value.longitud);
+    if (!Number.isFinite(lat) || !Number.isFinite(lng) || lat < -90 || lat > 90 || lng < -180 || lng > 180) continue;
+    const label = clean(value.label ?? value.name ?? value.address ?? value.url ?? '', 160)
+      .replace(/[|\r\n]+/g, ' ')
+      .trim();
+    return { lat, lng, label };
+  }
+  return null;
+}
+
 function normalizePhone(value) {
   const digits = String(value || '').replace(/\D/g, '').replace(/^00+/, '');
   return digits.length >= 8 && digits.length <= 15 ? digits : '';
@@ -469,15 +494,20 @@ function webhookMessage(payload) {
   const interactiveTitle = clean(firstValue(payload, [
     'metadata.interactiveTitle', 'message.metadata.interactiveTitle', 'data.metadata.interactiveTitle', 'data.message.metadata.interactiveTitle',
   ]), 200);
+  const location = whatsappLocation(payload);
   const textValue = typeof messageValue === 'object' ? clean(messageValue?.body || messageValue?.text || '') : clean(messageValue, 10000);
   // Zernio returns list/button taps in metadata rather than message text. The
   // ID is intentionally passed to the existing chatbot engine because its
   // machine commands are already the canonical option values.
-  const text = interactiveId || textValue || interactiveTitle;
+  // Location events similarly carry a human-readable message such as
+  // "📍 Location" while the actual coordinates live in metadata.location.
+  // Convert them to the engine's canonical geo:<lat>,<lng>|<label> format.
+  const locationText = location ? `geo:${location.lat},${location.lng}|${location.label}` : '';
+  const text = interactiveId || locationText || textValue || interactiveTitle;
   const source = clean(firstValue(payload, ['source', 'data.source', 'metadata.source']), 80);
   const incoming = eventType.includes('received') || eventType.includes('inbound') || eventType === 'message.new';
   const outgoing = eventType.includes('sent') || eventType.includes('outbound') || eventType.includes('outgoing');
-  return { eventType, messageId, conversationId, participant, recipient, senderName, text, interactiveId, interactiveType, interactiveTitle, source, incoming, outgoing };
+  return { eventType, messageId, conversationId, participant, recipient, senderName, text, interactiveId, interactiveType, interactiveTitle, location, source, incoming, outgoing };
 }
 
 async function handleWebhook(req, res, next) {
@@ -536,12 +566,15 @@ async function handleWebhook(req, res, next) {
       );
 
       if (parsed.messageId && parsed.text) {
+        const messageBody = parsed.location
+          ? (parsed.location.label || `Ubicación: ${parsed.location.lat}, ${parsed.location.lng}`)
+          : (parsed.interactiveTitle || parsed.text);
         await t.run(
           `INSERT INTO {s}.whatsapp_messages
             (conversation_id,external_message_id,direction,message_type,body,source,status,payload_json)
            VALUES($1,$2,$3,$4,$5,$6,$7,$8)
            ON CONFLICT(external_message_id) DO NOTHING`,
-          [conversation.id, parsed.messageId, parsed.incoming ? 'inbound' : 'outbound', parsed.interactiveId ? 'interactive' : 'text', parsed.interactiveTitle || parsed.text, parsed.source || (parsed.incoming ? 'whatsapp' : 'cellular'), parsed.incoming ? 'received' : 'sent', safePayload(payload)]
+          [conversation.id, parsed.messageId, parsed.incoming ? 'inbound' : 'outbound', parsed.location ? 'location' : (parsed.interactiveId ? 'interactive' : 'text'), messageBody, parsed.source || (parsed.incoming ? 'whatsapp' : 'cellular'), parsed.incoming ? 'received' : 'sent', safePayload(payload)]
         );
       }
 
