@@ -738,6 +738,17 @@ function webhookMessage(payload) {
   return { eventType, messageId, conversationId, participant, recipient, senderName, text, interactiveId, interactiveType, interactiveTitle, location, source, incoming, outgoing };
 }
 
+function whatsappConversationCustomerName(parsed, connection = null) {
+  // The sender on message.sent is the business account. It must never replace
+  // the contact name in the tenant inbox. Only message.received can establish
+  // or refresh the customer identity.
+  if (!parsed?.incoming) return '';
+  const name = clean(parsed.senderName, 160);
+  if (!name) return '';
+  const channelName = clean(connection?.display_name, 160).toLowerCase().replace(/\s+/g, ' ');
+  return channelName && name.toLowerCase().replace(/\s+/g, ' ') === channelName ? '' : name;
+}
+
 async function handleWebhook(req, res, next) {
   try {
     const rawToken = String(req.params.token || '').trim();
@@ -779,7 +790,11 @@ async function handleWebhook(req, res, next) {
       : Boolean(parsed.outgoing && parsed.text && (parsed.conversationId || parsed.recipient || parsed.participant));
     if (shouldStoreMessage) {
       const externalConversationId = parsed.conversationId || (parsed.incoming ? parsed.participant : (parsed.recipient || parsed.participant)) || `event_${inserted.id}`;
-      const customerPhone = parsed.incoming ? parsed.participant : (parsed.recipient || parsed.participant);
+      // Outbound lifecycle events can identify the business sender/recipient
+      // differently depending on the Zernio transport. The contact identity
+      // is authoritative only on the inbound message.received event.
+      const customerPhone = parsed.incoming ? parsed.participant : '';
+      const customerName = whatsappConversationCustomerName(parsed, connection);
       const conversation = await t.get(
         `INSERT INTO {s}.whatsapp_conversations
           (connection_id,external_id,customer_phone_enc,customer_phone_hash,customer_name_enc,status,bot_enabled,last_message_at,updated_at)
@@ -790,7 +805,7 @@ async function handleWebhook(req, res, next) {
            customer_name_enc=CASE WHEN EXCLUDED.customer_name_enc IS NULL THEN {s}.whatsapp_conversations.customer_name_enc ELSE EXCLUDED.customer_name_enc END,
            last_message_at=now(), updated_at=now()
          RETURNING *`,
-        [connection.id, externalConversationId, encrypt(customerPhone), customerPhone ? lookupHash(customerPhone) : '', encrypt(parsed.senderName)]
+        [connection.id, externalConversationId, customerPhone ? encrypt(customerPhone) : null, customerPhone ? lookupHash(customerPhone) : '', customerName ? encrypt(customerName) : null]
       );
 
       if (parsed.messageId && parsed.text) {
@@ -1199,5 +1214,6 @@ router.post('/conversations/:id/send', async (req, res, next) => {
 router.whatsappInteractiveMessages = whatsappInteractiveMessages;
 router.whatsappButtonTitle = whatsappButtonTitle;
 router.webhookMessage = webhookMessage;
+router.whatsappConversationCustomerName = whatsappConversationCustomerName;
 
 module.exports = router;

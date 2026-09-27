@@ -33,6 +33,16 @@ test('WhatsApp conserva el valor interno de botones y listas de Zernio', () => {
   assert.equal(titleOnly.text, 'Horarios de atención');
 });
 
+test('la bandeja conserva el cliente y no usa el nombre del negocio en mensajes salientes', () => {
+  const route = require('../src/routes/whatsapp');
+  const customerName = route.whatsappConversationCustomerName;
+  assert.equal(typeof customerName, 'function');
+
+  assert.equal(customerName({ incoming: true, senderName: 'Ana López' }, { display_name: 'daddypollo' }), 'Ana López');
+  assert.equal(customerName({ incoming: false, senderName: 'Programación y Desarrollo Tecnológicos de Ideas' }, { display_name: 'daddypollo' }), '');
+  assert.equal(customerName({ incoming: true, senderName: 'daddypollo' }, { display_name: 'daddypollo' }), '');
+});
+
 test('WhatsApp ofrece sandbox Zernio y conserva el flujo real de pedidos', () => {
   const route = source('src/routes/whatsapp.js');
   const html = source('public/app.html');
