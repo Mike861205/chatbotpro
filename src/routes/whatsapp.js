@@ -271,6 +271,28 @@ function whatsappDisplayText(value, max = 1000) {
     .slice(0, max);
 }
 
+// WhatsApp reply buttons have a much smaller title limit than the web
+// assistant. Prefer a complete, clear label over cutting the last character
+// of a sentence such as "gracias" or "productos".
+function whatsappButtonTitle(value) {
+  const raw = whatsappDisplayText(value, 120);
+  const compact = raw
+    .replace(/^➕\s*Agregar más productos\.?$/i, '➕ Agregar otro')
+    .replace(/^➡️\s*Siguiente ofrecimiento\.?$/i, '➡️ Siguiente')
+    .replace(/^✅\s*Sería todo, gracias\.?$/i, '✅ Finalizar pedido')
+    .replace(/^✏️\s*Editar productos\.?$/i, '✏️ Editar pedido')
+    .replace(/^❌\s*No, regresar\.?$/i, '↩️ Regresar')
+    .replace(/^✅\s*Sí, confirmar\.?$/i, '✅ Confirmar')
+    .replace(/^✅\s*Sí, agregar nota\.?$/i, '✅ Agregar nota')
+    .replace(/^❌\s*No, continuar\.?$/i, '↩️ Continuar')
+    .replace(/^📍\s*Compartir ubicación\.?$/i, '📍 Ubicación')
+    .replace(/^⏭️\s*Omitir referencia\.?$/i, '⏭️ Omitir referencia')
+    .replace(/^Capturar nueva dirección de entrega$/i, 'Nueva dirección')
+    .replace(/^👤\s*Soy cliente nuevo$/i, '👤 Cliente nuevo')
+    .replace(/^🔁\s*Ya he pedido$/i, '🔁 Ya he pedido');
+  return whatsappDisplayText(compact, 20);
+}
+
 function whatsappTransportId(value) {
   const canonical = whatsappDisplayText(value, 180);
   if (!canonical) return '';
@@ -346,48 +368,90 @@ function whatsappInteractiveRows(reply) {
   return rows;
 }
 
+function whatsappProductRows(reply) {
+  const rows = [];
+  const seen = new Set();
+  for (const product of (Array.isArray(reply.products) ? reply.products : [])) {
+    const variants = Array.isArray(product.variants) ? product.variants.filter((variant) => variant?.name) : [];
+    const variantHint = variants.length > 1
+      ? `${variants.length} variantes · desde ${whatsappDisplayText(product.priceLabel || '', 48)}`
+      : '';
+    const id = whatsappTransportId(`prod_${product.id}`);
+    const title = whatsappDisplayText(product.name, 24);
+    if (!id || !title || seen.has(id)) continue;
+    seen.add(id);
+    rows.push({
+      id,
+      title,
+      ...(variantHint || product.priceLabel || product.description
+        ? { description: whatsappDisplayText(variantHint || product.priceLabel || product.description, 72) }
+        : {}),
+    });
+  }
+  return rows;
+}
+
+function whatsappOptionRows(reply) {
+  const rows = [];
+  const seen = new Set();
+  for (const option of (Array.isArray(reply.options) ? reply.options : [])) {
+    const id = whatsappTransportId(option.value);
+    const title = whatsappButtonTitle(option.label);
+    if (!id || !title || seen.has(id)) continue;
+    seen.add(id);
+    rows.push({ id, title });
+  }
+  return rows;
+}
+
 function whatsappInteractiveMessages(reply) {
-  const rows = whatsappInteractiveRows(reply);
-  if (!rows.length) return [];
+  const messages = [];
+  const productRows = whatsappProductRows(reply);
+  const optionRows = whatsappOptionRows(reply);
 
-  const bodyText = whatsappDisplayText(
-    Array.isArray(reply.products) && reply.products.length
-      ? 'Selecciona un producto para continuar:'
-      : 'Elige una opción para continuar:',
-    1024
-  );
+  const addButtonMessages = (rows, bodyText) => {
+    for (let index = 0; index < rows.length; index += 3) {
+      const chunk = rows.slice(index, index + 3);
+      messages.push({
+        kind: 'buttons',
+        bodyText,
+        buttons: chunk.map((row) => ({ type: 'postback', title: row.title, payload: row.id })),
+      });
+    }
+  };
 
-  // WhatsApp reply buttons are the closest equivalent to the web assistant's
-  // visible buttons, but Meta/Zernio limit them to three per message.
-  if (rows.length <= 3) {
-    return [{
-      kind: 'buttons',
-      bodyText,
-      buttons: rows.map((row) => ({ type: 'postback', title: row.title, payload: row.id })),
-    }];
+  if (productRows.length) {
+    const bodyText = 'Selecciona un producto para continuar:';
+    // Up to three products can be shown as visible buttons. Larger catalogs
+    // use WhatsApp's native list so the customer can browse without receiving
+    // a long wall of button messages.
+    if (productRows.length <= 3) {
+      addButtonMessages(productRows, bodyText);
+    } else {
+      for (let index = 0; index < productRows.length; index += 10) {
+        const chunk = productRows.slice(index, index + 10);
+        const pageLabel = productRows.length > 10 ? ` ${Math.floor(index / 10) + 1}/${Math.ceil(productRows.length / 10)}` : '';
+        messages.push({
+          kind: 'list',
+          bodyText,
+          interactive: {
+            type: 'list',
+            body: { text: bodyText },
+            action: {
+              button: whatsappDisplayText(`Ver productos${pageLabel}`, 20),
+              sections: [{ rows: chunk }],
+            },
+          },
+        });
+      }
+    }
   }
 
-  // Native WhatsApp lists allow up to ten rows. Keep every option available
-  // by splitting larger engine replies into multiple list messages.
-  const messages = [];
-  for (let index = 0; index < rows.length; index += 10) {
-    const chunk = rows.slice(index, index + 10);
-    const pageLabel = rows.length > 10 ? ` (${Math.floor(index / 10) + 1}/${Math.ceil(rows.length / 10)})` : '';
-    const opener = Array.isArray(reply.products) && reply.products.length
-      ? 'Ver productos'
-      : rows.some((row) => /men[uú]/i.test(row.title)) ? 'Ver menú' : 'Ver opciones';
-    messages.push({
-      kind: 'list',
-      bodyText,
-      interactive: {
-        type: 'list',
-        body: { text: bodyText },
-        action: {
-          button: whatsappDisplayText(`${opener}${pageLabel}`, 20),
-          sections: [{ rows: chunk }],
-        },
-      },
-    });
+  // Actions are deliberately kept out of the product list. Confirmation,
+  // cart and navigation choices are always visible as reply buttons; when
+  // there are more than three, WhatsApp receives consecutive button cards.
+  if (optionRows.length) {
+    addButtonMessages(optionRows, productRows.length ? 'Acciones del pedido:' : 'Elige una opción para continuar:');
   }
   return messages;
 }
@@ -1024,5 +1088,10 @@ router.post('/conversations/:id/send', async (req, res, next) => {
     res.json({ ok: true, messageId: sent.messageId });
   } catch (error) { next(error); }
 });
+
+// Exposed on the router only for focused unit tests; the HTTP API remains the
+// Express router itself.
+router.whatsappInteractiveMessages = whatsappInteractiveMessages;
+router.whatsappButtonTitle = whatsappButtonTitle;
 
 module.exports = router;

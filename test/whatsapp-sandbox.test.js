@@ -26,7 +26,7 @@ test('WhatsApp ofrece sandbox Zernio y conserva el flujo real de pedidos', () =>
   assert.match(route, /x-late-signature/);
   assert.match(route, /x-late-event-id/);
   assert.match(route, /interactive: \{/);
-  assert.match(route, /buttons: rows\.map/);
+  assert.match(route, /buttons: chunk\.map/);
   assert.match(route, /metadata\.interactiveId/);
   assert.match(route, /metadata\.location/);
   assert.match(route, /sharelocation: 'share_location'/);
@@ -57,4 +57,37 @@ test('WhatsApp ofrece sandbox Zernio y conserva el flujo real de pedidos', () =>
   assert.match(client, /whatsappCustomerShareBtn/);
   assert.match(client, /visibleMessages/);
   assert.match(engine, /runtime\.sourceChannel/);
+});
+
+test('WhatsApp muestra las acciones como botones completos y separa el catálogo', () => {
+  const route = require('../src/routes/whatsapp');
+  const buildMessages = route.whatsappInteractiveMessages;
+  assert.equal(typeof buildMessages, 'function');
+
+  const actionMessages = buildMessages({
+    options: [
+      { label: '✅ Sí, confirmar', value: 'confirm_yes' },
+      { label: '✏️ Editar productos', value: 'confirm_edit_cart' },
+      { label: '📝 Editar nota', value: 'confirm_edit_note' },
+      { label: '❌ No, regresar', value: 'confirm_no' },
+    ],
+  });
+  assert.ok(actionMessages.every((message) => message.kind === 'buttons'));
+  assert.deepEqual(actionMessages.flatMap((message) => message.buttons.map((button) => button.title)), [
+    '✅ Confirmar', '✏️ Editar pedido', '📝 Editar nota', '↩️ Regresar',
+  ]);
+  assert.ok(actionMessages.every((message) => message.buttons.length <= 3));
+
+  const catalogMessages = buildMessages({
+    products: [
+      { id: 1, name: 'Hamburguesa BBQ', priceLabel: '$149.00' },
+      { id: 2, name: 'Papas grandes', priceLabel: '$99.00' },
+      { id: 3, name: 'Refresco', priceLabel: '$35.00' },
+      { id: 4, name: 'Postre', priceLabel: '$59.00' },
+    ],
+    options: [{ label: '➕ Agregar otro', value: 'more_products' }, { label: '🛒 Ver carrito', value: 'cart' }],
+  });
+  assert.equal(catalogMessages[0].kind, 'list');
+  assert.equal(catalogMessages[1].kind, 'buttons');
+  assert.deepEqual(catalogMessages[1].buttons.map((button) => button.title), ['➕ Agregar otro', '🛒 Ver carrito']);
 });

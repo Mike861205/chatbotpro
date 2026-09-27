@@ -1249,7 +1249,7 @@ async function presentNextQueuedProductConfiguration(state, reply, currency, t, 
   ];
   reply.products = null;
   reply.options = [
-    { label: '➕ Agregar más productos', value: 'menu' },
+    { label: '➕ Agregar otro', value: 'more_products' },
     { label: labels.checkoutButton, value: 'checkout' },
     { label: labels.cartButton, value: 'cart' },
   ];
@@ -1275,7 +1275,7 @@ async function finishPendingProductConfiguration(state, reply, currency, t, fini
   ];
   reply.products = null;
   reply.options = [
-    { label: '➕ Agregar más productos', value: 'menu' },
+    { label: '➕ Agregar otro', value: 'more_products' },
     { label: labels.checkoutButton, value: 'checkout' },
     { label: labels.cartButton, value: 'cart' },
   ];
@@ -2253,7 +2253,7 @@ async function handleMessage(t, slug, sessionId, rawInput, runtime = {}) {
     }
     reply.messages.push('¿Deseas agregar más productos o finalizar tu pedido?');
     reply.options = [
-      { label: '➕ Agregar más productos', value: 'menu' },
+      { label: '➕ Agregar otro', value: 'more_products' },
       { label: labels.cartButton, value: 'cart' },
       { label: labels.checkoutButton, value: 'checkout' },
     ];
@@ -2324,6 +2324,17 @@ async function handleMessage(t, slug, sessionId, rawInput, runtime = {}) {
   if (lower === 'menu' || lower === 'menú') {
     cancelPendingProductConfiguration(state);
     Object.assign(reply, await showMenu(t, state, labels, activeChatbotPromotions, showFullMenu, catalogSortMode));
+    return finish();
+  }
+  if (lower === 'more_products' || lower === 'add_more_products') {
+    cancelPendingProductConfiguration(state);
+    if (state.browseMode === 'promotions') {
+      Object.assign(reply, await showPromotions(t, state, labels, activeChatbotPromotions));
+    } else if (Number.isInteger(Number(state.currentCategoryId)) && Number(state.currentCategoryId) > 0) {
+      Object.assign(reply, await showProducts(t, state, Number(state.currentCategoryId), labels, { activePromotions: activeChatbotPromotions }));
+    } else {
+      Object.assign(reply, await showMenu(t, state, labels, activeChatbotPromotions, showFullMenu, catalogSortMode));
+    }
     return finish();
   }
   if (state.step === 'ask_scheduled_order') {
