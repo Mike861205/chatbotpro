@@ -832,28 +832,31 @@ async function handleWebhook(req, res, next) {
           (connection_id,external_id,customer_phone_enc,customer_phone_hash,customer_name_enc,status,bot_enabled,last_message_at,updated_at)
          VALUES($1,$2,$3,$4,$5,'open',1,now(),now())
          ON CONFLICT(connection_id,external_id) DO UPDATE SET
-           customer_phone_enc=CASE WHEN EXCLUDED.customer_phone_enc IS NULL THEN {s}.whatsapp_conversations.customer_phone_enc ELSE EXCLUDED.customer_phone_enc END,
+           customer_phone_enc=CASE WHEN COALESCE(EXCLUDED.customer_phone_enc, '') = '' THEN {s}.whatsapp_conversations.customer_phone_enc ELSE EXCLUDED.customer_phone_enc END,
            customer_phone_hash=CASE WHEN EXCLUDED.customer_phone_hash='' THEN {s}.whatsapp_conversations.customer_phone_hash ELSE EXCLUDED.customer_phone_hash END,
-           customer_name_enc=CASE WHEN EXCLUDED.customer_name_enc IS NULL THEN {s}.whatsapp_conversations.customer_name_enc ELSE EXCLUDED.customer_name_enc END,
+           customer_name_enc=CASE WHEN COALESCE(EXCLUDED.customer_name_enc, '') = '' THEN {s}.whatsapp_conversations.customer_name_enc ELSE EXCLUDED.customer_name_enc END,
            last_message_at=now(), updated_at=now()
          RETURNING *`,
-        [connection.id, externalConversationId, customerPhone ? encrypt(customerPhone) : null, customerPhone ? lookupHash(customerPhone) : '', customerName ? encrypt(customerName) : null]
+        [connection.id, externalConversationId, customerPhone ? encrypt(customerPhone) : '', customerPhone ? lookupHash(customerPhone) : '', customerName ? encrypt(customerName) : '']
       );
 
+      let inboundMessageStored = !parsed.messageId;
       if (parsed.messageId && parsed.text) {
         const messageBody = parsed.location
           ? (parsed.location.label || `Ubicación: ${parsed.location.lat}, ${parsed.location.lng}`)
           : (parsed.interactiveTitle || parsed.text);
-        await t.run(
+        const messageRow = await t.get(
           `INSERT INTO {s}.whatsapp_messages
             (conversation_id,external_message_id,direction,message_type,body,source,status,payload_json)
            VALUES($1,$2,$3,$4,$5,$6,$7,$8)
-           ON CONFLICT(external_message_id) DO NOTHING`,
+           ON CONFLICT(external_message_id) DO NOTHING
+           RETURNING id`,
           [conversation.id, parsed.messageId, parsed.incoming ? 'inbound' : 'outbound', parsed.location ? 'location' : (parsed.interactiveId ? 'interactive' : 'text'), messageBody, parsed.source || (parsed.incoming ? 'whatsapp' : 'cellular'), parsed.incoming ? 'received' : 'sent', safePayload(payload)]
         );
+        inboundMessageStored = Boolean(messageRow);
       }
 
-      if (parsed.incoming && parsed.text && Number(conversation.bot_enabled) === 1 && Number(connection.enabled) === 1) {
+      if (parsed.incoming && parsed.text && inboundMessageStored && Number(conversation.bot_enabled) === 1 && Number(connection.enabled) === 1) {
         setImmediate(() => {
           processWhatsAppBotReply({ t, tenantSlug, connection, conversation, parsed, externalConversationId }).catch((error) => {
             console.error('[whatsapp][bot-queue]', tenantSlug, error.message);

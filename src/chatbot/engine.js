@@ -550,8 +550,11 @@ function bankAccountsFallbackMessage(accounts, paymentLabel = 'Transferencia') {
 }
 
 async function getState(t, sessionId) {
-  const row = await t.get('SELECT state FROM {s}.chat_sessions WHERE id = $1', [sessionId]);
-  return row ? JSON.parse(row.state) : null;
+  const row = await t.get('SELECT state, updated_at FROM {s}.chat_sessions WHERE id = $1', [sessionId]);
+  if (!row) return null;
+  const state = JSON.parse(row.state);
+  Object.defineProperty(state, '__sessionUpdatedAt', { value: row.updated_at, enumerable: false, configurable: true });
+  return state;
 }
 
 async function saveState(t, sessionId, state) {
@@ -1960,6 +1963,25 @@ async function handleMessage(t, slug, sessionId, rawInput, runtime = {}) {
   const activeChatbotPromotions = await getActivePromotions(t, 'chatbot');
   labels = { ...labels, promotionsAvailable: activeChatbotPromotions.length > 0 };
   let state = (await getState(t, sessionId)) || { step: 'start', cart: [], customer: {}, currency, aiHistory: [] };
+  const sessionUpdatedAt = state.__sessionUpdatedAt ? new Date(state.__sessionUpdatedAt).getTime() : 0;
+  const completedAt = state.lastOrderCompletedAt ? new Date(state.lastOrderCompletedAt).getTime() : sessionUpdatedAt;
+  const orderSessionExpired = state.step === 'order_complete'
+    && Number.isFinite(completedAt)
+    && completedAt > 0
+    && Date.now() - completedAt >= 60 * 60 * 1000;
+  if (orderSessionExpired) {
+    // WhatsApp conserva la misma conversación externa indefinidamente. Después
+    // de una hora de haber terminado un pedido, la siguiente entrada debe
+    // comportarse como un pedido nuevo, conservando sólo la identidad básica.
+    state = {
+      step: 'start',
+      cart: [],
+      customer: {},
+      currency,
+      aiHistory: [],
+    };
+    input = 'start';
+  }
   if (!Array.isArray(state.aiHistory)) state.aiHistory = [];
   // Los canales externos pueden aportar identidad básica ya verificada por el
   // proveedor (por ejemplo, el número del remitente de WhatsApp). Se guarda
@@ -3697,7 +3719,7 @@ async function handleMessage(t, slug, sessionId, rawInput, runtime = {}) {
         };
         reply.previewComplete = true;
         reply.registrationUrl = runtime.registrationUrl || '/register?source=chatbot-demo';
-        state = { step: 'order_complete', cart: [], customer: {}, currency, previewComplete: true };
+        state = { step: 'order_complete', cart: [], customer: {}, currency, previewComplete: true, lastOrderCompletedAt: new Date().toISOString() };
         reply.options = [{ label: '🔄 Hacer otro pedido de prueba', value: 'start' }];
         return finish();
       }
@@ -3812,7 +3834,7 @@ async function handleMessage(t, slug, sessionId, rawInput, runtime = {}) {
         reply.messages.push('👇 Toca el botón para enviar el resumen de tu pedido por WhatsApp y agilizar la atención.');
       }
       if (!waLink) reply.messages.push('⚠️ El negocio aún no tiene un WhatsApp válido para envío automático. Tu pedido ya quedó registrado.');
-      state = { step: 'order_complete', cart: [], customer: {}, currency, lastOrderId: orderRow.id };
+      state = { step: 'order_complete', cart: [], customer: {}, currency, lastOrderId: orderRow.id, lastOrderCompletedAt: new Date().toISOString() };
       reply.options = [{ label: '🆕 Hacer otro pedido', value: 'start' }];
       return finish();
     }
