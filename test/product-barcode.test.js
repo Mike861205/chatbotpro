@@ -20,3 +20,24 @@ test('conserva el código detectado por IA en cada producto', () => {
   ]);
   assert.equal(product.barcode, '7501234567890');
 });
+
+test('no inventa un código eliminando caracteres inválidos ni truncando dígitos', () => {
+  for (const barcode of ['ABC@123', '1'.repeat(65)]) {
+    const [product] = normalizeAiCatalogProducts([{ name: 'Leche', price: 25, barcode }]);
+    assert.equal(product.barcode, '');
+    assert.ok(product.warnings.some((warning) => /código de barras/.test(warning)));
+    assert.throws(() => normalizeAiCatalogProducts([{ name: 'Leche', barcode }], { strictBarcodes: true }), /código de barras/);
+  }
+});
+
+test('productos con distinto código no se mezclan en variantes ni se pierden al consolidar', () => {
+  const products = normalizeAiCatalogProducts([
+    { name: 'Leche chica', price: 20, barcode: '000123' },
+    { name: 'Leche grande', price: 30, barcode: '000124' },
+    { name: 'Pan', price: 15, barcode: '000125' },
+    { name: 'Pan', price: 18, barcode: '000126' },
+  ]);
+  assert.equal(products.length, 4);
+  assert.deepEqual(products.map((product) => product.barcode), ['000123', '000124', '000125', '000126']);
+  assert.ok(products.every((product) => product.variants.length === 0));
+});

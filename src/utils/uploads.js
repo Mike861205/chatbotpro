@@ -21,7 +21,7 @@ function ensureScopedUploadsDir(scope) {
   return dir;
 }
 
-function createImageUpload({ scopeResolver, allowedMimePattern, tempPrefix, maxFiles = 1, maxFields = 50, fieldSize = 512 * 1024 }) {
+function createImageUpload({ scopeResolver, allowedMimePattern, fileValidator, unsupportedMessage, tempPrefix, maxFiles = 1, maxFields = 50, fieldSize = 512 * 1024 }) {
   const storage = multer.diskStorage({
     destination: (req, file, cb) => {
       try {
@@ -45,9 +45,9 @@ function createImageUpload({ scopeResolver, allowedMimePattern, tempPrefix, maxF
       fieldSize,
     },
     fileFilter: (req, file, cb) => {
-      if (allowedMimePattern.test(String(file.mimetype || ''))) return cb(null, true);
-      return cb(Object.assign(new Error('Formato de imagen no permitido'), {
-        code: 'UNSUPPORTED_FILE_TYPE',
+      if (fileValidator ? fileValidator(file) : allowedMimePattern.test(String(file.mimetype || ''))) return cb(null, true);
+      return cb(Object.assign(new Error(unsupportedMessage || 'Formato de imagen no permitido'), {
+        code: fileValidator ? 'UNSUPPORTED_CATALOG_FILE' : 'UNSUPPORTED_FILE_TYPE',
         status: 415,
       }));
     },

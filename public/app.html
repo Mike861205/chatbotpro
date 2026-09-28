@@ -11,7 +11,7 @@
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/fill/style.css" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/duotone/style.css" />
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-  <link rel="stylesheet" href="/static/css/styles.css?v=20260928-zernio-setup" />
+  <link rel="stylesheet" href="/static/css/styles.css?v=20260928-catalog-barcodes" />
   <link rel="icon" type="image/svg+xml" href="/static/favicon.svg" />
   <link rel="icon" type="image/png" href="/static/chatbotpro100.png" />
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
@@ -246,9 +246,9 @@
                   <div class="hint" id="posCatalogHint">Aquí aparecen automáticamente los productos activos dados de alta por categoría.</div>
                 </div>
                 <div class="field pos-barcode-search" id="posBarcodeSearch" hidden style="min-width:280px;margin:0">
-                  <label for="posBarcodeInput"><i class="ph-bold ph-barcode"></i> Escanear cÃ³digo</label>
+                  <label for="posBarcodeInput"><i class="ph-bold ph-barcode"></i> Escanear código</label>
                   <input id="posBarcodeInput" type="text" inputmode="none" autocomplete="off" placeholder="Apunta el lector y presiona Enter" />
-                  <div class="hint" id="posBarcodeHint">El lector funciona como teclado. TambiÃ©n puedes escribir el cÃ³digo.</div>
+                  <div class="hint" id="posBarcodeHint">El lector funciona como teclado. También puedes escribir el código.</div>
                 </div>
                 <div class="segmented pos-cat-filters" id="posCatChips"></div>
               </div>
@@ -1476,7 +1476,7 @@
               <label class="switch"><input type="checkbox" id="cfgPosChatIntegration" /><span class="track"></span></label>
             </div>
             <div class="toggle-row" style="margin-top:12px">
-              <div class="t-info"><i class="ph-bold ph-barcode"></i><div><b>Usar cÃ³digos de barras en el POS</b><span>Activa un campo de escaneo para pistola USB/Bluetooth. Los productos pueden tener cÃ³digo manual o detectado por IA.</span></div></div>
+              <div class="t-info"><i class="ph-bold ph-barcode"></i><div><b>Usar códigos de barras en el POS</b><span>Activa un campo de escaneo para pistola USB/Bluetooth. Los productos pueden tener código manual o detectado por IA.</span></div></div>
               <label class="switch"><input type="checkbox" id="cfgBarcodeEnabled" /><span class="track"></span></label>
             </div>
             <hr style="margin:18px 0;border:none;border-top:1px solid var(--line)" />
@@ -2033,9 +2033,9 @@
         </div>
         <label class="empty-catalog-ai-drop" id="emptyCatalogAiDrop" for="emptyCatalogMenuImage" role="button" tabindex="0" aria-label="Elegir fotos del menú o catálogo para analizarlas con IA">
           <i class="ph-bold ph-cloud-arrow-up"></i>
-          <span><b id="emptyCatalogAiUploadLabel">Sube aquí la foto o imagen de tu menú</b><small>Hasta 8 imágenes · máximo 8 MB cada una</small></span>
-          <em>Elegir imágenes</em>
-          <input type="file" id="emptyCatalogMenuImage" accept="image/*" multiple />
+          <span><b id="emptyCatalogAiUploadLabel">Sube tu menú: imágenes, PDF o Excel</b><small>Hasta 8 archivos · máximo 8 MB cada uno</small></span>
+          <em>Elegir archivos</em>
+          <input type="file" id="emptyCatalogMenuImage" accept="image/png,image/jpeg,image/webp,image/gif,.pdf,.xlsx,.xls,.csv" multiple />
         </label>
         <div class="empty-catalog-ai-actions">
           <button type="button" class="btn btn-ghost" id="emptyCatalogAiLater">Ahora no, entrar al panel</button>
@@ -2408,8 +2408,16 @@
             </div>
           </div>
           <div class="field"><label><i class="ph-bold ph-tag"></i> Nombre *</label><input type="text" id="pName" required placeholder="Hamburguesa clásica" /></div>
-          <div class="field"><label><i class="ph-bold ph-barcode"></i> CÃ³digo de barras <span class="hint-inline">(opcional)</span></label><input type="text" id="pBarcode" maxlength="64" inputmode="numeric" autocomplete="off" placeholder="Ej. 7501234567890" /><div class="hint">Puedes escribirlo o dejar que la IA lo lea al importar el catÃ¡logo. Debe ser Ãºnico por producto.</div></div>
-          <div class="field"><label><i class="ph-bold ph-text-align-left"></i> DescripciÃ³n</label><textarea id="pDesc" rows="2" placeholder="Carne 150g, queso, lechuga y tomate"></textarea></div>
+          <div class="field">
+            <label for="pBarcode"><i class="ph-bold ph-barcode"></i> Código de barras <span class="hint-inline">(opcional)</span></label>
+            <div class="product-barcode-capture">
+              <input type="text" id="pBarcode" maxlength="64" inputmode="text" autocomplete="off" spellcheck="false" placeholder="Ej. 7501234567890" aria-describedby="pBarcodeHelp pBarcodeStatus" />
+              <button type="button" class="btn btn-ghost" id="pBarcodeCapture"><i class="ph-bold ph-barcode"></i> Capturar con lector</button>
+            </div>
+            <div class="hint" id="pBarcodeHelp">Escríbelo o pulsa Capturar con lector y escanea el producto. Enter confirma el código; después pulsa Guardar. La IA también puede leerlo al importar el catálogo. Debe ser único dentro de tu negocio.</div>
+            <div class="hint" id="pBarcodeStatus" role="status" aria-live="polite"></div>
+          </div>
+          <div class="field"><label><i class="ph-bold ph-text-align-left"></i> Descripción</label><textarea id="pDesc" rows="2" placeholder="Carne 150g, queso, lechuga y tomate"></textarea></div>
           <div class="row-2">
             <div class="field"><label id="pPriceLabel"><i class="ph-bold ph-currency-dollar"></i> Precio base *</label><input type="number" id="pPrice" step="0.01" min="0" required placeholder="99.00" /><div class="hint" id="pPriceTaxHint">Si usas variantes, este precio es el de referencia.</div></div>
             <div class="field"><label><i class="ph-bold ph-folder"></i> Categoría</label><select id="pCat"><option value="">Sin categoría</option></select></div>
@@ -2538,26 +2546,26 @@
   <div class="modal-bg" id="aiProductModal">
     <div class="modal ai-product-modal" style="max-width:1180px">
       <h3 id="aiCatalogModalTitle"><i class="ph-bold ph-magic-wand"></i> Cargar catálogo con IA</h3>
-      <div class="hint" id="aiCatalogModalHint" style="margin-bottom:12px">Sube una foto o captura de tu catálogo y la IA convertirá su contenido en elementos editables para importar en lote.</div>
+      <div class="hint" id="aiCatalogModalHint" style="margin-bottom:12px">Sube imágenes, PDF o Excel de tu catálogo. La IA leerá productos, precios y códigos de barras para que los revises antes de importar.</div>
       <form id="aiProductForm">
         <div class="ai-upload-shell">
-          <div class="ai-upload-card" id="aiMenuUploadArea" role="button" tabindex="0" aria-label="Seleccionar imágenes del menú">
+          <div class="ai-upload-card" id="aiMenuUploadArea" role="button" tabindex="0" aria-label="Seleccionar imágenes, PDF o Excel del catálogo">
             <div class="ai-upload-hero"><i class="ph-bold ph-image-square"></i></div>
             <div class="ai-upload-copy">
               <b id="aiCatalogPickLabel">Selecciona el menú desde tu dispositivo</b>
-              <span>Puedes subir hasta 8 páginas o fotos, máximo 8 MB cada una.</span>
+              <span>Imágenes, PDF, Excel (.xlsx/.xls) o CSV. Hasta 8 archivos de 8 MB, 20 páginas visuales y 60 productos por lote. Excel: hasta 500 filas por archivo.</span>
             </div>
-            <button type="button" class="btn btn-ghost" id="aiMenuPickBtn"><i class="ph-bold ph-upload-simple"></i> Elegir imágenes</button>
-            <input type="file" id="aiMenuImage" accept="image/*" multiple />
+            <button type="button" class="btn btn-ghost" id="aiMenuPickBtn"><i class="ph-bold ph-upload-simple"></i> Elegir archivos</button>
+            <input type="file" id="aiMenuImage" accept="image/png,image/jpeg,image/webp,image/gif,.pdf,.xlsx,.xls,.csv" multiple />
           </div>
 
           <div class="ai-upload-tips">
             <span><i class="ph-bold ph-check-circle"></i> Asegúrate que el texto se vea claro</span>
-            <span><i class="ph-bold ph-check-circle"></i> Incluye nombre y precio en la foto</span>
-            <span><i class="ph-bold ph-check-circle"></i> Revisa variantes, ingredientes y fotos antes de importar</span>
+            <span><i class="ph-bold ph-check-circle"></i> Incluye nombre y precio. En Excel, guarda los códigos como texto</span>
+            <span><i class="ph-bold ph-check-circle"></i> Revisa códigos, variantes, ingredientes y fotos antes de importar</span>
           </div>
 
-          <div class="hint" id="aiMenuImageHint" style="margin-top:2px">Aún no has seleccionado imagen.</div>
+          <div class="hint" id="aiMenuImageHint" style="margin-top:2px">Aún no has seleccionado archivos.</div>
           <div id="aiMenuImagePreview" class="ai-image-preview" hidden>
             <div id="aiMenuImagePreviewList" class="ai-image-preview-list"></div>
           </div>
@@ -2601,7 +2609,7 @@
                 <th>Producto</th>
                 <th>Descripción</th>
                 <th>Precio / variantes</th>
-                <th>CÃ³digo de barras</th>
+                <th>Código de barras</th>
                 <th>Categoría</th>
                 <th>Foto y configuración</th>
                 <th></th>
@@ -3536,6 +3544,6 @@
   <script src="/socket.io/socket.io.js"></script>
   <script src="/static/vendor/qz-tray.js?v=2.3.0"></script>
   <script src="/static/js/whatsapp.js?v=20260928-zernio-setup"></script>
-  <script src="/static/js/app.js?v=20260921-scheduled-orders"></script>
+  <script src="/static/js/app.js?v=20260928-catalog-barcodes"></script>
 </body>
 </html>

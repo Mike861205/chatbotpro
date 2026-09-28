@@ -924,12 +924,12 @@ function openEmptyCatalogAiWelcome() {
   const title = $('#emptyCatalogAiTitle');
   const text = $('#emptyCatalogAiText');
   const catalogWord = ui.supportsRestaurantOperations ? 'menú' : 'catálogo';
-  if (title) title.textContent = `Sube una foto de tu ${catalogWord} y crea tus ${ui.itemPlural.toLowerCase()} con IA`;
+  if (title) title.textContent = `Sube tu ${catalogWord} y crea tus ${ui.itemPlural.toLowerCase()} con IA`;
   if (text) {
-    text.textContent = `Detectaremos ${ui.itemPlural.toLowerCase()}, precios, categorías, variantes, ingredientes y opciones para que sólo tengas que revisar y aceptar.`;
+    text.textContent = `Detectaremos ${ui.itemPlural.toLowerCase()}, precios, códigos de barras, categorías, variantes, ingredientes y opciones para que sólo tengas que revisar y aceptar.`;
   }
   const uploadLabel = $('#emptyCatalogAiUploadLabel');
-  if (uploadLabel) uploadLabel.textContent = `Sube aquí la foto o imagen de tu ${catalogWord}`;
+  if (uploadLabel) uploadLabel.textContent = `Sube tu ${catalogWord}: imágenes, PDF o Excel`;
   $('#emptyCatalogAiModal')?.classList.add('show');
   document.body.classList.add('empty-catalog-ai-open');
   setTimeout(() => $('#emptyCatalogAiDrop')?.focus(), 80);
@@ -1359,7 +1359,7 @@ $('#emptyCatalogMenuImage')?.addEventListener('change', (event) => {
   if (!files.length) return;
   if (files.length > 8 || files.some((file) => file.size > 8 * 1024 * 1024)) {
     event.target.value = '';
-    toast(files.length > 8 ? 'Puedes subir hasta 8 imágenes por carga' : 'Cada imagen debe pesar máximo 8 MB', true);
+    toast(files.length > 8 ? 'Puedes subir hasta 8 archivos por carga' : 'Cada archivo debe pesar máximo 8 MB', true);
     return;
   }
   launchEmptyCatalogAi(files).catch((error) => toast(error.message || 'No se pudo abrir la carga con IA', true));
@@ -4259,12 +4259,12 @@ function syncPosBarcodeInput() {
 }
 
 function addPosProductByBarcode(rawBarcode) {
-  if (!barcodeFeatureEnabled()) return false;
+  if (!barcodeFeatureEnabled() || POS_CHECKOUT_IN_FLIGHT || document.querySelector('.modal-bg.show')) return false;
   const barcode = normalizePosBarcode(rawBarcode);
   if (!barcode) return false;
   const product = (POS_OVERVIEW?.products || []).find((item) => normalizePosBarcode(item.barcode) === barcode);
   if (!product) {
-    toast(`No encontrÃ© un producto con el cÃ³digo ${barcode}`, true);
+    toast(`No encontré un producto con el código ${barcode}`, true);
     return false;
   }
   addPosProduct(product.id);
@@ -4283,12 +4283,20 @@ $('#posBarcodeInput')?.addEventListener('keydown', (event) => {
 document.addEventListener('keydown', (event) => {
   if (!barcodeFeatureEnabled() || CURRENT_VIEW !== 'pos') return;
   const target = event.target;
-  if (target?.id === 'posBarcodeInput' || target?.matches?.('input,textarea,select,[contenteditable="true"]')) return;
+  if (event.ctrlKey || event.altKey || event.metaKey || event.repeat || POS_CHECKOUT_IN_FLIGHT
+      || document.querySelector('.modal-bg.show') || target?.isContentEditable
+      || target?.matches?.('input,textarea,select')) {
+    POS_BARCODE_BUFFER = '';
+    return;
+  }
   const now = Date.now();
   if (now - POS_BARCODE_LAST_KEY_AT > 120) POS_BARCODE_BUFFER = '';
   POS_BARCODE_LAST_KEY_AT = now;
   if (event.key === 'Enter') {
-    if (POS_BARCODE_BUFFER.length >= 3) addPosProductByBarcode(POS_BARCODE_BUFFER);
+    if (POS_BARCODE_BUFFER.length >= 3) {
+      event.preventDefault();
+      addPosProductByBarcode(POS_BARCODE_BUFFER);
+    }
     POS_BARCODE_BUFFER = '';
     return;
   }
@@ -9040,7 +9048,7 @@ function startAiAnalyzeProgress() {
   const progress = $('#aiAnalyzeProgress');
   progress?.classList.remove('done');
   const phases = [
-    'Subiendo imagen...',
+    'Subiendo archivos...',
     'Leyendo texto del catálogo...',
     `Analizando ${businessUi().itemPlural.toLowerCase()} y precios...`,
     'Estructurando resultados...',
@@ -9187,8 +9195,8 @@ function renderAiDraftRows() {
           <input id="ai-draft-price-${idx}" type="number" class="ai-price" value="${Number(item.price || 0)}" min="0" step="0.01" />
           ${item.variants.length ? `<div class="ai-variant-price-list" aria-label="Precios por variante">${variantPrices}</div><small class="ai-price-explanation">Al vender se cobra la variante elegida.</small>` : ''}
         </td>
+        <td><input type="text" class="ai-barcode" maxlength="64" value="${esc(item.barcode || '')}" placeholder="Escribir o escanear" aria-label="Código de barras de ${esc(item.name)}" inputmode="text" autocomplete="off" spellcheck="false" /></td>
         <td><input type="text" class="ai-cat" value="${esc(item.categoryName || '')}" placeholder="Categoría" /></td>
-        <td><input type="text" class="ai-barcode" maxlength="64" value="${esc(item.barcode || '')}" placeholder="Opcional" inputmode="numeric" autocomplete="off" /></td>
         <td>
           <div class="ai-config-summary">
             ${renderAiImageReview(item)}
@@ -9219,6 +9227,13 @@ function renderAiDraftRows() {
     });
   });
   rows.querySelectorAll('.ai-barcode').forEach((input) => {
+    input.addEventListener('keydown', (event) => {
+      if (event.key !== 'Enter') return;
+      event.preventDefault();
+      event.stopPropagation();
+      input.value = normalizePosBarcode(input.value);
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    });
     input.addEventListener('input', (e) => {
       const i = Number(e.target.closest('[data-ai-row]').dataset.aiRow);
       AI_PRODUCTS_DRAFT[i].barcode = e.target.value.toUpperCase().replace(/\s+/g, '');
@@ -9360,7 +9375,7 @@ function openAiImportModal(files = []) {
   $('#aiMenuImage').value = '';
   $('#aiMenuImagePreview').hidden = true;
   if ($('#aiMenuImagePreviewList')) $('#aiMenuImagePreviewList').innerHTML = '';
-  $('#aiMenuImageHint').textContent = 'Aún no has seleccionado imagen.';
+  $('#aiMenuImageHint').textContent = 'Aún no has seleccionado archivos.';
   resetAiImportState();
   $('#aiProductModal').classList.add('show');
   if (files.length) {
@@ -9464,6 +9479,35 @@ function syncProductSaleSchedule() {
 $('#pSaleScheduleEnabled')?.addEventListener('change', syncProductSaleSchedule);
 document.querySelectorAll('input[name="pSaleDay"]').forEach((input) => input.addEventListener('change', syncProductSaleSchedule));
 
+function syncProductBarcodeStatus(confirmCapture = false) {
+  const input = $('#pBarcode');
+  const barcode = normalizePosBarcode(input.value);
+  const valid = !barcode || /^[A-Z0-9._\-/]{3,64}$/.test(barcode);
+  const duplicate = barcode && PRODUCTS_CACHE.find((product) => String(product.id) !== $('#pId').value
+    && normalizePosBarcode(product.barcode) === barcode);
+  const error = !valid ? 'Usa de 3 a 64 letras, números o . _ - /.'
+    : duplicate ? `Este código ya pertenece a ${duplicate.name}.` : '';
+  input.setCustomValidity(error);
+  $('#pBarcodeStatus').textContent = error || (barcode
+    ? `${confirmCapture ? 'Código capturado' : 'Código listo'}: ${barcode}. Pulsa Guardar para asignarlo a este producto.` : '');
+  if (confirmCapture) input.value = barcode;
+  return !error;
+}
+
+$('#pBarcodeCapture')?.addEventListener('click', () => {
+  const input = $('#pBarcode');
+  input.focus();
+  input.select();
+  $('#pBarcodeStatus').textContent = 'Esperando el lector… Escanea el producto físico. El código anterior se reemplazará al escanear.';
+});
+$('#pBarcode')?.addEventListener('input', () => syncProductBarcodeStatus());
+$('#pBarcode')?.addEventListener('keydown', (event) => {
+  if (event.key !== 'Enter') return;
+  event.preventDefault();
+  event.stopPropagation();
+  if (!syncProductBarcodeStatus(true)) event.currentTarget.reportValidity();
+});
+
 function openProdModal(p = null) {
   const ui = businessUi();
   $('#prodModalTitle').innerHTML = p
@@ -9473,6 +9517,7 @@ function openProdModal(p = null) {
   $('#pName').value = p ? p.name : '';
   $('#pDesc').value = p ? p.description || '' : '';
   $('#pBarcode').value = p ? p.barcode || '' : '';
+  syncProductBarcodeStatus();
   $('#pPrice').value = p ? p.price : '';
   $('#pCat').value = p && p.category_id ? p.category_id : '';
   $('#pActive').checked = p ? !!p.active : true;
@@ -9872,20 +9917,38 @@ $('#aiMenuImage')?.addEventListener('change', () => {
   if (!files.length) {
     preview.hidden = true;
     list.innerHTML = '';
-    $('#aiMenuImageHint').textContent = 'Aún no has seleccionado imagen.';
+    $('#aiMenuImageHint').textContent = 'Aún no has seleccionado archivos.';
     return;
   }
   if (files.length > 8 || files.some((file) => file.size > 8 * 1024 * 1024)) {
-    toast(files.length > 8 ? 'Puedes analizar hasta 8 imágenes por carga' : 'Una imagen supera 8 MB; elige archivos más ligeros', true);
+    toast(files.length > 8 ? 'Puedes analizar hasta 8 archivos por carga' : 'Un archivo supera 8 MB; elige archivos más ligeros', true);
     $('#aiMenuImage').value = '';
     preview.hidden = true;
     list.innerHTML = '';
     return;
   }
-  AI_MENU_PREVIEW_URLS = files.map((file) => URL.createObjectURL(file));
-  list.innerHTML = files.map((file, index) => `<figure><img src="${esc(AI_MENU_PREVIEW_URLS[index])}" alt="Página ${index + 1}" /><figcaption>${esc(file.name)}</figcaption></figure>`).join('');
+  if (files.some((file) => !/^image\/(png|jpe?g|webp|gif)$/.test(file.type) && !/\.(pdf|xlsx|xls|csv)$/i.test(file.name))) {
+    toast('Usa imágenes PNG/JPG/WebP/GIF, PDF, Excel (.xlsx/.xls) o CSV.', true);
+    $('#aiMenuImage').value = '';
+    preview.hidden = true;
+    list.innerHTML = '';
+    $('#aiMenuImageHint').textContent = 'Elige archivos compatibles para continuar.';
+    return;
+  }
+  list.innerHTML = files.map((file, index) => {
+    let body;
+    if (file.type.startsWith('image/')) {
+      const url = URL.createObjectURL(file);
+      AI_MENU_PREVIEW_URLS.push(url);
+      body = `<img src="${esc(url)}" alt="Imagen ${index + 1}" />`;
+    } else {
+      const pdf = /\.pdf$/i.test(file.name);
+      body = `<div class="ai-document-preview"><i class="ph-bold ${pdf ? 'ph-file-pdf' : 'ph-file-xls'}"></i><b>${pdf ? 'PDF' : 'Excel / CSV'}</b></div>`;
+    }
+    return `<figure>${body}<figcaption>${esc(file.name)}</figcaption></figure>`;
+  }).join('');
   preview.hidden = false;
-  $('#aiMenuImageHint').textContent = `${files.length} ${files.length === 1 ? 'imagen seleccionada' : 'imágenes seleccionadas'} · ${Math.ceil(files.reduce((total, file) => total + file.size, 0) / 1024)} KB`;
+  $('#aiMenuImageHint').textContent = `${files.length} ${files.length === 1 ? 'archivo seleccionado' : 'archivos seleccionados'} · ${Math.ceil(files.reduce((total, file) => total + file.size, 0) / 1024)} KB`;
 });
 
 $('#aiProductForm')?.addEventListener('submit', async (e) => {
@@ -9901,7 +9964,7 @@ $('#aiProductForm')?.addEventListener('submit', async (e) => {
   }
   const files = [...($('#aiMenuImage').files || [])];
   if (!files.length) {
-    toast('Selecciona al menos una imagen del catálogo para analizar', true);
+    toast('Selecciona imágenes, PDF o Excel del catálogo para analizar', true);
     return;
   }
 
@@ -9998,6 +10061,18 @@ $('#aiProductImport')?.addEventListener('click', async () => {
     return;
   }
 
+  const barcodeOwners = new Map();
+  for (const product of cleanProducts) {
+    if (!product.barcode) continue;
+    if (!/^[A-Z0-9._\-/]{3,64}$/.test(product.barcode)) {
+      return toast(`Revisa el código de barras de ${product.name}: usa de 3 a 64 letras, números o . _ - /.`, true);
+    }
+    if (barcodeOwners.has(product.barcode)) {
+      return toast(`El código ${product.barcode} se repite en ${barcodeOwners.get(product.barcode)} y ${product.name}. Corrígelo antes de importar.`, true);
+    }
+    barcodeOwners.set(product.barcode, product.name);
+  }
+
   const btn = $('#aiProductImport');
   btn.disabled = true;
   try {
@@ -10036,6 +10111,7 @@ $('#aiProductImport')?.addEventListener('click', async () => {
 
 $('#prodForm').addEventListener('submit', async (e) => {
   e.preventDefault();
+  if (!syncProductBarcodeStatus(true)) return $('#pBarcode').reportValidity();
   const id = $('#pId').value;
   const scheduledSale = $('#pSaleScheduleEnabled').checked;
   const saleDays = scheduledSale ? selectedProductSaleDays() : [];
@@ -12780,7 +12856,7 @@ $('#cfgBarcodeEnabled')?.addEventListener('change', async (event) => {
     SETTINGS.barcode_enabled = value;
     if (POS_OVERVIEW) POS_OVERVIEW.barcodeEnabled = checkbox.checked;
     syncPosBarcodeInput();
-    toast(checkbox.checked ? 'Lector de cÃ³digos activado' : 'Lector de cÃ³digos desactivado');
+    toast(checkbox.checked ? 'Lector de códigos activado' : 'Lector de códigos desactivado');
   } catch (error) {
     checkbox.checked = previousValue === '1';
     toast(error.message, true);
@@ -13224,7 +13300,7 @@ function applyBusinessModelUI() {
   });
   const aiCatalogModalTitle = $('#aiCatalogModalTitle');
   if (aiCatalogModalTitle) aiCatalogModalTitle.innerHTML = `<i class="ph-bold ph-magic-wand"></i> Cargar ${esc(ui.itemPlural.toLowerCase())} con IA`;
-  setBusinessText('#aiCatalogModalHint', `Sube una foto o captura de tu catálogo de ${ui.itemPlural.toLowerCase()} y la IA convertirá su contenido en elementos editables.`);
+  setBusinessText('#aiCatalogModalHint', `Sube imágenes, PDF o Excel de tu catálogo de ${ui.itemPlural.toLowerCase()}. Revisa productos, precios y códigos de barras antes de importar.`);
   setBusinessText('#aiCatalogPickLabel', `Selecciona el catálogo de ${ui.itemPlural.toLowerCase()} desde tu dispositivo`);
   const aiAnalyzeButton = $('#aiAnalyzeBtn');
   if (aiAnalyzeButton) {

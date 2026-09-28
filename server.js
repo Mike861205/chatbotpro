@@ -157,7 +157,7 @@ app.use((err, req, res, next) => {
   if (err instanceof multer.MulterError) {
     const msg =
       err.code === 'LIMIT_FILE_SIZE'
-        ? 'La imagen es demasiado grande (máximo 8 MB). Usa una imagen más ligera.'
+        ? 'El archivo es demasiado grande (máximo 8 MB). Usa un archivo más ligero.'
         : 'No se pudo procesar el archivo. Revisa su tamaño y formato.';
     return res.status(400).json({ error: msg });
   }
@@ -166,6 +166,9 @@ app.use((err, req, res, next) => {
   }
   if (err?.type === 'entity.too.large') {
     return res.status(413).json({ error: 'La solicitud excede el tamaño permitido' });
+  }
+  if (err?.code === '23505' && /products_barcode/i.test(String(err.constraint || ''))) {
+    return res.status(409).json({ error: 'El código de barras ya está asignado a otro producto de tu negocio.' });
   }
   if (err instanceof SyntaxError && err?.type === 'entity.parse.failed') {
     return res.status(400).json({ error: 'El contenido JSON no es válido' });
