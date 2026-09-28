@@ -33,7 +33,7 @@ test('el menú completo del asistente usa la preferencia del tenant y muestra gr
   const settings = read('src', 'routes', 'settings.js');
 
   assert.match(appHtml, /option value="category">Por categoría<\/option>/);
-  assert.match(engine, /showFullMenu\s*\?\s*normalizeCatalogSortMode\(await getSetting\(t, 'pos_catalog_sort_mode', 'top_sold'\)\)/);
+  assert.match(engine, /showFullMenu\s*\?\s*normalizeCatalogSortMode\(catalogSortModeRaw\)/);
   assert.match(engine, /orderFullMenuCatalog\(t, products, normalizedMode\)/);
   assert.match(chatHtml, /data\.catalogSortMode === 'category'/);
   assert.match(chatHtml, /product-category-heading/);

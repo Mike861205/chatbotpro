@@ -1863,35 +1863,94 @@ async function aiGuidedOption(state, rawInput) {
 
 async function handleMessage(t, slug, sessionId, rawInput, runtime = {}) {
   let input = String(rawInput || '').trim();
-  const businessName = await getSetting(t, 'business_name', slug);
-  const businessType = await getSetting(t, 'business_type', 'restaurant');
-  const currency = await getSetting(t, 'currency', 'MXN');
-  let currencyConversion = null;
-  try {
-    currencyConversion = await resolveCurrencyConversion(t, { scope: 'chatbot' });
-  } catch (error) {
+  const currencyConversionPromise = resolveCurrencyConversion(t, { scope: 'chatbot' }).catch((error) => {
     console.warn('[currency-conversion] No se pudo obtener la tasa automática:', error.message);
-  }
-  const deliveryFeeRules = parseDeliveryFeeRules(await getSetting(t, 'delivery_fee_rules', ''));
-  const deliveryZones = parseDeliveryZones(await getSetting(t, 'delivery_zones_geojson', '[]'));
-  let whatsapp = normalizeWhatsappNumber(await getSetting(t, 'whatsapp', ''));
+    return null;
+  });
+  const [
+    businessName,
+    businessType,
+    currency,
+    deliveryFeeRulesRaw,
+    deliveryZonesRaw,
+    whatsappRaw,
+    deliveryEnabledRaw,
+    pickupEnabledRaw,
+    dineInEnabledRaw,
+    locationEnabledRaw,
+    showFullMenuRaw,
+    catalogSortModeRaw,
+    timeZone,
+    businessHoursEnabledRaw,
+    preordersEnabledRaw,
+    businessHoursRaw,
+    customReceivingModesRaw,
+    deliveryCashRaw,
+    deliveryTransferRaw,
+    deliveryCardRaw,
+    pickupCashRaw,
+    pickupTransferRaw,
+    pickupCardRaw,
+    customPaymentMethodsRaw,
+    bankAccountsRaw,
+    upsellEnabledRaw,
+    legacyUpsellQuestionRaw,
+    legacyUpsellProductIdsRaw,
+    upsellOffersRaw,
+    chatbotInfoOptionsRaw,
+    currencyConversion,
+  ] = await Promise.all([
+    getSetting(t, 'business_name', slug),
+    getSetting(t, 'business_type', 'restaurant'),
+    getSetting(t, 'currency', 'MXN'),
+    getSetting(t, 'delivery_fee_rules', ''),
+    getSetting(t, 'delivery_zones_geojson', '[]'),
+    getSetting(t, 'whatsapp', ''),
+    getSetting(t, 'delivery_enabled', '1'),
+    getSetting(t, 'pickup_enabled', '1'),
+    getSetting(t, 'dine_in_enabled', '1'),
+    getSetting(t, 'location_enabled', '1'),
+    getSetting(t, 'chatbot_full_menu_enabled', '0'),
+    getSetting(t, 'pos_catalog_sort_mode', 'top_sold'),
+    getSetting(t, 'timezone', t.timezone || 'America/Mexico_City'),
+    getSetting(t, 'business_hours_enabled', '0'),
+    getSetting(t, 'chatbot_preorders_enabled', '0'),
+    getSetting(t, 'business_hours_json', '[]'),
+    getSetting(t, 'chatbot_receiving_modes_json', '[]'),
+    getSetting(t, 'chatbot_payment_delivery_cash', '1'),
+    getSetting(t, 'chatbot_payment_delivery_transfer', '0'),
+    getSetting(t, 'chatbot_payment_delivery_card', '0'),
+    getSetting(t, 'chatbot_payment_pickup_cash', '1'),
+    getSetting(t, 'chatbot_payment_pickup_transfer', '0'),
+    getSetting(t, 'chatbot_payment_pickup_card', '0'),
+    getSetting(t, 'custom_payment_methods_json', '[]'),
+    getSetting(t, 'chatbot_bank_accounts_json', '[]'),
+    getSetting(t, 'chatbot_upsell_enabled', '0'),
+    getSetting(t, 'chatbot_upsell_question', '¿Deseas agregar alguno de estos productos a tu pedido?'),
+    getSetting(t, 'chatbot_upsell_product_ids', '[]'),
+    getSetting(t, 'chatbot_upsell_offers_json', '[]'),
+    getSetting(t, 'chatbot_extra_options_json', '[]'),
+    currencyConversionPromise,
+  ]);
+  const deliveryFeeRules = parseDeliveryFeeRules(deliveryFeeRulesRaw);
+  const deliveryZones = parseDeliveryZones(deliveryZonesRaw);
+  let whatsapp = normalizeWhatsappNumber(whatsappRaw);
   if (!whatsapp) {
     const tenantRow = await q('SELECT phone_enc FROM tenants WHERE slug = $1 LIMIT 1', [slug]);
     const tenantPhone = decrypt(tenantRow.rows[0]?.phone_enc || '');
     whatsapp = normalizeWhatsappNumber(tenantPhone);
   }
-  const deliveryEnabled = (await getSetting(t, 'delivery_enabled', '1')) === '1';
-  const pickupEnabled = (await getSetting(t, 'pickup_enabled', '1')) === '1';
-  const dineInEnabled = (await getSetting(t, 'dine_in_enabled', '1')) !== '0';
-  const locationEnabled = (await getSetting(t, 'location_enabled', '1')) === '1';
-  const showFullMenu = (await getSetting(t, 'chatbot_full_menu_enabled', '0')) === '1';
+  const deliveryEnabled = deliveryEnabledRaw === '1';
+  const pickupEnabled = pickupEnabledRaw === '1';
+  const dineInEnabled = dineInEnabledRaw !== '0';
+  const locationEnabled = locationEnabledRaw === '1';
+  const showFullMenu = showFullMenuRaw === '1';
   const catalogSortMode = showFullMenu
-    ? normalizeCatalogSortMode(await getSetting(t, 'pos_catalog_sort_mode', 'top_sold'))
+    ? normalizeCatalogSortMode(catalogSortModeRaw)
     : 'category';
-  const timeZone = await getSetting(t, 'timezone', t.timezone || 'America/Mexico_City');
-  const businessHoursEnabled = (await getSetting(t, 'business_hours_enabled', '0')) === '1';
-  const preordersEnabled = (await getSetting(t, 'chatbot_preorders_enabled', '0')) === '1';
-  const businessHours = normalizeBusinessHours(await getSetting(t, 'business_hours_json', '[]'));
+  const businessHoursEnabled = businessHoursEnabledRaw === '1';
+  const preordersEnabled = preordersEnabledRaw === '1';
+  const businessHours = normalizeBusinessHours(businessHoursRaw);
   const scheduledHoursForDate = (dateKey) => {
     const weekday = new Date(`${dateKey}T00:00:00.000Z`).getUTCDay();
     return businessHours[weekday];
@@ -1912,7 +1971,7 @@ async function handleMessage(t, slug, sessionId, rawInput, runtime = {}) {
     return `Elegiste el *${dateLabel}*. ¿A qué hora quieres tu pedido?${range} ${timeFormatHelp}`;
   };
   let labels = getLabels(businessType);
-  const customReceivingModes = parseCustomReceivingModes(await getSetting(t, 'chatbot_receiving_modes_json', '[]'));
+  const customReceivingModes = parseCustomReceivingModes(customReceivingModesRaw);
   const receivingModes = [
     ...defaultReceivingModes(businessType, labels, { deliveryEnabled, pickupEnabled, dineInEnabled }),
     ...customReceivingModes.filter((mode) => mode.enabled).map((mode) => ({
@@ -1921,26 +1980,26 @@ async function handleMessage(t, slug, sessionId, rawInput, runtime = {}) {
     })),
   ];
   const chatPaymentDeliverySettings = {
-    cash: (await getSetting(t, 'chatbot_payment_delivery_cash', '1')) === '1',
-    transfer: (await getSetting(t, 'chatbot_payment_delivery_transfer', '0')) === '1',
-    card: (await getSetting(t, 'chatbot_payment_delivery_card', '0')) === '1',
+    cash: deliveryCashRaw === '1',
+    transfer: deliveryTransferRaw === '1',
+    card: deliveryCardRaw === '1',
   };
   const chatPaymentPickupSettings = {
-    cash: (await getSetting(t, 'chatbot_payment_pickup_cash', '1')) === '1',
-    transfer: (await getSetting(t, 'chatbot_payment_pickup_transfer', '0')) === '1',
-    card: (await getSetting(t, 'chatbot_payment_pickup_card', '0')) === '1',
+    cash: pickupCashRaw === '1',
+    transfer: pickupTransferRaw === '1',
+    card: pickupCardRaw === '1',
   };
-  const customPaymentMethods = parseCustomPaymentMethods(await getSetting(t, 'custom_payment_methods_json', '[]'));
-  const bankAccounts = parseBankAccounts(await getSetting(t, 'chatbot_bank_accounts_json', '[]'));
-  const upsellEnabled = (await getSetting(t, 'chatbot_upsell_enabled', '0')) === '1';
+  const customPaymentMethods = parseCustomPaymentMethods(customPaymentMethodsRaw);
+  const bankAccounts = parseBankAccounts(bankAccountsRaw);
+  const upsellEnabled = upsellEnabledRaw === '1';
   const legacyUpsellQuestion = String(
-    await getSetting(t, 'chatbot_upsell_question', '¿Deseas agregar alguno de estos productos a tu pedido?')
+    legacyUpsellQuestionRaw
   ).trim() || '¿Deseas agregar alguno de estos productos a tu pedido?';
-  const legacyUpsellProductIds = parseUpsellProductIds(await getSetting(t, 'chatbot_upsell_product_ids', '[]'));
-  const upsellOffersRaw = parseUpsellOffers(await getSetting(t, 'chatbot_upsell_offers_json', '[]'));
-  const chatbotInfoOptions = parseChatbotInfoOptions(await getSetting(t, 'chatbot_extra_options_json', '[]'));
-  const upsellOffersConfig = upsellOffersRaw.length
-    ? upsellOffersRaw
+  const legacyUpsellProductIds = parseUpsellProductIds(legacyUpsellProductIdsRaw);
+  const upsellOffersRawParsed = parseUpsellOffers(upsellOffersRaw);
+  const chatbotInfoOptions = parseChatbotInfoOptions(chatbotInfoOptionsRaw);
+  const upsellOffersConfig = upsellOffersRawParsed.length
+    ? upsellOffersRawParsed
     : (legacyUpsellProductIds.length
       ? [{ id: 'legacy_offer_1', question: legacyUpsellQuestion, productIds: legacyUpsellProductIds }]
       : []);
