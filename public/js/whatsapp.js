@@ -4,6 +4,9 @@ let WHATSAPP_SELECTED_CONNECTION = null;
 let WHATSAPP_SELECTED_CONVERSATION = null;
 let WHATSAPP_BOUND = false;
 let WHATSAPP_SOCKET = null;
+let WHATSAPP_CHANNEL_CHOICES = [];
+let WHATSAPP_DISCOVERY_VERSION = 0;
+let WHATSAPP_SETUP_BUSY = false;
 
 function whatsappAnalyticsDateKey(date = new Date()) {
   const timezone = ME?.tenant?.timezone || undefined;
@@ -95,7 +98,7 @@ function whatsappEntryLink(number) {
 function renderWhatsAppCustomerEntry(row = WHATSAPP_SELECTED_CONNECTION) {
   const card = $('#whatsappCustomerEntryCard');
   if (!card) return;
-  card.hidden = !row;
+  card.hidden = !row?.enabled || !whatsappEntryNumber(row);
   if (!row) return;
   const number = whatsappEntryNumber(row);
   const numberLabel = number ? `+${number}` : 'Número pendiente';
@@ -114,7 +117,7 @@ function renderWhatsAppCustomerEntry(row = WHATSAPP_SELECTED_CONNECTION) {
   $('#whatsappCustomerEntryBusiness').textContent = businessName ? `Pide por ${businessName}` : 'Pide por WhatsApp';
   $('#whatsappCustomerEntryHint').textContent = link
     ? 'Comparte este QR o enlace directo; abrirá WhatsApp con un mensaje listo para enviar.'
-    : 'Captura el número conectado o activa el teléfono para generar el enlace.';
+    : 'Conecta tu número o activa el teléfono de prueba para generar el enlace.';
   if (input) input.value = link;
   if (qr) {
     qr.hidden = !link;
@@ -130,7 +133,7 @@ function renderWhatsAppCustomerEntry(row = WHATSAPP_SELECTED_CONNECTION) {
     logoImage.onerror = () => { logoImage.hidden = true; if (logoFallback) logoFallback.hidden = false; };
   }
   if (logoFallback) logoFallback.hidden = Boolean(logo);
-  if (syncPhoto) syncPhoto.disabled = !row?.id || !logo || row?.mode !== 'api';
+  if (syncPhoto) syncPhoto.disabled = !row?.id || !row?.zernioAccountId || !logo || row?.mode !== 'api';
   const profilePhotoHint = $('#whatsappProfilePhotoHint');
   if (profilePhotoHint) {
     profilePhotoHint.innerHTML = row?.mode === 'business_app'
@@ -143,6 +146,8 @@ function renderWhatsAppCustomerEntry(row = WHATSAPP_SELECTED_CONNECTION) {
 
 function whatsappConnectionStatus(status, enabled, mode) {
   const key = String(status || '').toLowerCase();
+  if (key === 'error') return { label: 'Revisar conexión', tone: 'danger' };
+  if (key === 'pending') return { label: 'Pendiente de activar', tone: 'warning' };
   if (!enabled) return { label: 'Desactivada', tone: 'muted' };
   if (mode === 'sandbox') return { label: 'Sandbox activa', tone: 'info' };
   if (key === 'active') return { label: 'Activa', tone: 'success' };
@@ -164,42 +169,123 @@ function renderWhatsAppConnections() {
     const selected = Number(row.id) === Number(WHATSAPP_SELECTED_CONNECTION?.id);
     return `<button type="button" class="whatsapp-connection-row ${selected ? 'selected' : ''}" data-whatsapp-connection="${row.id}">
       <span class="whatsapp-connection-icon"><i class="ph-bold ph-whatsapp-logo"></i></span>
-      <span class="whatsapp-connection-copy"><b>${esc(row.displayName || row.phoneNumber || 'WhatsApp del negocio')}</b><small>${esc(row.phoneNumber || 'Número pendiente')} · ${esc(row.zernioAccountId || 'Sin Account ID')}</small></span>
+      <span class="whatsapp-connection-copy"><b>${esc(row.displayName || row.phoneNumber || 'WhatsApp del negocio')}</b><small>${esc(row.phoneNumber || 'Número pendiente')} · ${row.mode === 'sandbox' ? 'Pruebas' : row.mode === 'business_app' ? 'API + celular' : 'Cloud API'}</small></span>
       <span class="whatsapp-status-pill ${state.tone}">${esc(state.label)}</span>
     </button>`;
   }).join('');
   host.querySelectorAll('[data-whatsapp-connection]').forEach((button) => button.addEventListener('click', () => selectWhatsAppConnection(Number(button.dataset.whatsappConnection))));
 }
 
+function renderWhatsAppChannelChoices(choices, preferred = '') {
+  WHATSAPP_CHANNEL_CHOICES = Array.isArray(choices) ? choices : [];
+  const select = $('#whatsappChannel');
+  const selected = WHATSAPP_CHANNEL_CHOICES.some((choice) => choice.channelId === preferred)
+    ? preferred : WHATSAPP_CHANNEL_CHOICES.length === 1 ? WHATSAPP_CHANNEL_CHOICES[0].channelId : '';
+  select.innerHTML = '<option value="">Selecciona tu número o cuenta</option>' + WHATSAPP_CHANNEL_CHOICES
+    .map((choice) => `<option value="${esc(choice.channelId)}">${esc(choice.label)}</option>`).join('');
+  select.value = selected;
+}
+
+function syncWhatsAppSetupActions() {
+  const row = WHATSAPP_SELECTED_CONNECTION;
+  const mode = $('#whatsappMode').value;
+  const sandbox = mode === 'sandbox';
+  const savedMode = row?.mode === mode;
+  $('#whatsappChannelField').hidden = sandbox;
+  $('#whatsappSandboxPanel').hidden = !sandbox;
+  $('#whatsappModeHint').textContent = sandbox
+    ? 'Guarda la conexión y activa abajo el teléfono desde el que harás la prueba.'
+    : mode === 'business_app'
+      ? 'Conserva WhatsApp Business en el celular y atiende también desde el sistema.'
+      : 'Usa tu número de Zernio para recibir pedidos y responder desde este sistema.';
+  $('#whatsappConnectMetaBtn').hidden = sandbox || (savedMode && row?.enabled && row?.status === 'active');
+  $('#whatsappConnectMetaBtn').disabled = WHATSAPP_SETUP_BUSY || !savedMode || !row?.profileId;
+  $('#whatsappTestBtn').hidden = sandbox;
+  $('#whatsappTestBtn').disabled = WHATSAPP_SETUP_BUSY || !savedMode || !row?.zernioAccountId;
+  ['Activate', 'Refresh', 'Start', 'Discover', 'Revoke'].forEach((action) => {
+    const button = $(`#whatsappSandbox${action}Btn`);
+    if (button) button.disabled = WHATSAPP_SETUP_BUSY || !savedMode || !row?.id;
+  });
+}
+
+function renderWhatsAppSetupStatus(row) {
+  const host = $('#whatsappSetupStatus');
+  host.hidden = !row;
+  if (!row) { $('#whatsappWebhookCard').hidden = true; return; }
+  const state = whatsappConnectionStatus(row.status, row.enabled, row.mode);
+  const message = row.lastError || (row.enabled
+    ? 'Tu canal está activo y puede atender pedidos.'
+    : row.mode === 'sandbox' ? 'Activa tu teléfono de prueba para comenzar.'
+      : 'Conexión guardada. Completa la activación con Meta y revisa el estado.');
+  host.className = `whatsapp-setup-status ${row.lastError ? 'danger' : state.tone}`;
+  host.innerHTML = `<i class="ph-bold ${row.lastError ? 'ph-warning-circle' : row.enabled ? 'ph-check-circle' : 'ph-info'}"></i><span><b>${esc(state.label)}</b>${esc(message)}</span>`;
+  const card = $('#whatsappWebhookCard');
+  if (card) {
+    card.hidden = !row.webhookUrl;
+    $('#whatsappWebhookUrl').textContent = row.webhookUrl || '—';
+    $('#whatsappWebhookStatus').textContent = row.webhookError
+      ? `No se pudo configurar la recepción: ${row.webhookError}. Guarda nuevamente para reintentar.`
+      : row.webhookRegistered ? 'Webhook configurado automáticamente. No necesitas copiar la URL ni un secreto.'
+        : 'La recepción de mensajes está pendiente. Guarda la conexión para configurarla.';
+  }
+}
+
+async function discoverWhatsAppChannels() {
+  const version = ++WHATSAPP_DISCOVERY_VERSION;
+  const button = $('#whatsappDiscoverBtn');
+  const hint = $('#whatsappChannelHint');
+  button.disabled = true;
+  hint.textContent = 'Consultando tus números y cuentas en Zernio…';
+  try {
+    const result = await api('/api/whatsapp/connections/discover', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: Number($('#whatsappConnectionId').value) || undefined,
+        apiKey: $('#whatsappApiKey').value.trim(), mode: $('#whatsappMode').value }),
+    });
+    if (version !== WHATSAPP_DISCOVERY_VERSION) return false;
+    renderWhatsAppChannelChoices(result.choices, $('#whatsappChannel').value);
+    hint.textContent = WHATSAPP_CHANNEL_CHOICES.length === 1
+      ? 'Cuenta detectada. Guarda la conexión para activar el canal.'
+      : 'Encontramos varias cuentas. Selecciona la que usará este negocio.';
+    return true;
+  } catch (error) {
+    if (version === WHATSAPP_DISCOVERY_VERSION) hint.textContent = error.message;
+    throw error;
+  } finally {
+    if (version === WHATSAPP_DISCOVERY_VERSION) button.disabled = WHATSAPP_SETUP_BUSY;
+  }
+}
+
+function setWhatsAppSetupBusy(busy) {
+  WHATSAPP_SETUP_BUSY = busy;
+  ['whatsappSaveBtn', 'whatsappDiscoverBtn', 'whatsappApiKey', 'whatsappMode', 'whatsappChannel', 'whatsappWebhookSecret'].forEach((id) => {
+    const element = $(`#${id}`);
+    if (element) element.disabled = busy;
+  });
+  $('#whatsappConnectionForm').setAttribute('aria-busy', String(busy));
+  syncWhatsAppSetupActions();
+}
+
 function fillWhatsAppConnectionForm(row) {
   WHATSAPP_SELECTED_CONNECTION = row || null;
+  WHATSAPP_DISCOVERY_VERSION++;
   $('#whatsappConnectionId').value = row?.id || '';
-  $('#whatsappProfileId').value = row?.profileId || '';
-  $('#whatsappAccountId').value = row?.zernioAccountId || '';
   $('#whatsappApiKey').value = '';
-  $('#whatsappWabaId').value = row?.wabaId || '';
-  $('#whatsappPhoneNumberId').value = row?.phoneNumberId || '';
-  $('#whatsappPhoneNumber').value = row?.phoneNumber || '';
-  $('#whatsappDisplayName').value = row?.displayName || ME?.tenant?.businessName || '';
-  $('#whatsappMode').value = row?.mode || 'business_app';
+  $('#whatsappApiKey').required = !row?.hasApiKey;
+  $('#whatsappApiKey').placeholder = row?.hasApiKey ? 'API key guardada — pega otra sólo para reemplazarla' : 'Pega aquí tu API key de Zernio';
+  $('#whatsappApiKeyHint').textContent = row?.hasApiKey ? 'Ya está guardada de forma segura. No necesitas ingresarla otra vez.' : 'Se guarda cifrada y no vuelve a mostrarse.';
+  $('#whatsappMode').value = row?.mode || 'api';
   $('#whatsappWebhookSecret').value = '';
-  $('#whatsappConnectMetaBtn').disabled = !row?.id;
-  $('#whatsappTestBtn').disabled = !row?.id;
-  const webhookCard = $('#whatsappWebhookCard');
-  if (webhookCard) {
-    webhookCard.hidden = !row?.webhookUrl;
-    $('#whatsappWebhookUrl').textContent = row?.webhookUrl || '—';
-  }
-  const sandboxPanel = $('#whatsappSandboxPanel');
+  const channelId = row?.zernioAccountId ? `account:${row.zernioAccountId}` : row?.profileId ? `profile:${row.profileId}` : '';
+  renderWhatsAppChannelChoices(channelId && row.mode !== 'sandbox' ? [{ channelId,
+    label: [row.phoneNumber, row.displayName || 'WhatsApp del negocio'].filter(Boolean).join(' · ') }] : [], channelId);
+  $('#whatsappChannelHint').textContent = channelId ? 'Cuenta guardada. Consulta Zernio si deseas cambiar el número.' : 'No necesitas copiar identificadores. Consultaremos los números asociados a tu API key.';
   const sandbox = row?.sandbox || {};
-  if (sandboxPanel) sandboxPanel.hidden = row?.mode !== 'sandbox';
   if ($('#whatsappSandboxPhone')) $('#whatsappSandboxPhone').value = sandbox.phone || '';
+  syncWhatsAppSetupActions();
+  renderWhatsAppSetupStatus(row);
   renderWhatsAppSandbox(row);
   renderWhatsAppCustomerEntry(row);
-  const productionConnect = $('#whatsappConnectMetaBtn');
-  const productionTest = $('#whatsappTestBtn');
-  if (productionConnect) { productionConnect.hidden = row?.mode === 'sandbox'; productionConnect.disabled = !row?.id || row?.mode === 'sandbox'; }
-  if (productionTest) { productionTest.hidden = row?.mode === 'sandbox'; productionTest.disabled = !row?.id || row?.mode === 'sandbox'; }
   renderWhatsAppConnections();
 }
 
@@ -291,6 +377,13 @@ async function loadWhatsApp() {
   const active = WHATSAPP_DATA.connections?.find((row) => row.enabled) || WHATSAPP_DATA.connections?.[0] || null;
   if (active && !WHATSAPP_SELECTED_CONNECTION) fillWhatsAppConnectionForm(active);
   if (!active) fillWhatsAppConnectionForm(null);
+  if (WHATSAPP_SELECTED_CONNECTION) {
+    WHATSAPP_SELECTED_CONNECTION = WHATSAPP_DATA.connections.find((row) => Number(row.id) === Number(WHATSAPP_SELECTED_CONNECTION.id)) || null;
+    renderWhatsAppSetupStatus(WHATSAPP_SELECTED_CONNECTION);
+    renderWhatsAppSandbox(WHATSAPP_SELECTED_CONNECTION);
+    syncWhatsAppSetupActions();
+    renderWhatsAppConnections();
+  }
   renderWhatsAppCustomerEntry(WHATSAPP_SELECTED_CONNECTION || active);
   const pill = $('#whatsappConnectionPill');
   if (pill) {
@@ -318,11 +411,18 @@ async function loadWhatsApp() {
   }
   $('#whatsappOpenOrdersBtn')?.addEventListener('click', () => navigate('pedidos'));
   $('#whatsappMode')?.addEventListener('change', () => {
-    const sandboxMode = $('#whatsappMode').value === 'sandbox';
-    $('#whatsappSandboxPanel').hidden = !sandboxMode;
-    $('#whatsappConnectMetaBtn').hidden = sandboxMode;
-    $('#whatsappTestBtn').hidden = sandboxMode;
+    WHATSAPP_DISCOVERY_VERSION++;
+    renderWhatsAppChannelChoices([]);
+    $('#whatsappDiscoverBtn').disabled = false;
+    syncWhatsAppSetupActions();
   });
+  $('#whatsappApiKey')?.addEventListener('input', () => {
+    WHATSAPP_DISCOVERY_VERSION++;
+    renderWhatsAppChannelChoices([]);
+    $('#whatsappChannelHint').textContent = 'Consulta Zernio para detectar los números de esta API key.';
+    $('#whatsappDiscoverBtn').disabled = false;
+  });
+  $('#whatsappDiscoverBtn')?.addEventListener('click', () => discoverWhatsAppChannels().catch((error) => toast(error.message, true)));
   $('#whatsappCopyWebhookBtn')?.addEventListener('click', async () => { try { await navigator.clipboard.writeText($('#whatsappWebhookUrl').textContent); toast('URL de webhook copiada'); } catch { toast('No se pudo copiar la URL', true); } });
   $('#whatsappCustomerCopyBtn')?.addEventListener('click', async () => { try { await navigator.clipboard.writeText($('#whatsappCustomerLink').value); toast('Liga de WhatsApp copiada'); } catch { toast('No se pudo copiar la liga', true); } });
   $('#whatsappCustomerShareBtn')?.addEventListener('click', async () => {
@@ -335,11 +435,45 @@ async function loadWhatsApp() {
   });
   $('#whatsappConnectionForm')?.addEventListener('submit', async (event) => {
     event.preventDefault();
-    const id = Number($('#whatsappConnectionId').value || 0);
-    const body = { id: id || undefined, profileId: $('#whatsappProfileId').value, zernioAccountId: $('#whatsappAccountId').value, wabaId: $('#whatsappWabaId').value, phoneNumberId: $('#whatsappPhoneNumberId').value, phoneNumber: $('#whatsappPhoneNumber').value, displayName: $('#whatsappDisplayName').value, mode: $('#whatsappMode').value, apiKey: $('#whatsappApiKey').value, webhookSecret: $('#whatsappWebhookSecret').value };
-    try { const result = await api('/api/whatsapp/connections', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }); WHATSAPP_SELECTED_CONNECTION = result.connection; toast('Conexión de WhatsApp guardada'); await loadWhatsApp(); fillWhatsAppConnectionForm(result.connection); } catch (error) { toast(error.message, true); }
+    if (WHATSAPP_SETUP_BUSY) return;
+    setWhatsAppSetupBusy(true);
+    try {
+      if ($('#whatsappMode').value !== 'sandbox' && !WHATSAPP_CHANNEL_CHOICES.length) {
+        if (!await discoverWhatsAppChannels()) return;
+      }
+      if ($('#whatsappMode').value !== 'sandbox' && !$('#whatsappChannel').value) {
+        $('#whatsappChannel').disabled = false;
+        $('#whatsappChannel').focus();
+        throw new Error('Selecciona el número o la cuenta que usará este negocio');
+      }
+      const body = { id: Number($('#whatsappConnectionId').value) || undefined,
+        channelId: $('#whatsappChannel').value, mode: $('#whatsappMode').value,
+        apiKey: $('#whatsappApiKey').value.trim(), webhookSecret: $('#whatsappWebhookSecret').value.trim() };
+      const result = await api('/api/whatsapp/connections', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+      fillWhatsAppConnectionForm(result.connection);
+      toast(result.connection?.lastError || (result.webhookSetup?.registered === false ? result.webhookSetup.reason || 'Conexión guardada; recepción de mensajes pendiente' : 'Conexión de WhatsApp guardada'), Boolean(result.connection?.lastError || result.webhookSetup?.registered === false));
+      await loadWhatsApp();
+    } catch (error) {
+      if (error.data?.choices) renderWhatsAppChannelChoices(error.data.choices);
+      toast(error.message, true);
+    } finally { setWhatsAppSetupBusy(false); }
   });
-  $('#whatsappConnectMetaBtn')?.addEventListener('click', async () => { try { const row = WHATSAPP_SELECTED_CONNECTION; if (!row) return; const result = await api(`/api/whatsapp/connections/${row.id}/connect-url`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }); window.open(result.authUrl, '_blank', 'noopener,noreferrer'); toast('Se abrió la conexión segura de Meta'); } catch (error) { toast(error.message, true); } });
+  $('#whatsappConnectMetaBtn')?.addEventListener('click', async () => {
+    const row = WHATSAPP_SELECTED_CONNECTION;
+    if (!row || WHATSAPP_SETUP_BUSY) return;
+    // Reserve the tab during the click, before awaiting Zernio, to avoid popup blocking.
+    const popup = window.open('about:blank', '_blank');
+    if (popup) popup.opener = null;
+    setWhatsAppSetupBusy(true);
+    try {
+      const result = await api(`/api/whatsapp/connections/${row.id}/connect-url`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+      if (popup && !popup.closed) popup.location.replace(result.authUrl);
+      else window.location.assign(result.authUrl);
+    } catch (error) {
+      if (popup && !popup.closed) popup.close();
+      toast(error.message, true);
+    } finally { setWhatsAppSetupBusy(false); }
+  });
   $('#whatsappTestBtn')?.addEventListener('click', async () => { try { const row = WHATSAPP_SELECTED_CONNECTION; if (!row) return; const result = await api(`/api/whatsapp/connections/${row.id}/test`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }); WHATSAPP_SELECTED_CONNECTION = result.connection; toast('Canal validado correctamente'); await loadWhatsApp(); fillWhatsAppConnectionForm(result.connection); } catch (error) { toast(error.message, true); } });
   $('#whatsappSyncProfilePhotoBtn')?.addEventListener('click', async () => {
     try {

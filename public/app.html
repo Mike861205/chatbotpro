@@ -11,7 +11,7 @@
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/fill/style.css" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/duotone/style.css" />
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-  <link rel="stylesheet" href="/static/css/styles.css?v=20260921-business-hours" />
+  <link rel="stylesheet" href="/static/css/styles.css?v=20260928-zernio-setup" />
   <link rel="icon" type="image/svg+xml" href="/static/favicon.svg" />
   <link rel="icon" type="image/png" href="/static/chatbotpro100.png" />
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
@@ -1195,42 +1195,31 @@
           <div class="grid-2 whatsapp-connection-grid">
             <div class="card">
               <div class="whatsapp-card-heading"><div><span class="whatsapp-section-kicker">Cuenta propia del tenant</span><h3><i class="ph-bold ph-key"></i> Conectar Zernio</h3></div><span class="whatsapp-secure-badge"><i class="ph-bold ph-lock-key"></i> Cifrado</span></div>
-              <p class="hint">La API key se guarda únicamente en el servidor de este negocio. ChatBotPro no comparte conexiones, números ni conversaciones entre tenants.</p>
+              <p class="hint">Conecta el WhatsApp de tu negocio con tu API key. Los números y datos técnicos se consultan automáticamente en Zernio.</p>
               <form id="whatsappConnectionForm" class="whatsapp-form">
                 <input type="hidden" id="whatsappConnectionId" />
                 <div class="whatsapp-setup-guide" role="note" aria-label="Pasos para conectar WhatsApp">
-                  <div class="whatsapp-setup-title"><i class="ph-bold ph-list-numbers"></i><b>Configuración rápida</b><span>Completa lo obligatorio y sigue los pasos.</span></div>
+                  <div class="whatsapp-setup-title"><i class="ph-bold ph-list-numbers"></i><b>Conecta en 3 pasos</b></div>
                   <div class="whatsapp-setup-steps">
-                    <div><span>1</span><b>Captura la API key</b><small>Es obligatoria en todos los modos.</small></div>
-                    <div><span>2</span><b>Guarda la conexión</b><small>Se cifra y queda aislada por tenant.</small></div>
-                    <div><span>3</span><b>Activa o prueba el teléfono</b><small>Sandbox: activar. Producción: conectar en Zernio/Meta.</small></div>
-                    <div><span>4</span><b>Revisa el estado</b><small>Cuando aparezca activo, el canal queda listo.</small></div>
+                    <div><span>1</span><b>Pega tu API key</b><small>Se guarda cifrada para tu negocio.</small></div>
+                    <div><span>2</span><b>Elige cómo usar WhatsApp</b><small>Selecciona tu número o prueba el sandbox.</small></div>
+                    <div><span>3</span><b>Guarda y activa</b><small>Si el número ya está conectado, lo validamos por ti.</small></div>
                   </div>
                 </div>
-                <div class="row-2">
-                <div class="field"><label for="whatsappProfileId">Profile ID de Zernio <span class="optional-label">OPCIONAL EN SANDBOX</span></label><input id="whatsappProfileId" maxlength="120" placeholder="profile_..." autocomplete="off" /></div>
-                  <div class="field"><label for="whatsappAccountId">Account ID de Zernio <span class="required-label">UNO DE LOS DOS EN PRODUCCIÓN</span></label><input id="whatsappAccountId" maxlength="180" placeholder="Se completa al conectar" autocomplete="off" /><div class="hint">En producción se requiere Account ID o Profile ID; en sandbox se completa al detectar la cuenta.</div></div>
-                </div>
-                <div class="field"><label for="whatsappApiKey">API key de Zernio <span class="required-label">OBLIGATORIA</span></label><input id="whatsappApiKey" type="password" maxlength="600" placeholder="Pégala sólo para guardarla de forma segura" autocomplete="new-password" /><div class="hint">Por seguridad nunca se vuelve a mostrar después de guardarla.</div></div>
-                <div class="row-2">
-                  <div class="field"><label for="whatsappWabaId">WABA ID <span class="optional-label">OPCIONAL</span></label><input id="whatsappWabaId" maxlength="180" placeholder="Business Account ID" /></div>
-                  <div class="field"><label for="whatsappPhoneNumberId">Phone Number ID <span class="optional-label">OPCIONAL</span></label><input id="whatsappPhoneNumberId" maxlength="180" placeholder="Phone Number ID" /></div>
-                </div>
-                <div class="row-2">
-                  <div class="field"><label for="whatsappPhoneNumber">Número conectado <span class="optional-label">OPCIONAL</span></label><input id="whatsappPhoneNumber" maxlength="40" placeholder="521..." /><div class="hint">Solo informativo si Zernio ya devuelve el número.</div></div>
-                  <div class="field"><label for="whatsappDisplayName">Nombre visible <span class="optional-label">OPCIONAL</span></label><input id="whatsappDisplayName" maxlength="160" placeholder="Mi negocio" /></div>
-                </div>
-                <div class="field"><label for="whatsappMode">Modo de uso</label><select id="whatsappMode"><option value="business_app">API + WhatsApp Business en celular (coexistencia)</option><option value="api">Sólo Cloud API</option><option value="sandbox">Sandbox de pruebas con flujo real</option></select><div class="hint">Coexistencia permite atender desde el celular, pero tiene limitaciones de grupos y llamadas.</div></div>
-                <div class="field"><label for="whatsappWebhookSecret">Secreto de webhook <span class="optional-label">OPCIONAL</span></label><input id="whatsappWebhookSecret" type="password" maxlength="300" placeholder="Déjalo vacío normalmente" autocomplete="new-password" /><div class="hint">ChatBotPro genera y guarda automáticamente la firma. Sólo escríbelo si creaste manualmente el webhook en Zernio y usarás exactamente el mismo secreto.</div></div>
-                <div class="whatsapp-form-actions"><button class="btn btn-primary" type="submit"><i class="ph-bold ph-floppy-disk"></i> Guardar conexión</button><button class="btn btn-ghost" type="button" id="whatsappConnectMetaBtn" disabled><i class="ph-bold ph-facebook-logo"></i> Abrir conexión Meta</button><button class="btn btn-ghost" type="button" id="whatsappTestBtn" disabled><i class="ph-bold ph-plugs-connected"></i> Probar canal</button><button class="btn btn-ghost" type="button" id="whatsappSyncProfilePhotoBtn" disabled><i class="ph-bold ph-camera"></i> Sincronizar foto</button></div>
-                <div id="whatsappProfilePhotoHint" class="whatsapp-profile-photo-hint" role="note"><i class="ph-bold ph-info"></i><span>La foto se toma del logo configurado en <b>Mi negocio</b>. En coexistencia, WhatsApp exige cambiarla desde la app del teléfono.</span></div>
+                <div class="field"><label for="whatsappApiKey">API key de Zernio <span class="required-label">OBLIGATORIA</span></label><input id="whatsappApiKey" type="password" maxlength="600" placeholder="Pega aquí tu API key de Zernio" autocomplete="new-password" aria-describedby="whatsappApiKeyHint" /><div id="whatsappApiKeyHint" class="hint">Se guarda cifrada y no vuelve a mostrarse.</div></div>
+                <div class="field"><label for="whatsappMode">¿Cómo usarás WhatsApp?</label><select id="whatsappMode" aria-describedby="whatsappModeHint"><option value="api">Sólo Cloud API — atención desde el sistema</option><option value="business_app">API + WhatsApp Business en celular</option><option value="sandbox">Sandbox — pruebas con un teléfono</option></select><div id="whatsappModeHint" class="hint">Usa tu número de Zernio para recibir pedidos y responder desde este sistema.</div></div>
+                <div class="field" id="whatsappChannelField"><label for="whatsappChannel">Número o cuenta de WhatsApp</label><div class="whatsapp-channel-picker"><select id="whatsappChannel" aria-describedby="whatsappChannelHint"><option value="">Consulta tus números para elegir</option></select><button class="btn btn-ghost" id="whatsappDiscoverBtn" type="button"><i class="ph-bold ph-magnifying-glass"></i> Consultar Zernio</button></div><div id="whatsappChannelHint" class="hint" role="status" aria-live="polite">No necesitas copiar identificadores. Consultaremos los números asociados a tu API key.</div></div>
+                <div id="whatsappSetupStatus" class="whatsapp-setup-status" role="status" aria-live="polite" hidden></div>
+                <div class="whatsapp-form-actions"><button class="btn btn-primary" type="submit" id="whatsappSaveBtn"><i class="ph-bold ph-floppy-disk"></i> Guardar conexión</button><button class="btn btn-ghost" type="button" id="whatsappConnectMetaBtn" disabled><i class="ph-bold ph-facebook-logo"></i> Conectar con Meta</button><button class="btn btn-ghost" type="button" id="whatsappTestBtn" disabled><i class="ph-bold ph-plugs-connected"></i> Revisar conexión</button></div>
+                <details class="whatsapp-advanced"><summary>Ajustes avanzados de webhook</summary><div class="field"><label for="whatsappWebhookSecret">Secreto de webhook manual <span class="optional-label">OPCIONAL</span></label><input id="whatsappWebhookSecret" type="password" maxlength="300" placeholder="Déjalo vacío para la configuración automática" autocomplete="new-password" /><div class="hint">Sólo para un webhook creado manualmente: pega el mismo secreto de Zernio. Al dejarlo vacío, conservamos o generamos el secreto seguro automáticamente.</div></div></details>
               </form>
               <div id="whatsappSandboxPanel" class="whatsapp-sandbox-panel" hidden>
-                <div class="whatsapp-sandbox-limit" role="note"><i class="ph-bold ph-warning-circle"></i><span><b>Importante para la prueba:</b> el sandbox de Zernio sÃ³lo entrega mensajes al telÃ©fono activado y permite probar un telÃ©fono a la vez. Otro celular no dispararÃ¡ el webhook hasta que lo reemplaces y lo actives en Zernio.</span></div>
+                <div class="whatsapp-sandbox-limit" role="note"><i class="ph-bold ph-warning-circle"></i><span><b>Un teléfono de prueba a la vez:</b> el sandbox de Zernio sólo responde al teléfono que actives aquí.</span></div>
                 <div class="whatsapp-card-heading"><div><span class="whatsapp-section-kicker">Pruebas oficiales de Zernio</span><h3><i class="ph-bold ph-flask"></i> Sandbox</h3></div><span class="whatsapp-status-pill info">Sin cargos</span></div>
                 <p class="hint">Usa un teléfono real de WhatsApp. Zernio enviará la plantilla de activación y, al responder desde ese teléfono, podrás probar bot, pedidos, inventario, POS y KDS con el flujo real del negocio.</p>
                 <div class="field"><label for="whatsappSandboxPhone">Teléfono de prueba</label><input id="whatsappSandboxPhone" maxlength="20" placeholder="+52 1 555 123 4567" autocomplete="tel" /></div>
-                <div class="whatsapp-form-actions"><button class="btn btn-ghost" type="button" id="whatsappSandboxDiscoverBtn"><i class="ph-bold ph-magnifying-glass"></i> Detectar sandbox</button><button class="btn btn-primary" type="button" id="whatsappSandboxActivateBtn"><i class="ph-bold ph-paper-plane-tilt"></i> Activar teléfono</button><button class="btn btn-ghost" type="button" id="whatsappSandboxRefreshBtn"><i class="ph-bold ph-arrows-clockwise"></i> Revisar estado</button><button class="btn btn-ghost" type="button" id="whatsappSandboxStartBtn"><i class="ph-bold ph-chat-circle-dots"></i> Iniciar conversación</button><button class="btn btn-ghost" type="button" id="whatsappSandboxRevokeBtn"><i class="ph-bold ph-x-circle"></i> Revocar</button></div>
+                <div class="whatsapp-form-actions"><button class="btn btn-primary" type="button" id="whatsappSandboxActivateBtn" disabled><i class="ph-bold ph-paper-plane-tilt"></i> Activar teléfono</button><button class="btn btn-ghost" type="button" id="whatsappSandboxRefreshBtn" disabled><i class="ph-bold ph-arrows-clockwise"></i> Revisar estado</button><button class="btn btn-ghost" type="button" id="whatsappSandboxStartBtn" disabled><i class="ph-bold ph-chat-circle-dots"></i> Iniciar conversación</button></div>
+                <details class="whatsapp-advanced"><summary>Administrar prueba</summary><div class="whatsapp-form-actions"><button class="btn btn-ghost" type="button" id="whatsappSandboxDiscoverBtn" disabled><i class="ph-bold ph-magnifying-glass"></i> Actualizar sandbox</button><button class="btn btn-ghost" type="button" id="whatsappSandboxRevokeBtn" disabled><i class="ph-bold ph-x-circle"></i> Revocar sesión</button></div></details>
                 <div id="whatsappSandboxStatus" class="whatsapp-sandbox-status"><i class="ph-bold ph-info"></i><span>Guarda la API key y detecta el sandbox para comenzar.</span></div>
               </div>
             </div>
@@ -1240,7 +1229,7 @@
               <div class="whatsapp-tenant-note"><i class="ph-bold ph-info"></i><span>El tenant paga directamente Zernio y Meta. Esta vista sólo administra la conexión operativa y el canal de pedidos.</span></div>
             </div>
           </div>
-          <div class="card whatsapp-webhook-card" id="whatsappWebhookCard" hidden><div><span class="whatsapp-section-kicker">Eventos en tiempo real</span><h3><i class="ph-bold ph-webhooks-logo"></i> Webhook del tenant</h3><p class="hint">Registra esta URL en Zernio para recibir mensajes, estados y desconexiones. La URL incluye un token exclusivo de este tenant.</p></div><div class="whatsapp-webhook-copy"><code id="whatsappWebhookUrl">—</code><button class="btn btn-ghost btn-sm" id="whatsappCopyWebhookBtn" type="button"><i class="ph-bold ph-copy"></i> Copiar</button></div></div>
+          <div class="card whatsapp-webhook-card" id="whatsappWebhookCard" hidden><div><span class="whatsapp-section-kicker">Eventos en tiempo real</span><h3><i class="ph-bold ph-webhooks-logo"></i> Recepción de mensajes</h3><p id="whatsappWebhookStatus" class="hint" role="status" aria-live="polite">El webhook y su firma se configuran automáticamente al guardar.</p></div><details class="whatsapp-advanced whatsapp-webhook-details"><summary>Ver URL técnica</summary><div class="whatsapp-webhook-copy"><code id="whatsappWebhookUrl">—</code><button class="btn btn-ghost btn-sm" id="whatsappCopyWebhookBtn" type="button"><i class="ph-bold ph-copy"></i> Copiar</button></div></details></div>
           <div class="card whatsapp-customer-entry-card" id="whatsappCustomerEntryCard" hidden>
             <div class="whatsapp-card-heading"><div><span class="whatsapp-section-kicker">Comparte tu canal de pedidos</span><h3><i class="ph-bold ph-qr-code"></i> Lleva a tus clientes a WhatsApp</h3></div><span class="whatsapp-status-pill success"><i class="ph-bold ph-check-circle"></i> Listo para compartir</span></div>
             <p class="hint">Genera un QR o copia la liga para que tus clientes abran directamente el WhatsApp del negocio. El bot atenderá con el flujo configurado por este tenant.</p>
@@ -1249,6 +1238,8 @@
               <div class="whatsapp-entry-qr"><img id="whatsappCustomerQr" alt="Código QR para pedir por WhatsApp" /><small>Escanea para iniciar un pedido</small></div>
               <div class="whatsapp-entry-actions"><label for="whatsappCustomerLink">Liga directa de pedidos</label><div class="share-box whatsapp-entry-link-box"><input id="whatsappCustomerLink" type="text" readonly placeholder="Conecta un número para generar la liga" /><button class="btn btn-primary btn-sm" id="whatsappCustomerCopyBtn" type="button"><i class="ph-bold ph-copy"></i> Copiar</button></div><div class="whatsapp-form-actions"><a class="btn btn-primary" id="whatsappCustomerOpenBtn" target="_blank" rel="noopener noreferrer" href="#"><i class="ph-bold ph-whatsapp-logo"></i> Abrir WhatsApp</a><button class="btn btn-ghost" id="whatsappCustomerShareBtn" type="button"><i class="ph-bold ph-share-network"></i> Compartir</button></div><small id="whatsappCustomerEntryHint" class="hint">El enlace se genera con el número activo de Zernio.</small></div>
             </div>
+            <div class="whatsapp-form-actions"><button class="btn btn-ghost" type="button" id="whatsappSyncProfilePhotoBtn" disabled><i class="ph-bold ph-camera"></i> Sincronizar foto del negocio</button></div>
+            <div id="whatsappProfilePhotoHint" class="whatsapp-profile-photo-hint" role="note"></div>
           </div>
         </div>
 
@@ -3544,7 +3535,7 @@
 
   <script src="/socket.io/socket.io.js"></script>
   <script src="/static/vendor/qz-tray.js?v=2.3.0"></script>
-  <script src="/static/js/whatsapp.js?v=20260926-sandbox"></script>
+  <script src="/static/js/whatsapp.js?v=20260928-zernio-setup"></script>
   <script src="/static/js/app.js?v=20260921-scheduled-orders"></script>
 </body>
 </html>
