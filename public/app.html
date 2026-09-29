@@ -11,7 +11,7 @@
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/fill/style.css" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/duotone/style.css" />
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-  <link rel="stylesheet" href="/static/css/styles.css?v=20260928-catalog-barcodes" />
+  <link rel="stylesheet" href="/static/css/styles.css?v=20260929-qr-pdf" />
   <link rel="icon" type="image/svg+xml" href="/static/favicon.svg" />
   <link rel="icon" type="image/png" href="/static/chatbotpro100.png" />
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
@@ -812,6 +812,7 @@
             <div class="qr-box">
               <img id="qrImg" alt="Código QR de tu chatbot" />
               <span>Escanéame</span>
+              <button type="button" class="btn btn-primary btn-sm qr-pdf-trigger" id="chatbotQrDownloadBtn" data-qr-source="chatbot"><i class="ph-bold ph-download-simple"></i> Descargar PDF</button>
             </div>
           </div>
         </div>
@@ -1235,7 +1236,7 @@
             <p class="hint">Genera un QR o copia la liga para que tus clientes abran directamente el WhatsApp del negocio. El bot atenderá con el flujo configurado por este tenant.</p>
             <div class="whatsapp-customer-entry-grid">
               <div class="whatsapp-entry-preview"><div class="whatsapp-entry-fab"><img id="whatsappCustomerEntryLogo" alt="" hidden /><i id="whatsappCustomerEntryLogoFallback" class="ph-fill ph-whatsapp-logo"></i></div><b id="whatsappCustomerEntryBusiness">Pide por WhatsApp</b><span id="whatsappCustomerEntryNumber">Número pendiente</span></div>
-              <div class="whatsapp-entry-qr"><img id="whatsappCustomerQr" alt="Código QR para pedir por WhatsApp" /><small>Escanea para iniciar un pedido</small></div>
+              <div class="whatsapp-entry-qr"><img id="whatsappCustomerQr" alt="Código QR para pedir por WhatsApp" /><small>Escanea para iniciar un pedido</small><button type="button" class="btn btn-primary btn-sm qr-pdf-trigger" id="whatsappQrDownloadBtn" data-qr-source="whatsapp"><i class="ph-bold ph-download-simple"></i> Descargar PDF</button></div>
               <div class="whatsapp-entry-actions"><label for="whatsappCustomerLink">Liga directa de pedidos</label><div class="share-box whatsapp-entry-link-box"><input id="whatsappCustomerLink" type="text" readonly placeholder="Conecta un número para generar la liga" /><button class="btn btn-primary btn-sm" id="whatsappCustomerCopyBtn" type="button"><i class="ph-bold ph-copy"></i> Copiar</button></div><div class="whatsapp-form-actions"><a class="btn btn-primary" id="whatsappCustomerOpenBtn" target="_blank" rel="noopener noreferrer" href="#"><i class="ph-bold ph-whatsapp-logo"></i> Abrir WhatsApp</a><button class="btn btn-ghost" id="whatsappCustomerShareBtn" type="button"><i class="ph-bold ph-share-network"></i> Compartir</button></div><small id="whatsappCustomerEntryHint" class="hint">El enlace se genera con el número activo de Zernio.</small></div>
             </div>
             <div class="whatsapp-form-actions"><button class="btn btn-ghost" type="button" id="whatsappSyncProfilePhotoBtn" disabled><i class="ph-bold ph-camera"></i> Sincronizar foto del negocio</button></div>
@@ -3259,6 +3260,28 @@
     </div>
   </div>
 
+  <div class="modal-bg qr-download-modal-bg" id="qrPdfDownloadModal">
+    <section class="modal qr-download-modal" role="dialog" aria-modal="true" aria-labelledby="qrPdfTitle">
+      <div class="qr-download-modal-head"><div><span class="qr-download-kicker">LISTO PARA IMPRIMIR</span><h3 id="qrPdfTitle"><i class="ph-bold ph-qr-code"></i> Descargar códigos QR</h3></div><button type="button" class="btn btn-ghost btn-sm" id="qrPdfClose" aria-label="Cerrar"><i class="ph-bold ph-x"></i></button></div>
+      <p class="hint">Elige el canal y cómo acomodar los códigos en tu hoja PDF.</p>
+      <fieldset class="qr-pdf-mode-picker"><legend>Formato de descarga</legend>
+        <label class="qr-pdf-option"><input type="radio" name="qrPdfMode" value="single" checked /><span><b>Un solo QR</b><small>Una página con el código grande para imprimir o compartir.</small></span></label>
+        <label class="qr-pdf-option"><input type="radio" name="qrPdfMode" value="sheet" /><span><b>Varios QR en una hoja</b><small>Coloca los códigos del chatbot y WhatsApp en la misma página.</small></span></label>
+      </fieldset>
+      <fieldset class="qr-pdf-source-picker" id="qrPdfSingleSources"><legend>¿Qué canal quieres descargar?</legend>
+        <label class="qr-pdf-option"><input type="radio" name="qrPdfSingleSource" value="chatbot" /><span><b>Mi chatbot</b><small>Abre la liga para hacer pedidos en línea.</small></span></label>
+        <label class="qr-pdf-option"><input type="radio" name="qrPdfSingleSource" value="whatsapp" /><span><b>WhatsApp</b><small>Abre el chat del negocio con el mensaje de pedido.</small></span></label>
+      </fieldset>
+      <fieldset class="qr-pdf-source-picker" id="qrPdfSheetSources" hidden>
+        <legend>QR que incluirás en la hoja</legend>
+        <label class="qr-pdf-option"><input type="checkbox" id="qrPdfIncludeChatbot" checked /><span><b>Mi chatbot</b><small>Liga para pedidos en línea.</small></span></label>
+        <label class="qr-pdf-option"><input type="checkbox" id="qrPdfIncludeWhatsApp" checked /><span><b>WhatsApp</b><small>Chat directo con el negocio.</small></span></label>
+      </fieldset>
+      <div class="qr-pdf-status" id="qrPdfStatus" role="status" aria-live="polite"></div>
+      <div class="modal-actions"><button type="button" class="btn btn-ghost" id="qrPdfCancel">Cancelar</button><button type="button" class="btn btn-primary" id="qrPdfCreate"><i class="ph-bold ph-download-simple"></i> Descargar PDF</button></div>
+    </section>
+  </div>
+
   <div class="modal-bg" id="suspensionModal">
     <div class="modal" style="max-width:460px;text-align:center">
       <div style="width:64px;height:64px;border-radius:20px;background:var(--amber-soft);display:flex;align-items:center;justify-content:center;margin:0 auto 16px">
@@ -3544,6 +3567,6 @@
   <script src="/socket.io/socket.io.js"></script>
   <script src="/static/vendor/qz-tray.js?v=2.3.0"></script>
   <script src="/static/js/whatsapp.js?v=20260928-zernio-setup"></script>
-  <script src="/static/js/app.js?v=20260928-catalog-barcodes"></script>
+  <script src="/static/js/app.js?v=20260929-qr-pdf"></script>
 </body>
 </html>

@@ -6809,6 +6809,27 @@ select.status-sel {
   margin: 0;
   line-height: 1.5;
 }
+.qr-pdf-trigger { width:100%; justify-content:center; margin-top:9px; white-space:nowrap; }
+.whatsapp-entry-qr .qr-pdf-trigger { margin-top:3px; }
+.qr-download-modal-bg { z-index:1200; padding:18px; }
+.qr-download-modal { width:min(560px,100%); max-height:min(90vh,760px); overflow-y:auto; margin:auto; }
+.qr-download-modal-head { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; }
+.qr-download-modal-head h3 { margin:4px 0 8px; }
+.qr-download-kicker { color:var(--primary); font-size:10px; font-weight:900; letter-spacing:.1em; }
+.qr-pdf-mode-picker,.qr-pdf-source-picker { display:grid; gap:8px; min-width:0; margin:15px 0; padding:12px; border:1px solid var(--line); border-radius:14px; }
+.qr-pdf-mode-picker legend,.qr-pdf-source-picker legend { padding:0 5px; font-size:12px; font-weight:800; }
+.qr-pdf-option { display:flex; align-items:flex-start; gap:10px; padding:11px; border:1px solid #e2e8f0; border-radius:11px; background:#fff; cursor:pointer; }
+.qr-pdf-option:has(input:checked) { border-color:var(--primary); background:color-mix(in srgb,var(--primary) 6%,white); }
+.qr-pdf-option.disabled { opacity:.55; cursor:not-allowed; }
+.qr-pdf-source-picker[hidden] { display:none; }
+.qr-pdf-option input { width:17px; height:17px; flex:0 0 auto; margin-top:2px; accent-color:var(--primary); }
+.qr-pdf-option span { display:grid; gap:3px; }
+.qr-pdf-option b { font-size:12px; }
+.qr-pdf-option small { color:var(--ink-3); font-size:11px; line-height:1.4; }
+.qr-pdf-status { min-height:20px; color:#b42318; font-size:12px; }
+.qr-pdf-status:empty { display:none; }
+.qr-download-modal .modal-actions { flex-wrap:wrap; }
+.qr-download-modal .modal-actions button { min-height:42px; }
 .ai-promo-controls {
   padding: 16px;
   border-radius: 14px;
@@ -6965,6 +6986,10 @@ select.status-sel {
     width: 138px;
     height: 138px;
   }
+  .qr-download-modal-bg { align-items:flex-end; padding:0; }
+  .qr-download-modal { width:100%; max-height:92vh; padding:20px 16px calc(18px + env(safe-area-inset-bottom)); border-radius:22px 22px 0 0; }
+  .qr-download-modal .modal-actions { position:sticky; bottom:calc(-18px - env(safe-area-inset-bottom)); margin:12px -16px calc(-18px - env(safe-area-inset-bottom))!important; padding:12px 16px calc(15px + env(safe-area-inset-bottom)); background:#fff; border-top:1px solid var(--line); }
+  .qr-download-modal .modal-actions button { flex:1 1 130px; }
 }
 
 /* ---------- Toggle switch ---------- */

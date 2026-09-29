@@ -11283,6 +11283,190 @@ function initDeliveryZoneModuleEvents() {
   });
 }
 
+function getTenantQrDownloadSources() {
+  const chatbotUrl = String($('#chatLink')?.value || (SETTINGS?.slug ? `${location.origin}/${SETTINGS.slug}` : '')).trim();
+  const whatsappUrl = String($('#whatsappCustomerLink')?.value || '').trim();
+  return [
+    { key: 'chatbot', label: 'Mi chatbot', url: chatbotUrl },
+    { key: 'whatsapp', label: 'WhatsApp', url: whatsappUrl },
+  ];
+}
+
+function updateQrPdfMode() {
+  const mode = $('input[name="qrPdfMode"]:checked')?.value || 'single';
+  $('#qrPdfSingleSources').hidden = mode !== 'single';
+  $('#qrPdfSheetSources').hidden = mode !== 'sheet';
+}
+
+function openTenantQrPdfDialog(preferredSource = 'chatbot') {
+  const sources = getTenantQrDownloadSources();
+  const available = new Set(sources.filter((source) => source.url).map((source) => source.key));
+  if (!available.size) return toast('No hay ligas disponibles para crear códigos QR.', true);
+
+  const singleMode = $('input[name="qrPdfMode"][value="single"]');
+  if (singleMode) singleMode.checked = true;
+  const singleSource = available.has(preferredSource) ? preferredSource : available.has('chatbot') ? 'chatbot' : 'whatsapp';
+  for (const source of sources) {
+    const one = $(`input[name="qrPdfSingleSource"][value="${source.key}"]`);
+    const many = $(`#qrPdfInclude${source.key === 'chatbot' ? 'Chatbot' : 'WhatsApp'}`);
+    one.disabled = !source.url;
+    one.checked = source.key === singleSource;
+    many.disabled = !source.url;
+    many.checked = Boolean(source.url);
+  }
+  const sheetMode = $('input[name="qrPdfMode"][value="sheet"]');
+  sheetMode.disabled = available.size < 2;
+  sheetMode.closest('.qr-pdf-option')?.classList.toggle('disabled', sheetMode.disabled);
+  $('#qrPdfStatus').textContent = sheetMode.disabled
+    ? 'Para descargar varios QR en una hoja, configura también el canal de WhatsApp.' : '';
+  $('#qrPdfCreate').disabled = false;
+  $('#qrPdfCreate').innerHTML = '<i class="ph-bold ph-download-simple"></i> Descargar PDF';
+  updateQrPdfMode();
+  $('#qrPdfDownloadModal').classList.add('show');
+  $('#qrPdfClose').focus();
+}
+
+async function fetchTenantQrPng(value) {
+  const endpoint = new URL('https://api.qrserver.com/v1/create-qr-code/');
+  endpoint.searchParams.set('size', '1000x1000');
+  endpoint.searchParams.set('format', 'png');
+  endpoint.searchParams.set('margin', '20');
+  endpoint.searchParams.set('ecc', 'M');
+  endpoint.searchParams.set('data', value);
+  const response = await fetch(endpoint, {
+    mode: 'cors', credentials: 'omit', cache: 'force-cache',
+    signal: AbortSignal.timeout(15000),
+  });
+  if (!response.ok || !String(response.headers.get('content-type') || '').toLowerCase().includes('image/png')) {
+    throw new Error('No se pudo generar uno de los códigos QR.');
+  }
+  const image = await response.arrayBuffer();
+  const view = new DataView(image);
+  if (image.byteLength < 100 || image.byteLength > 2 * 1024 * 1024
+      || view.getUint32(0) !== 0x89504e47 || view.getUint32(16) < 500 || view.getUint32(20) < 500) {
+    throw new Error('El generador devolvió un código QR incompleto. Inténtalo nuevamente.');
+  }
+  return new Uint8Array(image);
+}
+
+function tenantQrPdfFilename() {
+  const name = String(ME?.tenant?.businessName || SETTINGS?.business_name || 'Mi negocio')
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-zA-Z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 50);
+  return `QR_${name || 'Mi_negocio'}.pdf`;
+}
+
+async function downloadTenantQrPdf() {
+  const status = $('#qrPdfStatus');
+  const button = $('#qrPdfCreate');
+  if (!globalThis.jspdf?.jsPDF) {
+    status.textContent = 'No se pudo cargar la función de PDF. Recarga el panel e inténtalo nuevamente.';
+    return;
+  }
+
+  const available = getTenantQrDownloadSources();
+  const mode = $('input[name="qrPdfMode"]:checked')?.value || 'single';
+  const selected = mode === 'sheet'
+    ? available.filter((source) => $(`#qrPdfInclude${source.key === 'chatbot' ? 'Chatbot' : 'WhatsApp'}`).checked)
+    : [available.find((source) => source.key === $('input[name="qrPdfSingleSource"]:checked')?.value)].filter(Boolean);
+  if (mode === 'sheet' && selected.length < 2) {
+    status.textContent = 'Selecciona los dos canales para acomodar varios QR en una hoja.';
+    return;
+  }
+  if (!selected.length || selected.some((source) => !source.url)) {
+    status.textContent = 'El canal seleccionado aún no tiene una liga disponible.';
+    return;
+  }
+
+  button.disabled = true;
+  button.innerHTML = '<i class="ph-bold ph-spinner-gap"></i> Preparando PDF…';
+  status.textContent = 'Preparando códigos QR de alta resolución…';
+  try {
+    const images = await Promise.all(selected.map((source) => fetchTenantQrPng(source.url)));
+    const doc = new globalThis.jspdf.jsPDF({ orientation: 'portrait', unit: 'mm', format: 'letter', compress: true });
+    const width = doc.internal.pageSize.getWidth();
+    const height = doc.internal.pageSize.getHeight();
+    const businessName = String(ME?.tenant?.businessName || SETTINGS?.business_name || 'Mi negocio').trim().slice(0, 90);
+    const textColor = [22, 39, 69];
+
+    doc.setTextColor(...textColor);
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(19);
+    doc.text(businessName, width / 2, 21, { align: 'center', maxWidth: width - 30 });
+    doc.setFontSize(mode === 'single' ? 13 : 15);
+    doc.text(mode === 'single' ? `Pide por ${selected[0].label}` : 'Elige cómo quieres hacer tu pedido', width / 2, 31, { align: 'center' });
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(9);
+    doc.setTextColor(95, 110, 132);
+
+    if (mode === 'single') {
+      const qrSize = 112;
+      const x = (width - qrSize) / 2;
+      doc.setDrawColor(222, 229, 239);
+      doc.setLineWidth(0.5);
+      doc.roundedRect(x - 9, 42, qrSize + 18, 161, 5, 5, 'S');
+      doc.addImage(images[0], 'PNG', x, 54, qrSize, qrSize, `tenant-qr-${selected[0].key}`, 'FAST');
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(13);
+      doc.setTextColor(...textColor);
+      doc.text('Escanea el código con la cámara de tu celular', width / 2, 177, { align: 'center' });
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(8);
+      doc.setTextColor(95, 110, 132);
+      doc.text(doc.splitTextToSize(selected[0].url, width - 42), width / 2, 191, { align: 'center' });
+    } else {
+      const cardWidth = 92;
+      const cardGap = 8;
+      const left = (width - (cardWidth * 2 + cardGap)) / 2;
+      const qrSize = 72;
+      selected.forEach((source, index) => {
+        const cardX = left + index * (cardWidth + cardGap);
+        const qrX = cardX + (cardWidth - qrSize) / 2;
+        doc.setDrawColor(222, 229, 239);
+        doc.setLineWidth(0.5);
+        doc.roundedRect(cardX, 49, cardWidth, 151, 5, 5, 'S');
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(12);
+        doc.setTextColor(...textColor);
+        doc.text(source.label, cardX + cardWidth / 2, 63, { align: 'center', maxWidth: cardWidth - 12 });
+        doc.addImage(images[index], 'PNG', qrX, 72, qrSize, qrSize, `tenant-qr-${source.key}`, 'FAST');
+        doc.setFont('helvetica', 'normal');
+        doc.setFontSize(8);
+        doc.setTextColor(95, 110, 132);
+        doc.text('Escanea para pedir', cardX + cardWidth / 2, 154, { align: 'center' });
+        doc.text(doc.splitTextToSize(source.url, cardWidth - 12), cardX + cardWidth / 2, 166, { align: 'center' });
+      });
+    }
+
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(8);
+    doc.setTextColor(130, 141, 158);
+    doc.text('Códigos QR de pedido · ChatBotPro', width / 2, height - 15, { align: 'center' });
+    doc.save(tenantQrPdfFilename());
+    status.textContent = 'PDF descargado. Está listo para imprimir o compartir.';
+    toast(`PDF de ${selected.length} QR${selected.length === 1 ? '' : 's'} descargado`);
+    setTimeout(() => $('#qrPdfDownloadModal')?.classList.remove('show'), 500);
+  } catch (error) {
+    status.textContent = error?.name === 'TimeoutError'
+      ? 'La preparación tardó demasiado. Verifica tu conexión e inténtalo nuevamente.'
+      : 'No se pudo preparar el PDF. Revisa tu conexión e inténtalo nuevamente.';
+  } finally {
+    button.disabled = false;
+    button.innerHTML = '<i class="ph-bold ph-download-simple"></i> Descargar PDF';
+  }
+}
+
+$('#chatbotQrDownloadBtn')?.addEventListener('click', () => openTenantQrPdfDialog('chatbot'));
+$('#whatsappQrDownloadBtn')?.addEventListener('click', () => openTenantQrPdfDialog('whatsapp'));
+document.querySelectorAll('input[name="qrPdfMode"]').forEach((input) => input.addEventListener('change', updateQrPdfMode));
+$('#qrPdfCreate')?.addEventListener('click', () => downloadTenantQrPdf());
+['qrPdfClose', 'qrPdfCancel'].forEach((id) => $(`#${id}`)?.addEventListener('click', () => $('#qrPdfDownloadModal').classList.remove('show')));
+$('#qrPdfDownloadModal')?.addEventListener('click', (event) => {
+  if (event.target === $('#qrPdfDownloadModal')) $('#qrPdfDownloadModal').classList.remove('show');
+});
+document.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape') $('#qrPdfDownloadModal')?.classList.remove('show');
+});
+
 async function fillBotForm() {
   if (!SETTINGS) return;
   const link = `${location.origin}/${SETTINGS.slug}`;

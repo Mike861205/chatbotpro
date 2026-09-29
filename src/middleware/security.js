@@ -10,7 +10,7 @@ function securityHeaders() {
       directives: {
         defaultSrc: ["'self'"],
         baseUri: ["'self'"],
-        connectSrc: ["'self'", 'ws:', 'wss:'],
+        connectSrc: ["'self'", 'ws:', 'wss:', 'https://api.qrserver.com'],
         fontSrc: ["'self'", 'data:', 'https://fonts.gstatic.com', 'https://cdn.jsdelivr.net'],
         formAction: ["'self'"],
         frameAncestors: ["'self'"],
