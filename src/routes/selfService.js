@@ -262,7 +262,7 @@ async function normalizeKioskItems(tenantDb, requestedItems) {
   const ids = [...new Set(input.map((item) => Number(item.productId || item.id)).filter((id) => Number.isInteger(id) && id > 0))];
   if (!ids.length) throw Object.assign(new Error('Los productos seleccionados no son válidos'), { status: 400 });
   const products = await tenantDb.all(
-    'SELECT id,name,price::float AS price,active,sale_days FROM {s}.products WHERE id=ANY($1::int[])',
+    'SELECT id,name,price::float AS price,active,sale_days,sar_tax_category FROM {s}.products WHERE id=ANY($1::int[])',
     [ids]
   );
   const productById = new Map(products.map((row) => [Number(row.id), row]));
@@ -319,6 +319,7 @@ async function normalizeKioskItems(tenantDb, requestedItems) {
       name: `${product.name}${variant ? ` · ${variant.name}` : ''}`,
       price: unitPrice,
       qty,
+      sarTaxCategory: product.sar_tax_category || '',
       ...productTaxLineSnapshot(unitPrice, taxConfig),
       variantId: variant ? Number(variant.id) : null,
       variantName: variant?.name || null,

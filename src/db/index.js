@@ -626,6 +626,7 @@ async function createTenantSchema(slug) {
     ALTER TABLE "${s}".products ADD COLUMN IF NOT EXISTS unit_cost NUMERIC(12,4) DEFAULT 0;
     ALTER TABLE "${s}".products ADD COLUMN IF NOT EXISTS sale_days TEXT NOT NULL DEFAULT '[]';
     ALTER TABLE "${s}".products ADD COLUMN IF NOT EXISTS barcode TEXT;
+    ALTER TABLE "${s}".products ADD COLUMN IF NOT EXISTS sar_tax_category TEXT NOT NULL DEFAULT '';
     CREATE UNIQUE INDEX IF NOT EXISTS idx_${s}_products_barcode
       ON "${s}".products(barcode) WHERE barcode IS NOT NULL AND barcode <> '';
     CREATE TABLE IF NOT EXISTS "${s}".restaurant_tables (
@@ -1573,6 +1574,121 @@ async function createTenantSchema(slug) {
       created_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
     CREATE INDEX IF NOT EXISTS idx_${s}_global_invoice_events_invoice ON "${s}".global_invoice_events(global_invoice_id, created_at DESC);
+
+    CREATE TABLE IF NOT EXISTS "${s}".sar_profiles (
+      id SMALLINT PRIMARY KEY DEFAULT 1 CHECK (id=1),
+      rtn TEXT NOT NULL DEFAULT '', legal_name TEXT NOT NULL DEFAULT '', trade_name TEXT NOT NULL DEFAULT '',
+      address TEXT NOT NULL DEFAULT '', phone TEXT NOT NULL DEFAULT '',
+      delivery_tax_category TEXT NOT NULL DEFAULT '',
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+    ALTER TABLE "${s}".orders ADD COLUMN IF NOT EXISTS sar_exoneration_enc TEXT;
+    ALTER TABLE "${s}".orders ADD COLUMN IF NOT EXISTS sar_exoneration_proof_name TEXT NOT NULL DEFAULT '';
+    ALTER TABLE "${s}".orders ADD COLUMN IF NOT EXISTS sar_exoneration_proof_pdf BYTEA;
+    ALTER TABLE "${s}".orders ADD COLUMN IF NOT EXISTS sar_delivery_exonerated BOOLEAN NOT NULL DEFAULT FALSE;
+    ALTER TABLE "${s}".orders ADD COLUMN IF NOT EXISTS sar_credit_adjustment_total NUMERIC(12,2) NOT NULL DEFAULT 0;
+    ALTER TABLE "${s}".orders ADD COLUMN IF NOT EXISTS sar_credit_adjusted_at TIMESTAMPTZ;
+    ALTER TABLE "${s}".orders ADD COLUMN IF NOT EXISTS sar_credit_adjusted_by TEXT NOT NULL DEFAULT '';
+    CREATE TABLE IF NOT EXISTS "${s}".sar_authorizations (
+      id BIGSERIAL PRIMARY KEY,
+      branch_id INTEGER,
+      cai TEXT NOT NULL, establishment TEXT NOT NULL, emission_point TEXT NOT NULL,
+      emitter_signature TEXT NOT NULL DEFAULT '',
+      document_type TEXT NOT NULL DEFAULT '01', range_start INTEGER NOT NULL,
+      range_end INTEGER NOT NULL, next_number INTEGER NOT NULL,
+      expires_on DATE NOT NULL, status TEXT NOT NULL DEFAULT 'active',
+      source_name TEXT NOT NULL DEFAULT '', source_pdf BYTEA,
+      created_by TEXT NOT NULL DEFAULT '', created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      CHECK (range_start > 0 AND range_end >= range_start AND next_number >= range_start AND next_number <= range_end + 1),
+      CHECK (status IN ('active','suspended','invalid'))
+    );
+    ALTER TABLE "${s}".sar_authorizations ADD COLUMN IF NOT EXISTS branch_id INTEGER;
+    ALTER TABLE "${s}".sar_authorizations ADD COLUMN IF NOT EXISTS emitter_signature TEXT NOT NULL DEFAULT '';
+    ALTER TABLE "${s}".sar_authorizations DROP CONSTRAINT IF EXISTS sar_authorizations_status_check;
+    ALTER TABLE "${s}".sar_authorizations ADD CONSTRAINT sar_authorizations_status_check CHECK (status IN ('active','suspended','invalid'));
+    CREATE INDEX IF NOT EXISTS idx_${s}_sar_auth_lookup ON "${s}".sar_authorizations(establishment,emission_point,document_type,status,range_start);
+    CREATE TABLE IF NOT EXISTS "${s}".sar_documents (
+      id BIGSERIAL PRIMARY KEY, order_id INTEGER NOT NULL REFERENCES "${s}".orders(id),
+      authorization_id BIGINT NOT NULL REFERENCES "${s}".sar_authorizations(id),
+      document_number TEXT NOT NULL, sequential INTEGER NOT NULL,
+      status TEXT NOT NULL DEFAULT 'issued' CHECK (status IN ('issued','annulled')),
+      receiver_enc TEXT NOT NULL, snapshot_enc TEXT NOT NULL,
+      issued_by TEXT NOT NULL DEFAULT '', issued_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      annul_reason TEXT NOT NULL DEFAULT '', annulled_by TEXT NOT NULL DEFAULT '', annulled_at TIMESTAMPTZ,
+      UNIQUE(document_number)
+    );
+    ALTER TABLE "${s}".sar_documents DROP CONSTRAINT IF EXISTS sar_documents_order_id_key;
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_${s}_sar_one_issued_per_order ON "${s}".sar_documents(order_id) WHERE status='issued';
+    CREATE INDEX IF NOT EXISTS idx_${s}_sar_docs_issued ON "${s}".sar_documents(issued_at DESC,id DESC);
+    CREATE TABLE IF NOT EXISTS "${s}".sar_credit_notes (
+      id BIGSERIAL PRIMARY KEY, original_document_id BIGINT NOT NULL REFERENCES "${s}".sar_documents(id),
+      authorization_id BIGINT NOT NULL REFERENCES "${s}".sar_authorizations(id),
+      document_number TEXT NOT NULL UNIQUE, sequential INTEGER NOT NULL,
+      status TEXT NOT NULL DEFAULT 'issued' CHECK (status IN ('issued','annulled')),
+      reason TEXT NOT NULL, snapshot_enc TEXT NOT NULL,
+      refund_method TEXT NOT NULL DEFAULT '', refund_reference TEXT NOT NULL DEFAULT '',
+      refund_status TEXT NOT NULL DEFAULT 'pending' CHECK (refund_status IN ('pending','completed')),
+      refund_at TIMESTAMPTZ, cash_movement_id INTEGER, restocked BOOLEAN NOT NULL DEFAULT FALSE,
+      issued_by TEXT NOT NULL DEFAULT '', issued_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      annul_reason TEXT NOT NULL DEFAULT '', annulled_by TEXT NOT NULL DEFAULT '', annulled_at TIMESTAMPTZ
+    );
+    CREATE INDEX IF NOT EXISTS idx_${s}_sar_credit_original ON "${s}".sar_credit_notes(original_document_id,issued_at);
+    CREATE TABLE IF NOT EXISTS "${s}".sar_purchase_documents (
+      id BIGSERIAL PRIMARY KEY, purchase_order_id INTEGER REFERENCES "${s}".purchase_orders(id) ON DELETE SET NULL,
+      supplier_name TEXT NOT NULL, supplier_rtn TEXT NOT NULL DEFAULT '',
+      cai TEXT NOT NULL DEFAULT '', document_number TEXT NOT NULL,
+      issued_on DATE NOT NULL, exempt_amount NUMERIC(14,2) NOT NULL DEFAULT 0,
+      taxable_15 NUMERIC(14,2) NOT NULL DEFAULT 0, isv_15 NUMERIC(14,2) NOT NULL DEFAULT 0,
+      taxable_18 NUMERIC(14,2) NOT NULL DEFAULT 0, isv_18 NUMERIC(14,2) NOT NULL DEFAULT 0,
+      total NUMERIC(14,2) NOT NULL, notes TEXT NOT NULL DEFAULT '',
+      source_name TEXT NOT NULL DEFAULT '', source_pdf BYTEA,
+      status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','void')),
+      void_reason TEXT NOT NULL DEFAULT '', voided_at TIMESTAMPTZ, voided_by TEXT NOT NULL DEFAULT '',
+      created_by TEXT NOT NULL DEFAULT '', created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      CHECK (total >= 0)
+    );
+    ALTER TABLE "${s}".sar_purchase_documents ADD COLUMN IF NOT EXISTS source_name TEXT NOT NULL DEFAULT '';
+    ALTER TABLE "${s}".sar_purchase_documents ADD COLUMN IF NOT EXISTS source_pdf BYTEA;
+    ALTER TABLE "${s}".sar_purchase_documents ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'active';
+    ALTER TABLE "${s}".sar_purchase_documents ADD COLUMN IF NOT EXISTS void_reason TEXT NOT NULL DEFAULT '';
+    ALTER TABLE "${s}".sar_purchase_documents ADD COLUMN IF NOT EXISTS voided_at TIMESTAMPTZ;
+    ALTER TABLE "${s}".sar_purchase_documents ADD COLUMN IF NOT EXISTS voided_by TEXT NOT NULL DEFAULT '';
+    ALTER TABLE "${s}".sar_purchase_documents ADD COLUMN IF NOT EXISTS accounted_on DATE;
+    ALTER TABLE "${s}".sar_purchase_documents ADD COLUMN IF NOT EXISTS document_type TEXT NOT NULL DEFAULT '01';
+    ALTER TABLE "${s}".sar_purchase_documents ADD COLUMN IF NOT EXISTS original_purchase_id BIGINT REFERENCES "${s}".sar_purchase_documents(id);
+    ALTER TABLE "${s}".sar_purchase_documents ADD COLUMN IF NOT EXISTS exonerated_amount NUMERIC(14,2) NOT NULL DEFAULT 0;
+    ALTER TABLE "${s}".sar_purchase_documents ADD COLUMN IF NOT EXISTS creditable_isv_15 NUMERIC(14,2) NOT NULL DEFAULT 0;
+    ALTER TABLE "${s}".sar_purchase_documents ADD COLUMN IF NOT EXISTS creditable_isv_18 NUMERIC(14,2) NOT NULL DEFAULT 0;
+    ALTER TABLE "${s}".sar_purchase_documents ADD COLUMN IF NOT EXISTS oce_number TEXT NOT NULL DEFAULT '';
+    ALTER TABLE "${s}".sar_purchase_documents ADD COLUMN IF NOT EXISTS exemption_resolution TEXT NOT NULL DEFAULT '';
+    ALTER TABLE "${s}".sar_purchase_documents DROP CONSTRAINT IF EXISTS sar_purchase_documents_supplier_rtn_document_number_key;
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_${s}_sar_purchase_active_unique ON "${s}".sar_purchase_documents(supplier_rtn,document_number) WHERE status='active';
+    CREATE INDEX IF NOT EXISTS idx_${s}_sar_purchase_original ON "${s}".sar_purchase_documents(original_purchase_id,status);
+    CREATE INDEX IF NOT EXISTS idx_${s}_sar_purchase_date ON "${s}".sar_purchase_documents(issued_on DESC,id DESC);
+    CREATE TABLE IF NOT EXISTS "${s}".sar_events (
+      id BIGSERIAL PRIMARY KEY, subject_type TEXT NOT NULL, subject_id BIGINT NOT NULL,
+      event_type TEXT NOT NULL, detail TEXT NOT NULL DEFAULT '', actor TEXT NOT NULL DEFAULT '',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+    CREATE TABLE IF NOT EXISTS "${s}".sar_filings (
+      id BIGSERIAL PRIMARY KEY, period CHAR(7) NOT NULL, filing_type TEXT NOT NULL CHECK (filing_type IN ('ISV201','DMC')),
+      status TEXT NOT NULL DEFAULT 'filed' CHECK (status IN ('filed','superseded')),
+      source_hash TEXT NOT NULL, receipt_number TEXT NOT NULL, filed_on DATE NOT NULL,
+      receipt_name TEXT NOT NULL, receipt_pdf BYTEA NOT NULL,
+      notes TEXT NOT NULL DEFAULT '', filed_by TEXT NOT NULL DEFAULT '', created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS idx_${s}_sar_filings_period ON "${s}".sar_filings(period,filing_type,created_at DESC);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_${s}_sar_filings_current ON "${s}".sar_filings(period,filing_type) WHERE status='filed';
+    CREATE TABLE IF NOT EXISTS "${s}".sar_period_adjustments (
+      id BIGSERIAL PRIMARY KEY, period CHAR(7) NOT NULL,
+      adjustment_type TEXT NOT NULL CHECK (adjustment_type IN ('prior_excess','period_payment','compensation','credit_transfer','retained_state','retained_agreement','retained_card')),
+      amount NUMERIC(14,2) NOT NULL CHECK (amount>0), reference TEXT NOT NULL,
+      proof_name TEXT NOT NULL, proof_pdf BYTEA NOT NULL,
+      status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','void')),
+      void_reason TEXT NOT NULL DEFAULT '', voided_by TEXT NOT NULL DEFAULT '', voided_at TIMESTAMPTZ,
+      created_by TEXT NOT NULL DEFAULT '', created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS idx_${s}_sar_adjustments_period ON "${s}".sar_period_adjustments(period,status);
   `);
   if (config.FACTURAMA_PRODUCTION_RFC) {
     await q(

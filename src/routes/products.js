@@ -532,7 +532,7 @@ router.get('/', async (req, res, next) => {
   try {
     const rows = await req.tdb.all(
       `SELECT p.id, p.category_id, p.name, p.description, p.price::float AS price, p.image, p.active, p.sale_days, p.barcode,
-              p.sat_product_code, p.sat_unit_code, p.sat_unit_name, p.tax_object,
+              p.sat_product_code, p.sat_unit_code, p.sat_unit_name, p.tax_object, p.sar_tax_category,
               p.iva_rate::float AS iva_rate, p.isr_rate::float AS isr_rate,
               c.name AS category_name
        FROM {s}.products p
@@ -1170,6 +1170,8 @@ router.post('/', upload.single('image'), async (req, res, next) => {
     if (!isValidProductBarcode(barcode)) throw Object.assign(new Error('El código de barras debe tener de 3 a 64 letras, números o . _ - /.'), { status: 400 });
     await assertBarcodeAvailable(req.tdb, barcode);
     const fiscal = normalizeProductFiscal(req.body || {});
+    const sarCategory = req.tenant.phone_country === 'HN' ? String(req.body?.sarTaxCategory || '') : '';
+    if (sarCategory && !['exempt', 'tax15', 'tax18'].includes(sarCategory)) throw Object.assign(new Error('Categoría ISV de Honduras inválida'), { status: 400 });
     const saleDays = normalizeProductSaleDays(req.body?.saleDays, { strict: true });
     if (!name || !name.trim() || price === undefined || price === '') {
       throw Object.assign(new Error('Nombre y precio son obligatorios'), { status: 400 });
@@ -1177,10 +1179,10 @@ router.post('/', upload.single('image'), async (req, res, next) => {
     img = req.file ? await optimizeUploadedImage(req.file, { scope: req.tenant.slug, outputPrefix: 'prod' }) : null;
     const row = await req.tdb.get(
       `INSERT INTO {s}.products
-       (name,description,price,category_id,image,active,sale_days,barcode,sat_product_code,sat_unit_code,sat_unit_name,tax_object,iva_rate,isr_rate)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) RETURNING id`,
+       (name,description,price,category_id,image,active,sale_days,barcode,sat_product_code,sat_unit_code,sat_unit_name,tax_object,iva_rate,isr_rate,sar_tax_category)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) RETURNING id`,
       [name.trim(), description || '', Number(price) || 0, categoryId || null, img, active === '0' ? 0 : 1,
-        JSON.stringify(saleDays), barcode, fiscal.productCode, fiscal.unitCode, fiscal.unitName, fiscal.taxObject, fiscal.ivaRate, fiscal.isrRate]
+        JSON.stringify(saleDays), barcode, fiscal.productCode, fiscal.unitCode, fiscal.unitName, fiscal.taxObject, fiscal.ivaRate, fiscal.isrRate, sarCategory]
     );
     res.json(row);
   } catch (e) {
@@ -1204,13 +1206,15 @@ router.put('/:id', upload.single('image'), async (req, res, next) => {
     if (!isValidProductBarcode(barcode)) throw Object.assign(new Error('El código de barras debe tener de 3 a 64 letras, números o . _ - /.'), { status: 400 });
     await assertBarcodeAvailable(req.tdb, barcode, req.params.id);
     const fiscal = normalizeProductFiscal(req.body || {}, existing);
+    const sarCategory = req.tenant.phone_country === 'HN' ? String(req.body?.sarTaxCategory ?? existing.sar_tax_category ?? '') : existing.sar_tax_category;
+    if (sarCategory && !['exempt', 'tax15', 'tax18'].includes(sarCategory)) throw Object.assign(new Error('Categoría ISV de Honduras inválida'), { status: 400 });
     const saleDays = Object.prototype.hasOwnProperty.call(req.body || {}, 'saleDays')
       ? normalizeProductSaleDays(req.body.saleDays, { strict: true })
       : normalizeProductSaleDays(existing.sale_days);
     img = req.file ? await optimizeUploadedImage(req.file, { scope: req.tenant.slug, outputPrefix: 'prod' }) : existing.image;
     await req.tdb.run(
       `UPDATE {s}.products SET name=$1,description=$2,price=$3,category_id=$4,image=$5,active=$6,
-       sale_days=$7,barcode=$8,sat_product_code=$9,sat_unit_code=$10,sat_unit_name=$11,tax_object=$12,iva_rate=$13,isr_rate=$14 WHERE id=$15`,
+       sale_days=$7,barcode=$8,sat_product_code=$9,sat_unit_code=$10,sat_unit_name=$11,tax_object=$12,iva_rate=$13,isr_rate=$14,sar_tax_category=$16 WHERE id=$15`,
       [
         (name || existing.name).trim(),
         description ?? existing.description,
@@ -1220,7 +1224,7 @@ router.put('/:id', upload.single('image'), async (req, res, next) => {
         active !== undefined ? (active === '0' ? 0 : 1) : existing.active,
         JSON.stringify(saleDays), barcode,
         fiscal.productCode, fiscal.unitCode, fiscal.unitName, fiscal.taxObject, fiscal.ivaRate, fiscal.isrRate,
-        req.params.id,
+        req.params.id, sarCategory,
       ]
     );
     if (req.file && existing.image && existing.image !== img) {

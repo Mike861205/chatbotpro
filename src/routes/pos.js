@@ -5,7 +5,8 @@ const path = require('node:path');
 const config = require('../config');
 const { requireAuth, requireOwner, requireModules } = require('../middleware/auth');
 const { getSetting } = require('../db');
-const { decrypt } = require('../utils/crypto');
+const { encrypt, decrypt } = require('../utils/crypto');
+const { validRtn, exonerateSarItems, calculateSarTotals } = require('../utils/sar');
 const { operationalOrderNote } = require('../utils/orderNotes');
 const { ensureCostingSchema, itemsCost, preciseCost } = require('../utils/costing');
 const { ensurePurchasingSchema } = require('../utils/purchasing');
@@ -265,21 +266,22 @@ async function getLastClosedSession(t, { forUsername = null, forBranchId = null 
 }
 
 async function getSessionTotals(t, sessionId) {
+  const effectiveTotal = '(total - COALESCE(sar_credit_adjustment_total,0))';
   const paidInSession = `channel = 'pos' AND status != 'cancelado' AND COALESCE(payment_status, 'paid') = 'paid'
     AND ((pos_session_id = $1 AND credit_paid_session_id IS NULL) OR credit_paid_session_id = $1)`;
   const sales = await t.get(
     `SELECT COUNT(*)::int AS tickets,
-            COALESCE(SUM(total), 0)::float AS total_sales,
-            COALESCE(SUM(CASE WHEN payment_method = 'cash' THEN total ELSE 0 END), 0)::float AS sales_cash_only,
-            COALESCE(SUM(CASE WHEN payment_method = 'card' THEN total ELSE 0 END), 0)::float AS sales_card_only,
-            COALESCE(SUM(CASE WHEN payment_method = 'transfer' THEN total ELSE 0 END), 0)::float AS sales_transfer_only,
-            COALESCE(SUM(CASE WHEN payment_method NOT IN ('cash','card','transfer','mixed','multiple') THEN total ELSE 0 END), 0)::float AS sales_other_only,
-            COALESCE(SUM(CASE WHEN payment_method = 'mixed' THEN total ELSE 0 END), 0)::float AS sales_mixed,
-            COALESCE(SUM(CASE WHEN payment_method = 'cash' THEN total WHEN payment_method = 'mixed' THEN COALESCE((payment_breakdown::jsonb ->> 'cash')::numeric, 0) ELSE 0 END), 0)::float AS collected_cash,
-            COALESCE(SUM(CASE WHEN payment_method = 'card' THEN total WHEN payment_method = 'mixed' THEN COALESCE((payment_breakdown::jsonb ->> 'card')::numeric, 0) ELSE 0 END), 0)::float AS collected_card,
-            COALESCE(SUM(CASE WHEN payment_method = 'transfer' THEN total WHEN payment_method = 'mixed' THEN COALESCE((payment_breakdown::jsonb ->> 'transfer')::numeric, 0) ELSE 0 END), 0)::float AS collected_transfer,
+            COALESCE(SUM(${effectiveTotal}), 0)::float AS total_sales,
+            COALESCE(SUM(CASE WHEN payment_method = 'cash' THEN ${effectiveTotal} ELSE 0 END), 0)::float AS sales_cash_only,
+            COALESCE(SUM(CASE WHEN payment_method = 'card' THEN ${effectiveTotal} ELSE 0 END), 0)::float AS sales_card_only,
+            COALESCE(SUM(CASE WHEN payment_method = 'transfer' THEN ${effectiveTotal} ELSE 0 END), 0)::float AS sales_transfer_only,
+            COALESCE(SUM(CASE WHEN payment_method NOT IN ('cash','card','transfer','mixed','multiple') THEN ${effectiveTotal} ELSE 0 END), 0)::float AS sales_other_only,
+            COALESCE(SUM(CASE WHEN payment_method = 'mixed' THEN ${effectiveTotal} ELSE 0 END), 0)::float AS sales_mixed,
+            COALESCE(SUM(CASE WHEN payment_method = 'cash' THEN ${effectiveTotal} WHEN payment_method = 'mixed' THEN COALESCE((payment_breakdown::jsonb ->> 'cash')::numeric, 0) ELSE 0 END), 0)::float AS collected_cash,
+            COALESCE(SUM(CASE WHEN payment_method = 'card' THEN ${effectiveTotal} WHEN payment_method = 'mixed' THEN COALESCE((payment_breakdown::jsonb ->> 'card')::numeric, 0) ELSE 0 END), 0)::float AS collected_card,
+            COALESCE(SUM(CASE WHEN payment_method = 'transfer' THEN ${effectiveTotal} WHEN payment_method = 'mixed' THEN COALESCE((payment_breakdown::jsonb ->> 'transfer')::numeric, 0) ELSE 0 END), 0)::float AS collected_transfer,
             COUNT(CASE WHEN delivery = 'domicilio' THEN 1 END)::int AS delivery_tickets,
-            COALESCE(SUM(CASE WHEN delivery = 'domicilio' THEN total ELSE 0 END), 0)::float AS delivery_total,
+            COALESCE(SUM(CASE WHEN delivery = 'domicilio' THEN ${effectiveTotal} ELSE 0 END), 0)::float AS delivery_total,
             COALESCE(SUM(CASE WHEN delivery = 'domicilio' THEN COALESCE(delivery_fee, 0) ELSE 0 END), 0)::float AS delivery_fees
      FROM {s}.orders WHERE ${paidInSession}`,
     [sessionId]
@@ -340,13 +342,14 @@ async function getSessionTotals(t, sessionId) {
     };
   });
   const openCreditRows = await t.all(
-    `SELECT o.id, o.total::float AS total, o.payment_breakdown,
+    `SELECT o.id, (o.total-COALESCE(o.sar_credit_adjustment_total,0))::float AS total, o.payment_breakdown,
             to_char(o.created_at AT TIME ZONE '${tenantTimeZone(t)}', 'DD Mon YYYY, HH24:MI') AS created_at
      FROM {s}.orders o JOIN {s}.pos_sessions ps ON ps.id = $1
      WHERE o.channel = 'pos' AND o.pos_session_id = $1 AND o.status != 'cancelado'
        AND (o.payment_method = 'credit' OR o.credit_paid_session_id IS NOT NULL)
        AND ((ps.status = 'open' AND COALESCE(o.payment_status, 'paid') = 'pending')
-         OR (ps.status = 'closed' AND (o.credit_paid_at IS NULL OR o.credit_paid_at > ps.closed_at)))
+         OR (ps.status = 'closed' AND (o.credit_paid_at IS NULL OR o.credit_paid_at > ps.closed_at)
+           AND (o.sar_credit_adjusted_at IS NULL OR o.sar_credit_adjusted_at > ps.closed_at)))
      ORDER BY o.id`,
     [sessionId]
   );
@@ -581,7 +584,9 @@ async function listOpenCreditSales(t, branchId) {
   const normalizedBranchId = Number(branchId || 0);
   if (!Number.isInteger(normalizedBranchId) || normalizedBranchId <= 0) return [];
   const rows = await t.all(
-    `SELECT id, items, subtotal::float AS subtotal, total::float AS total, payment_breakdown, notes, table_number,
+    `SELECT id, items, subtotal::float AS subtotal, total::float AS total,
+            (total-COALESCE(sar_credit_adjustment_total,0))::float AS amount_due, payment_breakdown, notes, table_number,
+            EXISTS(SELECT 1 FROM {s}.sar_documents d WHERE d.order_id=orders.id) AS has_sar_document,
             service_branch_id, service_branch_name,
             delivery, delivery_fee::float AS delivery_fee,
             delivery_address, delivery_neighborhood, delivery_reference,
@@ -660,7 +665,8 @@ async function listSalesHistoryPage(t, options = {}) {
   const offset = (boundedPage - 1) * safeSize;
 
   const rows = await t.all(
-        `SELECT id, invoice_code, invoice_token, total::float AS total, status, payment_status, payment_method, payment_breakdown, cash_received::float AS cash_received,
+        `SELECT id, invoice_code, invoice_token, total::float AS total,
+          (total-COALESCE(sar_credit_adjustment_total,0))::float AS amount_due, status, payment_status, payment_method, payment_breakdown, cash_received::float AS cash_received,
           credit_paid_session_id, credit_paid_at, credit_paid_by,
             cash_change::float AS cash_change, COALESCE(NULLIF(order_notes, ''), notes) AS notes, items, table_account_id, table_number, waiter_name,
             service_branch_id, service_branch_name,
@@ -672,7 +678,10 @@ async function listSalesHistoryPage(t, options = {}) {
             (SELECT i.uuid FROM {s}.invoices i WHERE i.order_id=o.id ORDER BY i.id DESC LIMIT 1) AS fiscal_invoice_uuid,
             (SELECT gi.id FROM {s}.global_invoice_orders gio JOIN {s}.global_invoices gi ON gi.id=gio.global_invoice_id WHERE gio.order_id=o.id AND gio.active=1 ORDER BY gi.id DESC LIMIT 1) AS global_invoice_id,
             (SELECT gi.status FROM {s}.global_invoice_orders gio JOIN {s}.global_invoices gi ON gi.id=gio.global_invoice_id WHERE gio.order_id=o.id AND gio.active=1 ORDER BY gi.id DESC LIMIT 1) AS global_invoice_status,
-            (SELECT gi.uuid FROM {s}.global_invoice_orders gio JOIN {s}.global_invoices gi ON gi.id=gio.global_invoice_id WHERE gio.order_id=o.id AND gio.active=1 ORDER BY gi.id DESC LIMIT 1) AS global_invoice_uuid
+            (SELECT gi.uuid FROM {s}.global_invoice_orders gio JOIN {s}.global_invoices gi ON gi.id=gio.global_invoice_id WHERE gio.order_id=o.id AND gio.active=1 ORDER BY gi.id DESC LIMIT 1) AS global_invoice_uuid,
+            (SELECT sd.id FROM {s}.sar_documents sd WHERE sd.order_id=o.id ORDER BY sd.id DESC LIMIT 1) AS sar_document_id,
+            (SELECT sd.status FROM {s}.sar_documents sd WHERE sd.order_id=o.id ORDER BY sd.id DESC LIMIT 1) AS sar_document_status,
+            (SELECT sd.document_number FROM {s}.sar_documents sd WHERE sd.order_id=o.id ORDER BY sd.id DESC LIMIT 1) AS sar_document_number
      FROM {s}.orders o
      ${whereSql}
      ORDER BY id DESC
@@ -816,7 +825,7 @@ async function normalizePosItems(t, inputItems) {
   const ids = [...new Set(items.map((item) => Number(item.productId ?? item.id)).filter((id) => Number.isInteger(id) && id > 0))];
   if (!ids.length) throw badRequest('Los productos del ticket no son válidos');
   const rows = await t.all(
-    `SELECT id, name, price::float AS price, COALESCE(unit_cost, 0)::float AS unit_cost, active, category_id, sale_days
+    `SELECT id, name, price::float AS price, COALESCE(unit_cost, 0)::float AS unit_cost, active, category_id, sale_days, sar_tax_category
      FROM {s}.products
      WHERE id = ANY($1::int[])`,
     [ids]
@@ -844,6 +853,7 @@ async function normalizePosItems(t, inputItems) {
       name: hasCustomLine ? (requestedName || product.name) : product.name,
       price: effectivePrice,
       qty,
+      sarTaxCategory: product.sar_tax_category || '',
       ...productTaxLineSnapshot(effectivePrice, taxConfig),
       unitCost,
       lineCost: preciseCost(unitCost * qty),
@@ -863,17 +873,19 @@ async function attachCostsToExistingItems(t, inputItems) {
   const ids = [...new Set(items.map((item) => Number(item?.id || item?.product_id || 0)).filter((id) => id > 0))];
   if (!ids.length) return items;
   const rows = await t.all(
-    'SELECT id, COALESCE(unit_cost, 0)::float AS unit_cost FROM {s}.products WHERE id = ANY($1::int[])',
+    'SELECT id, COALESCE(unit_cost, 0)::float AS unit_cost, sar_tax_category FROM {s}.products WHERE id = ANY($1::int[])',
     [ids]
   );
   const costs = new Map(rows.map((row) => [Number(row.id), preciseCost(row.unit_cost)]));
+  const sarCategories = new Map(rows.map((row) => [Number(row.id), row.sar_tax_category || '']));
   return items.map((item) => {
     const qty = Math.max(0, Number(item?.qty || item?.quantity || 0));
     const existingCost = Number(item?.unitCost ?? item?.unit_cost);
     const unitCost = Number.isFinite(existingCost) && existingCost >= 0
       ? preciseCost(existingCost)
       : (costs.get(Number(item?.id || item?.product_id || 0)) || 0);
-    return { ...item, unitCost, lineCost: preciseCost(unitCost * qty) };
+    const productId = Number(item?.id || item?.product_id || 0);
+    return { ...item, sarTaxCategory: sarCategories.has(productId) ? sarCategories.get(productId) : (item.sarTaxCategory || ''), unitCost, lineCost: preciseCost(unitCost * qty) };
   });
 }
 
@@ -1850,7 +1862,7 @@ async function createPosSale(req, res, next) {
     const existingSale = await findPosSaleByIdempotency(req.tdb, idempotencyKey);
     if (existingSale) return res.json({ ok: true, duplicate: true, sale: posSaleResponse(existingSale) });
     const isDelivery = Boolean(req.body?.isDelivery);
-    const deliveryFee = isDelivery ? Math.max(0, n(req.body?.deliveryFee)) : 0;
+    let deliveryFee = isDelivery ? Math.max(0, n(req.body?.deliveryFee)) : 0;
     const deliveryType = isDelivery ? 'domicilio' : 'mostrador';
     const notes = String(req.body?.notes || '').trim().slice(0, 240);
     const deliveryAddress = isDelivery ? String(req.body?.deliveryAddress || '').trim().replace(/\s+/g, ' ').slice(0, 300) : '';
@@ -1860,7 +1872,27 @@ async function createPosSale(req, res, next) {
       const session = await getOpenSession(tx, userSessionContext(req.user, req));
       if (!session) throw badRequest('Abre una caja antes de registrar una venta');
 
-      const saleItems = await normalizePosItems(tx, req.body?.items);
+      let saleItems = await normalizePosItems(tx, req.body?.items);
+      let sarExoneration = null;
+      let deliveryExonerated = false;
+      if (req.body?.sarExoneration) {
+        if (req.tenant.phone_country !== 'HN') throw badRequest('La exoneración SAR sólo aplica a Honduras');
+        const input = req.body.sarExoneration;
+        const name = String(input.name || '').trim().slice(0,180);
+        const rtn = String(input.rtn || '').replace(/[-\s]/g,'');
+        const evidenceType = String(input.evidenceType || '').trim();
+        const evidenceNumber = String(input.evidenceNumber || '').trim().slice(0,100);
+        if (!name || !validRtn(rtn) || !['OCE','CONSTANCIA','SAG'].includes(evidenceType) || !evidenceNumber) throw badRequest('La exoneración requiere nombre, RTN y referencia del documento OCE, constancia o SAG');
+        const sarProfile = await tx.get('SELECT delivery_tax_category FROM {s}.sar_profiles WHERE id=1');
+        if (!sarProfile) throw badRequest('Configura el emisor SAR antes de aplicar exoneraciones');
+        const adjusted = exonerateSarItems(saleItems, deliveryFee, sarProfile.delivery_tax_category);
+        saleItems = adjusted.items;
+        deliveryFee = adjusted.deliveryFee;
+        deliveryExonerated = adjusted.deliveryExonerated;
+        const calculated = calculateSarTotals(saleItems, deliveryFee, sarProfile.delivery_tax_category, deliveryExonerated);
+        sarExoneration = { name, rtn, evidenceType, evidenceNumber };
+        if (!calculated.totals.exonerated15 && !calculated.totals.exonerated18) throw badRequest('La venta no tiene partidas gravadas a exonerar');
+      }
       const subtotal = n(saleItems.reduce((sum, item) => sum + item.price * item.qty, 0));
       const total = n(subtotal + deliveryFee);
       const paymentMethod = String(req.body?.paymentMethod || '').trim();
@@ -1869,8 +1901,8 @@ async function createPosSale(req, res, next) {
       const cogsTotal = itemsCost(saleItems);
       const row = await tx.get(
         `INSERT INTO {s}.orders
-         (customer_id, items, subtotal, total, status, channel, source_channel, delivery, notes, payment_method, payment_breakdown, cash_received, cash_change, pos_session_id, delivery_fee, service_branch_id, service_branch_name, cogs_total, order_notes, delivery_address, delivery_neighborhood, delivery_reference, pos_idempotency_key, payment_status)
-         VALUES (NULL, $1, $2, $3, 'confirmado', 'pos', 'pos', $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
+         (customer_id, items, subtotal, total, status, channel, source_channel, delivery, notes, payment_method, payment_breakdown, cash_received, cash_change, pos_session_id, delivery_fee, service_branch_id, service_branch_name, cogs_total, order_notes, delivery_address, delivery_neighborhood, delivery_reference, pos_idempotency_key, payment_status,sar_exoneration_enc,sar_delivery_exonerated)
+         VALUES (NULL, $1, $2, $3, 'confirmado', 'pos', 'pos', $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20,$21,$22)
          RETURNING id, invoice_code, invoice_token`,
         [
           JSON.stringify(saleItems),
@@ -1893,6 +1925,8 @@ async function createPosSale(req, res, next) {
           deliveryReference,
           idempotencyKey,
           paymentStatus,
+          sarExoneration ? encrypt(JSON.stringify(sarExoneration)) : null,
+          deliveryExonerated,
         ]
       );
       if (await decrementBranchStockForSale(tx, session.branch_id, saleItems)) {
@@ -1978,6 +2012,9 @@ router.put('/sales/:id/credit', async (req, res, next) => {
       );
       if (fiscalInvoice) {
         throw Object.assign(new Error('No puedes cambiar los productos después de timbrar; cancela primero el CFDI'), { statusCode: 409 });
+      }
+      if (await tx.get('SELECT id FROM {s}.sar_documents WHERE order_id=$1 LIMIT 1', [id])) {
+        throw Object.assign(new Error('La venta tiene un documento SAR; no se pueden cambiar sus productos'), { statusCode: 409 });
       }
       const globalInvoice = await tx.get(
         `SELECT gi.status FROM {s}.global_invoice_orders gio
@@ -2185,6 +2222,10 @@ router.post('/sales/:id/cancel', async (req, res, next) => {
       if (fiscalInvoice) {
         throw Object.assign(new Error('Cancela primero el CFDI de esta venta desde Facturación MX'), { statusCode: 409 });
       }
+      const sarDocument = await tx.get("SELECT id FROM {s}.sar_documents WHERE order_id=$1 AND status='issued' LIMIT 1", [id]);
+      if (sarDocument) {
+        throw Object.assign(new Error('Anula primero la factura SAR desde Facturación Honduras'), { statusCode: 409 });
+      }
       const globalInvoice = await tx.get(
         `SELECT gi.status FROM {s}.global_invoice_orders gio JOIN {s}.global_invoices gi ON gi.id=gio.global_invoice_id
          WHERE gio.order_id=$1 AND gio.active=1 AND gi.status IN ('pending','unknown','active') LIMIT 1`, [id]
@@ -2221,7 +2262,8 @@ router.put('/sales/:id/payment', async (req, res, next) => {
     const id = Number(req.params.id);
     if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: 'Venta inválida' });
     const sale = await req.tdb.get(
-      `SELECT id, total::float AS total, status, payment_status, pos_session_id, payment_method, payment_breakdown,
+      `SELECT id, total::float AS total, sar_credit_adjustment_total::float AS sar_credit_adjustment_total,
+              status, payment_status, pos_session_id, payment_method, payment_breakdown,
               cash_received::float AS cash_received, cash_change::float AS cash_change, service_branch_id
        FROM {s}.orders
        WHERE id = $1 AND channel = 'pos'
@@ -2241,6 +2283,9 @@ router.put('/sales/:id/payment', async (req, res, next) => {
       [id]
     );
     if (fiscalInvoice) return res.status(409).json({ error: 'No puedes cambiar el pago después de timbrar; cancela primero el CFDI' });
+    if (!settlingCredit && await req.tdb.get('SELECT id FROM {s}.sar_documents WHERE order_id=$1 LIMIT 1', [id])) {
+      return res.status(409).json({ error: 'No puedes cambiar el pago de una venta con factura SAR' });
+    }
     const globalInvoice = await req.tdb.get(
       `SELECT gi.status FROM {s}.global_invoice_orders gio JOIN {s}.global_invoices gi ON gi.id=gio.global_invoice_id
        WHERE gio.order_id=$1 AND gio.active=1 AND gi.status IN ('pending','unknown','active') LIMIT 1`, [id]
@@ -2249,7 +2294,8 @@ router.put('/sales/:id/payment', async (req, res, next) => {
 
     const paymentMethod = String(req.body?.paymentMethod || '').trim();
     if (paymentMethod === 'credit') return res.status(400).json({ error: 'Selecciona un medio de pago para liquidar el crédito' });
-    const payment = await normalizeTenantPayment(req.tdb, paymentMethod, req.body?.payments || {}, n(sale.total), req.body?.cashReceived);
+    const amountDue = settlingCredit ? n(Number(sale.total)-Number(sale.sar_credit_adjustment_total || 0)) : n(sale.total);
+    const payment = await normalizeTenantPayment(req.tdb, paymentMethod, req.body?.payments || {}, amountDue, req.body?.cashReceived);
     const previousBreakdown = parseJsonObject(sale.payment_breakdown);
     const nextBreakdown = settlingCredit
       ? { ...previousBreakdown, ...payment.breakdown, creditSettledAt: new Date().toISOString(), creditSettledBy: req.user.username }
@@ -2264,7 +2310,7 @@ router.put('/sales/:id/payment', async (req, res, next) => {
            credit_paid_session_id = CASE WHEN $6 THEN $7 ELSE credit_paid_session_id END,
            credit_paid_at = CASE WHEN $6 THEN now() ELSE credit_paid_at END,
            credit_paid_by = CASE WHEN $6 THEN $8 ELSE credit_paid_by END
-       WHERE id = $5 AND (NOT $6 OR payment_status = 'pending')
+       WHERE id = $5 AND (NOT $6 OR payment_status = 'pending') AND sar_credit_adjustment_total=$9
        RETURNING id`,
       [
         payment.method,
@@ -2275,13 +2321,14 @@ router.put('/sales/:id/payment', async (req, res, next) => {
         settlingCredit,
         settlementSession?.id || null,
         req.user.username,
+        sale.sar_credit_adjustment_total || 0,
       ]
     );
     if (!updatedPayment) return res.status(409).json({ error: 'Esta venta a crédito ya fue liquidada' });
     const paymentAuditEvent = {
       eventType: 'sale_payment_edited', orderId: id,
       sessionId: settlingCredit ? settlementSession.id : sale.pos_session_id,
-      branchId: sale.service_branch_id, amount: sale.total,
+      branchId: sale.service_branch_id, amount: amountDue,
       reason: settlingCredit ? 'Liquidación de venta a crédito' : 'Cambio de forma de pago',
       before: { paymentMethod: sale.payment_method, paymentBreakdown: sale.payment_breakdown, cashReceived: sale.cash_received, cashChange: sale.cash_change },
       after: { paymentMethod: payment.method, paymentStatus: 'paid', paymentBreakdown: nextBreakdown, cashReceived: payment.cashReceived, cashChange: payment.cashChange },

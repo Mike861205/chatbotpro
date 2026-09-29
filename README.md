@@ -1,5 +1,7 @@
 # 🤖 ChatBotPro — Sistema multi-tenant de chatbot de pedidos para restaurantes
 
+Para la modalidad fiscal de autoimpresor de Honduras (SAR/CAI), consulta [la guía de operación e integración](docs/SAR_HONDURAS.md).
+
 Sistema SaaS multi-tenant donde cada restaurante (tenant) tiene su **base de datos aislada**, su panel de administración y su **chatbot público de pedidos** accesible por liga (`/tu-slug`) con envío del resumen del pedido por **WhatsApp**.
 
 ## ✨ Funcionalidades

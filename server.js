@@ -111,6 +111,7 @@ app.use('/api/inventory', require('./src/routes/inventory'));
 app.use('/api/employees', require('./src/routes/employees'));
 app.use('/api/kds', require('./src/routes/kds'));
 app.use('/api/invoicing', require('./src/routes/invoicing'));
+app.use('/api/sar', require('./src/routes/sar'));
 app.use('/api/self-service', require('./src/routes/selfService'));
 
 // Páginas

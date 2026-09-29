@@ -100,6 +100,8 @@ const DASHBOARD_PERIOD_LABELS = {
   year: 'del año',
 };
 let POS_PAYMENT_FORM = { cashReceived: '', cash: '', card: '', cardType: '', transfer: '', creditCustomerName: '', creditCustomerPhone: '', notes: '', deliveryAddress: '', deliveryNeighborhood: '', deliveryReference: '' };
+let POS_SAR_EXONERATION = { enabled: false, name: '', rtn: '', evidenceType: 'OCE', evidenceNumber: '' };
+let POS_SAR_DELIVERY_CATEGORY = '';
 let LAST_POS_SALE = null;
 let INVOICING_DATA = null;
 let SELF_SERVICE_DEVICES = [];
@@ -1070,6 +1072,7 @@ const VIEW_META = {
   pos: ['Punto de venta', 'Caja, cobro y cierre del día', 'ph-cash-register'],
   kds: ['Pantallas KDS', 'Comandas automáticas por área de preparación', 'ph-monitor-play'],
   ventas: ['Ventas', 'Reportes diarios y mensuales por sucursal', 'ph-chart-line-up'],
+  sar: ['Facturación Honduras', 'CAI, ventas y compras ante el SAR', 'ph-receipt'],
   facturacion: ['Facturación MX', 'CFDI 4.0, timbrado y portal de autofacturación', 'ph-file-text'],
   cfdi: ['CFDI emitidos', 'Facturas, archivos fiscales y seguimiento de cancelaciones', 'ph-files'],
   cancelaciones: ['Cancelaciones', 'Auditoría de ventas y correcciones', 'ph-file-magnifying-glass'],
@@ -1095,6 +1098,7 @@ const VIEW_LOADERS = {
   pos: loadPos,
   kds: loadKds,
   ventas: loadSalesReport,
+  sar: () => window.loadSar?.(),
   facturacion: loadInvoicing,
   cfdi: loadCfdiDocuments,
   cancelaciones: () => loadAuditLog(1),
@@ -1128,6 +1132,7 @@ function normalizeView(view) {
   const hidden = new Set(Array.isArray(ME?.tenant?.hiddenModules) ? ME.tenant.hiddenModules : []);
   if (ME?.role === 'owner' && hidden.has(view)) return permissions.has('dashboard') && !hidden.has('dashboard') ? 'dashboard' : 'config';
   if (['facturacion', 'cfdi'].includes(view) && !ME?.tenant?.invoicingEligible) return 'dashboard';
+  if (view === 'sar' && (ME?.tenant?.phoneCountry !== 'HN' || ME?.role !== 'owner')) return 'dashboard';
   if (view === 'kds' && !businessUi().supportsRestaurantOperations) return 'dashboard';
   return VIEW_META[view] ? view : 'dashboard';
 }
@@ -1170,11 +1175,15 @@ function applyUserScopeUI() {
     const roleAllowed = cashierMode ? CASHIER_ALLOWED_VIEWS.has(a.dataset.view) : (!staffMode || permissions.has(a.dataset.view));
     const ownerVisible = ME?.role !== 'owner' || !hiddenModules.has(a.dataset.view);
     const businessAllowed = a.dataset.businessFeature !== 'restaurant' || businessUi().supportsRestaurantOperations;
-    const allowed = mexicoAllowed && roleAllowed && ownerVisible && businessAllowed;
+    const hondurasAllowed = a.dataset.hondurasOnly !== 'true' || (ME?.tenant?.phoneCountry === 'HN' && ME?.role === 'owner');
+    const allowed = mexicoAllowed && hondurasAllowed && roleAllowed && ownerVisible && businessAllowed;
     a.hidden = !allowed;
   });
   document.querySelectorAll('[data-mexico-only="true"]:not(.sidebar nav a)').forEach((element) => {
     if (!mexicoEligible) element.hidden = true;
+  });
+  document.querySelectorAll('[data-honduras-only="true"]:not(.sidebar nav a)').forEach((element) => {
+    element.hidden = ME?.tenant?.phoneCountry !== 'HN';
   });
   document.querySelectorAll('.sidebar nav .nav-label').forEach((lbl) => {
     if (cashierMode) {
@@ -4460,6 +4469,17 @@ function posGrandTotal() {
     return moneyNum(Number(POS_TABLE_ACCOUNT.total || 0) + posCartTotal());
   }
   const fee = POS_IS_DELIVERY ? moneyNum(Number(POS_DELIVERY_FEE) || 0) : 0;
+  if (ME?.tenant?.phoneCountry === 'HN' && POS_SAR_EXONERATION.enabled) {
+    posCartTotal();
+    const catalog = new Map((POS_OVERVIEW?.products || []).map((product) => [Number(product.id), product.sarTaxCategory || product.sar_tax_category]));
+    const deliveryRate = POS_SAR_DELIVERY_CATEGORY === 'tax15' ? .15 : POS_SAR_DELIVERY_CATEGORY === 'tax18' ? .18 : 0;
+    return moneyNum(POS_CART.reduce((sum, item) => {
+      const category = catalog.get(Number(item.id));
+      const rate = category === 'tax15' ? .15 : category === 'tax18' ? .18 : 0;
+      const gross = moneyNum(item.price * item.qty);
+      return sum + (rate ? moneyNum(gross / (1 + rate)) : gross);
+    }, 0) + (deliveryRate ? moneyNum(fee / (1 + deliveryRate)) : fee));
+  }
   return moneyNum(posCartTotal() + fee);
 }
 
@@ -4547,7 +4567,7 @@ function updatePosPaymentEditMixedHint() {
   }
   const id = Number($('#posPaymentEditSaleId')?.value || 0);
   const sale = POS_SALES_HISTORY_CACHE.find((row) => Number(row.id) === id);
-  const total = Number(sale?.total || 0);
+  const total = Number(sale?.amount_due ?? sale?.total ?? 0);
   const cash = moneyNum($('#posPaymentEditMixCash')?.value || 0);
   const card = moneyNum($('#posPaymentEditMixCard')?.value || 0);
   const transfer = moneyNum($('#posPaymentEditMixTransfer')?.value || 0);
@@ -4584,8 +4604,9 @@ function openPosPaymentEditModal(id) {
     ? '<i class="ph-bold ph-check-circle"></i> Liquidar crédito'
     : '<i class="ph-bold ph-floppy-disk"></i> Guardar cambio';
   $('#posPaymentEditSaleId').value = String(sale.id);
-  $('#posPaymentEditTicket').value = `#${sale.id} · ${breakdown.creditCustomerName ? `${breakdown.creditCustomerName} · ` : ''}${fmtMoney(sale.total)}`;
-  $('#posPaymentEditCashReceived').value = String(sale.cash_received || sale.total || '');
+  const amountDue = Number(isPendingCredit ? (sale.amount_due ?? sale.total) : sale.total);
+  $('#posPaymentEditTicket').value = `#${sale.id} · ${breakdown.creditCustomerName ? `${breakdown.creditCustomerName} · ` : ''}${fmtMoney(amountDue)}`;
+  $('#posPaymentEditCashReceived').value = String(sale.cash_received || amountDue || '');
   $('#posPaymentEditMixCash').value = String(Number(breakdown.cash || 0));
   $('#posPaymentEditMixCard').value = String(Number(breakdown.card || 0));
   $('#posPaymentEditMixTransfer').value = String(Number(breakdown.transfer || 0));
@@ -4881,7 +4902,7 @@ function buildThermalTicketDocument(ticket, widthOverride = null, autoPrint = tr
     : '';
 
   const breakdownObj = ticket.paymentBreakdown || {};
-  const isPendingCredit = ticket.paymentStatus === 'pending' || ticket.paymentMethod === 'credit';
+  const isPendingCredit = ticket.paymentStatus === 'pending' || (ticket.paymentStatus == null && ticket.paymentMethod === 'credit');
   const isSettledCredit = !isPendingCredit && Number(breakdownObj.creditOriginalAmount || 0) > 0;
   const ticketPaymentLabel = (method) => method === 'card'
     ? (breakdownObj.cardType === 'debit' ? 'Tarjeta de débito' : breakdownObj.cardType === 'credit' ? 'Tarjeta de crédito' : 'Tarjeta')
@@ -4894,6 +4915,7 @@ function buildThermalTicketDocument(ticket, widthOverride = null, autoPrint = tr
 
   const subtotal = Number(ticket.subtotal || ticket.total || 0);
   const total = Number(ticket.total || 0);
+  const sarCreditAdjustment = Math.max(0, moneyNum(total - Number(ticket.amountDue ?? total)));
   const taxSummary = productTaxSummary(ticket.items || []);
   const deliveryAddress = esc(ticket.deliveryAddress || ticket.delivery_address || '');
   const deliveryNeighborhood = esc(ticket.deliveryNeighborhood || ticket.delivery_neighborhood || '');
@@ -4971,8 +4993,8 @@ function buildThermalTicketDocument(ticket, widthOverride = null, autoPrint = tr
   <div class="center meta">Ticket ${esc(ticketId)}</div>
   <div class="center meta">${esc(ticket.createdAt)}</div>
   <div class="center meta">Cajero: ${seller}</div>
-  ${isPendingCredit ? `<div class="credit-state"><strong>VENTA A CRÉDITO</strong><span>SALDO PENDIENTE · NO PAGADO</span><span>${esc(fmtMoney(total, currency))}</span></div>` : ''}
-  ${isSettledCredit ? `<div class="credit-state"><strong>CRÉDITO LIQUIDADO</strong><span>Pagado con ${esc(ticketPaymentLabel(ticket.paymentMethod))}</span>${ticket.creditPaidAt ? `<span>${esc(String(ticket.creditPaidAt))}</span>` : ''}</div>` : ''}
+  ${isPendingCredit ? `<div class="credit-state"><strong>VENTA A CRÉDITO</strong><span>SALDO PENDIENTE · NO PAGADO</span><span>${esc(fmtMoney(Number(ticket.amountDue ?? total), currency))}</span></div>` : ''}
+  ${isSettledCredit ? `<div class="credit-state"><strong>CRÉDITO LIQUIDADO</strong><span>${sarCreditAdjustment >= total ? 'Saldado con nota de crédito SAR' : `Pagado con ${esc(ticketPaymentLabel(ticket.paymentMethod))}`}</span>${ticket.creditPaidAt ? `<span>${esc(String(ticket.creditPaidAt))}</span>` : ''}</div>` : ''}
   ${isRoundTicket ? `<div class="center meta"><b>Mesero: ${esc(ticket.waiterName || '—')}</b></div><div class="center meta"><b>COMANDA DE RONDA</b></div>` : ''}
   ${!isRoundTicket && ticket.tableNumber ? `<div class="center meta"><b>Mesa ${esc(String(ticket.tableNumber))} · Mesero: ${esc(ticket.waiterName || '—')}</b></div>` : ''}
   ${ticket.customerName ? `<div class="center meta"><b>A nombre de ${esc(ticket.customerName)}</b>${ticket.customerPhone ? `<br><span>${esc(ticket.customerPhone)}</span>` : ''}</div>` : ''}
@@ -4995,6 +5017,7 @@ function buildThermalTicketDocument(ticket, widthOverride = null, autoPrint = tr
       : `<tr><td>Subtotal</td><td class="r">${esc(fmtMoney(subtotal, currency))}</td></tr>`}
     ${taxSummary ? `<tr><td>Base gravable</td><td class="r">${esc(fmtMoney(taxSummary.base, currency))}</td></tr><tr><td>IVA${taxSummary.rate === null ? '' : ` ${esc(String(taxSummary.rate * 100))}%`}</td><td class="r">${esc(fmtMoney(taxSummary.tax, currency))}</td></tr>` : ''}
     <tr><td class="tot">TOTAL</td><td class="tot r">${esc(fmtMoney(total, currency))}</td></tr>
+    ${sarCreditAdjustment > 0 ? `<tr><td>Notas de crédito SAR aplicadas al saldo</td><td class="r">− ${esc(fmtMoney(sarCreditAdjustment,currency))}</td></tr><tr><td><b>Saldo ajustado</b></td><td class="r"><b>${esc(fmtMoney(Number(ticket.amountDue),currency))}</b></td></tr>` : ''}
     ${fmtConvertedMoney(total, 'pos') ? `<tr><td>Equivalente informativo${SETTINGS?.currency_conversion_mode === 'automatic' ? '<br><small>Fuente: ExchangeRate-API</small>' : ''}</td><td class="r"><b>${esc(fmtConvertedMoney(total, 'pos'))}</b><br><small>Tasa de cambio: ${esc(currencyConversionRateLabel('pos'))}</small></td></tr>` : ''}
     ${!isMixed && Number(ticket.cashReceived || 0) > 0 ? `<tr><td>Efectivo recibido</td><td class="r">${esc(fmtMoney(ticket.cashReceived, currency))}</td></tr>` : ''}
     ${!isMixed && Number(ticket.cashChange || 0) > 0 ? `<tr><td>Cambio</td><td class="r">${esc(fmtMoney(ticket.cashChange, currency))}</td></tr>` : ''}`}
@@ -5215,6 +5238,7 @@ function printPosSaleById(id) {
     subtotal: Number(sale.total || 0) - Number(sale.delivery_fee || 0),
     deliveryFee: Number(sale.delivery_fee || 0),
     total: Number(sale.total || 0),
+    amountDue: Number(sale.amount_due ?? sale.total ?? 0),
     paymentBreakdown: sale.payment_breakdown || null,
     customerName: sale.payment_breakdown?.creditCustomerName || '',
     customerPhone: sale.payment_breakdown?.creditCustomerPhone || '',
@@ -5250,6 +5274,7 @@ function printPosCreditSale(sale) {
     subtotal: Number(sale.subtotal ?? (Number(sale.total || 0) - Number(sale.delivery_fee || 0))),
     deliveryFee: Number(sale.delivery_fee || 0),
     total: Number(sale.total || 0),
+    amountDue: Number(sale.amount_due ?? sale.total ?? 0),
     notes: sale.notes || '',
     delivery: sale.delivery || '',
     deliveryAddress: sale.delivery_address || '',
@@ -5478,6 +5503,10 @@ function printPosCloseReport(closeResult) {
 
 async function loadPos() {
   POS_OVERVIEW = await api('/api/pos/overview');
+  if (ME?.tenant?.phoneCountry === 'HN') {
+    try { POS_SAR_DELIVERY_CATEGORY = (await api('/api/sar/checkout-config')).deliveryTaxCategory || ''; }
+    catch { POS_SAR_DELIVERY_CATEGORY = ''; }
+  }
   syncPosBarcodeInput();
   const managedBranchId = getManagedPosBranchId();
   const managedSessionStillOpen = (POS_OVERVIEW?.openSessions || [])
@@ -5691,6 +5720,7 @@ function updatePosQty(productId, delta, cartKey) {
 function clearPosCart() {
   POS_CART = [];
   POS_EDITING_CREDIT_SALE = null;
+  POS_SAR_EXONERATION = { enabled: false, name: '', rtn: '', evidenceType: 'OCE', evidenceNumber: '' };
   resetPosPaymentForm();
   renderPosCart();
 }
@@ -5714,6 +5744,7 @@ function posCartPayload() {
 function selectPosTableAccount(account) {
   if (!account) return;
   POS_TABLE_ACCOUNT = { ...account };
+  POS_SAR_EXONERATION = { enabled: false, name: '', rtn: '', evidenceType: 'OCE', evidenceNumber: '' };
   POS_CART = [];
   resetPosPaymentForm();
   $('#posTablesModal')?.classList.remove('show');
@@ -5904,16 +5935,16 @@ function renderPosCreditQueue() {
   if (!host) return;
   const rows = Array.isArray(POS_OVERVIEW?.creditSales) ? POS_OVERVIEW.creditSales : [];
   if (!POS_OVERVIEW?.activeSession || !rows.length) { host.innerHTML = ''; return; }
-  const total = moneyNum(rows.reduce((sum, row) => sum + Number(row.total || 0), 0));
+  const total = moneyNum(rows.reduce((sum, row) => sum + Number(row.amount_due ?? row.total ?? 0), 0));
   host.innerHTML = `<section class="card pos-credit-queue">
     <div class="pos-credit-head"><div><h3><i class="ph-bold ph-credit-card"></i> Ventas a crédito</h3><div class="hint">Saldos pendientes que todavía no afectan el corte de caja.</div></div><div><span>${rows.length} abierta${rows.length === 1 ? '' : 's'}</span><b>${fmtMoney(total)}</b></div></div>
     <div class="pos-credit-grid">${rows.map((sale) => {
       const breakdown = sale.payment_breakdown || {};
       return `<article class="pos-credit-card">
-        <header><span>Ticket #${sale.id}</span><b>${fmtMoney(sale.total)}</b></header>
+        <header><span>Ticket #${sale.id}</span><b>${fmtMoney(sale.amount_due ?? sale.total)}</b></header>
         <div class="pos-credit-customer"><i class="ph-bold ph-user-circle"></i><div><strong>${esc(breakdown.creditCustomerName || 'Cliente')}</strong>${breakdown.creditCustomerPhone ? `<small>${esc(breakdown.creditCustomerPhone)}</small>` : ''}</div></div>
         <div class="pos-credit-meta"><span><i class="ph-bold ph-calendar"></i>${esc(sale.created_at || '')}</span>${sale.table_number ? `<span><i class="ph-bold ph-fork-knife"></i>Mesa ${esc(String(sale.table_number))}</span>` : ''}</div>
-        <footer><button class="btn btn-ghost" type="button" data-print-credit="${sale.id}"><i class="ph-bold ph-printer"></i> Ticket</button><button class="btn btn-ghost" type="button" data-edit-credit="${sale.id}"><i class="ph-bold ph-pencil-simple"></i> Editar</button><button class="btn btn-primary" type="button" data-settle-credit="${sale.id}"><i class="ph-bold ph-hand-coins"></i> Cobrar</button></footer>
+        <footer><button class="btn btn-ghost" type="button" data-print-credit="${sale.id}"><i class="ph-bold ph-printer"></i> Ticket</button>${sale.has_sar_document ? '' : `<button class="btn btn-ghost" type="button" data-edit-credit="${sale.id}"><i class="ph-bold ph-pencil-simple"></i> Editar</button>`}<button class="btn btn-primary" type="button" data-settle-credit="${sale.id}"><i class="ph-bold ph-hand-coins"></i> Cobrar</button></footer>
       </article>`;
     }).join('')}</div>
   </section>`;
@@ -6373,6 +6404,7 @@ function renderPosCart() {
   const total = posGrandTotal();
   const subtotalItems = posCartTotal();
   const deliveryFeeAmt = POS_IS_DELIVERY ? moneyNum(Number(POS_DELIVERY_FEE) || 0) : 0;
+  const sarRelief = POS_SAR_EXONERATION.enabled && ME?.tenant?.phoneCountry === 'HN' ? moneyNum(subtotalItems + deliveryFeeAmt - total) : 0;
   const taxSummary = productTaxSummary(POS_CART);
   const session = POS_OVERVIEW?.activeSession;
   const tableAccount = POS_TABLE_ACCOUNT;
@@ -6469,7 +6501,9 @@ function renderPosCart() {
            <div class="pos-total-line"><span>Total</span><b>${fmtMoney(total)}${convertedMoneyHtml(total, 'pos')}</b></div>`
         : `<div class="pos-total-line"><span>Total</span><b>${fmtMoney(total)}${convertedMoneyHtml(total, 'pos')}</b></div>`}
       ${taxSummary ? `<div class="pos-total-line pos-subtotal-line"><span>Base gravable</span><b>${fmtMoney(taxSummary.base)}</b></div><div class="pos-total-line pos-subtotal-line"><span>IVA${taxSummary.rate === null ? '' : ` ${taxSummary.rate * 100}%`}</span><b>${fmtMoney(taxSummary.tax)}</b></div>` : ''}
+      ${sarRelief > 0 ? `<div class="pos-total-line pos-subtotal-line"><span>ISV exonerado</span><b>− ${fmtMoney(sarRelief)}</b></div>` : ''}
       <form id="posCheckoutForm">
+        ${ME?.tenant?.phoneCountry === 'HN' && !tableAccount && !creditEdit ? `<div class="field"><label><input type="checkbox" id="posSarExonerated" ${POS_SAR_EXONERATION.enabled ? 'checked' : ''}> Venta a comprador exonerado (SAR)</label><div class="hint">Verifica la constancia antes de cobrar. El sistema quita el ISV de los productos gravados y conserva el dato en la factura.</div></div>${POS_SAR_EXONERATION.enabled ? `<div class="row-2"><div class="field"><label>Nombre fiscal</label><input id="posSarBuyerName" value="${esc(POS_SAR_EXONERATION.name)}" required maxlength="180"></div><div class="field"><label>RTN</label><input id="posSarBuyerRtn" value="${esc(POS_SAR_EXONERATION.rtn)}" required maxlength="14"></div></div><div class="row-2"><div class="field"><label>Documento de exoneración</label><select id="posSarEvidenceType"><option value="OCE" ${POS_SAR_EXONERATION.evidenceType === 'OCE' ? 'selected' : ''}>OCE</option><option value="CONSTANCIA" ${POS_SAR_EXONERATION.evidenceType === 'CONSTANCIA' ? 'selected' : ''}>Constancia de exonerado</option><option value="SAG" ${POS_SAR_EXONERATION.evidenceType === 'SAG' ? 'selected' : ''}>Registro SAG</option></select></div><div class="field"><label>No. documento</label><input id="posSarEvidenceNumber" value="${esc(POS_SAR_EXONERATION.evidenceNumber)}" required maxlength="100"></div></div>` : ''}` : ''}
         <div class="field">
           <label><i class="ph-bold ph-credit-card"></i> Medio de pago</label>
           <div class="segmented pos-pay-methods">${methodButtons}</div>
@@ -6561,6 +6595,11 @@ function renderPosCart() {
   $('#posCardType')?.addEventListener('change', (e) => (POS_PAYMENT_FORM.cardType = e.target.value));
   $('#posCreditCustomerName')?.addEventListener('input', (e) => (POS_PAYMENT_FORM.creditCustomerName = e.target.value));
   $('#posCreditCustomerPhone')?.addEventListener('input', (e) => (POS_PAYMENT_FORM.creditCustomerPhone = e.target.value));
+  $('#posSarExonerated')?.addEventListener('change', (e) => { POS_SAR_EXONERATION.enabled = e.target.checked; POS_PAYMENT_FORM.cashReceived = ''; renderPosCart(); });
+  $('#posSarBuyerName')?.addEventListener('input', (e) => (POS_SAR_EXONERATION.name = e.target.value));
+  $('#posSarBuyerRtn')?.addEventListener('input', (e) => (POS_SAR_EXONERATION.rtn = e.target.value));
+  $('#posSarEvidenceType')?.addEventListener('change', (e) => (POS_SAR_EXONERATION.evidenceType = e.target.value));
+  $('#posSarEvidenceNumber')?.addEventListener('input', (e) => (POS_SAR_EXONERATION.evidenceNumber = e.target.value));
   $('#posMixTransfer')?.addEventListener('input', (e) => {
     POS_PAYMENT_FORM.transfer = e.target.value;
     updatePosMixedHint();
@@ -6622,6 +6661,12 @@ function renderPosCart() {
         deliveryNeighborhood: POS_IS_DELIVERY ? ($('#posDeliveryNeighborhood')?.value || '') : '',
         deliveryReference: POS_IS_DELIVERY ? ($('#posDeliveryReference')?.value || '') : '',
       };
+      if (ME?.tenant?.phoneCountry === 'HN' && POS_SAR_EXONERATION.enabled && !tableAccount && !editingCredit) {
+        payload.sarExoneration = {
+          name: $('#posSarBuyerName')?.value || '', rtn: $('#posSarBuyerRtn')?.value || '',
+          evidenceType: $('#posSarEvidenceType')?.value || '', evidenceNumber: $('#posSarEvidenceNumber')?.value || '',
+        };
+      }
       if (!tableAccount) payload.items = posCartPayload();
       if (!editingCredit) {
         const checkoutFingerprint = JSON.stringify({ accountId: tableAccount?.id || null, payload });
@@ -7322,13 +7367,13 @@ async function loadPosSalesHistory(page = 1) {
           const individualInvoiceEligible = posSaleIsInvoiceEligible(row, { includePendingCredit: true });
           const isSelected = POS_GLOBAL_INVOICE_SELECTION.has(Number(row.id));
           return `<tr>
-            <td><input class="pos-global-ticket-check" type="checkbox" data-global-ticket="${row.id}" ${isSelected ? 'checked' : ''} ${invoiceEligible ? '' : 'disabled'} aria-label="Seleccionar ticket ${row.id} para factura global"></td>
+            <td><input class="pos-global-ticket-check" type="checkbox" data-global-ticket="${row.id}" ${isSelected ? 'checked' : ''} ${invoiceEligible && ME?.tenant?.invoicingEligible ? '' : 'disabled'} aria-label="Seleccionar ticket ${row.id} para factura global"></td>
             <td><b>#${row.id}</b></td>
             <td>${esc(row.items.map((item) => `${item.qty}x ${item.name}`).join(', '))}</td>
             <td><div><b>${esc(posMethodLabel(row.payment_method, row.payment_breakdown))}${row.payment_method === 'card' && posCardTypeLabel(row.payment_breakdown) ? ` · ${esc(posCardTypeLabel(row.payment_breakdown))}` : ''}</b></div><div style="font-size:12px;color:var(--ink-3)">${isPendingCredit ? `${esc(row.payment_breakdown?.creditCustomerName || 'Cliente')} · saldo pendiente` : esc(paymentBreakdown)}</div></td>
             <td><b>${fmtMoney(row.total)}</b>${row.cash_change ? `<div style="font-size:12px;color:var(--ink-3)">Cambio ${fmtMoney(row.cash_change)}</div>` : ''}</td>
             <td>${posSaleStatusBadge(row.status)}${isPendingCredit ? ' <span class="badge b-pendiente"><i class="ph-bold ph-credit-card"></i> Crédito abierto</span>' : ''}</td>
-            <td>${posFiscalStatus(row)}</td>
+            <td>${ME?.tenant?.phoneCountry === 'HN' ? (row.sar_document_id ? `${esc(row.sar_document_number)} · ${row.sar_document_status === 'issued' ? 'Emitida' : 'Anulada'}` : 'Pendiente SAR') : posFiscalStatus(row)}</td>
             <td style="max-width:220px;white-space:normal;line-height:1.4">${noteText ? esc(noteText) : '<span style="color:var(--ink-3)">—</span>'}</td>
             <td>${esc(row.created_at || '')}</td>
             <td>
@@ -7337,6 +7382,8 @@ async function loadPosSalesHistory(page = 1) {
                 ${ME?.tenant?.invoicingEligible && individualInvoiceEligible ? `<button type="button" class="btn btn-ghost" data-invoice-pos-sale="${row.id}"><i class="ph-bold ph-file-text"></i> Facturar</button>` : ''}
                 ${row.fiscal_invoice_status === 'active' ? `<a class="btn btn-ghost" target="_blank" href="/api/invoicing/invoices/${row.fiscal_invoice_id}/pdf"><i class="ph-bold ph-file-pdf"></i> Ver factura</a>` : ''}
                 ${row.global_invoice_status === 'active' ? `<a class="btn btn-ghost" target="_blank" href="/api/invoicing/global-invoices/${row.global_invoice_id}/pdf"><i class="ph-bold ph-files"></i> Ver global</a>` : ''}
+                ${ME?.tenant?.phoneCountry === 'HN' && !isCanceled && row.sar_document_status !== 'issued' ? `<button type="button" class="btn btn-ghost" data-sar-pos-sale="${row.id}"><i class="ph-bold ph-file-text"></i> Facturar SAR</button>` : ''}
+                ${ME?.tenant?.phoneCountry === 'HN' && row.sar_document_id ? `<a class="btn btn-ghost" target="_blank" rel="noopener" href="/api/sar/documents/${row.sar_document_id}/print"><i class="ph-bold ph-printer"></i> Factura SAR</a>` : ''}
                 <button type="button" class="btn ${isPendingCredit ? 'btn-primary' : 'btn-ghost'}" data-edit-pos-payment="${row.id}" ${isCanceled ? 'disabled' : ''}><i class="ph-bold ${isPendingCredit ? 'ph-hand-coins' : 'ph-credit-card'}"></i> ${isPendingCredit ? 'Cobrar' : 'Pago'}</button>
                 ${POS_OVERVIEW?.policy?.sameDayCancelEnabled ? `<button type="button" class="btn btn-danger" data-cancel-pos-sale="${row.id}" ${isCanceled ? 'disabled' : ''}><i class="ph-bold ph-x-circle"></i> Cancelar</button>` : ''}
               </div>
@@ -7354,6 +7401,9 @@ async function loadPosSalesHistory(page = 1) {
   );
   document.querySelectorAll('[data-invoice-pos-sale]').forEach((button) =>
     button.addEventListener('click', () => { openPosInvoiceModal(button.dataset.invoicePosSale); })
+  );
+  document.querySelectorAll('[data-sar-pos-sale]').forEach((button) =>
+    button.addEventListener('click', () => window.issueSarPosSale?.(button.dataset.sarPosSale))
   );
   document.querySelectorAll('[data-global-ticket]').forEach((checkbox) => {
     checkbox.addEventListener('change', () => {
@@ -9697,6 +9747,7 @@ function openProdModal(p = null) {
   $('#pBarcode').value = p ? p.barcode || '' : '';
   syncProductBarcodeStatus();
   $('#pPrice').value = p ? p.price : '';
+  $('#pSarTaxCategory').value = p?.sar_tax_category || '';
   $('#pCat').value = p && p.category_id ? p.category_id : '';
   $('#pActive').checked = p ? !!p.active : true;
   const saleDays = normalizeClientProductSaleDays(p?.saleDays ?? p?.sale_days);
@@ -10303,6 +10354,7 @@ $('#prodForm').addEventListener('submit', async (e) => {
   fd.append('description', $('#pDesc').value);
   fd.append('barcode', $('#pBarcode').value.trim());
   fd.append('price', $('#pPrice').value);
+  if (ME?.tenant?.phoneCountry === 'HN') fd.append('sarTaxCategory', $('#pSarTaxCategory').value);
   fd.append('categoryId', $('#pCat').value);
   fd.append('active', $('#pActive').checked ? '1' : '0');
   fd.append('saleDays', JSON.stringify(saleDays));
