@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#14213d">
+  <title>Menú del negocio</title>
+  <style>
+    :root { --accent:#16a34a; --ink:#17233d; --muted:#65738d; --line:#e2e8f0; --bg:#f5f7fb; }
+    * { box-sizing:border-box; }
+    body { margin:0; color:var(--ink); background:var(--bg); font:15px/1.5 system-ui,-apple-system,Segoe UI,sans-serif; }
+    button,input,a { font:inherit; }
+    a { color:inherit; text-decoration:none; }
+    .hero { background:linear-gradient(135deg,#14213d,#20345b); color:#fff; padding:30px max(18px,calc((100vw - 1180px)/2)); }
+    .brand { display:flex; align-items:center; gap:14px; min-width:0; }
+    .brand img { width:58px; height:58px; border-radius:16px; object-fit:cover; background:#fff; }
+    .brand h1 { margin:0; font-size:clamp(23px,4vw,35px); line-height:1.12; overflow-wrap:anywhere; }
+    .brand p { margin:5px 0 0; color:#d9e4f4; }
+    .hero-bottom { display:flex; align-items:end; justify-content:space-between; gap:16px; margin-top:30px; }
+    .hero-bottom h2 { margin:0; font-size:clamp(20px,3.4vw,30px); }
+    .hero-bottom p { margin:4px 0 0; color:#d9e4f4; }
+    .chat-link,.back-link { display:inline-flex; align-items:center; justify-content:center; min-height:43px; padding:9px 16px; border-radius:12px; font-weight:700; }
+    .chat-link { background:var(--accent); color:#fff; }
+    .back-link { background:#fff; color:#17233d; }
+    main { max-width:1220px; padding:26px 20px 60px; margin:auto; }
+    .controls { display:grid; grid-template-columns:minmax(0,1fr); gap:14px; margin-bottom:20px; }
+    .search { width:100%; min-height:48px; padding:11px 15px; border:1px solid var(--line); border-radius:14px; background:#fff; color:var(--ink); outline:none; box-shadow:0 5px 18px #17233d0b; }
+    .search:focus { border-color:var(--accent); box-shadow:0 0 0 3px color-mix(in srgb,var(--accent) 16%,transparent); }
+    .categories { display:flex; flex-wrap:wrap; gap:8px; }
+    .categories button { border:1px solid var(--line); border-radius:999px; padding:8px 14px; color:var(--ink); background:#fff; cursor:pointer; }
+    .categories button.active { background:var(--accent); color:#fff; border-color:var(--accent); }
+    .count { color:var(--muted); margin:0 0 14px; }
+    .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(240px,1fr)); gap:18px; }
+    .card { display:flex; flex-direction:column; min-width:0; overflow:hidden; background:#fff; border:1px solid var(--line); border-radius:20px; box-shadow:0 10px 28px #17233d0b; }
+    .photo { width:100%; height:180px; object-fit:cover; background:linear-gradient(135deg,#e5f6eb,#eaf0ff); }
+    .placeholder { display:grid; place-items:center; font-size:55px; }
+    .card-content { display:flex; flex-direction:column; flex:1; padding:18px; }
+    .category { color:var(--accent); font-size:11px; font-weight:800; letter-spacing:.08em; text-transform:uppercase; }
+    .card h3 { margin:5px 0 6px; font-size:19px; line-height:1.25; overflow-wrap:anywhere; }
+    .description { color:var(--muted); margin:0 0 14px; overflow-wrap:anywhere; }
+    .price-row { display:flex; align-items:center; flex-wrap:wrap; gap:7px; margin-top:auto; }
+    .price { color:var(--accent); font-size:20px; font-weight:800; }
+    .old-price { color:var(--muted); text-decoration:line-through; }
+    .badge { display:inline-block; align-self:flex-start; margin-top:10px; padding:5px 9px; border-radius:8px; font-size:12px; font-weight:700; color:#92400e; background:#fef3c7; }
+    .card-actions { display:flex; gap:8px; flex-wrap:wrap; margin-top:17px; }
+    .card-actions a { flex:1; min-height:39px; display:grid; place-items:center; padding:8px 10px; border-radius:10px; background:#eff7f1; color:#146b39; font-weight:700; text-align:center; }
+    .card-actions a.order { color:#fff; background:var(--accent); }
+    .single .grid { grid-template-columns:minmax(0,480px); justify-content:center; }
+    .single .photo { height:300px; }
+    .single .card h3 { font-size:26px; }
+    .message { text-align:center; padding:45px 20px; border:1px solid var(--line); border-radius:18px; background:#fff; color:var(--muted); }
+    [hidden] { display:none!important; }
+    @media(max-width:640px) {
+      .hero { padding:20px 17px 24px; }
+      .hero-bottom { align-items:stretch; flex-direction:column; margin-top:25px; }
+      .hero-bottom a { width:100%; }
+      main { padding:18px 13px 40px; }
+      .grid { grid-template-columns:repeat(auto-fill,minmax(min(100%,155px),1fr)); gap:11px; }
+      .photo { height:145px; }
+      .card-content { padding:13px; }
+      .card h3 { font-size:16px; }
+      .description { font-size:13px; }
+      .price { font-size:17px; }
+      .single .grid { grid-template-columns:1fr; }
+      .single .photo { height:min(65vw,290px); }
+      .categories { flex-wrap:nowrap; overflow-x:auto; padding-bottom:5px; }
+      .categories button { flex:none; }
+    }
+  </style>
+</head>
+<body>
+  <header class="hero">
+    <div class="brand"><img id="logo" alt="" hidden><div><h1 id="businessName">Menú</h1><p>Explora nuestros productos</p></div></div>
+    <div class="hero-bottom"><div><h2 id="pageTitle">Menú completo</h2><p id="pageSubtitle">Elige lo que más te guste.</p></div><a id="mainLink" class="chat-link" href="#">Pedir por chatbot</a></div>
+  </header>
+  <main id="main">
+    <div class="controls" id="controls" hidden><input class="search" id="search" type="search" placeholder="Buscar producto o categoría" aria-label="Buscar producto"><div class="categories" id="categories"></div></div>
+    <p class="count" id="count" hidden></p>
+    <div class="grid" id="grid"></div>
+    <div class="message" id="message">Cargando menú…</div>
+  </main>
+  <script>
+    (() => {
+      const slug = decodeURIComponent(location.pathname.split('/')[2] || '');
+      const params = new URLSearchParams(location.search);
+      const productId = params.get('producto');
+      const single = productId !== null;
+      const menuUrl = `/menu/${encodeURIComponent(slug)}`;
+      const chatUrl = `/${encodeURIComponent(slug)}`;
+      const $ = (id) => document.getElementById(id);
+      let products = [];
+      let currency = 'MXN';
+      let category = '';
+      const normalize = (value) => String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+      const money = (value) => { try { return new Intl.NumberFormat('es', { style:'currency', currency }).format(Number(value) || 0); } catch { return `${Number(value) || 0}`; } };
+      const element = (tag, className, content) => { const node = document.createElement(tag); if (className) node.className = className; if (content !== undefined) node.textContent = content; return node; };
+      const safeImage = (value) => /^\/(uploads|static)\/(?!\/)/.test(String(value || '')) && !String(value).includes('..') ? value : '';
+      function card(product) {
+        const article = element('article', 'card');
+        const src = safeImage(product.image);
+        if (src) { const image = element('img', 'photo'); image.src = src; image.alt = product.name || ''; image.loading = 'lazy'; article.append(image); }
+        else article.append(element('div', 'photo placeholder', '🍽️'));
+        const body = element('div', 'card-content');
+        if (product.category_name) body.append(element('span', 'category', product.category_name));
+        body.append(element('h3', '', product.name));
+        if (product.description) body.append(element('p', 'description', product.description));
+        const priceRow = element('div', 'price-row');
+        if (Number(product.promotionalPrice) < Number(product.price)) priceRow.append(element('span', 'old-price', money(product.price)));
+        priceRow.append(element('span', 'price', money(product.promotionalPrice ?? product.price)));
+        body.append(priceRow);
+        if (product.promotion) body.append(element('span', 'badge', product.promotion));
+        if (!product.availableToday) body.append(element('span', 'badge', 'No disponible hoy'));
+        const actions = element('div', 'card-actions');
+        if (!single) { const detail = element('a', '', 'Ver producto'); detail.href = `${menuUrl}?producto=${product.id}`; actions.append(detail); }
+        if (product.availableToday) { const order = element('a', 'order', 'Pedir por chatbot'); order.href = chatUrl; actions.append(order); }
+        if (actions.children.length) body.append(actions);
+        article.append(body);
+        return article;
+      }
+      function render() {
+        const query = normalize($('search').value.trim());
+        const shown = products.filter((p) => (!category || String(p.category_id || '') === category) && (!query || normalize([p.name,p.description,p.category_name].join(' ')).includes(query)));
+        $('grid').replaceChildren(...shown.map(card));
+        $('count').textContent = `${shown.length} ${shown.length === 1 ? 'producto' : 'productos'}`;
+        $('count').hidden = single;
+        $('message').hidden = shown.length > 0;
+        if (!shown.length) $('message').textContent = products.length ? 'No hay productos que coincidan con tu búsqueda.' : 'Todavía no hay productos visibles en este menú.';
+      }
+      function renderCategories() {
+        const values = [...new Map(products.filter((p) => p.category_name).map((p) => [String(p.category_id), p.category_name])).entries()];
+        $('categories').replaceChildren();
+        for (const [id, name] of [['','Todos'], ...values]) {
+          const button = element('button', id === category ? 'active' : '', name);
+          button.type = 'button';
+          button.addEventListener('click', () => { category = id; renderCategories(); render(); });
+          $('categories').append(button);
+        }
+      }
+      async function load() {
+        try {
+          const query = single ? `?producto=${encodeURIComponent(productId)}` : '';
+          const response = await fetch(`/api/chat/${encodeURIComponent(slug)}/menu${query}`, { credentials:'omit', cache:'no-store' });
+          const data = await response.json();
+          if (!response.ok) throw new Error(data.error || 'No se pudo abrir el menú.');
+          products = data.products || [];
+          currency = data.currency || 'MXN';
+          $('businessName').textContent = data.businessName || 'Menú';
+          document.title = `${single ? products[0]?.name || 'Producto' : 'Menú'} · ${data.businessName || 'Negocio'}`;
+          if (/^#[0-9a-f]{6}$/i.test(data.primaryColor || '')) document.documentElement.style.setProperty('--accent', data.primaryColor);
+          const logo = safeImage(data.logo);
+          if (logo) { $('logo').src = logo; $('logo').hidden = false; }
+          $('mainLink').href = chatUrl;
+          if (single) {
+            $('main').classList.add('single');
+            $('pageTitle').textContent = products[0]?.name || 'Producto';
+            $('pageSubtitle').textContent = 'Conoce este producto y visita el menú completo.';
+            $('mainLink').textContent = 'Ver menú completo';
+            $('mainLink').href = menuUrl;
+            $('mainLink').className = 'back-link';
+          } else { $('controls').hidden = false; renderCategories(); }
+          render();
+        } catch (error) { $('message').textContent = error.message || 'No se pudo cargar el menú.'; }
+      }
+      $('search').addEventListener('input', render);
+      load();
+    })();
+  </script>
+</body>
+</html>

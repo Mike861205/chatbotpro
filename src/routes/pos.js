@@ -1303,13 +1303,15 @@ router.get('/overview', async (req, res, next) => {
        ORDER BY ps.opened_at DESC`
     );
     const products = await req.tdb.all(
-      `SELECT p.id, p.category_id, p.name, p.description, p.price::float AS price, p.image, p.sale_days, p.barcode, c.name AS category_name
+      `SELECT p.id, p.category_id, p.name, p.description, p.price::float AS price, p.image, p.sale_days, p.barcode, p.sat_product_code, c.name AS category_name
        FROM {s}.products p
        LEFT JOIN {s}.categories c ON c.id = p.category_id
        WHERE p.active = 1
        ORDER BY COALESCE(c.sort, 0), c.name NULLS FIRST, p.name`
     );
     const availableProducts = products.filter((product) => isProductAvailableToday(product, new Date(), tenantTimeZone(req.tdb)));
+    const unavailableProducts = products.filter((product) => !isProductAvailableToday(product, new Date(), tenantTimeZone(req.tdb)))
+      .map(({ id, name, barcode, sat_product_code }) => ({ id, name, barcode, sat_product_code }));
     const { variantsMap, groupsMap } = await getProductExtrasMaps(req.tdb, availableProducts.map((p) => p.id));
     const taxConfig = await loadProductTaxConfig(req.tdb);
     const soldQtyByProduct = await listSoldQtyByProduct(req.tdb);
@@ -1348,6 +1350,7 @@ router.get('/overview', async (req, res, next) => {
       categories,
       branches,
       products: productsWithPromotions,
+      unavailableProducts,
       productTax: taxConfig,
       barcodeEnabled,
       activeSession,

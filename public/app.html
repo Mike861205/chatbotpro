@@ -11,7 +11,7 @@
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/fill/style.css" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/duotone/style.css" />
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-  <link rel="stylesheet" href="/static/css/styles.css?v=20260929-qr-pdf" />
+  <link rel="stylesheet" href="/static/css/styles.css?v=20260929-product-menu-qr" />
   <link rel="icon" type="image/svg+xml" href="/static/favicon.svg" />
   <link rel="icon" type="image/png" href="/static/chatbotpro100.png" />
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
@@ -240,12 +240,21 @@
         <div class="pos-shell">
           <div class="pos-main">
             <div class="card pos-catalog-card">
-              <div class="pos-catalog-head" style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap;margin-bottom:16px">
+              <div class="pos-catalog-head">
                 <div>
                   <h3 id="posCatalogTitle" style="margin-bottom:8px"><i class="ph-bold ph-storefront"></i> Catálogo para cobrar</h3>
                   <div class="hint" id="posCatalogHint">Aquí aparecen automáticamente los productos activos dados de alta por categoría.</div>
                 </div>
-                <div class="field pos-barcode-search" id="posBarcodeSearch" hidden style="min-width:280px;margin:0">
+                <div class="field pos-product-search" id="posProductSearchWrap">
+                  <label for="posProductSearch"><i class="ph-bold ph-magnifying-glass"></i> Buscar producto</label>
+                  <div class="pos-product-search-control">
+                    <i class="ph-bold ph-magnifying-glass" aria-hidden="true"></i>
+                    <input id="posProductSearch" type="search" autocomplete="off" spellcheck="false" placeholder="Nombre, categoría o código" aria-controls="posProductGrid" />
+                    <button type="button" id="posProductSearchClear" aria-label="Limpiar búsqueda" title="Limpiar búsqueda" hidden><i class="ph-bold ph-x"></i></button>
+                  </div>
+                  <div class="hint">Filtra mientras escribes.</div>
+                </div>
+                <div class="field pos-barcode-search" id="posBarcodeSearch" hidden>
                   <label for="posBarcodeInput"><i class="ph-bold ph-barcode"></i> Escanear código</label>
                   <input id="posBarcodeInput" type="text" inputmode="none" autocomplete="off" placeholder="Apunta el lector y presiona Enter" />
                   <div class="hint" id="posBarcodeHint">El lector funciona como teclado. También puedes escribir el código.</div>
@@ -482,6 +491,10 @@
             <button class="btn btn-primary" type="submit"><i class="ph-bold ph-floppy-disk"></i> Guardar IVA</button>
           </div>
         </form>
+        <div class="product-qr-panel" id="productQrPanel">
+          <div class="product-qr-panel-copy"><i class="ph-bold ph-qr-code"></i><div><b>Menú QR para clientes</b><span id="productQrPanelHint">Enciéndelo para compartir el menú completo o un producto individual. Cada QR abre una página pública adaptable al celular.</span></div></div>
+          <div class="product-qr-panel-controls"><button type="button" class="btn btn-ghost" id="generalProductQrBtn" hidden><i class="ph-bold ph-qr-code"></i> QR del menú completo</button><label class="switch" title="Activar o desactivar los QR del menú"><input type="checkbox" id="productQrEnabled" aria-label="Activar menú QR para clientes"><span class="track"></span></label></div>
+        </div>
         <div class="prod-toolbar">
           <div class="chips" id="catChips"></div>
           <div class="prod-toolbar-actions">
@@ -3266,16 +3279,17 @@
       <p class="hint">Elige el canal y cómo acomodar los códigos en tu hoja PDF.</p>
       <fieldset class="qr-pdf-mode-picker"><legend>Formato de descarga</legend>
         <label class="qr-pdf-option"><input type="radio" name="qrPdfMode" value="single" checked /><span><b>Un solo QR</b><small>Una página con el código grande para imprimir o compartir.</small></span></label>
-        <label class="qr-pdf-option"><input type="radio" name="qrPdfMode" value="sheet" /><span><b>Varios QR en una hoja</b><small>Coloca los códigos del chatbot y WhatsApp en la misma página.</small></span></label>
+        <label class="qr-pdf-option"><input type="radio" name="qrPdfMode" value="sheet" /><span><b>Varios QR en una hoja</b><small>Imprime juntos los canales que ya estén configurados.</small></span></label>
       </fieldset>
       <fieldset class="qr-pdf-source-picker" id="qrPdfSingleSources"><legend>¿Qué canal quieres descargar?</legend>
         <label class="qr-pdf-option"><input type="radio" name="qrPdfSingleSource" value="chatbot" /><span><b>Mi chatbot</b><small>Abre la liga para hacer pedidos en línea.</small></span></label>
         <label class="qr-pdf-option"><input type="radio" name="qrPdfSingleSource" value="whatsapp" /><span><b>WhatsApp</b><small>Abre el chat del negocio con el mensaje de pedido.</small></span></label>
       </fieldset>
       <fieldset class="qr-pdf-source-picker" id="qrPdfSheetSources" hidden>
-        <legend>QR que incluirás en la hoja</legend>
+        <legend>Canales para tu hoja</legend>
         <label class="qr-pdf-option"><input type="checkbox" id="qrPdfIncludeChatbot" checked /><span><b>Mi chatbot</b><small>Liga para pedidos en línea.</small></span></label>
         <label class="qr-pdf-option"><input type="checkbox" id="qrPdfIncludeWhatsApp" checked /><span><b>WhatsApp</b><small>Chat directo con el negocio.</small></span></label>
+        <p class="qr-pdf-sheet-hint" id="qrPdfSheetHint" role="status" aria-live="polite"></p>
       </fieldset>
       <div class="qr-pdf-status" id="qrPdfStatus" role="status" aria-live="polite"></div>
       <div class="modal-actions"><button type="button" class="btn btn-ghost" id="qrPdfCancel">Cancelar</button><button type="button" class="btn btn-primary" id="qrPdfCreate"><i class="ph-bold ph-download-simple"></i> Descargar PDF</button></div>
@@ -3564,9 +3578,20 @@
     </div>
   </div>
 
+  <div class="modal-bg" id="productQrModal">
+    <div class="modal product-qr-modal">
+      <button type="button" class="modal-close" id="productQrClose" aria-label="Cerrar"><i class="ph-bold ph-x"></i></button>
+      <div class="product-qr-modal-header"><span><i class="ph-bold ph-qr-code"></i> LISTO PARA COMPARTIR</span><h3 id="productQrTitle">Código QR</h3><p id="productQrDescription"></p></div>
+      <div class="product-qr-preview"><img id="productQrImage" alt="Código QR del menú"><span>Escanea con la cámara del celular</span></div>
+      <div class="field"><label for="productQrUrl">Enlace público</label><input type="text" id="productQrUrl" readonly></div>
+      <div class="product-qr-modal-actions"><a class="btn btn-ghost" id="productQrPreview" target="_blank" rel="noopener noreferrer"><i class="ph-bold ph-arrow-square-out"></i> Vista previa</a><button type="button" class="btn btn-ghost" id="productQrCopy"><i class="ph-bold ph-copy"></i> Copiar enlace</button><button type="button" class="btn btn-primary" id="productQrDownload"><i class="ph-bold ph-download-simple"></i> Descargar PDF</button></div>
+      <p class="hint" id="productQrStatus" role="status" aria-live="polite"></p>
+    </div>
+  </div>
+
   <script src="/socket.io/socket.io.js"></script>
   <script src="/static/vendor/qz-tray.js?v=2.3.0"></script>
   <script src="/static/js/whatsapp.js?v=20260928-zernio-setup"></script>
-  <script src="/static/js/app.js?v=20260929-qr-pdf"></script>
+  <script src="/static/js/app.js?v=20260929-product-menu-qr"></script>
 </body>
 </html>

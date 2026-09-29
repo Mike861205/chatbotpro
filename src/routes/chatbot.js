@@ -5,6 +5,10 @@ const { q, tdb, getSetting } = require('../db');
 const { decrypt } = require('../utils/crypto');
 const { handleMessage, newSessionId } = require('../chatbot/engine');
 const { parseFloatingIcons } = require('../utils/chatbotAppearance');
+const { normalizeTimeZone } = require('../utils/regional');
+const { productAvailabilityFields } = require('../utils/productAvailability');
+const { loadProductTaxConfig, effectiveProductPrice } = require('../utils/productTax');
+const { getActivePromotions, decorateCatalogProducts } = require('../utils/promotions');
 
 const router = express.Router();
 
@@ -30,6 +34,7 @@ async function findTenant(req, res, next) {
     }
     req.tenant = rows[0];
     req.tdb = tdb(rows[0].slug);
+    req.tdb.timezone = normalizeTimeZone(rows[0].timezone);
     next();
   } catch (e) { next(e); }
 }
@@ -61,6 +66,48 @@ router.get('/:slug/info', findTenant, async (req, res, next) => {
         || normalizeWhatsappNumber(configuredWhatsapp)
         || normalizeWhatsappNumber(fallbackWhatsapp),
       floatingIcons: parseFloatingIcons(await getSetting(req.tdb, 'chatbot_floating_icons_json')),
+    });
+  } catch (e) { next(e); }
+});
+
+// Menú público para los QR de Productos
+router.get('/:slug/menu', findTenant, async (req, res, next) => {
+  try {
+    if ((await getSetting(req.tdb, 'product_qr_enabled', '0')) !== '1') {
+      return res.status(404).json({ error: 'El menú QR no está activado para este negocio' });
+    }
+    const requestedId = req.query.producto === undefined ? null : Number(req.query.producto);
+    if (requestedId !== null && (!Number.isSafeInteger(requestedId) || requestedId <= 0)) {
+      return res.status(404).json({ error: 'Producto no encontrado' });
+    }
+    const rows = await req.tdb.all(
+      `SELECT p.id, p.category_id, p.name, p.description, p.price::float AS price, p.image, p.sale_days,
+              c.name AS category_name
+       FROM {s}.products p
+       LEFT JOIN {s}.categories c ON c.id = p.category_id
+       WHERE p.active = 1
+       ORDER BY COALESCE(c.sort, 0), c.name NULLS FIRST, p.name`
+    );
+    const now = new Date();
+    const tax = await loadProductTaxConfig(req.tdb);
+    const products = decorateCatalogProducts(rows.map((product) => ({
+      ...product,
+      price: effectiveProductPrice(product.price, tax),
+      ...productAvailabilityFields(product, now, req.tdb.timezone),
+    })), await getActivePromotions(req.tdb, 'chatbot'));
+    const selected = requestedId === null ? products : products.filter((product) => Number(product.id) === requestedId);
+    if (requestedId !== null && !selected.length) return res.status(404).json({ error: 'Producto no encontrado' });
+    res.json({
+      businessName: await getSetting(req.tdb, 'business_name', req.tenant.business_name),
+      logo: req.tenant.logo,
+      primaryColor: req.tenant.primary_color,
+      currency: await getSetting(req.tdb, 'currency', 'MXN'),
+      slug: req.tenant.slug,
+      products: selected.map(({ id, name, description, category_id, category_name, image, availableToday,
+        price, promotionalPrice, activePromotion }) => ({
+        id, name, description, category_id, category_name, image, availableToday,
+        price, promotionalPrice, promotion: activePromotion?.label || activePromotion?.name || '',
+      })),
     });
   } catch (e) { next(e); }
 });

@@ -1008,6 +1008,17 @@ router.get('/analytics', async (req, res, next) => {
 router.get('/', async (req, res, next) => {
   try {
     const connections = await req.tdb.all('SELECT * FROM {s}.whatsapp_connections ORDER BY id DESC');
+    const publicConnections = connections.map((row) => connectionPublic(row, req));
+    if (req.query.connectionsOnly === '1') {
+      return res.json({
+        connections: publicConnections.map(({ id, phoneNumber, enabled, sandbox }) => ({
+          id,
+          phoneNumber,
+          enabled,
+          sandbox: sandbox?.number ? { number: sandbox.number } : null,
+        })),
+      });
+    }
     const conversations = await req.tdb.all(
       `SELECT c.id,c.external_id,c.status,c.bot_enabled,c.last_message_at,c.updated_at,
               c.customer_phone_enc,c.customer_name_enc,
@@ -1016,7 +1027,7 @@ router.get('/', async (req, res, next) => {
        ORDER BY COALESCE(c.last_message_at,c.updated_at) DESC LIMIT 100`
     );
     res.json({
-      connections: connections.map((row) => connectionPublic(row, req)),
+      connections: publicConnections,
       conversations: conversations.map((row) => ({
         id: Number(row.id), externalId: row.external_id, status: row.status, botEnabled: Boolean(Number(row.bot_enabled)),
         lastMessageAt: row.last_message_at, updatedAt: row.updated_at, lastMessage: row.last_message || '',

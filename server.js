@@ -136,6 +136,7 @@ app.get('/superadmin', page('superadmin.html'));
 app.get('/resellers/panel', page('reseller.html'));
 app.get('/resellers/:slug', validSlug, page('reseller-login.html'));
 app.get('/c/:slug', validSlug, page('chat.html'));
+app.get('/menu/:slug', validSlug, page('menu.html'));
 app.get('/facturacion/:slug', validSlug, page('invoice.html'));
 app.get('/autoservicio/:slug/:token', validSlug, validKdsToken, page('self-service.html'));
 app.get('/:slug', validSlug, async (req, res, next) => {

@@ -80,6 +80,7 @@ let KDS_CONFIG = { areas: [], categories: [], products: [], branches: [] };
 let KDS_PRODUCT_SELECTED = new Set();
 let POS_CART = [];
 let POS_CATEGORY_FILTER = 'all';
+let POS_PRODUCT_SEARCH = '';
 let POS_PRODUCT_SORT = 'top_sold';
 let POS_BARCODE_BUFFER = '';
 let POS_BARCODE_LAST_KEY_AT = 0;
@@ -4264,7 +4265,8 @@ function addPosProductByBarcode(rawBarcode) {
   if (!barcode) return false;
   const product = (POS_OVERVIEW?.products || []).find((item) => normalizePosBarcode(item.barcode) === barcode);
   if (!product) {
-    toast(`No encontré un producto con el código ${barcode}`, true);
+    const unavailable = (POS_OVERVIEW?.unavailableProducts || []).find((item) => normalizePosBarcode(item.barcode) === barcode);
+    toast(unavailable ? `${unavailable.name} no está disponible para venta hoy.` : `No encontré un producto con el código ${barcode}`, true);
     return false;
   }
   addPosProduct(product.id);
@@ -4631,10 +4633,29 @@ async function submitPosCancelSale() {
 
 function getVisiblePosProducts() {
   const products = POS_OVERVIEW?.products || [];
-  const filtered = POS_CATEGORY_FILTER === 'all'
+  const categories = POS_OVERVIEW?.categories || [];
+  const filteredByCategory = POS_CATEGORY_FILTER === 'all'
     ? products
     : products.filter((product) => String(product.category_id || 'none') === POS_CATEGORY_FILTER);
-  return sortCatalogItems(filtered, POS_OVERVIEW?.categories || [], POS_PRODUCT_SORT);
+  const query = String(POS_PRODUCT_SEARCH || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim();
+  if (!query) return sortCatalogItems(filteredByCategory, categories, POS_PRODUCT_SORT);
+  const numericId = /^\d+$/.test(query) && Number.isSafeInteger(Number(query)) ? Number(query) : null;
+  const terms = query.split(/\s+/).filter(Boolean);
+  const matches = filteredByCategory.filter((product) => {
+    const categoryName = product.category_name || categories.find((category) => String(category.id) === String(product.category_id))?.name || '';
+    const searchText = [product.name, categoryName, product.description, product.barcode, product.sat_product_code, product.reference, product.sku, product.code, product.id]
+      .filter((value) => value !== null && value !== undefined)
+      .join(' ').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+    return (numericId !== null && Number(product.id) === numericId)
+      || terms.every((term) => searchText.includes(term))
+      || normalizePosBarcode(product.barcode).includes(normalizePosBarcode(query));
+  });
+  return sortCatalogItems(matches, categories, POS_PRODUCT_SORT).sort((a, b) => {
+    const score = (product) => normalizePosBarcode(product.barcode) === normalizePosBarcode(query) ? 3
+      : String(product.sat_product_code || '').toLowerCase() === query ? 2
+      : numericId !== null && Number(product.id) === numericId ? 1 : 0;
+    return score(b) - score(a);
+  });
 }
 
 function syncPosCartFromCatalog() {
@@ -6280,6 +6301,12 @@ function renderPosSession() {
 function renderPosCatalog() {
   const cats = POS_OVERVIEW?.categories || [];
   const products = getVisiblePosProducts();
+  const search = POS_PRODUCT_SEARCH.trim().normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+  const unavailableMatch = !products.length && search
+    ? (POS_OVERVIEW?.unavailableProducts || []).find((product) =>
+      [product.name, product.barcode, product.sat_product_code, product.id]
+        .some((value) => String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().includes(search)))
+    : null;
   $('#posCatChips').innerHTML = [
     `<button class="${POS_CATEGORY_FILTER === 'all' ? 'on' : ''}" data-pos-cat="all">Todos</button>`,
     ...cats.map((cat) => `<button class="${POS_CATEGORY_FILTER === String(cat.id) ? 'on' : ''}" data-pos-cat="${cat.id}">${esc(cat.name)}</button>`),
@@ -6299,6 +6326,7 @@ function renderPosCatalog() {
             <div class="pos-prod-body">
               <span class="pos-prod-cat">${esc(product.category_name || 'Sin categoría')}</span>
               <b>${esc(product.name)}</b>
+              ${product.barcode ? `<small class="pos-prod-barcode">Código: ${esc(product.barcode)}</small>` : ''}
               ${product.activePromotion ? `<span class="pos-promo-subtitle"><span class="pos-promo-kicker"><i class="ph-fill ph-lightning"></i> PROMOCIÓN</span><span class="pos-promo-kind">${esc(product.activePromotion.label || product.activePromotion.name)}</span></span>` : ''}
               <small>${esc(product.description || 'Producto listo para venta mostrador')}</small>
             </div>
@@ -6306,11 +6334,38 @@ function renderPosCatalog() {
           </button>`
         )
         .join('')
-    : emptyHTML('ph-storefront', 'Sin productos activos', 'Activa productos en tu catálogo para cobrarlos aquí.');
+    : POS_PRODUCT_SEARCH.trim()
+      ? unavailableMatch
+        ? emptyHTML('ph-calendar-x', 'No disponible hoy', `${esc(unavailableMatch.name)} coincide con la búsqueda, pero no se vende hoy.`)
+        : emptyHTML('ph-magnifying-glass', 'Sin coincidencias', `No encontramos productos para “${esc(POS_PRODUCT_SEARCH.trim())}”. Revisa el código en Productos y que el artículo esté activo.`)
+      : emptyHTML('ph-storefront', 'Sin productos activos', 'Activa productos en tu catálogo para cobrarlos aquí.');
   document.querySelectorAll('[data-pos-product]').forEach((button) =>
     button.addEventListener('click', () => addPosProduct(button.dataset.posProduct))
   );
 }
+
+$('#posProductSearch')?.addEventListener('input', (event) => {
+  POS_PRODUCT_SEARCH = event.currentTarget.value;
+  if (POS_PRODUCT_SEARCH.trim()) POS_CATEGORY_FILTER = 'all';
+  if ($('#posProductSearchClear')) $('#posProductSearchClear').hidden = !POS_PRODUCT_SEARCH;
+  renderPosCatalog();
+});
+$('#posProductSearchClear')?.addEventListener('click', () => {
+  const input = $('#posProductSearch');
+  if (!input) return;
+  input.value = '';
+  POS_PRODUCT_SEARCH = '';
+  $('#posProductSearchClear').hidden = true;
+  renderPosCatalog();
+  input.focus();
+});
+$('#posProductSearch')?.addEventListener('keydown', (event) => {
+  if (event.key !== 'Enter' || !POS_PRODUCT_SEARCH.trim()) return;
+  const product = getVisiblePosProducts()[0];
+  if (!product) return;
+  event.preventDefault();
+  addPosProduct(product.id);
+});
 
 function renderPosCart() {
   const el = $('#posCartCard');
@@ -8351,6 +8406,119 @@ $('#promotionForm')?.addEventListener('submit', async (event) => {
 /* ===== Productos ===== */
 let CATS = [];
 let PRODUCTS_CACHE = [];
+let PRODUCT_QR_CURRENT = null;
+
+function productQrEnabled() {
+  return SETTINGS?.product_qr_enabled === '1';
+}
+
+function syncProductQrControls() {
+  const enabled = productQrEnabled();
+  const checkbox = $('#productQrEnabled');
+  if (checkbox) checkbox.checked = enabled;
+  $('#productQrPanel')?.classList.toggle('is-active', enabled);
+  const generalButton = $('#generalProductQrBtn');
+  if (generalButton) generalButton.hidden = !enabled;
+  const hint = $('#productQrPanelHint');
+  if (hint) hint.textContent = enabled
+    ? 'El menú completo y cada producto activo tienen su propio QR. Puedes descargarlo en PDF para imprimirlo.'
+    : 'Enciéndelo para compartir el menú completo o un producto individual. Cada QR abre una página pública adaptable al celular.';
+}
+
+function productBarcodeHTML(product) {
+  return product.barcode
+    ? `<span class="prod-barcode"><i class="ph-bold ph-barcode"></i> Código de barras: <code>${esc(product.barcode)}</code></span>`
+    : '';
+}
+
+function productQrButtonHTML(product) {
+  if (!productQrEnabled() || !product.active) return '';
+  return `<button class="btn btn-ghost" type="button" data-product-qr="${product.id}" title="QR público de ${esc(product.name)}"><i class="ph-bold ph-qr-code"></i> QR</button>`;
+}
+
+function openProductQrModal(product = null) {
+  if (!productQrEnabled()) return toast('Activa el menú QR en Productos primero.', true);
+  if (product && !product.active) return toast('Activa este producto para compartirlo por QR.', true);
+  const slug = ME?.tenant?.slug || SETTINGS?.slug;
+  if (!slug) return toast('No se encontró el enlace público del negocio.', true);
+  const url = new URL(`/menu/${encodeURIComponent(slug)}`, location.origin);
+  if (product) url.searchParams.set('producto', String(product.id));
+  PRODUCT_QR_CURRENT = { url: url.href, product };
+  $('#productQrTitle').textContent = product ? `QR de ${product.name}` : 'QR del menú completo';
+  $('#productQrDescription').textContent = product
+    ? 'Abre la ficha pública de este producto. El cliente también puede visitar el menú completo.'
+    : 'Abre el menú público adaptable al celular con tus productos activos.';
+  $('#productQrUrl').value = url.href;
+  $('#productQrPreview').href = url.href;
+  const qrUrl = new URL('https://api.qrserver.com/v1/create-qr-code/');
+  qrUrl.searchParams.set('size', '440x440');
+  qrUrl.searchParams.set('margin', '16');
+  qrUrl.searchParams.set('data', url.href);
+  $('#productQrImage').src = qrUrl.href;
+  $('#productQrStatus').textContent = ['localhost', '127.0.0.1'].includes(location.hostname)
+    ? 'Esta liga usa localhost: para que clientes la abran desde su celular, descarga el QR desde el dominio público del negocio.'
+    : '';
+  $('#productQrModal').classList.add('show');
+  $('#productQrClose').focus();
+}
+
+$('#productQrEnabled')?.addEventListener('change', async (event) => {
+  const checkbox = event.currentTarget;
+  const previous = productQrEnabled();
+  checkbox.disabled = true;
+  try {
+    const form = new FormData();
+    form.append('product_qr_enabled', checkbox.checked ? '1' : '0');
+    await api('/api/settings', { method: 'PUT', body: form });
+    SETTINGS.product_qr_enabled = checkbox.checked ? '1' : '0';
+    syncProductQrControls();
+    renderProductsGrid();
+    if (!checkbox.checked) $('#productQrModal')?.classList.remove('show');
+    toast(checkbox.checked ? 'Menú QR activado' : 'Menú QR desactivado');
+  } catch (error) {
+    checkbox.checked = previous;
+    toast(error.message, true);
+  } finally { checkbox.disabled = false; }
+});
+$('#generalProductQrBtn')?.addEventListener('click', () => openProductQrModal());
+$('#productQrClose')?.addEventListener('click', () => $('#productQrModal')?.classList.remove('show'));
+$('#productQrCopy')?.addEventListener('click', async () => {
+  if (!PRODUCT_QR_CURRENT) return;
+  try { await navigator.clipboard.writeText(PRODUCT_QR_CURRENT.url); toast('Enlace copiado'); }
+  catch { $('#productQrUrl').select(); document.execCommand('copy'); toast('Enlace copiado'); }
+});
+$('#productQrDownload')?.addEventListener('click', async (event) => {
+  if (!PRODUCT_QR_CURRENT) return;
+  const button = event.currentTarget;
+  const { url, product } = PRODUCT_QR_CURRENT;
+  const status = $('#productQrStatus');
+  if (!globalThis.jspdf?.jsPDF) { status.textContent = 'No se cargó el generador de PDF. Recarga la página.'; return; }
+  button.disabled = true;
+  status.textContent = 'Preparando el código QR para imprimir…';
+  try {
+    const image = await fetchTenantQrPng(url);
+    const doc = new globalThis.jspdf.jsPDF({ orientation: 'portrait', unit: 'mm', format: 'letter', compress: true });
+    const width = doc.internal.pageSize.getWidth();
+    const name = String(ME?.tenant?.businessName || SETTINGS?.business_name || 'Mi negocio').trim();
+    const title = product ? product.name : 'Menú completo';
+    drawTenantQrPdfTitle(doc, name, width / 2, 25, 19, width - 28);
+    doc.setTextColor(22, 39, 69);
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(15);
+    doc.text(doc.splitTextToSize(title, width - 36), width / 2, 40, { align: 'center' });
+    doc.addImage(image, 'PNG', (width - 112) / 2, 70, 112, 112, 'product-menu-qr', 'FAST');
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(11);
+    doc.text('Escanea para ver el producto o el menú', width / 2, 195, { align: 'center' });
+    doc.setFontSize(8);
+    doc.setTextColor(95, 110, 132);
+    doc.text(doc.splitTextToSize(url, width - 36), width / 2, 207, { align: 'center' });
+    const fileToken = String(product ? `producto_${product.id}` : 'menu_completo');
+    doc.save(`QR_${fileToken}_${String(ME?.tenant?.slug || 'negocio')}.pdf`);
+    status.textContent = 'PDF listo para imprimir o compartir.';
+  } catch (error) { status.textContent = error.message || 'No se pudo descargar el PDF.'; }
+  finally { button.disabled = false; }
+});
 let PRODUCT_CAT_FILTER = 'all';
 let PRODUCT_VIEW_MODE = 'card';
 let PRODUCT_VIEW_SWITCH_BOUND = false;
@@ -8669,10 +8837,12 @@ function renderProductsGrid() {
           <span class="price-tag">${fmtMoney(p.price)}</span>
         </div>
         <div class="desc">${esc(p.description || '')}</div>
+        ${productBarcodeHTML(p)}
       </div>
       <div class="row-actions">
         <span class="state-dot ${p.active ? 'on' : 'off'}">${p.active ? 'ACTIVO' : 'OCULTO'}</span>
         ${catalogAiImageButton(p, 'row')}
+        ${productQrButtonHTML(p)}
         <button class="btn btn-ghost" data-edit="${p.id}"><i class="ph-bold ph-pencil-simple"></i> Editar</button>
         <button class="btn btn-danger btn-icon" data-del="${p.id}" title="Eliminar"><i class="ph-bold ph-trash"></i></button>
       </div>
@@ -8694,9 +8864,11 @@ function renderProductsGrid() {
           return `<article class="prod-mini ${p.active ? '' : 'inactive'}">
       <div class="mini-thumb">${p.image ? `<img src="${esc(p.image)}" alt="" loading="lazy" />` : '<i class="ph ph-fork-knife"></i>'}</div>
       <div class="mini-name">${esc(p.name)}${extras.length ? ` ${extras.join('')}` : ''}</div>
+      ${productBarcodeHTML(p)}
       <div class="mini-price">${fmtMoney(p.price)}</div>
       <div class="mini-actions">
         ${catalogAiImageButton(p, 'compact')}
+        ${productQrButtonHTML(p)}
         <button class="btn btn-ghost" data-edit="${p.id}"><i class="ph-bold ph-pencil-simple"></i></button>
         <button class="btn btn-danger btn-icon" data-del="${p.id}" title="Eliminar"><i class="ph-bold ph-trash"></i></button>
       </div>
@@ -8722,9 +8894,11 @@ function renderProductsGrid() {
         ${p.category_name ? `<span class="cat">${esc(p.category_name)}</span>` : ''}
         <div class="name">${esc(p.name)}</div>
         <div class="desc">${esc(p.description || '')}</div>
+        ${productBarcodeHTML(p)}
         ${topBadge || scheduleBadge || varBadge || modBadge ? `<div class="prod-badges-row">${topBadge}${scheduleBadge}${varBadge}${modBadge}</div>` : ''}
       </div>
       <div class="actions">
+        ${productQrButtonHTML(p)}
         <button class="btn btn-ghost" data-edit="${p.id}"><i class="ph-bold ph-pencil-simple"></i> Editar</button>
         <button class="btn btn-danger btn-icon" data-del="${p.id}" title="Eliminar"><i class="ph-bold ph-trash"></i></button>
       </div>
@@ -8739,6 +8913,9 @@ function renderProductsGrid() {
   );
   grid.querySelectorAll('[data-generate-product-image]').forEach((button) =>
     button.addEventListener('click', () => generateCatalogProductImages([Number(button.dataset.generateProductImage)]))
+  );
+  grid.querySelectorAll('[data-product-qr]').forEach((button) =>
+    button.addEventListener('click', () => openProductQrModal(PRODUCTS_CACHE.find((product) => String(product.id) === button.dataset.productQr)))
   );
   document.querySelectorAll('[data-del]').forEach((b) =>
     b.addEventListener('click', async () => {
@@ -8756,6 +8933,7 @@ async function loadProducts() {
   PRODUCT_VIEW_MODE = readStoredProductViewMode();
   POS_PRODUCT_SORT = normalizePosSortMode(SETTINGS?.pos_catalog_sort_mode || readStoredPosSortMode());
   fillProductTaxForm();
+  syncProductQrControls();
   CATS = await api('/api/products/categories');
   PRODUCTS_CACHE = await api('/api/products');
   PRODUCT_CATALOG_TOTAL = PRODUCTS_CACHE.length;
@@ -11283,9 +11461,25 @@ function initDeliveryZoneModuleEvents() {
   });
 }
 
-function getTenantQrDownloadSources() {
+let TENANT_QR_DIALOG_REQUEST_ID = 0;
+
+async function getTenantQrDownloadSources() {
   const chatbotUrl = String($('#chatLink')?.value || (SETTINGS?.slug ? `${location.origin}/${SETTINGS.slug}` : '')).trim();
-  const whatsappUrl = String($('#whatsappCustomerLink')?.value || '').trim();
+  const customerEntryCard = $('#whatsappCustomerEntryCard');
+  let whatsappUrl = !customerEntryCard?.hidden ? String($('#whatsappCustomerLink')?.value || '').trim() : '';
+  if (!whatsappUrl) {
+    try {
+      const whatsappData = await api('/api/whatsapp?connectionsOnly=1');
+      const connections = Array.isArray(whatsappData?.connections) ? whatsappData.connections : [];
+      const selectedId = WHATSAPP_SELECTED_CONNECTION?.id;
+      const selectedConnection = connections.find((row) => Number(row.id) === Number(selectedId));
+      const connection = [selectedConnection, ...connections].find((row) => row?.enabled && typeof whatsappEntryNumber === 'function' && whatsappEntryNumber(row));
+      const number = connection && whatsappEntryNumber(connection);
+      if (number && typeof whatsappEntryLink === 'function') whatsappUrl = whatsappEntryLink(number);
+    } catch {
+      // A missing WhatsApp configuration should not prevent printing the chatbot QR.
+    }
+  }
   return [
     { key: 'chatbot', label: 'Mi chatbot', url: chatbotUrl },
     { key: 'whatsapp', label: 'WhatsApp', url: whatsappUrl },
@@ -11298,31 +11492,55 @@ function updateQrPdfMode() {
   $('#qrPdfSheetSources').hidden = mode !== 'sheet';
 }
 
-function openTenantQrPdfDialog(preferredSource = 'chatbot') {
-  const sources = getTenantQrDownloadSources();
-  const available = new Set(sources.filter((source) => source.url).map((source) => source.key));
-  if (!available.size) return toast('No hay ligas disponibles para crear códigos QR.', true);
+function updateQrPdfSheetHint() {
+  const hint = $('#qrPdfSheetHint');
+  if (!hint) return;
+  const channelInputs = [$('#qrPdfIncludeChatbot'), $('#qrPdfIncludeWhatsApp')].filter((input) => input && !input.disabled);
+  const selectedCount = channelInputs.filter((input) => input.checked).length;
+  const availableCount = channelInputs.length;
+  if (!selectedCount) {
+    hint.textContent = 'Selecciona al menos un canal para incluir su QR.';
+    return;
+  }
+  const selectedLabel = selectedCount === 1 ? 'Se incluirá 1 QR' : `Se incluirán ${selectedCount} QR`;
+  const availableLabel = availableCount === 1
+    ? 'Solo hay 1 canal configurado.'
+    : `Hay ${availableCount} canales configurados.`;
+  hint.textContent = `${selectedLabel} en la hoja. ${availableLabel}`;
+}
 
+async function openTenantQrPdfDialog(preferredSource = 'chatbot') {
+  const requestId = ++TENANT_QR_DIALOG_REQUEST_ID;
   const singleMode = $('input[name="qrPdfMode"][value="single"]');
   if (singleMode) singleMode.checked = true;
+  updateQrPdfMode();
+  $('#qrPdfStatus').textContent = 'Buscando los canales configurados…';
+  $('#qrPdfCreate').disabled = true;
+  $('#qrPdfDownloadModal').classList.add('show');
+  const sources = await getTenantQrDownloadSources();
+  if (requestId !== TENANT_QR_DIALOG_REQUEST_ID) return;
+  const available = new Set(sources.filter((source) => source.url).map((source) => source.key));
+  if (!available.size) {
+    $('#qrPdfDownloadModal').classList.remove('show');
+    return toast('No hay ligas disponibles para crear códigos QR.', true);
+  }
+
   const singleSource = available.has(preferredSource) ? preferredSource : available.has('chatbot') ? 'chatbot' : 'whatsapp';
   for (const source of sources) {
     const one = $(`input[name="qrPdfSingleSource"][value="${source.key}"]`);
     const many = $(`#qrPdfInclude${source.key === 'chatbot' ? 'Chatbot' : 'WhatsApp'}`);
+    one.closest('.qr-pdf-option')?.classList.toggle('disabled', !source.url);
+    many.closest('.qr-pdf-option')?.classList.toggle('disabled', !source.url);
     one.disabled = !source.url;
     one.checked = source.key === singleSource;
     many.disabled = !source.url;
     many.checked = Boolean(source.url);
   }
-  const sheetMode = $('input[name="qrPdfMode"][value="sheet"]');
-  sheetMode.disabled = available.size < 2;
-  sheetMode.closest('.qr-pdf-option')?.classList.toggle('disabled', sheetMode.disabled);
-  $('#qrPdfStatus').textContent = sheetMode.disabled
-    ? 'Para descargar varios QR en una hoja, configura también el canal de WhatsApp.' : '';
+  $('#qrPdfStatus').textContent = '';
   $('#qrPdfCreate').disabled = false;
   $('#qrPdfCreate').innerHTML = '<i class="ph-bold ph-download-simple"></i> Descargar PDF';
+  updateQrPdfSheetHint();
   updateQrPdfMode();
-  $('#qrPdfDownloadModal').classList.add('show');
   $('#qrPdfClose').focus();
 }
 
@@ -11355,6 +11573,18 @@ function tenantQrPdfFilename() {
   return `QR_${name || 'Mi_negocio'}.pdf`;
 }
 
+function drawTenantQrPdfTitle(doc, text, x, y, fontSize, maxWidth) {
+  const options = { align: 'center', maxWidth };
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(fontSize);
+  doc.setTextColor(14, 165, 233);
+  doc.text(text, x + 0.85, y + 0.8, options);
+  doc.setTextColor(124, 58, 237);
+  doc.text(text, x + 0.4, y + 0.4, options);
+  doc.setTextColor(22, 39, 69);
+  doc.text(text, x, y, options);
+}
+
 async function downloadTenantQrPdf() {
   const status = $('#qrPdfStatus');
   const button = $('#qrPdfCreate');
@@ -11363,13 +11593,13 @@ async function downloadTenantQrPdf() {
     return;
   }
 
-  const available = getTenantQrDownloadSources();
+  const available = await getTenantQrDownloadSources();
   const mode = $('input[name="qrPdfMode"]:checked')?.value || 'single';
   const selected = mode === 'sheet'
     ? available.filter((source) => $(`#qrPdfInclude${source.key === 'chatbot' ? 'Chatbot' : 'WhatsApp'}`).checked)
     : [available.find((source) => source.key === $('input[name="qrPdfSingleSource"]:checked')?.value)].filter(Boolean);
-  if (mode === 'sheet' && selected.length < 2) {
-    status.textContent = 'Selecciona los dos canales para acomodar varios QR en una hoja.';
+  if (mode === 'sheet' && !selected.length) {
+    status.textContent = 'Selecciona al menos un canal configurado para incluir su código QR.';
     return;
   }
   if (!selected.length || selected.some((source) => !source.url)) {
@@ -11388,12 +11618,15 @@ async function downloadTenantQrPdf() {
     const businessName = String(ME?.tenant?.businessName || SETTINGS?.business_name || 'Mi negocio').trim().slice(0, 90);
     const textColor = [22, 39, 69];
 
-    doc.setTextColor(...textColor);
-    doc.setFont('helvetica', 'bold');
-    doc.setFontSize(19);
-    doc.text(businessName, width / 2, 21, { align: 'center', maxWidth: width - 30 });
-    doc.setFontSize(mode === 'single' ? 13 : 15);
-    doc.text(mode === 'single' ? `Pide por ${selected[0].label}` : 'Elige cómo quieres hacer tu pedido', width / 2, 31, { align: 'center' });
+    drawTenantQrPdfTitle(doc, businessName, width / 2, 21, 19, width - 30);
+    drawTenantQrPdfTitle(
+      doc,
+      mode === 'single' || selected.length === 1 ? `Pide por ${selected[0].label}` : 'Elige cómo quieres hacer tu pedido',
+      width / 2,
+      31,
+      mode === 'single' ? 13 : 15,
+      width - 30,
+    );
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(9);
     doc.setTextColor(95, 110, 132);
@@ -11414,26 +11647,26 @@ async function downloadTenantQrPdf() {
       doc.setTextColor(95, 110, 132);
       doc.text(doc.splitTextToSize(selected[0].url, width - 42), width / 2, 191, { align: 'center' });
     } else {
-      const cardWidth = 92;
+      const cardWidth = selected.length === 1 ? 116 : 92;
       const cardGap = 8;
-      const left = (width - (cardWidth * 2 + cardGap)) / 2;
-      const qrSize = 72;
+      const left = (width - (cardWidth * selected.length + cardGap * (selected.length - 1))) / 2;
+      const qrSize = selected.length === 1 ? 90 : 72;
+      const qrTop = selected.length === 1 ? 68 : 72;
+      const instructionTop = selected.length === 1 ? 170 : 154;
+      const urlTop = selected.length === 1 ? 182 : 166;
       selected.forEach((source, index) => {
         const cardX = left + index * (cardWidth + cardGap);
         const qrX = cardX + (cardWidth - qrSize) / 2;
         doc.setDrawColor(222, 229, 239);
         doc.setLineWidth(0.5);
         doc.roundedRect(cardX, 49, cardWidth, 151, 5, 5, 'S');
-        doc.setFont('helvetica', 'bold');
-        doc.setFontSize(12);
-        doc.setTextColor(...textColor);
-        doc.text(source.label, cardX + cardWidth / 2, 63, { align: 'center', maxWidth: cardWidth - 12 });
-        doc.addImage(images[index], 'PNG', qrX, 72, qrSize, qrSize, `tenant-qr-${source.key}`, 'FAST');
+        drawTenantQrPdfTitle(doc, source.label, cardX + cardWidth / 2, 63, 12, cardWidth - 12);
+        doc.addImage(images[index], 'PNG', qrX, qrTop, qrSize, qrSize, `tenant-qr-${source.key}`, 'FAST');
         doc.setFont('helvetica', 'normal');
         doc.setFontSize(8);
         doc.setTextColor(95, 110, 132);
-        doc.text('Escanea para pedir', cardX + cardWidth / 2, 154, { align: 'center' });
-        doc.text(doc.splitTextToSize(source.url, cardWidth - 12), cardX + cardWidth / 2, 166, { align: 'center' });
+        doc.text('Escanea para pedir', cardX + cardWidth / 2, instructionTop, { align: 'center' });
+        doc.text(doc.splitTextToSize(source.url, cardWidth - 12), cardX + cardWidth / 2, urlTop, { align: 'center' });
       });
     }
 
@@ -11459,13 +11692,18 @@ $('#chatbotQrDownloadBtn')?.addEventListener('click', () => openTenantQrPdfDialo
 $('#whatsappQrDownloadBtn')?.addEventListener('click', () => openTenantQrPdfDialog('whatsapp'));
 document.querySelectorAll('input[name="qrPdfMode"]').forEach((input) => input.addEventListener('change', updateQrPdfMode));
 $('#qrPdfCreate')?.addEventListener('click', () => downloadTenantQrPdf());
-['qrPdfClose', 'qrPdfCancel'].forEach((id) => $(`#${id}`)?.addEventListener('click', () => $('#qrPdfDownloadModal').classList.remove('show')));
+function closeTenantQrPdfDialog() {
+  TENANT_QR_DIALOG_REQUEST_ID++;
+  $('#qrPdfDownloadModal')?.classList.remove('show');
+}
+['qrPdfClose', 'qrPdfCancel'].forEach((id) => $(`#${id}`)?.addEventListener('click', closeTenantQrPdfDialog));
 $('#qrPdfDownloadModal')?.addEventListener('click', (event) => {
-  if (event.target === $('#qrPdfDownloadModal')) $('#qrPdfDownloadModal').classList.remove('show');
+  if (event.target === $('#qrPdfDownloadModal')) closeTenantQrPdfDialog();
 });
 document.addEventListener('keydown', (event) => {
-  if (event.key === 'Escape') $('#qrPdfDownloadModal')?.classList.remove('show');
+  if (event.key === 'Escape') closeTenantQrPdfDialog();
 });
+['qrPdfIncludeChatbot', 'qrPdfIncludeWhatsApp'].forEach((id) => $(`#${id}`)?.addEventListener('change', updateQrPdfSheetHint));
 
 async function fillBotForm() {
   if (!SETTINGS) return;

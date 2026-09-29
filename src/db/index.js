@@ -1631,6 +1631,7 @@ async function ensureTenantDefaults(slug, businessName = slug, regional = {}) {
     chatbot_full_menu_enabled: '0',
     chatbot_pos_integration_enabled: '0',
     chatbot_pos_global_orders_enabled: '0',
+    product_qr_enabled: '0',
     self_service_enabled: '0',
     self_service_auto_print: '0',
     self_service_payment_cash: '1',
