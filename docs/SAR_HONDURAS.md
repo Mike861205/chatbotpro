@@ -1,5 +1,7 @@
 # Facturación SAR para tenants de Honduras
 
+Guía orientada al negocio, visible desde el panel: [Cómo integrarse y emitir la primera factura](../public/docs/guia-facturacion-honduras.md).
+
 ## Alcance
 
 El módulo aparece únicamente cuando el país elegido para el tenant es Honduras (`tenants.phone_country = 'HN'`). El propietario configura el emisor, registra las autorizaciones de **autoimpresor** obtenidas en la Oficina Virtual del SAR, clasifica productos por ISV y consulta ventas, facturas emitidas y comprobantes recibidos de proveedores. El cajero o personal con permiso de POS puede emitir e imprimir una factura desde el historial de ventas de su sucursal.

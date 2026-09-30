@@ -1,0 +1,82 @@
+/* Honduras SAR: a separate workspace for setup, invoicing and monthly records. */
+#view-sar { --sar-green: #087f68; --sar-dark: #143b37; --sar-border: #dce9e5; }
+#view-sar .sar-hero {
+  position: relative; overflow: hidden; margin-bottom: 16px; padding: 24px 28px;
+  border-radius: 22px; color: #fff;
+  background: linear-gradient(115deg, #123e3a 0%, #0e7865 72%, #15977a 100%);
+  box-shadow: 0 14px 32px rgba(11, 87, 74, .16);
+}
+#view-sar .sar-hero::after { content: ''; position: absolute; width: 310px; height: 310px; right: -100px; top: -195px; border: 55px solid rgba(255,255,255,.08); border-radius: 50%; pointer-events: none; }
+#view-sar .sar-eyebrow, #view-sar .sar-kicker { display: inline-flex; align-items: center; gap: 7px; font-size: 11px; font-weight: 800; letter-spacing: .07em; text-transform: uppercase; }
+#view-sar .sar-eyebrow { color: #b9f5de; }
+#view-sar .sar-kicker { color: var(--sar-green); }
+#view-sar .sar-hero h2 { position: relative; margin: 9px 0 6px; font-size: clamp(21px, 2vw, 28px); letter-spacing: -.03em; }
+#view-sar .sar-hero p { position: relative; max-width: 1030px; margin: 7px 0; color: #e1f7ee; line-height: 1.55; font-size: 12px; }
+#view-sar .sar-hero a { color: #fff; text-decoration: underline; text-underline-offset: 3px; }
+#view-sar #sarSummary { display: inline-block; margin: 10px 0 4px; padding: 9px 12px; border: 1px solid rgba(255,255,255,.2); border-radius: 11px; background: rgba(255,255,255,.13); color: #fff; }
+#view-sar .sar-hero-links { position: relative; display: flex; gap: 8px; flex-wrap: wrap; margin-top: 16px; }
+#view-sar .sar-hero-links a { display: inline-flex; align-items: center; gap: 7px; min-height: 36px; padding: 7px 12px; border: 1px solid rgba(255,255,255,.28); border-radius: 10px; background: rgba(255,255,255,.1); font-size: 11px; font-weight: 800; text-decoration: none; transition: background .18s, transform .18s; }
+#view-sar .sar-hero-links a:hover { background: rgba(255,255,255,.21); transform: translateY(-1px); }
+#view-sar .sar-tabs { display: flex; gap: 9px; padding: 6px 2px 11px; margin-bottom: 15px; overflow-x: auto; scrollbar-width: thin; scroll-snap-type: x proximity; }
+#view-sar .sar-tabs button { display: flex; align-items: center; gap: 9px; flex: 1 0 150px; min-width: 150px; padding: 11px 12px; border: 1px solid #dbe5e7; border-radius: 14px; background: #fff; color: #425a61; text-align: left; box-shadow: 0 3px 9px rgba(17,50,47,.035); scroll-snap-align: start; transition: border-color .18s, color .18s, background .18s, box-shadow .18s; }
+#view-sar .sar-tabs button:hover { border-color: #76c5ae; background: #f5fcf8; }
+#view-sar .sar-tabs button[aria-selected="true"] { color: #0a6351; border-color: #54b79a; background: linear-gradient(135deg,#eafff3,#f4fffb); box-shadow: 0 6px 18px rgba(16,138,105,.12); }
+#view-sar .sar-tabs button > i { display: grid; place-items: center; flex: 0 0 auto; width: 34px; height: 34px; border-radius: 10px; background: #eef8f4; color: #118366; font-size: 19px; }
+#view-sar .sar-tabs button[aria-selected="true"] > i { background: #c8f4dc; color: #09644d; }
+#view-sar .sar-tabs button span { display: grid; gap: 2px; min-width: 0; }
+#view-sar .sar-tabs button b { font-size: 11px; line-height: 1.2; white-space: nowrap; }
+#view-sar .sar-tabs button small { font-size: 9px; line-height: 1.2; color: #70838a; white-space: nowrap; }
+#view-sar .sar-tabs button:focus-visible, #view-sar .sar-step-link:focus-visible { outline: 3px solid #12a475; outline-offset: 2px; }
+#view-sar .sar-panel[hidden], #view-sar #sarCreditEditor[hidden] { display: none !important; }
+#view-sar .sar-section-heading { display: flex; align-items: end; justify-content: space-between; gap: 14px; flex-wrap: wrap; margin: 4px 1px 16px; }
+#view-sar .sar-section-heading h3 { margin: 5px 0 4px; color: #173d38; font-size: clamp(18px, 1.7vw, 22px); letter-spacing: -.025em; }
+#view-sar .sar-section-heading p { margin: 0; color: #6b8185; font-size: 12px; line-height: 1.5; }
+#view-sar .sar-panel > .card, #view-sar .sar-panel > .row-2 > .card, #view-sar .sar-panel > .row-2 > form.card { border: 1px solid var(--sar-border); border-radius: 17px; box-shadow: 0 5px 17px rgba(17,50,47,.045); }
+#view-sar .sar-panel > .row-2 { grid-template-columns: repeat(2, minmax(0,1fr)); align-items: start; margin-bottom: 14px; }
+#view-sar #sarPanelPurchases > .row-2 { grid-template-columns: minmax(0,1.35fr) minmax(250px,.65fr); }
+#view-sar .sar-panel .card h3 { color: #194a42; margin-bottom: 12px; }
+#view-sar .sar-panel .card > .hint { margin: -3px 0 17px; }
+#view-sar .sar-panel .field label { color: #3c5960; font-size: 11px; font-weight: 800; letter-spacing: .01em; }
+#view-sar .sar-panel .field input, #view-sar .sar-panel .field select, #view-sar .sar-panel .field textarea { background: #fbfefd; border-color: #dbe8e5; border-radius: 11px; min-height: 42px; }
+#view-sar .sar-panel .field textarea { min-height: 78px; resize: vertical; }
+#view-sar .sar-panel .field input:focus, #view-sar .sar-panel .field select:focus, #view-sar .sar-panel .field textarea:focus { border-color: #15a47e; background: #fff; box-shadow: 0 0 0 4px rgba(21,164,126,.12); }
+#view-sar .sar-panel .field input[type="file"] { padding: 7px; }
+#view-sar .sar-panel .field input[type="file"]::file-selector-button { padding: 8px 11px; margin-right: 11px; border: 0; border-radius: 8px; background: #e6f7ee; color: #08765d; font: inherit; font-size: 11px; font-weight: 800; cursor: pointer; }
+#view-sar .sar-panel form.card > .btn { margin-top: 3px; }
+#view-sar .sar-panel .table-wrap { margin: 10px 0 0; border: 1px solid #e7efed; border-radius: 12px; }
+#view-sar .sar-panel .table-wrap table { width: 100%; }
+#view-sar .sar-panel .table-wrap th { background: #f3faf6; color: #41645d; white-space: nowrap; }
+#view-sar .sar-panel .table-wrap td { vertical-align: top; }
+#view-sar .sar-panel .table-wrap td input:not([type="checkbox"]), #view-sar .sar-panel .table-wrap td select { min-width: 140px; margin-bottom: 6px; padding: 8px 10px; font-size: 11px; }
+#view-sar .sar-step-grid { display: grid; grid-template-columns: repeat(4,minmax(0,1fr)); gap: 13px; }
+#view-sar .sar-step { position: relative; display: flex; flex-direction: column; min-height: 260px; padding: 18px; border: 1px solid var(--sar-border); border-radius: 17px; background: #fff; box-shadow: 0 5px 17px rgba(17,50,47,.045); }
+#view-sar .sar-step > span { position: absolute; right: 17px; top: 18px; color: #98b6ac; font-size: 11px; font-weight: 900; }
+#view-sar .sar-step > i { display: grid; place-items: center; width: 45px; height: 45px; border-radius: 13px; background: #eaf8f0; color: #0e8063; font-size: 24px; }
+#view-sar .sar-step h4 { margin: 16px 0 7px; color: #1a4540; font-size: 13px; }
+#view-sar .sar-step p { margin: 0 0 15px; color: #687d80; font-size: 11px; line-height: 1.55; }
+#view-sar .sar-step a, #view-sar .sar-step-link { display: inline-flex; align-items: center; gap: 5px; align-self: flex-start; margin-top: auto; padding: 0; border: 0; background: transparent; color: #087f68; font: inherit; font-size: 11px; font-weight: 800; text-align: left; }
+#view-sar .sar-guide-note { display: flex; align-items: center; gap: 13px; margin-top: 15px; padding: 14px 17px; border: 1px solid #b9e8d6; border-radius: 15px; background: #effbf5; }
+#view-sar .sar-guide-note > i { font-size: 26px; color: #0e8063; }
+#view-sar .sar-guide-note > div { flex: 1; }
+#view-sar .sar-guide-note b { color: #155a48; font-size: 12px; }
+#view-sar .sar-guide-note p { margin: 3px 0 0; color: #5c7870; font-size: 11px; }
+#view-sar .sar-aside { align-self: start; background: #f7fcf9; }
+#view-sar .sar-aside > i { font-size: 28px; color: #15866a; }
+#view-sar .sar-aside p { color: #5d7471; font-size: 12px; line-height: 1.6; }
+#view-sar .sar-aside-callout { display: flex; align-items: flex-start; gap: 8px; padding: 12px; border: 1px solid #cde9dc; border-radius: 11px; background: #e9f8ef; color: #21684e; font-size: 11px; line-height: 1.5; }
+#view-sar #sarCreditEditor { margin-bottom: 14px; background: #f8fffa; }
+#view-sar #sarCreditEditor h4 { margin: 0 0 15px; color: #1b594b; }
+#view-sar #sarCreditEditor .row-2 { align-items: center; padding: 10px 0; border-bottom: 1px solid #e4eee8; }
+#view-sar #sarCreditEditor .row-2:last-of-type { margin-bottom: 15px; }
+@media (max-width: 1100px) { #view-sar .sar-step-grid { grid-template-columns: repeat(2,minmax(0,1fr)); } }
+@media (max-width: 800px) { #view-sar .sar-panel > .row-2, #view-sar #sarPanelPurchases > .row-2 { grid-template-columns: 1fr; } }
+@media (max-width: 600px) {
+  #view-sar .sar-hero { padding: 21px; }
+  #view-sar .sar-hero-links a { width: 100%; }
+  #view-sar .sar-tabs button { flex-basis: 145px; min-width: 145px; }
+  #view-sar .sar-step-grid { grid-template-columns: 1fr; }
+  #view-sar .sar-step { min-height: 0; }
+  #view-sar .sar-guide-note { align-items: flex-start; flex-wrap: wrap; }
+  #view-sar .sar-guide-note .btn { width: 100%; justify-content: center; }
+  #view-sar .sar-section-heading > .btn { width: 100%; justify-content: center; }
+}

@@ -10,6 +10,36 @@
   const sendJson = (url, body) => api(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
   let lastReport = null;
 
+  const sarTabs = [...document.querySelectorAll('#view-sar [data-sar-tab]')];
+  function openSarTab(name, focus = false) {
+    const selected = sarTabs.find((tab) => tab.dataset.sarTab === name);
+    if (!selected) return;
+    for (const tab of sarTabs) {
+      const active = tab === selected;
+      tab.setAttribute('aria-selected', String(active));
+      tab.tabIndex = active ? 0 : -1;
+      const panel = document.getElementById(tab.getAttribute('aria-controls'));
+      if (panel) panel.hidden = !active;
+    }
+    if (focus) selected.focus();
+  }
+  $sar('#view-sar .sar-tabs')?.addEventListener('click', (event) => {
+    const tab = event.target.closest('[data-sar-tab]');
+    if (tab) openSarTab(tab.dataset.sarTab);
+  });
+  $sar('#view-sar .sar-tabs')?.addEventListener('keydown', (event) => {
+    const current = event.target.closest('[data-sar-tab]');
+    if (!current || !['ArrowLeft','ArrowRight','Home','End'].includes(event.key)) return;
+    event.preventDefault();
+    const index = sarTabs.indexOf(current);
+    const next = event.key === 'Home' ? 0 : event.key === 'End' ? sarTabs.length - 1 : (index + (event.key === 'ArrowRight' ? 1 : -1) + sarTabs.length) % sarTabs.length;
+    openSarTab(sarTabs[next].dataset.sarTab, true);
+  });
+  $sar('#view-sar')?.addEventListener('click', (event) => {
+    const link = event.target.closest('[data-sar-open]');
+    if (link) openSarTab(link.dataset.sarOpen);
+  });
+
   async function loadSar() {
     if (ME?.tenant?.phoneCountry !== 'HN' || ME?.role !== 'owner') return;
     if (!$sar('#sarReportTo').value) $sar('#sarReportTo').value = getLocalIsoDate();
@@ -158,6 +188,8 @@
         const balance = await api(`/api/sar/documents/${creditButton.dataset.id}/credit-balance`);
         const fields = balance.lines.map((line,index) => `<div class="row-2"><div><b>${esc(line.name)}</b><div class="hint">Vendido ${line.quantity} · pendiente ${line.remaining} · ${fmt(line.gross)}</div></div><div class="field"><label>Cantidad a acreditar</label><input type="number" name="q${index}" min="0" max="${line.remaining}" step="any" value="0" required></div></div>`).join('');
         $sar('#sarCreditEditor').innerHTML = `<form id="sarCreditForm" data-document="${creditButton.dataset.id}"><h4>Nota de crédito sobre ${esc(balance.number)}</h4>${fields}<div class="field"><label>Motivo detallado</label><textarea name="reason" minlength="8" maxlength="300" required></textarea></div><button type="submit" class="btn btn-primary">Emitir nota de crédito</button> <button type="button" class="btn btn-ghost" id="sarCreditClose">Cerrar</button></form>`;
+        $sar('#sarCreditEditor').hidden = false;
+        openSarTab('credits');
         $sar('#sarCreditEditor').scrollIntoView({behavior:'smooth',block:'nearest'});
       } catch (error) { toast(error.message,true); }
       return;
@@ -171,7 +203,7 @@
     catch (error) { toast(error.message, true); }
   });
   $sar('#sarCreditEditor')?.addEventListener('click', (event) => {
-    if (event.target.closest('#sarCreditClose')) $sar('#sarCreditEditor').innerHTML = '';
+    if (event.target.closest('#sarCreditClose')) { $sar('#sarCreditEditor').innerHTML = ''; $sar('#sarCreditEditor').hidden = true; }
   });
   $sar('#sarCreditEditor')?.addEventListener('submit', async (event) => {
     event.preventDefault();
@@ -180,7 +212,7 @@
     if (!await askConfirm('Emitir nota de crédito SAR', 'Se consumirá el siguiente correlativo tipo 07. Revisa las cantidades y el motivo.', {yesLabel:'Emitir nota'})) return;
     try {
       const result=await sendJson(`/api/sar/documents/${form.dataset.document}/credit-notes`,{reason:value(form,'reason'),quantities});
-      toast(`Nota ${result.document_number} emitida`); $sar('#sarCreditEditor').innerHTML=''; await loadSar();
+      toast(`Nota ${result.document_number} emitida`); $sar('#sarCreditEditor').innerHTML=''; $sar('#sarCreditEditor').hidden = true; await loadSar();
       window.open(`/api/sar/credit-notes/${result.id}/print`,'_blank','noopener');
     } catch(error) { toast(error.message,true); }
   });
