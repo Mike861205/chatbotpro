@@ -615,6 +615,23 @@ async function createTenantSchema(slug) {
       created_by TEXT DEFAULT '',
       created_at TIMESTAMPTZ DEFAULT now()
     );
+    CREATE TABLE IF NOT EXISTS "${s}".pos_close_approvals (
+      id SERIAL PRIMARY KEY,
+      session_id INTEGER NOT NULL,
+      token_hash TEXT NOT NULL UNIQUE,
+      snapshot_json TEXT NOT NULL,
+      closing_amount NUMERIC(12,2) NOT NULL,
+      notes TEXT NOT NULL DEFAULT '',
+      requested_by TEXT NOT NULL DEFAULT '',
+      status TEXT NOT NULL DEFAULT 'pending',
+      attempts INTEGER NOT NULL DEFAULT 0,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      expires_at TIMESTAMPTZ NOT NULL,
+      approved_at TIMESTAMPTZ,
+      used_at TIMESTAMPTZ
+    );
+    CREATE INDEX IF NOT EXISTS idx_${s}_pos_close_approvals_session
+      ON "${s}".pos_close_approvals(session_id, id DESC);
     CREATE TABLE IF NOT EXISTS "${s}".branches (
       id SERIAL PRIMARY KEY,
       name TEXT NOT NULL,

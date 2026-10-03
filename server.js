@@ -131,6 +131,11 @@ app.get('/facturacion/registro', page('invoicing-register.html'));
 app.get('/facturacion/panel', page('invoicing-app.html'));
 app.get('/notificaciones', page('notify.html'));
 app.get('/caja/:slug', validSlug, page('cashier-login.html'));
+app.get('/autorizar-cierre/:slug/:token', validSlug, (req, res) => {
+  if (!/^[a-f0-9]{64}$/.test(req.params.token)) return res.status(404).end();
+  res.setHeader('Cache-Control', 'no-store');
+  return page('pos-close-approval.html')(req, res);
+});
 app.get('/kds/:slug/:token', validSlug, validKdsToken, page('kds.html'));
 app.get('/superadmin/login', page('superadmin-login.html'));
 app.get('/superadmin', page('superadmin.html'));

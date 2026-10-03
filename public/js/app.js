@@ -76,6 +76,12 @@ let INTERNAL_USERS = [];
 let MODULE_CATALOG = [];
 let LAST_ORDERS = [];
 let POS_OVERVIEW = null;
+let POS_CLOSE_APPROVAL = null;
+const POS_CARD_OPTIONS = [
+  ['opening', 'Fondo inicial'], ['sales', 'Ventas del turno'], ['cash', 'Efectivo en ventas'],
+  ['card', 'Tarjeta'], ['transfer', 'Transferencia'], ['custom', 'Pagos móviles y locales'],
+  ['movements', 'Movimientos netos'], ['cancellations', 'Cancelaciones'], ['expected', 'Efectivo esperado'],
+];
 let KDS_CONFIG = { areas: [], categories: [], products: [], branches: [] };
 let KDS_PRODUCT_SELECTED = new Set();
 let POS_CART = [];
@@ -6175,19 +6181,22 @@ function renderPosFinanceStrip() {
   const expectedCash = session?.expectedCash || 0;
   const movementNet = moneyNum(totals.movements.income - totals.movements.withdrawal - totals.movements.expense);
   const cards = [
-    { icon: 'ph-wallet', title: 'Fondo inicial', value: session?.opening_amount || 0, tone: 'primary' },
-    { icon: 'ph-chart-line-up', title: 'Ventas del turno', value: totals.totalSales, tone: 'blue' },
-    { icon: 'ph-money', title: 'Efectivo en ventas', value: totals.collected.cash, tone: 'green' },
-    { icon: 'ph-credit-card', title: 'Tarjeta', value: totals.collected.card, tone: 'violet' },
-    { icon: 'ph-bank', title: 'Transferencia', value: totals.collected.transfer, tone: 'cyan' },
+    { key: 'opening', icon: 'ph-wallet', title: 'Fondo inicial', value: session?.opening_amount || 0, tone: 'primary' },
+    { key: 'sales', icon: 'ph-chart-line-up', title: 'Ventas del turno', value: totals.totalSales, tone: 'blue' },
+    { key: 'cash', icon: 'ph-money', title: 'Efectivo en ventas', value: totals.collected.cash, tone: 'green' },
+    { key: 'card', icon: 'ph-credit-card', title: 'Tarjeta', value: totals.collected.card, tone: 'violet' },
+    { key: 'transfer', icon: 'ph-bank', title: 'Transferencia', value: totals.collected.transfer, tone: 'cyan' },
     ...(totals.customPayments || []).map((method) => ({
-      icon: 'ph-device-mobile', title: method.label, value: method.total, tone: 'cyan', tickets: method.tickets,
+      key: 'custom', icon: 'ph-device-mobile', title: method.label, value: method.total, tone: 'cyan', tickets: method.tickets,
     })),
-    { icon: 'ph-arrows-down-up', title: 'Movimientos netos', value: movementNet, tone: movementNet < 0 ? 'red' : 'amber' },
-    { icon: 'ph-x-circle', title: 'Cancelaciones', value: totals.cancellations.total, tone: 'red' },
-    { icon: 'ph-calculator', title: 'Efectivo esperado', value: expectedCash, tone: 'ink' },
+    { key: 'movements', icon: 'ph-arrows-down-up', title: 'Movimientos netos', value: movementNet, tone: movementNet < 0 ? 'red' : 'amber' },
+    { key: 'cancellations', icon: 'ph-x-circle', title: 'Cancelaciones', value: totals.cancellations.total, tone: 'red' },
+    { key: 'expected', icon: 'ph-calculator', title: 'Efectivo esperado', value: expectedCash, tone: 'ink' },
   ];
+  const visible = ME?.role === 'cashier' && Array.isArray(POS_OVERVIEW?.policy?.cashierCards)
+    ? new Set(POS_OVERVIEW.policy.cashierCards) : null;
   el.innerHTML = cards
+    .filter((card) => !visible || visible.has(card.key))
     .map(
       (card) => `<div class="pos-fin-card tone-${card.tone}">
         <div class="pos-fin-ic"><i class="ph-fill ${card.icon}"></i></div>
@@ -7908,9 +7917,23 @@ function openPosCloseModal() {
     closingInput.value = expectedCash;
   }
   $('#posClosingNoteModal').value = '';
+  POS_CLOSE_APPROVAL = null;
+  syncPosCloseApprovalUi();
   updatePosCloseDifference();
   renderLastCloseHint();
   $('#posCloseModal').classList.add('show');
+  if (ME?.role === 'cashier' && POS_OVERVIEW?.policy?.closeRequireApproval) {
+    api('/api/pos/session/close-approval/status').then((approval) => {
+      if (!$('#posCloseModal')?.classList.contains('show') || POS_CLOSE_APPROVAL?.id || !approval.id) return;
+      POS_CLOSE_APPROVAL = approval;
+      if (approval.status === 'approved') {
+        $('#posClosingAmountModal').value = approval.closingAmount;
+        $('#posClosingNoteModal').value = approval.notes || '';
+        updatePosCloseDifference();
+      }
+      syncPosCloseApprovalUi();
+    }).catch(() => {});
+  }
 
   setTimeout(() => {
     closingInput?.focus();
@@ -8173,6 +8196,9 @@ $('#posMovementFormModal')?.addEventListener('submit', async (e) => {
 $('#posCloseFormModal')?.addEventListener('submit', async (e) => {
   e.preventDefault();
   try {
+    if (ME?.role === 'cashier' && POS_OVERVIEW?.policy?.closeRequireApproval && POS_CLOSE_APPROVAL?.status !== 'approved') {
+      return toast('Espera la autorización del dueño antes de cerrar', true);
+    }
     const result = await api('/api/pos/session/close', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -8190,6 +8216,7 @@ $('#posCloseFormModal')?.addEventListener('submit', async (e) => {
     printPosCloseReport(result);
     await loadPos();
   } catch (err) {
+    if (err.status === 409 && POS_CLOSE_APPROVAL?.id) { POS_CLOSE_APPROVAL.status = 'stale'; syncPosCloseApprovalUi(); }
     toast(err.message, true);
   }
 });
@@ -8530,6 +8557,66 @@ $('#productQrEnabled')?.addEventListener('change', async (event) => {
     toast(error.message, true);
   } finally { checkbox.disabled = false; }
 });
+
+function syncPosCloseApprovalUi() {
+  const required = ME?.role === 'cashier' && POS_OVERVIEW?.policy?.closeRequireApproval;
+  const panel = $('#posCloseApprovalPanel');
+  if (!panel) return;
+  panel.hidden = !required;
+  if (!required) return;
+  const status = POS_CLOSE_APPROVAL?.status || 'none';
+  $('#posCloseSubmitBtn').disabled = status !== 'approved';
+  $('#posCloseRequestApproval').textContent = status === 'none' ? 'Solicitar autorización' : 'Generar enlace nuevo';
+  $('#posCloseShareApproval').hidden = !POS_CLOSE_APPROVAL?.link || status === 'stale';
+  $('#posCloseCheckApproval').hidden = !POS_CLOSE_APPROVAL?.id || status === 'stale';
+  $('#posCloseApprovalLink').hidden = !POS_CLOSE_APPROVAL?.link || status === 'stale';
+  $('#posCloseApprovalLink').value = POS_CLOSE_APPROVAL?.link || '';
+  $('#posCloseApprovalStatus').textContent = {
+    none: 'El cierre requiere la aprobación del dueño.', pending: POS_CLOSE_APPROVAL?.link ? 'Solicitud pendiente. Comparte el enlace y espera la aprobación.' : 'Solicitud pendiente. Si necesitas el enlace, genera uno nuevo.',
+    approved: 'Corte aprobado. Ya puedes confirmar el cierre.', expired: 'El enlace expiró. Genera uno nuevo.',
+    stale: 'El corte cambió. Genera un enlace nuevo.', replaced: 'Esta solicitud fue reemplazada.',
+  }[status] || 'Genera un enlace nuevo.';
+}
+
+async function checkPosCloseApproval() {
+  if (!POS_CLOSE_APPROVAL?.id || POS_CLOSE_APPROVAL.status === 'stale' || !$('#posCloseModal')?.classList.contains('show')) return;
+  try {
+    const result = await api('/api/pos/session/close-approval/status');
+    if (result.id === POS_CLOSE_APPROVAL.id) {
+      POS_CLOSE_APPROVAL.status = result.status;
+      syncPosCloseApprovalUi();
+    }
+  } catch {}
+}
+
+$('#posCloseRequestApproval')?.addEventListener('click', async () => {
+  const amountInput = $('#posClosingAmountModal');
+  if (!amountInput.value || !amountInput.reportValidity()) return toast('Escribe el efectivo final contado', true);
+  const button = $('#posCloseRequestApproval');
+  button.disabled = true;
+  try {
+    const result = await api('/api/pos/session/close-approval', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ closingAmount: Number($('#posClosingAmountModal').value), notes: $('#posClosingNoteModal').value }) });
+    POS_CLOSE_APPROVAL = result;
+    syncPosCloseApprovalUi();
+    toast('Enlace de autorización listo para compartir');
+  } catch (error) { toast(error.message, true); }
+  finally { button.disabled = false; }
+});
+
+$('#posCloseShareApproval')?.addEventListener('click', async () => {
+  const link = POS_CLOSE_APPROVAL?.link;
+  if (!link) return;
+  try {
+    if (navigator.share) await navigator.share({ title: 'Autorizar cierre de caja', text: 'Revisa y autoriza el corte de caja:', url: link });
+    else { await navigator.clipboard.writeText(link); toast('Enlace copiado. Envíalo al dueño.'); }
+  } catch (error) { if (error.name !== 'AbortError') toast('No se pudo compartir el enlace', true); }
+});
+$('#posCloseCheckApproval')?.addEventListener('click', checkPosCloseApproval);
+setInterval(checkPosCloseApproval, 5000);
+['posClosingAmountModal', 'posClosingNoteModal'].forEach((id) => $("#" + id)?.addEventListener('input', () => {
+  if (POS_CLOSE_APPROVAL?.id) { POS_CLOSE_APPROVAL.status = 'stale'; syncPosCloseApprovalUi(); }
+}));
 $('#generalProductQrBtn')?.addEventListener('click', () => openProductQrModal());
 $('#productQrClose')?.addEventListener('click', () => $('#productQrModal')?.classList.remove('show'));
 $('#productQrCopy')?.addEventListener('click', async () => {
@@ -12262,6 +12349,27 @@ function renderModuleVisibility() {
   host.innerHTML = businessModuleCatalog().filter((item) => item.key !== 'config').map((item) => `<label class="module-permission-item"><input type="checkbox" value="${esc(item.key)}" ${hidden.has(item.key) ? '' : 'checked'}/><span>${esc(moduleLabel(item.key))}</span></label>`).join('');
 }
 
+function renderPosCardVisibility() {
+  const host = $('#posCardVisibilityGrid');
+  if (!host || ME?.role !== 'owner') return;
+  let selected;
+  try { selected = JSON.parse(SETTINGS?.pos_cashier_cards_json || 'null'); } catch { selected = null; }
+  const visible = Array.isArray(selected) ? new Set(selected) : null;
+  host.innerHTML = POS_CARD_OPTIONS.map(([key, label]) => `<label class="module-permission-item"><input type="checkbox" value="${key}" ${!visible || visible.has(key) ? 'checked' : ''}/><span>${esc(label)}</span></label>`).join('');
+}
+
+$('#posCardVisibilityForm')?.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  try {
+    const selected = [...document.querySelectorAll('#posCardVisibilityGrid input:checked')].map((box) => box.value);
+    const fd = new FormData();
+    fd.append('pos_cashier_cards_json', JSON.stringify(selected));
+    await api('/api/settings', { method: 'PUT', body: fd });
+    SETTINGS.pos_cashier_cards_json = JSON.stringify(selected);
+    toast('Tarjetas del cajero actualizadas');
+  } catch (error) { toast(error.message, true); }
+});
+
 $('#addInternalUserBtn')?.addEventListener('click', () => openInternalUserModal());
 $('#internalUserClose')?.addEventListener('click', () => $('#internalUserModal').classList.remove('show'));
 $('#internalUserCancel')?.addEventListener('click', () => $('#internalUserModal').classList.remove('show'));
@@ -12709,6 +12817,7 @@ async function fillConfigForm() {
   $('#cfgRoundEditRequirePin').checked = (SETTINGS.pos_round_edit_require_pin || '0') === '1';
   $('#cfgSameDayCancelEnabled').checked = (SETTINGS.pos_same_day_cancel_enabled || '1') === '1';
   $('#cfgCancelRequirePin').checked = (SETTINGS.pos_cancel_require_pin || '0') === '1';
+  $('#cfgCloseRequireApproval').checked = (SETTINGS.pos_close_require_approval || '0') === '1';
   $('#cfgAuthorizationPin').value = '';
   $('#posAuthorizationPinStatus').textContent = SETTINGS.authorization_pin_configured ? 'NIP configurado' : 'NIP no configurado';
   $('#cfgTicketWidth').value = String(Number(SETTINGS.ticket_width_mm || 80));
@@ -12726,6 +12835,7 @@ async function fillConfigForm() {
     await loadCashiers();
     await loadInternalUsers();
     renderModuleVisibility();
+    renderPosCardVisibility();
     await loadSelfServiceDevices();
     await loadDirectPrintDestinations();
   } else if (ME?.role === 'staff' && ME.permissions?.includes('config')) {
@@ -12838,7 +12948,7 @@ $('#configForm').addEventListener('submit', async (e) => {
 $('#operationPolicyForm')?.addEventListener('submit', async (event) => {
   event.preventDefault();
   const pin = String($('#cfgAuthorizationPin').value || '').trim();
-  if (($('#cfgRoundEditRequirePin').checked || $('#cfgCancelRequirePin').checked) && !pin && !SETTINGS.authorization_pin_configured) {
+  if (($('#cfgRoundEditRequirePin').checked || $('#cfgCancelRequirePin').checked || $('#cfgCloseRequireApproval').checked) && !pin && !SETTINGS.authorization_pin_configured) {
     return toast('Configura un NIP antes de activar la autorización', true);
   }
   const fd = new FormData();
@@ -12846,6 +12956,7 @@ $('#operationPolicyForm')?.addEventListener('submit', async (event) => {
   fd.append('pos_round_edit_require_pin', $('#cfgRoundEditRequirePin').checked ? '1' : '0');
   fd.append('pos_same_day_cancel_enabled', $('#cfgSameDayCancelEnabled').checked ? '1' : '0');
   fd.append('pos_cancel_require_pin', $('#cfgCancelRequirePin').checked ? '1' : '0');
+  if (ME?.role === 'owner') fd.append('pos_close_require_approval', $('#cfgCloseRequireApproval').checked ? '1' : '0');
   if (pin) fd.append('pos_authorization_pin', pin);
   await api('/api/settings', { method: 'PUT', body: fd });
   SETTINGS = await api('/api/settings');

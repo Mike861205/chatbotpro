@@ -1439,6 +1439,14 @@
                 <button class="btn btn-primary" type="submit"><i class="ph-bold ph-floppy-disk"></i> Guardar módulos visibles</button>
               </form>
             </section>
+            <hr data-owner-only style="margin:18px 0;border:none;border-top:1px solid var(--line)" />
+            <section class="access-config" data-owner-only>
+              <div class="access-config-head"><div><h3><i class="ph-bold ph-cash-register"></i> Tarjetas visibles en el POS</h3><p class="hint">Elige qué indicadores verá el cajero en la parte superior del punto de venta. El dueño conserva la vista completa y el corte sigue incluyendo todos los importes.</p></div></div>
+              <form id="posCardVisibilityForm">
+                <div class="module-permission-grid compact" id="posCardVisibilityGrid"></div>
+                <button class="btn btn-primary" type="submit"><i class="ph-bold ph-floppy-disk"></i> Guardar tarjetas visibles</button>
+              </form>
+            </section>
             <hr style="margin:18px 0;border:none;border-top:1px solid var(--line)" />
             <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
               <h3><i class="ph-bold ph-storefront"></i> Modelo de negocio</h3>
@@ -1726,6 +1734,7 @@
               <div>
                 <div class="toggle-row"><div class="t-info"><i class="ph-bold ph-x-circle"></i><div><b>Cancelar ventas del mismo día</b><span>Las ventas de días anteriores siempre quedan protegidas.</span></div></div><label class="switch"><input type="checkbox" id="cfgSameDayCancelEnabled" /><span class="track"></span></label></div>
                 <div class="toggle-row"><div class="t-info"><i class="ph-bold ph-password"></i><div><b>Solicitar NIP al cancelar ventas</b><span>Exige autorización antes de devolver inventario y cancelar.</span></div></div><label class="switch"><input type="checkbox" id="cfgCancelRequirePin" /><span class="track"></span></label></div>
+                <div class="toggle-row" data-owner-only><div class="t-info"><i class="ph-bold ph-lock-key"></i><div><b>Autorizar cierre de caja con enlace</b><span>El cajero comparte el corte con el dueño. El dueño lo revisa y aprueba con el NIP antes de que el cajero cierre.</span></div></div><label class="switch"><input type="checkbox" id="cfgCloseRequireApproval" /><span class="track"></span></label></div>
               </div>
             </div>
             <div class="row-2" style="align-items:end;margin-top:14px">
@@ -3083,6 +3092,14 @@
               <label for="posClosingNoteModal"><i class="ph-bold ph-note-pencil"></i> Notas u observaciones de cierre</label>
               <input type="text" id="posClosingNoteModal" maxlength="240" placeholder="Ej. Cierre sin novedades, se dejaron $300 para cambio..." />
             </div>
+          </div>
+
+          <div id="posCloseApprovalPanel" class="pos-close-approval-panel" hidden>
+            <b><i class="ph-bold ph-shield-check"></i> Autorización del dueño</b>
+            <p>Solicita autorización y comparte el enlace con el dueño. Cuando apruebe el corte con su NIP, podrás confirmar el cierre.</p>
+            <div class="pos-close-approval-controls"><button type="button" class="btn btn-primary" id="posCloseRequestApproval">Solicitar autorización</button><button type="button" class="btn btn-ghost" id="posCloseShareApproval" hidden>Compartir enlace</button><button type="button" class="btn btn-ghost" id="posCloseCheckApproval" hidden>Comprobar estado</button></div>
+            <input id="posCloseApprovalLink" type="text" readonly aria-label="Enlace para autorizar el cierre" hidden />
+            <div class="hint" id="posCloseApprovalStatus"></div>
           </div>
 
           <div class="modal-actions pos-close-actions">

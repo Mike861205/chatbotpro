@@ -88,6 +88,8 @@ const SETTING_KEYS = [
   'pos_round_edit_require_pin',
   'pos_same_day_cancel_enabled',
   'pos_cancel_require_pin',
+  'pos_cashier_cards_json',
+  'pos_close_require_approval',
 ];
 
 function normalizeReceivingModes(raw) {
@@ -200,6 +202,7 @@ router.put('/', upload.single('logo'), async (req, res, next) => {
       }
     }
     if (body.pos_authorization_pin !== undefined) {
+      if (req.user.role !== 'owner') return res.status(403).json({ error: 'Solo el dueño puede cambiar el NIP de autorización' });
       const pin = String(body.pos_authorization_pin || '').trim();
       if (pin && !/^\d{4,8}$/.test(pin)) {
         return res.status(400).json({ error: 'El NIP debe contener de 4 a 8 dígitos' });
@@ -232,6 +235,22 @@ router.put('/', upload.single('logo'), async (req, res, next) => {
         return res.status(400).json({ error: 'La tasa de IVA debe estar entre 0% y 100%' });
       }
       body.product_tax_rate = String(productTaxRate);
+    }
+    if (body.pos_close_require_approval !== undefined) {
+      if (req.user.role !== 'owner') return res.status(403).json({ error: 'Solo el dueño puede configurar el cierre de caja' });
+      if (!['0', '1'].includes(String(body.pos_close_require_approval))) return res.status(400).json({ error: 'Configuración de cierre no válida' });
+      const pinConfigured = body.pos_authorization_pin || await req.tdb.get("SELECT value FROM {s}.settings WHERE key = 'pos_authorization_pin_hash' AND COALESCE(value, '') <> ''");
+      if (body.pos_close_require_approval === '1' && !pinConfigured) return res.status(409).json({ error: 'Configura primero el NIP de autorización' });
+    }
+    if (body.pos_cashier_cards_json !== undefined) {
+      if (req.user.role !== 'owner') return res.status(403).json({ error: 'Solo el dueño puede configurar las tarjetas del cajero' });
+      let cards;
+      try { cards = JSON.parse(String(body.pos_cashier_cards_json)); } catch { cards = null; }
+      const allowed = ['opening', 'sales', 'cash', 'card', 'transfer', 'custom', 'movements', 'cancellations', 'expected'];
+      if (!Array.isArray(cards) || cards.some((card) => !allowed.includes(card)) || new Set(cards).size !== cards.length) {
+        return res.status(400).json({ error: 'Selección de tarjetas no válida' });
+      }
+      body.pos_cashier_cards_json = JSON.stringify(cards);
     }
     if (body.pos_catalog_sort_mode !== undefined) {
       body.pos_catalog_sort_mode = String(body.pos_catalog_sort_mode || '').trim();

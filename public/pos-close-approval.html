@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="referrer" content="no-referrer" />
+  <title>Autorizar cierre de caja</title>
+  <style>
+    :root{font-family:system-ui,-apple-system,Segoe UI,sans-serif;color:#182238;background:#f2f5fa}*{box-sizing:border-box}
+    body{margin:0;padding:20px}main{max-width:760px;margin:28px auto}.card{background:white;border:1px solid #dfe5ef;border-radius:18px;padding:24px;box-shadow:0 12px 32px #1822380d;margin-bottom:16px}
+    h1{font-size:1.8rem;margin:0 0 8px}h2{font-size:1.1rem;margin:0 0 14px}p{color:#52617b;line-height:1.5}.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.stat{padding:13px;background:#f5f7fb;border-radius:12px}.stat small{display:block;color:#687690;margin-bottom:5px}.stat strong{font-size:1.12rem}.row{display:flex;justify-content:space-between;gap:10px;border-bottom:1px solid #edf0f5;padding:10px 0}.row:last-child{border:0}.row span{color:#52617b}.total{background:#ecfdf5;border:1px solid #a7f3d0}.difference{background:#fff7ed;border:1px solid #fed7aa}label{font-weight:650;display:block;margin-bottom:7px}input{width:100%;padding:13px;border:1px solid #cbd5e1;border-radius:10px;font:inherit}button{width:100%;margin-top:14px;padding:13px;background:#e87913;color:white;border:0;border-radius:10px;font:inherit;font-weight:700;cursor:pointer}button:disabled{opacity:.55;cursor:default}#message{font-weight:650}#error{color:#b42318}#success{color:#087344}@media(max-width:540px){body{padding:12px}main{margin:12px auto}.card{padding:18px}.grid{grid-template-columns:1fr}}
+  </style>
+</head>
+<body>
+<main>
+  <section class="card"><h1>Autorizar cierre de caja</h1><p id="business">Cargando corte…</p><p id="message"></p></section>
+  <section class="card" id="details" hidden>
+    <h2>Resumen del corte</h2><div class="grid" id="primary"></div>
+    <h2 style="margin-top:22px">Ventas y movimientos</h2><div id="breakdown"></div>
+    <p id="notes"></p>
+  </section>
+  <section class="card" id="approval" hidden>
+    <h2>Confirmar autorización</h2><p>Revisa el importe contado y la diferencia. Tu autorización permite al cajero cerrar esta caja con estos mismos datos.</p>
+    <form id="approveForm"><label for="pin">NIP del negocio</label><input id="pin" type="password" inputmode="numeric" pattern="[0-9]{4,8}" maxlength="8" autocomplete="off" required /><button id="approveButton" type="submit">Autorizar este corte</button></form>
+    <p id="error" role="alert"></p><p id="success" role="status"></p>
+  </section>
+</main>
+<script>
+  const parts = location.pathname.split('/');
+  const endpoint = `/api/pos/close-approval/${encodeURIComponent(parts[2] || '')}/${encodeURIComponent(parts[3] || '')}`;
+  let currency = 'MXN';
+  const money = (value) => new Intl.NumberFormat('es-MX', { style: 'currency', currency }).format(Number(value || 0));
+  const addStat = (host, label, value, className = '') => { const el = document.createElement('div'); el.className = `stat ${className}`; const small = document.createElement('small'); small.textContent = label; const strong = document.createElement('strong'); strong.textContent = value; el.append(small, strong); host.append(el); };
+  const addRow = (host, label, value) => { const el = document.createElement('div'); el.className = 'row'; const left = document.createElement('span'); left.textContent = label; const right = document.createElement('strong'); right.textContent = value; el.append(left, right); host.append(el); };
+  async function load() {
+    try {
+      const response = await fetch(endpoint, { cache: 'no-store' }); const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'No se pudo cargar el corte');
+      currency = /^[A-Z]{3}$/.test(data.currency || '') ? data.currency : 'MXN';
+      document.getElementById('business').textContent = `${data.businessName} · ${data.branchName || 'Caja'} · Solicitado por ${data.requestedBy}`;
+      if (data.status !== 'pending') { document.getElementById('message').textContent = data.status === 'approved' ? 'Este corte ya fue autorizado.' : 'Este enlace ya no está vigente. Solicita uno nuevo al cajero.'; return; }
+      document.getElementById('message').textContent = `Solicitud vigente hasta ${new Date(data.expiresAt).toLocaleString('es-MX')}.`;
+      const primary = document.getElementById('primary');
+      addStat(primary, 'Fondo inicial', money(data.openingAmount)); addStat(primary, 'Ventas del turno', money(data.totals.totalSales));
+      addStat(primary, 'Efectivo esperado', money(data.expectedAmount), 'total'); addStat(primary, 'Efectivo contado', money(data.closingAmount), 'total');
+      addStat(primary, 'Diferencia', money(data.closingAmount - data.expectedAmount), 'difference'); addStat(primary, 'Tickets cobrados', String(data.totals.tickets || 0));
+      const rows = document.getElementById('breakdown'); const t = data.totals;
+      addRow(rows, 'Efectivo en ventas', money(t.collected?.cash)); addRow(rows, 'Tarjeta', money(t.collected?.card)); addRow(rows, 'Transferencia', money(t.collected?.transfer));
+      for (const payment of (t.customPayments || [])) if (payment.total) addRow(rows, payment.label, money(payment.total));
+      addRow(rows, 'Entradas de caja', money(t.movements?.income)); addRow(rows, 'Retiros', money(t.movements?.withdrawal)); addRow(rows, 'Gastos', money(t.movements?.expense));
+      addRow(rows, 'Cancelaciones', `${t.cancellations?.tickets || 0} · ${money(t.cancellations?.total)}`);
+      if (t.openCredit?.tickets) addRow(rows, 'Crédito sin cobrar', `${t.openCredit.tickets} · ${money(t.openCredit.total)}`);
+      if (t.tables?.openCount) addRow(rows, 'Mesas abiertas', String(t.tables.openCount));
+      document.getElementById('notes').textContent = data.notes ? `Observaciones del cajero: ${data.notes}` : 'Sin observaciones del cajero.';
+      document.getElementById('details').hidden = false; document.getElementById('approval').hidden = false;
+    } catch (error) { document.getElementById('message').textContent = error.message; }
+  }
+  document.getElementById('approveForm').addEventListener('submit', async (event) => {
+    event.preventDefault(); const button = document.getElementById('approveButton'); button.disabled = true;
+    document.getElementById('error').textContent = '';
+    try {
+      const response = await fetch(`${endpoint}/approve`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pin: document.getElementById('pin').value }) });
+      const data = await response.json(); if (!response.ok) throw new Error(data.error || 'No se pudo autorizar');
+      document.getElementById('success').textContent = 'Corte autorizado. El cajero ya puede cerrar la caja.';
+      document.getElementById('approval').querySelector('form').hidden = true;
+      document.getElementById('pin').value = '';
+    } catch (error) { document.getElementById('error').textContent = error.message; button.disabled = false; }
+  });
+  load();
+</script>
+</body>
+</html>

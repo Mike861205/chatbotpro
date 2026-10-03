@@ -1,10 +1,12 @@
 const express = require('express');
 const bcrypt = require('bcryptjs');
+const crypto = require('node:crypto');
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const config = require('../config');
 const { requireAuth, requireOwner, requireModules } = require('../middleware/auth');
-const { getSetting } = require('../db');
+const { getSetting, q, tdb } = require('../db');
+const { createRateLimiter } = require('../middleware/security');
 const { encrypt, decrypt } = require('../utils/crypto');
 const { validRtn, exonerateSarItems, calculateSarTotals } = require('../utils/sar');
 const { operationalOrderNote } = require('../utils/orderNotes');
@@ -18,6 +20,64 @@ const { applyPromotionsToItems, getActivePromotions, decorateCatalogProducts } =
 const { isProductAvailableToday } = require('../utils/productAvailability');
 
 const router = express.Router();
+const closeApprovalLimiter = createRateLimiter({ windowMs: 15 * 60 * 1000, max: 12, message: 'Demasiados intentos. Espera unos minutos.' });
+const closeTokenHash = (token) => crypto.createHash('sha256').update(String(token)).digest('hex');
+const validCloseLink = (req) => /^[a-z0-9-]{3,40}$/.test(req.params.slug) && /^[a-f0-9]{64}$/.test(req.params.token);
+
+async function publicCloseRequest(req) {
+  if (!validCloseLink(req)) return null;
+  const tenant = (await q("SELECT slug, business_name, timezone FROM tenants WHERE slug=$1 AND account_status='active' AND billing_status<>'suspended' LIMIT 1", [req.params.slug])).rows[0];
+  if (!tenant) return null;
+  const db = tdb(tenant.slug);
+  db.timezone = tenant.timezone;
+  const approval = await db.get(
+    `SELECT a.*, s.status AS session_status, s.branch_name FROM {s}.pos_close_approvals a
+     JOIN {s}.pos_sessions s ON s.id=a.session_id WHERE a.token_hash=$1 LIMIT 1`,
+    [closeTokenHash(req.params.token)]
+  );
+  return approval ? { tenant, db, approval } : null;
+}
+
+router.get('/close-approval/:slug/:token', closeApprovalLimiter, async (req, res, next) => {
+  try {
+    const found = await publicCloseRequest(req);
+    if (!found) return res.status(404).json({ error: 'Solicitud no encontrada' });
+    const { tenant, approval } = found;
+    const expired = new Date(approval.expires_at).getTime() <= Date.now();
+    const snapshot = JSON.parse(approval.snapshot_json);
+    res.json({ businessName: tenant.business_name, currency: await getSetting(found.db, 'currency', 'MXN'), branchName: approval.branch_name || '', requestedBy: approval.requested_by,
+      closingAmount: Number(approval.closing_amount), notes: approval.notes, expectedAmount: snapshot.expectedAmount,
+      openingAmount: snapshot.openingAmount, totals: snapshot.totals,
+      status: approval.session_status === 'open' && !expired ? approval.status : 'expired', expiresAt: approval.expires_at });
+  } catch (e) { next(e); }
+});
+
+router.post('/close-approval/:slug/:token/approve', closeApprovalLimiter, async (req, res, next) => {
+  try {
+    const found = await publicCloseRequest(req);
+    if (!found) return res.status(404).json({ error: 'Solicitud no encontrada' });
+    const { db, approval } = found;
+    if (approval.status !== 'pending' || approval.session_status !== 'open' || new Date(approval.expires_at).getTime() <= Date.now()) {
+      return res.status(409).json({ error: 'La solicitud ya no está pendiente. Pide al cajero un enlace nuevo.' });
+    }
+    if (approval.attempts >= 5) return res.status(429).json({ error: 'Se agotaron los intentos. Pide al cajero un enlace nuevo.' });
+    const pinHash = await getSetting(db, 'pos_authorization_pin_hash', '');
+    if (!pinHash || !(await bcrypt.compare(String(req.body?.pin || ''), pinHash))) {
+      await db.run("UPDATE {s}.pos_close_approvals SET attempts=attempts+1 WHERE id=$1 AND status='pending'", [approval.id]);
+      return res.status(403).json({ error: 'NIP incorrecto' });
+    }
+    const session = await db.get('SELECT opening_amount::float AS opening_amount FROM {s}.pos_sessions WHERE id=$1 AND status=$2', [approval.session_id, 'open']);
+    const totals = await getSessionTotals(db, approval.session_id);
+    if (!session || JSON.stringify({ openingAmount: session.opening_amount, expectedAmount: expectedCashForSession(session, totals), totals }) !== approval.snapshot_json) {
+      await db.run("UPDATE {s}.pos_close_approvals SET status='stale' WHERE id=$1", [approval.id]);
+      return res.status(409).json({ error: 'El corte cambió. Pide al cajero una solicitud nueva.' });
+    }
+    const updated = await db.run("UPDATE {s}.pos_close_approvals SET status='approved', approved_at=now() WHERE id=$1 AND status='pending' AND attempts<5", [approval.id]);
+    if (!updated.rowCount) return res.status(409).json({ error: 'La solicitud ya cambió' });
+    res.json({ ok: true });
+  } catch (e) { next(e); }
+});
+
 router.use(requireAuth);
 router.use(requireModules('pos', 'cortes', 'cancelaciones'));
 router.use(async (req, res, next) => {
@@ -39,7 +99,7 @@ const SALES_HISTORY_FILTERS = new Set(['today', 'week', 'month', 'custom']);
 const CHATBOT_IMPORTABLE_STATUSES = new Set(['pendiente', 'confirmado', 'preparando', 'enviado']);
 
 async function getPosPolicy(t) {
-  const keys = ['pos_round_edit_enabled', 'pos_round_edit_require_pin', 'pos_same_day_cancel_enabled', 'pos_cancel_require_pin', 'pos_authorization_pin_hash'];
+  const keys = ['pos_round_edit_enabled', 'pos_round_edit_require_pin', 'pos_same_day_cancel_enabled', 'pos_cancel_require_pin', 'pos_authorization_pin_hash', 'pos_cashier_cards_json', 'pos_close_require_approval'];
   const rows = await t.all('SELECT key, value FROM {s}.settings WHERE key = ANY($1::text[])', [keys]);
   const values = Object.fromEntries(rows.map((row) => [row.key, row.value]));
   return {
@@ -48,6 +108,8 @@ async function getPosPolicy(t) {
     sameDayCancelEnabled: values.pos_same_day_cancel_enabled !== '0',
     cancelRequirePin: values.pos_cancel_require_pin === '1',
     pinHash: values.pos_authorization_pin_hash || '',
+    cashierCards: (() => { try { const cards = JSON.parse(values.pos_cashier_cards_json || 'null'); return Array.isArray(cards) ? cards : null; } catch { return null; } })(),
+    closeRequireApproval: values.pos_close_require_approval === '1',
   };
 }
 
@@ -1373,6 +1435,8 @@ router.get('/overview', async (req, res, next) => {
         roundEditRequirePin: policy.roundEditRequirePin,
         sameDayCancelEnabled: policy.sameDayCancelEnabled,
         cancelRequirePin: policy.cancelRequirePin,
+        cashierCards: policy.cashierCards,
+        closeRequireApproval: policy.closeRequireApproval,
       },
       openSessions: allOpenSessions,
       tables: await listRestaurantTables(req.tdb, activeSession, false),
@@ -1755,6 +1819,43 @@ router.post('/session/open', async (req, res, next) => {
   }
 });
 
+router.post('/session/close-approval', async (req, res, next) => {
+  try {
+    const policy = await getPosPolicy(req.tdb);
+    if (req.user.role !== 'cashier' || !policy.closeRequireApproval) return res.status(403).json({ error: 'Esta caja no requiere autorización remota' });
+    if (!policy.pinHash) return res.status(409).json({ error: 'El dueño debe configurar un NIP en Mi negocio' });
+    const session = await getOpenSession(req.tdb, userSessionContext(req.user, req));
+    if (!session) return res.status(409).json({ error: 'No hay una caja abierta' });
+    const rawAmount = Number(req.body?.closingAmount);
+    if (req.body?.closingAmount === null || req.body?.closingAmount === '' || !Number.isFinite(rawAmount) || rawAmount < 0) return res.status(400).json({ error: 'Escribe el efectivo contado' });
+    const closingAmount = n(rawAmount);
+    const notes = String(req.body?.notes || '').trim().slice(0, 240);
+    const totals = await getSessionTotals(req.tdb, session.id);
+    const snapshot = JSON.stringify({ openingAmount: session.opening_amount, expectedAmount: expectedCashForSession(session, totals), totals });
+    const token = crypto.randomBytes(32).toString('hex');
+    const approval = await req.tdb.tx(async (tx) => {
+      await tx.run("UPDATE {s}.pos_close_approvals SET status='replaced' WHERE session_id=$1 AND status IN ('pending','approved')", [session.id]);
+      return tx.get(`INSERT INTO {s}.pos_close_approvals (session_id, token_hash, snapshot_json, closing_amount, notes, requested_by, expires_at)
+        VALUES ($1,$2,$3,$4,$5,$6,now()+interval '30 minutes') RETURNING id, expires_at`,
+      [session.id, closeTokenHash(token), snapshot, closingAmount, notes, req.user.username]);
+    });
+    const baseUrl = String(process.env.PUBLIC_APP_URL || '').trim().replace(/\/+$/, '') || `${req.protocol}://${req.get('host')}`;
+    const link = `${baseUrl}/autorizar-cierre/${encodeURIComponent(req.tenant.slug)}/${token}`;
+    res.json({ id: approval.id, status: 'pending', expiresAt: approval.expires_at, link });
+  } catch (e) { next(e); }
+});
+
+router.get('/session/close-approval/status', async (req, res, next) => {
+  try {
+    const session = await getOpenSession(req.tdb, userSessionContext(req.user, req));
+    if (!session) return res.json({ status: 'closed' });
+    const approval = await req.tdb.get('SELECT id, status, expires_at, closing_amount::float AS closing_amount, notes FROM {s}.pos_close_approvals WHERE session_id=$1 ORDER BY id DESC LIMIT 1', [session.id]);
+    if (!approval) return res.json({ status: 'none' });
+    res.json({ id: approval.id, status: new Date(approval.expires_at).getTime() <= Date.now() ? 'expired' : approval.status,
+      closingAmount: approval.closing_amount, notes: approval.notes });
+  } catch (e) { next(e); }
+});
+
 router.post('/session/close', async (req, res, next) => {
   try {
     const session = await getOpenSession(req.tdb, userSessionContext(req.user, req));
@@ -1771,27 +1872,46 @@ router.post('/session/close', async (req, res, next) => {
         error: `Hay un autocobro Mercado Pago en proceso (${pendingPointPayment.self_service_folio || pendingPointPayment.id}). Espera a que termine antes de cerrar caja.`,
       });
     }
-    const totals = await getSessionTotals(req.tdb, session.id);
-    const expectedAmount = expectedCashForSession(session, totals);
-    const closingAmount = n(req.body?.closingAmount);
+    const rawAmount = Number(req.body?.closingAmount);
+    if (req.body?.closingAmount === null || req.body?.closingAmount === '' || !Number.isFinite(rawAmount) || rawAmount < 0) return res.status(400).json({ error: 'Escribe el efectivo contado' });
+    const closingAmount = n(rawAmount);
     const notes = String(req.body?.notes || '').trim().slice(0, 240);
-    const differenceAmount = n(closingAmount - expectedAmount);
-    await req.tdb.run(
+    const policy = await getPosPolicy(req.tdb);
+    const closeResult = await req.tdb.tx(async (tx) => {
+      const locked = await tx.get("SELECT id, status, opening_amount::float AS opening_amount FROM {s}.pos_sessions WHERE id=$1 FOR UPDATE", [session.id]);
+      if (!locked || locked.status !== 'open') throw Object.assign(new Error('La caja ya está cerrada'), { statusCode: 409 });
+      const totals = await getSessionTotals(tx, session.id);
+      const expectedAmount = expectedCashForSession(locked, totals);
+      if (req.user.role === 'cashier' && policy.closeRequireApproval) {
+        const approval = await tx.get("SELECT * FROM {s}.pos_close_approvals WHERE session_id=$1 ORDER BY id DESC LIMIT 1 FOR UPDATE", [session.id]);
+        if (!approval || approval.status !== 'approved' || new Date(approval.expires_at).getTime() <= Date.now()) {
+          throw Object.assign(new Error('Solicita y espera la autorización del dueño para cerrar'), { statusCode: 409 });
+        }
+        if (Number(approval.closing_amount) !== closingAmount || approval.notes !== notes ||
+          approval.snapshot_json !== JSON.stringify({ openingAmount: locked.opening_amount, expectedAmount, totals })) {
+          throw Object.assign(new Error('El corte cambió desde la autorización. Solicita una nueva.'), { statusCode: 409 });
+        }
+        await tx.run("UPDATE {s}.pos_close_approvals SET status='used', used_at=now() WHERE id=$1", [approval.id]);
+      }
+      const differenceAmount = n(closingAmount - expectedAmount);
+      await tx.run(
       `UPDATE {s}.pos_sessions
        SET status = 'closed', closing_amount = $1, expected_amount = $2, difference_amount = $3,
            notes = CASE WHEN COALESCE(notes, '') = '' THEN $4 ELSE notes || E'\n' || $4 END,
            closed_by = $5, closed_at = now()
        WHERE id = $6`,
       [closingAmount, expectedAmount, differenceAmount, notes, req.user.username, session.id]
-    );
+      );
+      return { totals, expectedAmount, differenceAmount };
+    });
     const closed = await getLastClosedSession(req.tdb, userSessionContext(req.user, req));
     res.json({
       ok: true,
       closedSession: closed,
-      totals,
-      expectedAmount,
+      totals: closeResult.totals,
+      expectedAmount: closeResult.expectedAmount,
       closingAmount,
-      differenceAmount,
+      differenceAmount: closeResult.differenceAmount,
     });
   } catch (e) {
     next(e);

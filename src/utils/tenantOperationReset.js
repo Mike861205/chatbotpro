@@ -4,6 +4,7 @@ const RESET_SEQUENCE_TABLES = Object.freeze([
   'orders',
   'pos_sessions',
   'pos_cash_movements',
+  'pos_close_approvals',
   'table_accounts',
   'table_rounds',
   'sales_audit_log',
@@ -135,6 +136,7 @@ async function resetTenantOperations(tenantDb, tenant, actor) {
     await tx.run('DELETE FROM {s}.table_rounds');
     await tx.run('DELETE FROM {s}.table_accounts');
     await tx.run('DELETE FROM {s}.pos_cash_movements');
+    await tx.run('DELETE FROM {s}.pos_close_approvals');
     await tx.run('DELETE FROM {s}.pos_sessions');
     await tx.run('DELETE FROM {s}.orders');
 
