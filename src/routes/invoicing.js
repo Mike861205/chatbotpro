@@ -122,21 +122,34 @@ function validateIncomeReceiver(input, options = {}) {
   return receiver;
 }
 
+function withoutFiscalVowelAccents(name) {
+  return String(name || '').normalize('NFD').replace(/([AEIOUaeiou])[\u0300-\u036f]+/g, '$1').normalize('NFC');
+}
+
 async function validateReceiverWithFacturama(facturama, receiver) {
   if (['XAXX010101000', 'XEXX010101000'].includes(receiver.rfc)) return;
-  const result = await facturama.validateReceiver({
-    rfc: receiver.rfc,
-    name: receiver.name,
-    postalCode: receiver.postalCode,
-    fiscalRegime: receiver.fiscalRegime,
+  const validateName = (name) => facturama.validateReceiver({
+    rfc: receiver.rfc, name, postalCode: receiver.postalCode, fiscalRegime: receiver.fiscalRegime,
   });
+  const flag = (result, key) => result?.[key] ?? result?.[key[0].toLowerCase() + key.slice(1)];
+  let result = await validateName(receiver.name);
+  if (flag(result, 'ExistRfc') !== false && flag(result, 'MatchName') === false) {
+    const candidate = withoutFiscalVowelAccents(receiver.name);
+    if (candidate !== receiver.name) {
+      const retried = await validateName(candidate);
+      if (flag(retried, 'MatchName') === true) {
+        result = retried;
+        receiver.name = candidate;
+      }
+    }
+  }
   const checks = [
     ['ExistRfc', 'El RFC no está activo o no fue localizado por el SAT'],
     ['MatchName', 'El nombre o razón social no coincide con el RFC ante el SAT'],
     ['MatchZipCode', 'El código postal fiscal no coincide con el RFC ante el SAT'],
     ['MatchFiscalRegime', 'El régimen fiscal no coincide con el RFC ante el SAT'],
   ];
-  const failed = checks.find(([key]) => result?.[key] === false || result?.[key[0].toLowerCase() + key.slice(1)] === false);
+  const failed = checks.find(([key]) => flag(result, key) === false);
   if (failed) throw Object.assign(new Error(failed[1]), { status: 422 });
 }
 
