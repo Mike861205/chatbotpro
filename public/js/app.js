@@ -6875,10 +6875,9 @@ function renderInvoicing() {
   $('#fiscalIvaRate').value = String(profile.default_iva_rate ?? data.sandboxDefaults?.defaultIvaRate ?? 0.16);
   $('#fiscalIsrRate').value = String(profile.default_isr_rate ?? data.sandboxDefaults?.defaultIsrRate ?? 0);
   $('#fiscalEnabled').checked = profile.enabled ?? true;
-  $('#fiscalCsdCard').hidden = Boolean(data.sandboxSharedAvailable && $('#fiscalSandboxShared').checked);
   const emitters = data.emitters || [];
   const uploadableEmitters = emitters.filter((item) => item.enabled && !item.sandbox_shared && item.api_mode !== 'web');
-  $('#fiscalCsdCard').hidden = Boolean(data.sandboxSharedAvailable && $('#fiscalSandboxShared').checked && !uploadableEmitters.length);
+  $('#fiscalCsdCard').hidden = uploadableEmitters.length === 0;
   const emitterOptions = uploadableEmitters.map((item) => `<option value="${item.id}">${esc(item.label || item.legal_name)} · ${esc(item.rfc)}</option>`).join('');
   $('#fiscalCsdEmitter').innerHTML = emitterOptions;
   const wallet = data.stampWallet;
@@ -7091,7 +7090,7 @@ $('#fiscalEmitterForm')?.addEventListener('submit', async (event) => {
 
 $('#fiscalSandboxShared')?.addEventListener('change', (event) => {
   const hasUploadableEmitter = (INVOICING_DATA?.emitters || []).some((item) => item.enabled && !item.sandbox_shared && item.api_mode !== 'web');
-  $('#fiscalCsdCard').hidden = event.target.checked && !hasUploadableEmitter;
+  $('#fiscalCsdCard').hidden = !hasUploadableEmitter;
   if (event.target.checked && INVOICING_DATA?.sandboxDefaults) {
     const d = INVOICING_DATA.sandboxDefaults;
     $('#fiscalRfc').value = d.rfc; $('#fiscalLegalName').value = d.legalName; $('#fiscalRegime').value = d.fiscalRegime; $('#fiscalPostalCode').value = d.postalCode;
