@@ -164,11 +164,13 @@ function paymentFormFromSale(sale, defaultCard = '04', requested = '') {
       : (PAYMENT_FORMS.has(defaultCard) ? defaultCard : '04');
   if (method === 'cash') return '01';
   if (method === 'transfer') return '03';
+  if (method === 'platform') return PAYMENT_FORMS.has(String(requested || '')) && requested !== '99' ? String(requested) : '31';
   if (method === 'card') return ['04', '28'].includes(String(requested || '')) ? String(requested) : cardPaymentForm;
   const options = [
     ['01', Number(breakdown.cash || 0)],
     [cardPaymentForm, Number(breakdown.card || 0)],
     ['03', Number(breakdown.transfer || 0)],
+    ['31', Number(breakdown.platform || 0)],
   ];
   options.sort((a, b) => b[1] - a[1]);
   return options[0][1] > 0 ? options[0][0] : '01';
@@ -185,10 +187,12 @@ function paymentFormFromSales(sales = [], defaultCard = '04') {
     if (method === 'cash') add('01', sale.total);
     else if (method === 'transfer') add('03', sale.total);
     else if (method === 'card') add(paymentFormFromSale(sale, defaultCard), sale.total);
+    else if (method === 'platform') add('31', sale.total);
     else {
       add('01', breakdown.cash);
       add(paymentFormFromSale({ payment_method: 'card', payment_breakdown: breakdown }, defaultCard), breakdown.card);
       add('03', breakdown.transfer);
+      add('31', breakdown.platform);
     }
   }
   return [...totals.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] || '01';

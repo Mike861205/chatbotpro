@@ -79,7 +79,7 @@ let POS_OVERVIEW = null;
 let POS_CLOSE_APPROVAL = null;
 const POS_CARD_OPTIONS = [
   ['opening', 'Fondo inicial'], ['sales', 'Ventas del turno'], ['cash', 'Efectivo en ventas'],
-  ['card', 'Tarjeta'], ['transfer', 'Transferencia'], ['custom', 'Pagos móviles y locales'],
+  ['card', 'Tarjeta'], ['transfer', 'Transferencia'], ['platform', 'Plataforma'], ['custom', 'Pagos móviles y locales'],
   ['movements', 'Movimientos netos'], ['cancellations', 'Cancelaciones'], ['expected', 'Efectivo esperado'],
 ];
 let KDS_CONFIG = { areas: [], categories: [], products: [], branches: [] };
@@ -105,7 +105,7 @@ const DASHBOARD_PERIOD_LABELS = {
   month: 'del mes',
   year: 'del año',
 };
-let POS_PAYMENT_FORM = { cashReceived: '', cash: '', card: '', cardType: '', transfer: '', creditCustomerName: '', creditCustomerPhone: '', notes: '', deliveryAddress: '', deliveryNeighborhood: '', deliveryReference: '' };
+let POS_PAYMENT_FORM = { cashReceived: '', cash: '', card: '', cardType: '', transfer: '', platform: '', creditCustomerName: '', creditCustomerPhone: '', notes: '', deliveryAddress: '', deliveryNeighborhood: '', deliveryReference: '' };
 let POS_SAR_EXONERATION = { enabled: false, name: '', rtn: '', evidenceType: 'OCE', evidenceNumber: '' };
 let POS_SAR_DELIVERY_CATEGORY = '';
 let LAST_POS_SALE = null;
@@ -1667,6 +1667,7 @@ function renderSalesReportStats() {
   const cashCollected = payments?.cash ?? (dailyMode ? summary.selectedMonthCash : summary.yearCash) ?? 0;
   const cardCollected = payments?.card ?? (dailyMode ? summary.selectedMonthCard : summary.yearCard) ?? 0;
   const transferCollected = payments?.transfer ?? (dailyMode ? summary.selectedMonthTransfer : summary.yearTransfer) ?? 0;
+  const platformCollected = payments?.platform ?? (dailyMode ? summary.selectedMonthPlatform : summary.yearPlatform) ?? 0;
   const customPayments = payments?.custom || [];
 
   const totalSales = Number(sales || 0);
@@ -1704,6 +1705,11 @@ function renderSalesReportStats() {
       </div>
       <strong>${fmtMoney(transferCollected)}</strong>
       <span>${pct(transferCollected)} transferencias bancarias</span>
+    </div>
+    <div class="card sales-report-stat">
+      <div class="sales-stat-top"><small>Plataforma</small><i class="sales-stat-icon-free ph-duotone ph-device-mobile icon-cyan"></i></div>
+      <strong>${fmtMoney(platformCollected)}</strong>
+      <span>${pct(platformCollected)} cobros digitales de plataforma</span>
     </div>
     ${customPayments.map((method) => `
     <div class="card sales-report-stat">
@@ -1779,11 +1785,13 @@ function renderSalesCalendar() {
     const cash = Number(row.cash || 0);
     const card = Number(row.card || 0);
     const transfer = Number(row.transfer || 0);
+    const platform = Number(row.platform || 0);
 
     const paymentBadges = [];
     if (cash > 0) paymentBadges.push(`<span class="sales-pay-chip sales-pay-cash" title="Efectivo: ${fmtMoney(cash)}"><i class="ph-bold ph-money"></i> Efec ${fmtMoney(cash)}</span>`);
     if (card > 0) paymentBadges.push(`<span class="sales-pay-chip sales-pay-card" title="Tarjeta: ${fmtMoney(card)}"><i class="ph-bold ph-credit-card"></i> Tarj ${fmtMoney(card)}</span>`);
     if (transfer > 0) paymentBadges.push(`<span class="sales-pay-chip sales-pay-transfer" title="Transferencia: ${fmtMoney(transfer)}"><i class="ph-bold ph-bank"></i> Transf ${fmtMoney(transfer)}</span>`);
+    if (platform > 0) paymentBadges.push(`<span class="sales-pay-chip sales-pay-other" title="Plataforma: ${fmtMoney(platform)}"><i class="ph-bold ph-device-mobile"></i> Plataforma ${fmtMoney(platform)}</span>`);
     const customTotal = (row.customPayments || []).reduce((sum, method) => sum + Number(method.total || 0), 0);
     for (const method of (row.customPayments || []).filter((item) => Number(item.total || 0) > 0)) {
       paymentBadges.push(`<span class="sales-pay-chip sales-pay-other" title="${esc(method.label)}: ${fmtMoney(method.total)}"><i class="ph-bold ph-device-mobile"></i> ${esc(method.label)} ${fmtMoney(method.total)}</span>`);
@@ -1886,8 +1894,8 @@ function renderSalesBranchBreakdown() {
     host.innerHTML = emptyHTML('ph-storefront', 'Sin ventas en este mes', 'No hay operaciones registradas para el filtro seleccionado.');
     return;
   }
-  host.innerHTML = `<div class="table-wrap"><table class="sales-branch-table"><thead><tr><th>Sucursal</th><th>Ventas</th><th>Efectivo</th><th>Tarjeta</th><th>Transferencia</th><th>Costo vendido</th><th>Compras</th><th>Gastos</th><th>Utilidad / pérdida</th><th>Resultado efectivo</th></tr></thead><tbody>${rows.map((row) => {
-    return `<tr><td><b>${esc(row.name)}</b><small>${row.tickets} operaciones</small></td><td><b>${fmtMoney(row.sales)}</b></td><td><span class="sales-pay-chip sales-pay-cash">${fmtMoney(row.cash || 0)}</span></td><td><span class="sales-pay-chip sales-pay-card">${fmtMoney(row.card || 0)}</span></td><td><span class="sales-pay-chip sales-pay-transfer">${fmtMoney(row.transfer || 0)}</span></td><td>${fmtMoney(row.cogs)}</td><td>${fmtMoney(row.purchases)}</td><td>${fmtMoney(row.expenses)}</td><td><b class="${Number(row.netProfit) < 0 ? 'sales-value-loss' : 'sales-value-profit'}">${fmtMoney(row.netProfit)}</b><small>${Number(row.marginPercent || 0).toFixed(1)}%</small></td><td><b class="${Number(row.cashResult) < 0 ? 'sales-value-loss' : 'sales-value-profit'}">${fmtMoney(row.cashResult)}</b></td></tr>`;
+  host.innerHTML = `<div class="table-wrap"><table class="sales-branch-table"><thead><tr><th>Sucursal</th><th>Ventas</th><th>Efectivo</th><th>Tarjeta</th><th>Transferencia</th><th>Plataforma</th><th>Costo vendido</th><th>Compras</th><th>Gastos</th><th>Utilidad / pérdida</th><th>Resultado efectivo</th></tr></thead><tbody>${rows.map((row) => {
+    return `<tr><td><b>${esc(row.name)}</b><small>${row.tickets} operaciones</small></td><td><b>${fmtMoney(row.sales)}</b></td><td><span class="sales-pay-chip sales-pay-cash">${fmtMoney(row.cash || 0)}</span></td><td><span class="sales-pay-chip sales-pay-card">${fmtMoney(row.card || 0)}</span></td><td><span class="sales-pay-chip sales-pay-transfer">${fmtMoney(row.transfer || 0)}</span></td><td><span class="sales-pay-chip sales-pay-other">${fmtMoney(row.platform || 0)}</span></td><td>${fmtMoney(row.cogs)}</td><td>${fmtMoney(row.purchases)}</td><td>${fmtMoney(row.expenses)}</td><td><b class="${Number(row.netProfit) < 0 ? 'sales-value-loss' : 'sales-value-profit'}">${fmtMoney(row.netProfit)}</b><small>${Number(row.marginPercent || 0).toFixed(1)}%</small></td><td><b class="${Number(row.cashResult) < 0 ? 'sales-value-loss' : 'sales-value-profit'}">${fmtMoney(row.cashResult)}</b></td></tr>`;
   }).join('')}</tbody></table></div>`;
 }
 
@@ -1901,10 +1909,12 @@ function renderSalesMonthly() {
     const cash = Number(row.cash || 0);
     const card = Number(row.card || 0);
     const transfer = Number(row.transfer || 0);
+    const platform = Number(row.platform || 0);
     const paymentBadges = [];
     if (cash > 0) paymentBadges.push(`<span class="sales-pay-chip sales-pay-cash" title="Efectivo: ${fmtMoney(cash)}"><i class="ph-bold ph-money"></i> Efec ${fmtMoney(cash)}</span>`);
     if (card > 0) paymentBadges.push(`<span class="sales-pay-chip sales-pay-card" title="Tarjeta: ${fmtMoney(card)}"><i class="ph-bold ph-credit-card"></i> Tarj ${fmtMoney(card)}</span>`);
     if (transfer > 0) paymentBadges.push(`<span class="sales-pay-chip sales-pay-transfer" title="Transferencia: ${fmtMoney(transfer)}"><i class="ph-bold ph-bank"></i> Transf ${fmtMoney(transfer)}</span>`);
+    if (platform > 0) paymentBadges.push(`<span class="sales-pay-chip sales-pay-other" title="Plataforma: ${fmtMoney(platform)}"><i class="ph-bold ph-device-mobile"></i> Plataforma ${fmtMoney(platform)}</span>`);
     const customTotal = (row.customPayments || []).reduce((sum, method) => sum + Number(method.total || 0), 0);
     for (const method of (row.customPayments || []).filter((item) => Number(item.total || 0) > 0)) {
       paymentBadges.push(`<span class="sales-pay-chip sales-pay-other" title="${esc(method.label)}: ${fmtMoney(method.total)}"><i class="ph-bold ph-device-mobile"></i> ${esc(method.label)} ${fmtMoney(method.total)}</span>`);
@@ -2104,13 +2114,14 @@ function salesDetailRangeTitle(startDate, endDate) {
 }
 
 function salesDetailPaymentLabel(sale) {
-  const labels = { cash: 'Efectivo', card: 'Tarjeta', transfer: 'Transferencia', mixed: 'Mixto', other: 'Otro' };
+  const labels = { cash: 'Efectivo', card: 'Tarjeta', transfer: 'Transferencia', platform: 'Plataforma', mixed: 'Mixto', other: 'Otro' };
   const label = labels[sale.paymentMethod] || sale.paymentBreakdown?.customLabel || posMethodLabel(sale.paymentMethod, sale.paymentBreakdown) || 'Otro';
   if (sale.paymentMethod !== 'mixed') return label;
   const parts = [];
   if (Number(sale.paymentBreakdown?.cash) > 0) parts.push(`Efectivo ${fmtMoney(sale.paymentBreakdown.cash)}`);
   if (Number(sale.paymentBreakdown?.card) > 0) parts.push(`Tarjeta ${fmtMoney(sale.paymentBreakdown.card)}`);
   if (Number(sale.paymentBreakdown?.transfer) > 0) parts.push(`Transferencia ${fmtMoney(sale.paymentBreakdown.transfer)}`);
+  if (Number(sale.paymentBreakdown?.platform) > 0) parts.push(`Plataforma ${fmtMoney(sale.paymentBreakdown.platform)}`);
   return parts.length ? `Mixto · ${parts.join(' / ')}` : label;
 }
 
@@ -2141,6 +2152,7 @@ function renderSalesDetail(data) {
       <div><i class="ph-bold ph-money"></i><span>Efectivo</span><b>${fmtMoney(data.payments.cash)}</b></div>
       <div><i class="ph-bold ph-credit-card"></i><span>Tarjeta</span><b>${fmtMoney(data.payments.card)}</b></div>
       <div><i class="ph-bold ph-bank"></i><span>Transferencia</span><b>${fmtMoney(data.payments.transfer)}</b></div>
+      <div><i class="ph-bold ph-device-mobile"></i><span>Plataforma</span><b>${fmtMoney(data.payments.platform)}</b></div>
       ${(data.payments.custom || []).map((method) => `<div><i class="ph-bold ph-device-mobile"></i><span>${esc(method.label)}</span><b>${fmtMoney(method.total || 0)}</b></div>`).join('')}
       ${Number(data.payments.other || 0) > 0 ? `<div><i class="ph-bold ph-dots-three-circle"></i><span>Otros</span><b>${fmtMoney(data.payments.other)}</b></div>` : ''}
     </div>
@@ -2186,7 +2198,7 @@ function salesDetailFileBase(data = SALES_DETAIL_DATA) {
 function salesDetailPrintHtml(data) {
   const s = data.summary;
   const paymentRows = [
-    ['Efectivo', data.payments.cash], ['Tarjeta', data.payments.card], ['Transferencia', data.payments.transfer],
+    ['Efectivo', data.payments.cash], ['Tarjeta', data.payments.card], ['Transferencia', data.payments.transfer], ['Plataforma', data.payments.platform],
     ...(data.payments.custom || []).map((method) => [method.label, method.total]),
     ...(Number(data.payments.other || 0) > 0 ? [['Otros', data.payments.other]] : []),
   ].map(([name, amount]) => `<tr><td>${name}</td><td class="num">${esc(fmtMoney(amount))}</td></tr>`).join('');
@@ -2218,7 +2230,7 @@ function exportSalesDetailExcel(data = SALES_DETAIL_DATA) {
   XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet([['Concepto', 'Valor'], ...summaryRows]), 'Resumen');
   XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet([
     { Forma: 'Efectivo', Total: data.payments.cash }, { Forma: 'Tarjeta', Total: data.payments.card },
-    { Forma: 'Transferencia', Total: data.payments.transfer },
+    { Forma: 'Transferencia', Total: data.payments.transfer }, { Forma: 'Plataforma', Total: data.payments.platform },
     ...(data.payments.custom || []).map((method) => ({ Forma: method.label, Total: method.total })),
     ...(Number(data.payments.other || 0) > 0 ? [{ Forma: 'Otros', Total: data.payments.other }] : []),
   ]), 'Formas de pago');
@@ -2236,7 +2248,7 @@ function exportSalesDetailPdf(data = SALES_DETAIL_DATA) {
   doc.setFontSize(16); doc.text(ME?.tenant?.businessName || SETTINGS?.business_name || 'Reporte de ventas', 14, 14);
   doc.setFontSize(9); doc.setTextColor(90); doc.text(`${SALES_DETAIL_TITLE} · ${salesScopeLabel()}`, 14, 20); doc.setTextColor(0);
   doc.autoTable({ startY: 25, theme: 'grid', head: [['Ventas', 'Costo vendido', 'Compras', 'Gastos', 'Utilidad neta', 'Resultado efectivo', 'Margen']], body: [[fmtMoney(s.sales), fmtMoney(s.cogs), fmtMoney(s.purchases), fmtMoney(s.expenses), fmtMoney(s.netProfit), fmtMoney(s.cashResult), `${Number(s.marginPercent || 0).toFixed(1)}%`]], styles: { fontSize: 8 }, headStyles: { fillColor: [30, 136, 76] } });
-  doc.autoTable({ startY: doc.lastAutoTable.finalY + 5, theme: 'striped', head: [['Forma de pago', 'Total']], body: [['Efectivo', fmtMoney(data.payments.cash)], ['Tarjeta', fmtMoney(data.payments.card)], ['Transferencia', fmtMoney(data.payments.transfer)], ...(data.payments.custom || []).map((method) => [method.label, fmtMoney(method.total || 0)]), ...(Number(data.payments.other || 0) > 0 ? [['Otros', fmtMoney(data.payments.other)]] : [])], styles: { fontSize: 8 }, tableWidth: 90 });
+  doc.autoTable({ startY: doc.lastAutoTable.finalY + 5, theme: 'striped', head: [['Forma de pago', 'Total']], body: [['Efectivo', fmtMoney(data.payments.cash)], ['Tarjeta', fmtMoney(data.payments.card)], ['Transferencia', fmtMoney(data.payments.transfer)], ['Plataforma', fmtMoney(data.payments.platform)], ...(data.payments.custom || []).map((method) => [method.label, fmtMoney(method.total || 0)]), ...(Number(data.payments.other || 0) > 0 ? [['Otros', fmtMoney(data.payments.other)]] : [])], styles: { fontSize: 8 }, tableWidth: 90 });
   doc.autoTable({ startY: doc.lastAutoTable.finalY + 6, theme: 'striped', head: [['Ticket', 'Fecha', 'Sucursal', 'Origen', 'Pago', 'Venta', 'Costo', 'Utilidad']], body: data.sales.map((row) => [`#${row.id}`, row.createdAt, row.branchName, row.channel === 'pos' ? 'POS' : 'Chatbot', salesDetailPaymentLabel(row), fmtMoney(row.total), fmtMoney(row.cogs), fmtMoney(row.grossProfit)]), styles: { fontSize: 7 }, headStyles: { fillColor: [37, 99, 235] } });
   doc.autoTable({ startY: doc.lastAutoTable.finalY + 6, theme: 'striped', head: [['Orden', 'Recepción', 'Proveedor', 'Sucursal', 'Total']], body: (data.purchases || []).map((row) => [row.orderNumber, row.receivedAt, row.supplierName, row.branchName, fmtMoney(row.total)]), styles: { fontSize: 7 }, headStyles: { fillColor: [234, 88, 12] } });
   doc.autoTable({ startY: doc.lastAutoTable.finalY + 6, theme: 'striped', head: [['Producto', 'Cantidad', 'Ventas', 'Costo', 'Utilidad']], body: data.products.map((row) => [row.name, row.quantity, fmtMoney(row.sales), fmtMoney(row.cogs), fmtMoney(row.profit)]), styles: { fontSize: 7 }, headStyles: { fillColor: [124, 58, 237] } });
@@ -3314,6 +3326,7 @@ function orderPaymentLabel(method, breakdown = null) {
   return {
     cash: 'Efectivo',
     transfer: 'Transferencia',
+    platform: 'Plataforma',
   }[normalizedMethod] || breakdown?.customLabel || CUSTOM_PAYMENT_METHODS.find((item) => item.id === normalizedMethod)?.label || '—';
 }
 
@@ -4494,6 +4507,7 @@ function posMethodLabel(method, breakdown = null) {
     cash: 'Efectivo',
     card: 'Tarjeta',
     transfer: 'Transferencia',
+    platform: 'Plataforma',
     mixed: 'Múltiple',
     credit: 'Crédito',
   }[method];
@@ -4577,7 +4591,8 @@ function updatePosPaymentEditMixedHint() {
   const cash = moneyNum($('#posPaymentEditMixCash')?.value || 0);
   const card = moneyNum($('#posPaymentEditMixCard')?.value || 0);
   const transfer = moneyNum($('#posPaymentEditMixTransfer')?.value || 0);
-  const sum = moneyNum(cash + card + transfer);
+  const platform = moneyNum($('#posPaymentEditMixPlatform')?.value || 0);
+  const sum = moneyNum(cash + card + transfer + platform);
   const diff = moneyNum(total - sum);
   if (Math.abs(diff) < 0.01) {
     hint.style.color = 'var(--green)';
@@ -4601,6 +4616,9 @@ function openPosPaymentEditModal(id) {
   const breakdown = sale.payment_breakdown || {};
   const isPendingCredit = sale.payment_status === 'pending' && sale.payment_method === 'credit';
   const method = isPendingCredit ? 'cash' : sale.payment_method || 'cash';
+  const platformAvailable = SETTINGS?.chatbot_payment_pickup_platform === '1' || method === 'platform' || Number(breakdown.platform || 0) > 0;
+  $('#posPaymentEditMethods [data-method="platform"]').style.display = platformAvailable ? '' : 'none';
+  $('#posPaymentEditMixPlatform').closest('.field').style.display = platformAvailable ? '' : 'none';
   const title = document.querySelector('#posPaymentEditModal h3');
   if (title) title.innerHTML = isPendingCredit
     ? '<i class="ph-bold ph-hand-coins"></i> Cobrar venta a crédito'
@@ -4616,6 +4634,7 @@ function openPosPaymentEditModal(id) {
   $('#posPaymentEditMixCash').value = String(Number(breakdown.cash || 0));
   $('#posPaymentEditMixCard').value = String(Number(breakdown.card || 0));
   $('#posPaymentEditMixTransfer').value = String(Number(breakdown.transfer || 0));
+  $('#posPaymentEditMixPlatform').value = String(Number(breakdown.platform || 0));
   $('#posPaymentEditCardType').value = breakdown.cardType || breakdown.card_type || '';
   $('#posPaymentEditMixCashReceived').value = String(sale.cash_received || Number(breakdown.cash || 0) || '');
   setPosPaymentEditMethod(method);
@@ -4717,12 +4736,13 @@ function setPosPaymentDefaults() {
     POS_PAYMENT_FORM.cash = '';
     POS_PAYMENT_FORM.card = '';
     POS_PAYMENT_FORM.transfer = '';
+    POS_PAYMENT_FORM.platform = '';
   }
 }
 
 function resetPosPaymentForm() {
   POS_PAYMENT_METHOD = 'cash';
-  POS_PAYMENT_FORM = { cashReceived: '', cash: '', card: '', cardType: '', transfer: '', creditCustomerName: '', creditCustomerPhone: '', notes: '', deliveryAddress: '', deliveryNeighborhood: '', deliveryReference: '' };
+  POS_PAYMENT_FORM = { cashReceived: '', cash: '', card: '', cardType: '', transfer: '', platform: '', creditCustomerName: '', creditCustomerPhone: '', notes: '', deliveryAddress: '', deliveryNeighborhood: '', deliveryReference: '' };
   POS_IS_DELIVERY = false;
   POS_DELIVERY_FEE = '';
   POS_CHECKOUT_IDEMPOTENCY_KEY = '';
@@ -4761,7 +4781,8 @@ function updatePosMixedHint() {
   const cash = moneyNum($('#posMixCash')?.value || POS_PAYMENT_FORM.cash || 0);
   const card = moneyNum($('#posMixCard')?.value || POS_PAYMENT_FORM.card || 0);
   const transfer = moneyNum($('#posMixTransfer')?.value || POS_PAYMENT_FORM.transfer || 0);
-  const sum = moneyNum(cash + card + transfer);
+  const platform = moneyNum($('#posMixPlatform')?.value || POS_PAYMENT_FORM.platform || 0);
+  const sum = moneyNum(cash + card + transfer + platform);
   const diff = moneyNum(total - sum);
   const base = `Suma capturada: ${fmtMoney(sum)} de ${fmtMoney(total)}.`;
   if (Math.abs(diff) < 0.01) {
@@ -4797,6 +4818,7 @@ function buildPosTicketData() {
       cash: POS_PAYMENT_METHOD === 'cash' ? total : moneyNum(POS_PAYMENT_FORM.cash || 0),
       card: POS_PAYMENT_METHOD === 'card' ? total : moneyNum(POS_PAYMENT_FORM.card || 0),
       transfer: POS_PAYMENT_METHOD === 'transfer' ? total : moneyNum(POS_PAYMENT_FORM.transfer || 0),
+      platform: POS_PAYMENT_METHOD === 'platform' ? total : moneyNum(POS_PAYMENT_FORM.platform || 0),
     };
     return {
       id: null,
@@ -4914,7 +4936,7 @@ function buildThermalTicketDocument(ticket, widthOverride = null, autoPrint = tr
     ? (breakdownObj.cardType === 'debit' ? 'Tarjeta de débito' : breakdownObj.cardType === 'credit' ? 'Tarjeta de crédito' : 'Tarjeta')
     : posMethodLabel(method, breakdownObj);
   const isMixed = ticket.paymentMethod === 'mixed';
-  const breakdownLines = ['cash', 'card', 'transfer']
+  const breakdownLines = ['cash', 'card', 'transfer', 'platform']
     .filter((method) => Number(breakdownObj[method]) > 0)
     .map((method) => `<tr><td>${esc(ticketPaymentLabel(method))}</td><td class="r">${esc(fmtMoney(breakdownObj[method], currency))}</td></tr>`)
     .join('');
@@ -5349,6 +5371,7 @@ function exportPosClosePdf(closeResult) {
       ['Efectivo', fmtMoney(salesByMethod.cash || 0)],
       ['Tarjeta', fmtMoney(salesByMethod.card || 0)],
       ['Transferencia', fmtMoney(salesByMethod.transfer || 0)],
+      ['Plataforma', fmtMoney(salesByMethod.platform || 0)],
       ...customPayments.map((method) => [method.label, fmtMoney(method.total || 0)]),
       ['Mixto', fmtMoney(salesByMethod.mixed || 0)],
     ],
@@ -5363,6 +5386,7 @@ function exportPosClosePdf(closeResult) {
       ['Cobrado efectivo', fmtMoney(collected.cash || 0)],
       ['Cobrado tarjeta', fmtMoney(collected.card || 0)],
       ['Cobrado transferencia', fmtMoney(collected.transfer || 0)],
+      ['Cobrado plataforma', fmtMoney(collected.platform || 0)],
       ['Ingresos manuales', fmtMoney(movements.income || 0)],
       ['Retiros', fmtMoney(movements.withdrawal || 0)],
       ['Gastos', fmtMoney(movements.expense || 0)],
@@ -5464,6 +5488,7 @@ function printPosCloseReport(closeResult) {
     <tr><td>Efectivo</td><td>${esc(fmtMoney(salesByMethod.cash || 0))}</td></tr>
     <tr><td>Tarjeta</td><td>${esc(fmtMoney(salesByMethod.card || 0))}</td></tr>
     <tr><td>Transferencia</td><td>${esc(fmtMoney(salesByMethod.transfer || 0))}</td></tr>
+    <tr><td>Plataforma</td><td>${esc(fmtMoney(salesByMethod.platform || 0))}</td></tr>
     ${customPayments.map((method) => `<tr><td>${esc(method.label)}</td><td>${esc(fmtMoney(method.total || 0))}</td></tr>`).join('')}
     <tr><td>Mixto</td><td>${esc(fmtMoney(salesByMethod.mixed || 0))}</td></tr>
   </table>
@@ -5472,6 +5497,7 @@ function printPosCloseReport(closeResult) {
     <tr><td>Cobrado efectivo</td><td>${esc(fmtMoney(collected.cash || 0))}</td></tr>
     <tr><td>Cobrado tarjeta</td><td>${esc(fmtMoney(collected.card || 0))}</td></tr>
     <tr><td>Cobrado transferencia</td><td>${esc(fmtMoney(collected.transfer || 0))}</td></tr>
+    <tr><td>Cobrado plataforma</td><td>${esc(fmtMoney(collected.platform || 0))}</td></tr>
     <tr><td>Ingresos</td><td>${esc(fmtMoney(movements.income || 0))}</td></tr>
     <tr><td>Retiros</td><td>${esc(fmtMoney(movements.withdrawal || 0))}</td></tr>
     <tr><td>Gastos</td><td>${esc(fmtMoney(movements.expense || 0))}</td></tr>
@@ -5918,7 +5944,7 @@ async function editPosCreditSale(sale) {
   const breakdown = sale.payment_breakdown || {};
   POS_PAYMENT_METHOD = 'credit';
   POS_PAYMENT_FORM = {
-    cashReceived: '', cash: '', card: '', cardType: '', transfer: '',
+    cashReceived: '', cash: '', card: '', cardType: '', transfer: '', platform: '',
     creditCustomerName: breakdown.creditCustomerName || '',
     creditCustomerPhone: breakdown.creditCustomerPhone || '',
     notes: sale.notes || '',
@@ -6019,7 +6045,9 @@ function openSelfServiceCheckout(order) {
   $('#selfServiceCheckoutPreferred').textContent = preferredLabel;
   $('#selfServiceCashReceived').value = String(Number(order.total || 0));
   $('#selfServiceCardType').value = order.payment_breakdown?.cardType || '';
-  const preferredMethod = ['cash', 'card', 'transfer'].includes(order.payment_method) ? order.payment_method : 'cash';
+  const platformAvailable = SETTINGS?.chatbot_payment_pickup_platform === '1' || order.payment_method === 'platform';
+  $('#selfServicePlatformMethod').style.display = platformAvailable ? '' : 'none';
+  const preferredMethod = ['cash', 'card', 'transfer', ...(platformAvailable ? ['platform'] : [])].includes(order.payment_method) ? order.payment_method : 'cash';
   const preferred = document.querySelector(`input[name="selfServicePayment"][value="${preferredMethod}"]`);
   if (preferred) preferred.checked = true;
   renderSelfServiceCashShortcuts(order.total);
@@ -6051,6 +6079,7 @@ function syncSelfServicePaymentFields() {
   $('#selfServiceCashRow').hidden = method !== 'cash';
   $('#selfServiceCardRow').hidden = method !== 'card';
   $('#selfServiceTransferRow').hidden = method !== 'transfer';
+  $('#selfServicePlatformRow').hidden = method !== 'platform';
   const total = Number(SELF_SERVICE_CHECKOUT_ORDER?.total || 0);
   const received = Number($('#selfServiceCashReceived')?.value || 0);
   const difference = moneyNum(received - total);
@@ -6083,7 +6112,7 @@ $('#selfServiceCheckoutForm')?.addEventListener('submit', async (event) => {
       body: JSON.stringify({
         paymentMethod: method,
         cashReceived,
-        payments: { cash: method === 'cash' ? total : 0, card: method === 'card' ? total : 0, transfer: method === 'transfer' ? total : 0, cardType: $('#selfServiceCardType').value },
+        payments: { cash: method === 'cash' ? total : 0, card: method === 'card' ? total : 0, transfer: method === 'transfer' ? total : 0, platform: method === 'platform' ? total : 0, cardType: $('#selfServiceCardType').value },
       }),
     });
     $('#selfServiceCheckoutModal').classList.remove('show');
@@ -6186,6 +6215,8 @@ function renderPosFinanceStrip() {
     { key: 'cash', icon: 'ph-money', title: 'Efectivo en ventas', value: totals.collected.cash, tone: 'green' },
     { key: 'card', icon: 'ph-credit-card', title: 'Tarjeta', value: totals.collected.card, tone: 'violet' },
     { key: 'transfer', icon: 'ph-bank', title: 'Transferencia', value: totals.collected.transfer, tone: 'cyan' },
+    ...((SETTINGS?.chatbot_payment_pickup_platform === '1' || Number(totals.collected.platform || 0) > 0)
+      ? [{ key: 'platform', icon: 'ph-device-mobile', title: 'Plataforma', value: totals.collected.platform || 0, tone: 'cyan' }] : []),
     ...(totals.customPayments || []).map((method) => ({
       key: 'custom', icon: 'ph-device-mobile', title: method.label, value: method.total, tone: 'cyan', tickets: method.tickets,
     })),
@@ -6430,8 +6461,9 @@ function renderPosCart() {
     </div>` : (tableAccount ? '<div class="hint" style="margin-bottom:10px">Aún no se ha enviado ninguna ronda.</div>' : '');
   setPosPaymentDefaults();
   const activeCustomMethods = CUSTOM_PAYMENT_METHODS.filter((item) => item.active).map((item) => item.id);
-  if (!['cash', 'card', 'transfer', 'credit', 'mixed', ...activeCustomMethods].includes(POS_PAYMENT_METHOD)) POS_PAYMENT_METHOD = 'cash';
-  const methodButtons = ['cash', 'card', 'transfer', ...activeCustomMethods, 'credit', 'mixed']
+  const platformAvailable = SETTINGS?.chatbot_payment_pickup_platform === '1';
+  if (!['cash', 'card', 'transfer', ...(platformAvailable ? ['platform'] : []), 'credit', 'mixed', ...activeCustomMethods].includes(POS_PAYMENT_METHOD)) POS_PAYMENT_METHOD = 'cash';
+  const methodButtons = ['cash', 'card', 'transfer', ...(platformAvailable ? ['platform'] : []), ...activeCustomMethods, 'credit', 'mixed']
     .map((method) => `<button type="button" class="${POS_PAYMENT_METHOD === method ? 'on' : ''}" data-pos-method="${method}">${posMethodLabel(method)}</button>`)
     .join('');
   const cashField = POS_PAYMENT_METHOD === 'cash'
@@ -6468,11 +6500,12 @@ function renderPosCart() {
       </div>
       <div class="row-2">
         <div class="field"><label><i class="ph-bold ph-arrow-u-up-left"></i> Transferencia</label><input type="number" id="posMixTransfer" step="0.01" min="0" value="${esc(POS_PAYMENT_FORM.transfer || '')}" /></div>
+        ${platformAvailable ? `<div class="field"><label><i class="ph-bold ph-device-mobile"></i> Plataforma</label><input type="number" id="posMixPlatform" step="0.01" min="0" value="${esc(POS_PAYMENT_FORM.platform || '')}" /></div>` : ''}
         <div class="field"><label><i class="ph-bold ph-hand-coins"></i> Cambio efectivo</label><input type="number" id="posCashReceived" step="0.01" min="0" value="${esc(POS_PAYMENT_FORM.cashReceived || '')}" placeholder="Efectivo recibido" /></div>
       </div>
-      <div class="hint" id="posMixedHint" style="margin-top:-6px;margin-bottom:12px">La suma de los tres medios debe ser igual a ${fmtMoney(total)}.</div>`
+      <div class="hint" id="posMixedHint" style="margin-top:-6px;margin-bottom:12px">La suma de los medios debe ser igual a ${fmtMoney(total)}.</div>`
     : '';
-  const mixedSum = moneyNum(Number(POS_PAYMENT_FORM.cash || 0) + Number(POS_PAYMENT_FORM.card || 0) + Number(POS_PAYMENT_FORM.transfer || 0));
+  const mixedSum = moneyNum(Number(POS_PAYMENT_FORM.cash || 0) + Number(POS_PAYMENT_FORM.card || 0) + Number(POS_PAYMENT_FORM.transfer || 0) + Number(POS_PAYMENT_FORM.platform || 0));
   const mixedValid = POS_PAYMENT_METHOD !== 'mixed' || Math.abs(mixedSum - total) < 0.01;
   const hasCheckoutItems = tableAccount ? Number(tableAccount.total || 0) + POS_CART.length > 0 : POS_CART.length > 0;
   const submitDisabled = session && mixedValid && hasCheckoutItems ? '' : 'disabled';
@@ -6613,6 +6646,10 @@ function renderPosCart() {
     POS_PAYMENT_FORM.transfer = e.target.value;
     updatePosMixedHint();
   });
+  $('#posMixPlatform')?.addEventListener('input', (e) => {
+    POS_PAYMENT_FORM.platform = e.target.value;
+    updatePosMixedHint();
+  });
   $('#posSaleNotes')?.addEventListener('input', (e) => (POS_PAYMENT_FORM.notes = e.target.value));
   $('#posDeliveryAddress')?.addEventListener('input', (e) => (POS_PAYMENT_FORM.deliveryAddress = e.target.value));
   $('#posDeliveryNeighborhood')?.addEventListener('input', (e) => (POS_PAYMENT_FORM.deliveryNeighborhood = e.target.value));
@@ -6658,6 +6695,7 @@ function renderPosCart() {
           cash: Number($('#posMixCash')?.value || 0),
           card: Number($('#posMixCard')?.value || 0),
           transfer: Number($('#posMixTransfer')?.value || 0),
+          platform: Number($('#posMixPlatform')?.value || 0),
           cardType: $('#posCardType')?.value || '',
           creditCustomerName: $('#posCreditCustomerName')?.value || '',
           creditCustomerPhone: $('#posCreditCustomerPhone')?.value || '',
@@ -7122,13 +7160,12 @@ async function openPosInvoiceModal(saleId) {
   $('#posInvoiceSaleId').value = saleId;
   $('#posInvoiceTicketLabel').textContent = `#${saleId}`;
   const sale = POS_SALES_HISTORY_CACHE.find((row) => Number(row.id) === Number(saleId));
-  const cardPayment = sale?.payment_method === 'card';
   const cardType = String(sale?.payment_breakdown?.cardType || sale?.payment_breakdown?.card_type || '').toLowerCase();
   $('#posInvoicePaymentMethod').value = 'PUE';
   $('#posInvoiceRelationType').value = '';
   $('#posInvoiceRelatedUuid').value = '';
-  $('#posInvoicePaymentForm').value = cardType === 'debit' ? '28' : cardType === 'credit' ? '04' : '';
   syncPosInvoicePaymentMethod();
+  $('#posInvoicePaymentForm').value = sale?.payment_method === 'platform' ? '31' : cardType === 'debit' ? '28' : cardType === 'credit' ? '04' : '';
   const environment = String(INVOICING_DATA?.provider?.environment || 'sandbox').toLowerCase();
   const environmentBadge = $('#posInvoiceEnvironment');
   environmentBadge.classList.toggle('production', environment === 'production');
@@ -7144,8 +7181,21 @@ function syncPosInvoicePaymentMethod() {
   const saleId = Number($('#posInvoiceSaleId')?.value || 0);
   const sale = POS_SALES_HISTORY_CACHE.find((row) => Number(row.id) === saleId);
   const cardPayment = sale?.payment_method === 'card';
+  const platformPayment = sale?.payment_method === 'platform';
   const ppd = $('#posInvoicePaymentMethod')?.value === 'PPD';
-  $('#posInvoicePaymentWrap').hidden = ppd || !cardPayment;
+  const select = $('#posInvoicePaymentForm');
+  const mode = platformPayment ? 'platform' : 'card';
+  if (select.dataset.mode !== mode) {
+    select.innerHTML = platformPayment
+      ? '<option value="31">31 — Intermediario de pagos</option><option value="03">03 — Transferencia electrónica</option><option value="04">04 — Tarjeta de crédito</option><option value="28">28 — Tarjeta de débito</option>'
+      : '<option value="">Selecciona débito o crédito</option><option value="28">28 — Tarjeta de débito</option><option value="04">04 — Tarjeta de crédito</option>';
+    select.dataset.mode = mode;
+  }
+  $('#posInvoicePaymentLabel').textContent = platformPayment ? 'Forma de pago para facturar' : 'Forma de pago de la tarjeta';
+  $('#posInvoicePaymentHint').textContent = platformPayment
+    ? 'Selecciona la forma SAT que corresponda al cobro de la plataforma.'
+    : 'Este dato es necesario porque el ticket fue cobrado con tarjeta.';
+  $('#posInvoicePaymentWrap').hidden = ppd || !(cardPayment || platformPayment);
   $('#posInvoicePaymentForm').required = !ppd && cardPayment;
 }
 
@@ -7364,7 +7414,7 @@ async function loadPosSalesHistory(page = 1) {
         .map((row) => {
           const paymentBreakdown = row.payment_breakdown
             ? Object.entries(row.payment_breakdown)
-                .filter(([method, amount]) => (['cash', 'card', 'transfer'].includes(method) || method.startsWith('custom_')) && Number(amount) > 0)
+                .filter(([method, amount]) => (['cash', 'card', 'transfer', 'platform'].includes(method) || method.startsWith('custom_')) && Number(amount) > 0)
                 .map(([method, amount]) => `${posMethodLabel(method)}${method === 'card' && posCardTypeLabel(row.payment_breakdown) ? ` ${posCardTypeLabel(row.payment_breakdown)}` : ''} ${fmtMoney(amount)}`)
                 .join(' · ')
             : posMethodLabel(row.payment_method, row.payment_breakdown);
@@ -7824,6 +7874,7 @@ function openPosCloseModal() {
           <div class="pos-mini-stat tone-green"><span>Efectivo</span><b>${fmtMoney(totals.salesByMethod?.cash || 0)}</b></div>
           <div class="pos-mini-stat tone-violet"><span>Tarjeta</span><b>${fmtMoney(totals.salesByMethod?.card || 0)}</b></div>
           <div class="pos-mini-stat tone-cyan"><span>Transferencia</span><b>${fmtMoney(totals.salesByMethod?.transfer || 0)}</b></div>
+          <div class="pos-mini-stat tone-cyan"><span>Plataforma</span><b>${fmtMoney(totals.salesByMethod?.platform || 0)}</b></div>
           ${(totals.customPayments || []).map((method) => `<div class="pos-mini-stat tone-cyan"><span>${esc(method.label)}</span><b>${fmtMoney(method.total || 0)}</b></div>`).join('')}
           <div class="pos-mini-stat tone-amber"><span>Mixto</span><b>${fmtMoney(totals.salesByMethod?.mixed || 0)}</b></div>
         </div>
@@ -8122,6 +8173,7 @@ document.querySelectorAll('#posPaymentEditMethods [data-method]').forEach((butto
 $('#posPaymentEditMixCash')?.addEventListener('input', updatePosPaymentEditMixedHint);
 $('#posPaymentEditMixCard')?.addEventListener('input', updatePosPaymentEditMixedHint);
 $('#posPaymentEditMixTransfer')?.addEventListener('input', updatePosPaymentEditMixedHint);
+$('#posPaymentEditMixPlatform')?.addEventListener('input', updatePosPaymentEditMixedHint);
 $('#posPaymentEditMixCashReceived')?.addEventListener('input', updatePosPaymentEditMixedHint);
 
 $('#posPaymentEditCancel')?.addEventListener('click', () => $('#posPaymentEditModal').classList.remove('show'));
@@ -8142,6 +8194,7 @@ $('#posPaymentEditForm')?.addEventListener('submit', async (e) => {
       cash: Number($('#posPaymentEditMixCash')?.value || 0),
       card: Number($('#posPaymentEditMixCard')?.value || 0),
       transfer: Number($('#posPaymentEditMixTransfer')?.value || 0),
+      platform: Number($('#posPaymentEditMixPlatform')?.value || 0),
       cardType: $('#posPaymentEditCardType')?.value || '',
     },
     cashReceived: POS_PAYMENT_EDIT_METHOD === 'mixed'
@@ -12793,6 +12846,7 @@ async function fillConfigForm() {
   $('#cfgChatPayPickupCash').checked = (SETTINGS.chatbot_payment_pickup_cash || '1') === '1';
   $('#cfgChatPayPickupTransfer').checked = (SETTINGS.chatbot_payment_pickup_transfer || '0') === '1';
   $('#cfgChatPayPickupCard').checked = (SETTINGS.chatbot_payment_pickup_card || '0') === '1';
+  $('#cfgChatPayPickupPlatform').checked = (SETTINGS.chatbot_payment_pickup_platform || '0') === '1';
   loadCustomPaymentMethodsFromSettings();
   renderCustomPaymentMethods();
   syncPosCustomPaymentMethods();
@@ -13198,7 +13252,7 @@ function openCutDetail(id) {
   $('#cutsDetailContent').innerHTML = `
     <div class="cut-detail-meta"><span><i class="ph-bold ph-user"></i><b>Abrió</b>${esc(row.opened_by || '—')}</span><span><i class="ph-bold ph-door-open"></i><b>Apertura</b>${esc(row.opened_at || '—')}</span><span><i class="ph-bold ph-lock-key"></i><b>Cierre</b>${esc(row.closed_at || 'Pendiente')}</span></div>
     <div class="cut-detail-kpis"><article class="opening"><i class="ph-bold ph-wallet"></i><span>Fondo inicial</span><b>${fmtMoney(row.opening_amount || 0)}</b></article><article class="sales"><i class="ph-bold ph-chart-line-up"></i><span>Ventas</span><b>${fmtMoney(totals.totalSales || 0)}</b><small>${Number(totals.tickets || 0)} tickets</small></article>${Number(productTax.lines || 0) > 0 ? `<article class="sales"><i class="ph-bold ph-percent"></i><span>IVA productos</span><b>${fmtMoney(productTax.tax || 0)}</b><small>Base ${fmtMoney(productTax.base || 0)}</small></article>` : ''}${openCredit.tickets ? `<article class="difference negative"><i class="ph-bold ph-credit-card"></i><span>Crédito abierto</span><b>${fmtMoney(openCredit.total || 0)}</b><small>${Number(openCredit.tickets)} sin cobrar</small></article>` : ''}<article class="expected"><i class="ph-bold ph-calculator"></i><span>Esperado</span><b>${fmtMoney(row.expected_cash || 0)}</b></article><article class="counted"><i class="ph-bold ph-money"></i><span>Contado</span><b>${row.closing_amount == null ? 'Pendiente' : fmtMoney(row.closing_amount)}</b></article><article class="difference ${difference < 0 ? 'negative' : difference > 0 ? 'positive' : ''}"><i class="ph-bold ph-scales"></i><span>Diferencia</span><b>${row.status === 'open' ? 'Pendiente' : fmtMoney(difference)}</b></article></div>
-    <div class="cut-detail-groups"><section><h4><i class="ph-bold ph-credit-card"></i> Ventas por medio</h4><div><span>Efectivo <b>${fmtMoney(methods.cash || 0)}</b></span><span>Tarjeta <b>${fmtMoney(methods.card || 0)}</b></span><span>Transferencia <b>${fmtMoney(methods.transfer || 0)}</b></span>${customPayments.map((method) => `<span>${esc(method.label)} <b>${fmtMoney(method.total || 0)}</b></span>`).join('')}<span>Mixto <b>${fmtMoney(methods.mixed || 0)}</b></span></div></section><section><h4><i class="ph-bold ph-arrows-left-right"></i> Movimientos de caja</h4><div><span>Ingresos <b>${fmtMoney(movements.income || 0)}</b></span><span>Retiros <b>${fmtMoney(movements.withdrawal || 0)}</b></span><span>Gastos <b>${fmtMoney(movements.expense || 0)}</b></span><span>Cancelaciones <b>${fmtMoney(totals.cancellations?.total || 0)}</b></span></div></section></div>
+    <div class="cut-detail-groups"><section><h4><i class="ph-bold ph-credit-card"></i> Ventas por medio</h4><div><span>Efectivo <b>${fmtMoney(methods.cash || 0)}</b></span><span>Tarjeta <b>${fmtMoney(methods.card || 0)}</b></span><span>Transferencia <b>${fmtMoney(methods.transfer || 0)}</b></span><span>Plataforma <b>${fmtMoney(methods.platform || 0)}</b></span>${customPayments.map((method) => `<span>${esc(method.label)} <b>${fmtMoney(method.total || 0)}</b></span>`).join('')}<span>Mixto <b>${fmtMoney(methods.mixed || 0)}</b></span></div></section><section><h4><i class="ph-bold ph-arrows-left-right"></i> Movimientos de caja</h4><div><span>Ingresos <b>${fmtMoney(movements.income || 0)}</b></span><span>Retiros <b>${fmtMoney(movements.withdrawal || 0)}</b></span><span>Gastos <b>${fmtMoney(movements.expense || 0)}</b></span><span>Cancelaciones <b>${fmtMoney(totals.cancellations?.total || 0)}</b></span></div></section></div>
     ${openCredit.tickets ? `<div class="cut-detail-notes"><i class="ph-bold ph-warning"></i><div><b>Ventas a crédito abiertas al cierre · ${fmtMoney(openCredit.total || 0)}</b><p>${(openCredit.lines || []).map((line) => `#${line.id} ${esc(line.customerName || 'Cliente')} (${fmtMoney(line.amount || 0)})`).join(' · ')}</p></div></div>` : ''}
     ${row.notes ? `<div class="cut-detail-notes"><i class="ph-bold ph-note"></i><div><b>Notas del corte</b><p>${esc(row.notes)}</p></div></div>` : ''}`;
   $('#cutsDetailModal').classList.add('show');
@@ -13396,6 +13450,7 @@ $('#contactForm').addEventListener('submit', async (e) => {
   fd.append('chatbot_payment_pickup_cash', $('#cfgChatPayPickupCash').checked ? '1' : '0');
   fd.append('chatbot_payment_pickup_transfer', $('#cfgChatPayPickupTransfer').checked ? '1' : '0');
   fd.append('chatbot_payment_pickup_card', $('#cfgChatPayPickupCard').checked ? '1' : '0');
+  fd.append('chatbot_payment_pickup_platform', $('#cfgChatPayPickupPlatform').checked ? '1' : '0');
   fd.append('custom_payment_methods_json', JSON.stringify(CUSTOM_PAYMENT_METHODS));
   fd.append('chatbot_bank_accounts_json', JSON.stringify(BANK_ACCOUNTS));
   await api('/api/settings', { method: 'PUT', body: fd });

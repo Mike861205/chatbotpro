@@ -1755,6 +1755,7 @@ async function ensureTenantDefaults(slug, businessName = slug, regional = {}) {
     chatbot_payment_pickup_cash: '1',
     chatbot_payment_pickup_transfer: '0',
     chatbot_payment_pickup_card: '0',
+    chatbot_payment_pickup_platform: '0',
     custom_payment_methods_json: '[]',
     chatbot_upsell_enabled: '0',
     chatbot_upsell_question: '¿Deseas agregar alguno de estos productos a tu pedido?',

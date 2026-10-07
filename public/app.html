@@ -1548,7 +1548,7 @@
               </div>
               <div class="field">
                 <label><i class="ph-bold ph-credit-card"></i> Medios de pago en chatbot</label>
-                <div class="hint" style="margin-bottom:8px">Configura por separado los pagos para domicilio y para las modalidades atendidas en sucursal o personalizadas.</div>
+                <div class="hint" style="margin-bottom:8px">Configura por separado los pagos para domicilio y sucursal. Plataforma también se habilita en el punto de venta y se registra como cobro digital en los cortes.</div>
                 <div class="pay-method-group">
                   <b><i class="ph-bold ph-moped"></i> Servicio a domicilio</b>
                   <div class="pay-method-grid">
@@ -1563,6 +1563,7 @@
                     <label class="pay-method-chip"><input type="checkbox" id="cfgChatPayPickupCash" /> <span><i class="ph-bold ph-money"></i> Efectivo</span></label>
                     <label class="pay-method-chip"><input type="checkbox" id="cfgChatPayPickupTransfer" /> <span><i class="ph-bold ph-bank"></i> Transferencia</span></label>
                     <label class="pay-method-chip"><input type="checkbox" id="cfgChatPayPickupCard" /> <span><i class="ph-bold ph-credit-card"></i> Tarjeta</span></label>
+                    <label class="pay-method-chip"><input type="checkbox" id="cfgChatPayPickupPlatform" /> <span><i class="ph-bold ph-device-mobile"></i> Plataforma</span></label>
                   </div>
                 </div>
                 <section class="custom-payment-panel">
@@ -3186,6 +3187,7 @@
             <label><input type="radio" name="selfServicePayment" value="cash" checked /><span class="self-service-method-icon cash"><i class="ph-bold ph-money"></i></span><span><b>Efectivo</b><small>Calcula el cambio</small></span><i class="ph-bold ph-check-circle method-check"></i></label>
             <label><input type="radio" name="selfServicePayment" value="card" /><span class="self-service-method-icon card"><i class="ph-bold ph-credit-card"></i></span><span><b>Tarjeta</b><small>Débito o crédito</small></span><i class="ph-bold ph-check-circle method-check"></i></label>
             <label><input type="radio" name="selfServicePayment" value="transfer" /><span class="self-service-method-icon transfer"><i class="ph-bold ph-bank"></i></span><span><b>Transferencia</b><small>Confirma el depósito</small></span><i class="ph-bold ph-check-circle method-check"></i></label>
+            <label id="selfServicePlatformMethod" style="display:none"><input type="radio" name="selfServicePayment" value="platform" /><span class="self-service-method-icon transfer"><i class="ph-bold ph-device-mobile"></i></span><span><b>Plataforma</b><small>Cobro digital</small></span><i class="ph-bold ph-check-circle method-check"></i></label>
           </div>
         </section>
         <section class="self-service-payment-detail">
@@ -3200,6 +3202,7 @@
             <label class="self-service-select"><i class="ph-bold ph-credit-card"></i><select id="selfServiceCardType"><option value="">Selecciona débito o crédito</option><option value="debit">Tarjeta de débito</option><option value="credit">Tarjeta de crédito</option></select><i class="ph-bold ph-caret-down"></i></label>
           </div>
           <div class="self-service-transfer-row" id="selfServiceTransferRow" hidden><i class="ph-bold ph-shield-check"></i><div><b>Confirma la transferencia</b><span>Verifica el depósito antes de finalizar. El POS registrará la venta como transferencia.</span></div></div>
+          <div class="self-service-transfer-row" id="selfServicePlatformRow" hidden><i class="ph-bold ph-shield-check"></i><div><b>Confirma el pago de plataforma</b><span>Verifica el cobro digital antes de finalizar. Se registrará separado del efectivo en el corte.</span></div></div>
         </section>
         <div class="modal-actions self-service-checkout-actions"><button class="btn btn-ghost" type="button" id="selfServiceCheckoutCancel"><i class="ph-bold ph-arrow-left"></i> Volver</button><button class="btn btn-primary" type="submit" id="selfServiceCheckoutSubmit"><i class="ph-bold ph-check-circle"></i><span>Confirmar pago</span><small>Imprimir ticket y enviar a cocina</small></button></div>
       </form>
@@ -3244,7 +3247,7 @@
           <div class="field"><label>Uso del CFDI</label><select id="posInvoiceUse"><optgroup label="Usos generales"><option value="G01">G01 — Adquisición de mercancías</option><option value="G02">G02 — Devoluciones, descuentos o bonificaciones</option><option value="G03" selected>G03 — Gastos en general</option></optgroup><optgroup label="Inversiones"><option value="I01">I01 — Construcciones</option><option value="I02">I02 — Mobiliario y equipo de oficina</option><option value="I03">I03 — Equipo de transporte</option><option value="I04">I04 — Equipo de cómputo y accesorios</option><option value="I05">I05 — Dados, troqueles, moldes y herramental</option><option value="I06">I06 — Comunicaciones telefónicas</option><option value="I07">I07 — Comunicaciones satelitales</option><option value="I08">I08 — Otra maquinaria y equipo</option></optgroup><optgroup label="Deducciones personales"><option value="D01">D01 — Honorarios médicos y gastos hospitalarios</option><option value="D02">D02 — Gastos médicos por incapacidad o discapacidad</option><option value="D03">D03 — Gastos funerales</option><option value="D04">D04 — Donativos</option><option value="D05">D05 — Intereses reales por créditos hipotecarios</option><option value="D06">D06 — Aportaciones voluntarias al SAR</option><option value="D07">D07 — Primas de seguros de gastos médicos</option><option value="D08">D08 — Transportación escolar obligatoria</option><option value="D09">D09 — Depósitos para ahorro y pensiones</option><option value="D10">D10 — Pagos por servicios educativos</option></optgroup><optgroup label="Otros"><option value="S01">S01 — Sin efectos fiscales</option></optgroup></select></div>
         </div>
         <div class="field"><label>Método de pago</label><select id="posInvoicePaymentMethod"><option value="PUE">PUE — Pago en una sola exhibición</option><option value="PPD">PPD — Pago diferido o en parcialidades</option></select><div class="hint">PPD emitirá la factura con forma 99 y habilitará sus complementos de pago.</div></div>
-        <div class="field" id="posInvoicePaymentWrap" hidden><label>Forma de pago de la tarjeta</label><select id="posInvoicePaymentForm"><option value="">Selecciona débito o crédito</option><option value="28">28 — Tarjeta de débito</option><option value="04">04 — Tarjeta de crédito</option></select><div class="hint">Este dato es necesario porque el ticket fue cobrado con tarjeta.</div></div>
+        <div class="field" id="posInvoicePaymentWrap" hidden><label id="posInvoicePaymentLabel">Forma de pago de la tarjeta</label><select id="posInvoicePaymentForm"><option value="">Selecciona débito o crédito</option><option value="28">28 — Tarjeta de débito</option><option value="04">04 — Tarjeta de crédito</option></select><div class="hint" id="posInvoicePaymentHint">Este dato es necesario porque el ticket fue cobrado con tarjeta.</div></div>
         <details class="field"><summary>Relacionar este CFDI (opcional)</summary><div class="row-2" style="margin-top:10px"><div class="field"><label>Tipo de relación</label><select id="posInvoiceRelationType"><option value="">Sin relación</option><option value="04">04 — Sustitución de CFDI previos</option><option value="07">07 — Aplicación de anticipo</option></select></div><div class="field"><label>UUID relacionado</label><input id="posInvoiceRelatedUuid" maxlength="36" placeholder="XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX" /></div></div></details>
         <div class="field"><label>Correo del receptor (opcional)</label><input id="posInvoiceEmail" type="email" maxlength="160" /></div>
         <div class="modal-actions"><button type="button" class="btn btn-ghost" id="posInvoiceCancel">Cancelar</button><button type="submit" class="btn btn-primary" id="posInvoiceSubmit"><i class="ph-bold ph-seal-check"></i> Timbrar CFDI</button></div>
@@ -3288,6 +3291,7 @@
             <button type="button" data-method="cash">Efectivo</button>
             <button type="button" data-method="card">Tarjeta</button>
             <button type="button" data-method="transfer">Transferencia</button>
+            <button type="button" data-method="platform" style="display:none">Plataforma</button>
             <button type="button" data-method="mixed">Múltiple</button>
           </div>
         </div>
@@ -3311,6 +3315,7 @@
           </div>
           <div class="row-2">
             <div class="field"><label><i class="ph-bold ph-arrow-u-up-left"></i> Transferencia</label><input type="number" id="posPaymentEditMixTransfer" min="0" step="0.01" /></div>
+            <div class="field"><label><i class="ph-bold ph-device-mobile"></i> Plataforma</label><input type="number" id="posPaymentEditMixPlatform" min="0" step="0.01" /></div>
             <div class="field"><label><i class="ph-bold ph-hand-coins"></i> Efectivo recibido</label><input type="number" id="posPaymentEditMixCashReceived" min="0" step="0.01" /></div>
           </div>
           <div class="hint" id="posPaymentEditMixedHint"></div>

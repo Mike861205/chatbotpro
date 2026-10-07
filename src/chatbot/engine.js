@@ -508,6 +508,7 @@ function paymentMethodLabel(method) {
     cash: 'Efectivo',
     transfer: 'Transferencia',
     card: 'Tarjeta',
+    platform: 'Plataforma',
   }[String(method || '')] || 'Sin definir';
 }
 
@@ -516,6 +517,7 @@ function enabledPaymentOptions(settings, customMethods = []) {
   if (settings.cash) options.push({ label: '💵 Efectivo', value: 'pay_cash', method: 'cash' });
   if (settings.transfer) options.push({ label: '🏦 Transferencia', value: 'pay_transfer', method: 'transfer' });
   if (settings.card) options.push({ label: '💳 Tarjeta', value: 'pay_card', method: 'card' });
+  if (settings.platform) options.push({ label: '📱 Plataforma', value: 'pay_platform', method: 'platform' });
   for (const method of customMethods.filter((item) => item.active)) {
     options.push({ label: `📲 ${method.label}`, value: `pay_${method.id}`, method: method.id, plainLabel: method.label });
   }
@@ -1891,6 +1893,7 @@ async function handleMessage(t, slug, sessionId, rawInput, runtime = {}) {
     pickupCashRaw,
     pickupTransferRaw,
     pickupCardRaw,
+    pickupPlatformRaw,
     customPaymentMethodsRaw,
     bankAccountsRaw,
     upsellEnabledRaw,
@@ -1923,6 +1926,7 @@ async function handleMessage(t, slug, sessionId, rawInput, runtime = {}) {
     getSetting(t, 'chatbot_payment_pickup_cash', '1'),
     getSetting(t, 'chatbot_payment_pickup_transfer', '0'),
     getSetting(t, 'chatbot_payment_pickup_card', '0'),
+    getSetting(t, 'chatbot_payment_pickup_platform', '0'),
     getSetting(t, 'custom_payment_methods_json', '[]'),
     getSetting(t, 'chatbot_bank_accounts_json', '[]'),
     getSetting(t, 'chatbot_upsell_enabled', '0'),
@@ -1988,6 +1992,7 @@ async function handleMessage(t, slug, sessionId, rawInput, runtime = {}) {
     cash: pickupCashRaw === '1',
     transfer: pickupTransferRaw === '1',
     card: pickupCardRaw === '1',
+    platform: pickupPlatformRaw === '1',
   };
   const customPaymentMethods = parseCustomPaymentMethods(customPaymentMethodsRaw);
   const bankAccounts = parseBankAccounts(bankAccountsRaw);
@@ -3593,8 +3598,9 @@ async function handleMessage(t, slug, sessionId, rawInput, runtime = {}) {
       pay_cash: 'cash',
       pay_transfer: 'transfer',
       pay_card: 'card',
+      pay_platform: 'platform',
     }[lower] || (lower.startsWith('pay_custom_') ? lower.slice(4) : '')
-      || ({ efectivo: 'cash', cash: 'cash', transferencia: 'transfer', transfer: 'transfer', tarjeta: 'card', card: 'card' }[normalizeSearchText(input)] || '')
+      || ({ efectivo: 'cash', cash: 'cash', transferencia: 'transfer', transfer: 'transfer', tarjeta: 'card', card: 'card', plataforma: 'platform', platform: 'platform' }[normalizeSearchText(input)] || '')
       || chatPaymentOptions.find((option) => normalizeSearchText(option.plainLabel || option.label) === normalizeSearchText(input))?.method;
     if (!selected || !chatPaymentOptions.some((opt) => opt.method === selected)) {
       reply.messages = ['Elige una opción de pago válida para continuar:'];

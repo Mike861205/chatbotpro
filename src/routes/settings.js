@@ -54,6 +54,7 @@ const SETTING_KEYS = [
   'chatbot_payment_pickup_cash',
   'chatbot_payment_pickup_transfer',
   'chatbot_payment_pickup_card',
+  'chatbot_payment_pickup_platform',
   'custom_payment_methods_json',
   'chatbot_bank_accounts_json',
   'chatbot_upsell_enabled',
@@ -246,7 +247,7 @@ router.put('/', upload.single('logo'), async (req, res, next) => {
       if (req.user.role !== 'owner') return res.status(403).json({ error: 'Solo el dueño puede configurar las tarjetas del cajero' });
       let cards;
       try { cards = JSON.parse(String(body.pos_cashier_cards_json)); } catch { cards = null; }
-      const allowed = ['opening', 'sales', 'cash', 'card', 'transfer', 'custom', 'movements', 'cancellations', 'expected'];
+      const allowed = ['opening', 'sales', 'cash', 'card', 'transfer', 'platform', 'custom', 'movements', 'cancellations', 'expected'];
       if (!Array.isArray(cards) || cards.some((card) => !allowed.includes(card)) || new Set(cards).size !== cards.length) {
         return res.status(400).json({ error: 'Selección de tarjetas no válida' });
       }

@@ -99,7 +99,13 @@ router.get('/report', async (req, res, next) => {
                ELSE 0::numeric
              END AS payment_transfer,
              CASE
-               WHEN o.payment_method NOT IN ('cash', 'card', 'transfer', 'mixed', 'multiple') THEN
+               WHEN o.payment_method = 'platform' THEN o.total::numeric
+               WHEN o.payment_method IN ('mixed', 'multiple') OR (o.payment_breakdown IS NOT NULL AND o.payment_breakdown ~ '^\\s*\\{.*\\}\\s*$') THEN
+                 COALESCE((NULLIF(o.payment_breakdown, '')::jsonb ->> 'platform')::numeric, 0)
+               ELSE 0::numeric
+             END AS payment_platform,
+             CASE
+               WHEN o.payment_method NOT IN ('cash', 'card', 'transfer', 'platform', 'mixed', 'multiple') THEN
                  o.total::numeric
                ELSE 0::numeric
              END AS payment_other
@@ -143,6 +149,7 @@ router.get('/report', async (req, res, next) => {
              COALESCE(SUM(o.payment_cash), 0)::float AS cash,
              COALESCE(SUM(o.payment_card), 0)::float AS card,
              COALESCE(SUM(o.payment_transfer), 0)::float AS transfer,
+             COALESCE(SUM(o.payment_platform), 0)::float AS platform,
              COALESCE(SUM(o.payment_other), 0)::float AS other,
              COUNT(o.id)::int AS tickets
       FROM days d
@@ -171,6 +178,7 @@ router.get('/report', async (req, res, next) => {
              COALESCE(SUM(o.payment_cash), 0)::float AS cash,
              COALESCE(SUM(o.payment_card), 0)::float AS card,
              COALESCE(SUM(o.payment_transfer), 0)::float AS transfer,
+             COALESCE(SUM(o.payment_platform), 0)::float AS platform,
              COALESCE(SUM(o.payment_other), 0)::float AS other,
              COUNT(o.id)::int AS tickets
       FROM months m
@@ -198,6 +206,7 @@ router.get('/report', async (req, res, next) => {
              COALESCE(SUM(o.payment_cash), 0)::float AS cash,
              COALESCE(SUM(o.payment_card), 0)::float AS card,
              COALESCE(SUM(o.payment_transfer), 0)::float AS transfer,
+             COALESCE(SUM(o.payment_platform), 0)::float AS platform,
              COALESCE(SUM(o.payment_other), 0)::float AS other,
              COUNT(o.id)::int AS tickets
       FROM costed_orders o
@@ -325,6 +334,7 @@ router.get('/report', async (req, res, next) => {
       const cash = Number(row.cash || 0);
       const card = Number(row.card || 0);
       const transfer = Number(row.transfer || 0);
+      const platform = Number(row.platform || 0);
       const other = Number(row.other || 0);
       const expenses = dailyExpenseMap.get(row.date) || 0;
       const purchases = dailyPurchaseMap.get(row.date) || 0;
@@ -336,6 +346,7 @@ router.get('/report', async (req, res, next) => {
         cash,
         card,
         transfer,
+        platform,
         other,
         customPayments: customPaymentSummary(null, row.date),
         expenses,
@@ -352,6 +363,7 @@ router.get('/report', async (req, res, next) => {
       const cash = Number(row.cash || 0);
       const card = Number(row.card || 0);
       const transfer = Number(row.transfer || 0);
+      const platform = Number(row.platform || 0);
       const other = Number(row.other || 0);
       const expenses = monthlyExpenseMap.get(monthNumber) || 0;
       const purchases = monthlyPurchaseMap.get(monthNumber) || 0;
@@ -363,6 +375,7 @@ router.get('/report', async (req, res, next) => {
         cash,
         card,
         transfer,
+        platform,
         other,
         customPayments: customPaymentSummary(monthNumber),
         expenses,
@@ -391,11 +404,13 @@ router.get('/report', async (req, res, next) => {
     const selectedMonthCash = money(daily.reduce((sum, row) => sum + row.cash, 0));
     const selectedMonthCard = money(daily.reduce((sum, row) => sum + row.card, 0));
     const selectedMonthTransfer = money(daily.reduce((sum, row) => sum + row.transfer, 0));
+    const selectedMonthPlatform = money(daily.reduce((sum, row) => sum + row.platform, 0));
     const selectedMonthOther = money(daily.reduce((sum, row) => sum + row.other, 0));
 
     const yearCash = money(monthly.reduce((sum, row) => sum + row.cash, 0));
     const yearCard = money(monthly.reduce((sum, row) => sum + row.card, 0));
     const yearTransfer = money(monthly.reduce((sum, row) => sum + row.transfer, 0));
+    const yearPlatform = money(monthly.reduce((sum, row) => sum + row.platform, 0));
     const yearOther = money(monthly.reduce((sum, row) => sum + row.other, 0));
 
     res.json({
@@ -415,11 +430,13 @@ router.get('/report', async (req, res, next) => {
         selectedMonthCash,
         selectedMonthCard,
         selectedMonthTransfer,
+        selectedMonthPlatform,
         selectedMonthOther,
         selectedMonthPayments: {
           cash: selectedMonthCash,
           card: selectedMonthCard,
           transfer: selectedMonthTransfer,
+          platform: selectedMonthPlatform,
           other: selectedMonthOther,
           custom: customPaymentSummary(month),
         },
@@ -436,11 +453,13 @@ router.get('/report', async (req, res, next) => {
         yearCash,
         yearCard,
         yearTransfer,
+        yearPlatform,
         yearOther,
         yearPayments: {
           cash: yearCash,
           card: yearCard,
           transfer: yearTransfer,
+          platform: yearPlatform,
           other: yearOther,
           custom: customPaymentSummary(),
         },
@@ -459,18 +478,19 @@ router.get('/report', async (req, res, next) => {
           cash: Number(row.cash || 0),
           card: Number(row.card || 0),
           transfer: Number(row.transfer || 0),
+          platform: Number(row.platform || 0),
           other: Number(row.other || 0),
           expenses: 0,
           purchases: 0,
           tickets: Number(row.tickets || 0),
         });
         for (const row of branchExpenseRows) {
-          const current = map.get(row.key) || { key: row.key, name: row.name, sales: 0, cogs: 0, cash: 0, card: 0, transfer: 0, other: 0, expenses: 0, purchases: 0, tickets: 0 };
+          const current = map.get(row.key) || { key: row.key, name: row.name, sales: 0, cogs: 0, cash: 0, card: 0, transfer: 0, platform: 0, other: 0, expenses: 0, purchases: 0, tickets: 0 };
           current.expenses = Number(row.expenses || 0);
           map.set(row.key, current);
         }
         for (const row of branchPurchaseRows) {
-          const current = map.get(row.key) || { key: row.key, name: row.name, sales: 0, cogs: 0, cash: 0, card: 0, transfer: 0, other: 0, expenses: 0, purchases: 0, tickets: 0 };
+          const current = map.get(row.key) || { key: row.key, name: row.name, sales: 0, cogs: 0, cash: 0, card: 0, transfer: 0, platform: 0, other: 0, expenses: 0, purchases: 0, tickets: 0 };
           current.purchases = Number(row.purchases || 0); map.set(row.key,current);
         }
         return [...map.values()].map((row) => ({
@@ -591,7 +611,7 @@ router.get('/detail', async (req, res, next) => {
       method.id,
       { id: method.id, label: method.label, total: 0, tickets: 0 },
     ]));
-    const paymentTotals = { cash: 0, card: 0, transfer: 0, other: 0 };
+    const paymentTotals = { cash: 0, card: 0, transfer: 0, platform: 0, other: 0 };
     const productMap = new Map();
 
     const sales = orderRows.map((row) => {
@@ -599,11 +619,12 @@ router.get('/detail', async (req, res, next) => {
       const cogs = money(row.cogs);
       const items = parseJson(row.items, []);
       const breakdown = parseJson(row.payment_breakdown, {});
-      const breakdownTotal = ['cash', 'card', 'transfer'].reduce((sum, key) => sum + Number(breakdown[key] || 0), 0);
+      const breakdownTotal = ['cash', 'card', 'transfer', 'platform'].reduce((sum, key) => sum + Number(breakdown[key] || 0), 0);
       if (breakdownTotal > 0) {
         paymentTotals.cash += Number(breakdown.cash || 0);
         paymentTotals.card += Number(breakdown.card || 0);
         paymentTotals.transfer += Number(breakdown.transfer || 0);
+        paymentTotals.platform += Number(breakdown.platform || 0);
       } else if (isCustomPaymentMethod(row.payment_method)) {
         const current = customPaymentTotals.get(row.payment_method) || {
           id: row.payment_method,
@@ -690,7 +711,7 @@ router.get('/detail', async (req, res, next) => {
       },
       payments: {
         cash: money(paymentTotals.cash), card: money(paymentTotals.card),
-        transfer: money(paymentTotals.transfer), other: money(paymentTotals.other),
+        transfer: money(paymentTotals.transfer), platform: money(paymentTotals.platform), other: money(paymentTotals.other),
         custom: [...customPaymentTotals.values()].map((method) => ({
           ...method,
           total: money(method.total),

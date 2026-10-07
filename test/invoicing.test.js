@@ -22,6 +22,16 @@ const {
 const root = path.join(__dirname, '..');
 const read = (file) => fs.readFileSync(path.join(root, file), 'utf8');
 
+test('Plataforma usa la forma SAT 31 y respeta una forma solicitada válida', () => {
+  const sale = { payment_method: 'platform', payment_breakdown: { platform: 120 }, total: 120 };
+  assert.equal(paymentFormFromSale(sale), '31');
+  assert.equal(paymentFormFromSale(sale, '04', '03'), '03');
+  assert.equal(paymentFormFromSales([sale]), '31');
+  assert.equal(paymentFormFromSales([
+    { payment_method: 'mixed', payment_breakdown: { cash: 20, platform: 80 }, total: 100 },
+  ]), '31');
+});
+
 test('habilita facturación sólo para identidad México o lada +52', () => {
   assert.equal(isMexicoIdentity({ phone_country: 'MX' }), true);
   assert.equal(isMexicoIdentity({ phone_calling_code: '+52' }), true);

@@ -92,7 +92,7 @@ router.use(async (req, res, next) => {
   }
 });
 
-const PAYMENT_METHODS = new Set(['cash', 'card', 'transfer', 'mixed', 'credit']);
+const PAYMENT_METHODS = new Set(['cash', 'card', 'transfer', 'platform', 'mixed', 'credit']);
 const MOVEMENT_KINDS = new Set(['income', 'withdrawal', 'expense']);
 const tenantTimeZone = (tenantDb) => tenantDb?.timezone || 'America/Mexico_City';
 const SALES_HISTORY_FILTERS = new Set(['today', 'week', 'month', 'custom']);
@@ -337,11 +337,13 @@ async function getSessionTotals(t, sessionId) {
             COALESCE(SUM(CASE WHEN payment_method = 'cash' THEN ${effectiveTotal} ELSE 0 END), 0)::float AS sales_cash_only,
             COALESCE(SUM(CASE WHEN payment_method = 'card' THEN ${effectiveTotal} ELSE 0 END), 0)::float AS sales_card_only,
             COALESCE(SUM(CASE WHEN payment_method = 'transfer' THEN ${effectiveTotal} ELSE 0 END), 0)::float AS sales_transfer_only,
-            COALESCE(SUM(CASE WHEN payment_method NOT IN ('cash','card','transfer','mixed','multiple') THEN ${effectiveTotal} ELSE 0 END), 0)::float AS sales_other_only,
+            COALESCE(SUM(CASE WHEN payment_method = 'platform' THEN ${effectiveTotal} ELSE 0 END), 0)::float AS sales_platform_only,
+            COALESCE(SUM(CASE WHEN payment_method NOT IN ('cash','card','transfer','platform','mixed','multiple') THEN ${effectiveTotal} ELSE 0 END), 0)::float AS sales_other_only,
             COALESCE(SUM(CASE WHEN payment_method = 'mixed' THEN ${effectiveTotal} ELSE 0 END), 0)::float AS sales_mixed,
             COALESCE(SUM(CASE WHEN payment_method = 'cash' THEN ${effectiveTotal} WHEN payment_method = 'mixed' THEN COALESCE((payment_breakdown::jsonb ->> 'cash')::numeric, 0) ELSE 0 END), 0)::float AS collected_cash,
             COALESCE(SUM(CASE WHEN payment_method = 'card' THEN ${effectiveTotal} WHEN payment_method = 'mixed' THEN COALESCE((payment_breakdown::jsonb ->> 'card')::numeric, 0) ELSE 0 END), 0)::float AS collected_card,
             COALESCE(SUM(CASE WHEN payment_method = 'transfer' THEN ${effectiveTotal} WHEN payment_method = 'mixed' THEN COALESCE((payment_breakdown::jsonb ->> 'transfer')::numeric, 0) ELSE 0 END), 0)::float AS collected_transfer,
+            COALESCE(SUM(CASE WHEN payment_method = 'platform' THEN ${effectiveTotal} WHEN payment_method = 'mixed' THEN COALESCE((payment_breakdown::jsonb ->> 'platform')::numeric, 0) ELSE 0 END), 0)::float AS collected_platform,
             COUNT(CASE WHEN delivery = 'domicilio' THEN 1 END)::int AS delivery_tickets,
             COALESCE(SUM(CASE WHEN delivery = 'domicilio' THEN ${effectiveTotal} ELSE 0 END), 0)::float AS delivery_total,
             COALESCE(SUM(CASE WHEN delivery = 'domicilio' THEN COALESCE(delivery_fee, 0) ELSE 0 END), 0)::float AS delivery_fees
@@ -433,6 +435,7 @@ async function getSessionTotals(t, sessionId) {
       cash: n(sales?.sales_cash_only),
       card: n(sales?.sales_card_only),
       transfer: n(sales?.sales_transfer_only),
+      platform: n(sales?.sales_platform_only),
       mixed: n(sales?.sales_mixed),
       other: n(sales?.sales_other_only),
     },
@@ -446,6 +449,7 @@ async function getSessionTotals(t, sessionId) {
       cash: n(sales?.collected_cash),
       card: n(sales?.collected_card),
       transfer: n(sales?.collected_transfer),
+      platform: n(sales?.collected_platform),
     },
     movements: {
       income: n(moves?.incomes),
@@ -544,6 +548,7 @@ function paymentBreakdownForMethod(method, total) {
   const amount = n(total);
   if (method === 'card') return { cash: 0, card: amount, transfer: 0 };
   if (method === 'transfer') return { cash: 0, card: 0, transfer: amount };
+  if (method === 'platform') return { cash: 0, card: 0, transfer: 0, platform: amount };
   if (isCustomPaymentMethod(method)) return { cash: 0, card: 0, transfer: 0, [method]: amount };
   return { cash: amount, card: 0, transfer: 0 };
 }
@@ -811,6 +816,7 @@ function normalizePayment(method, paymentInput, total, cashReceivedInput, custom
     cash: 0,
     card: 0,
     transfer: 0,
+    platform: 0,
   };
   let cashReceived = 0;
   let cashChange = 0;
@@ -856,16 +862,24 @@ function normalizePayment(method, paymentInput, total, cashReceivedInput, custom
     breakdown.transfer = n(total);
     return { method, breakdown, cashReceived: 0, cashChange: 0 };
   }
+  if (method === 'platform') {
+    breakdown.platform = n(total);
+    return { method, breakdown, cashReceived: 0, cashChange: 0 };
+  }
 
   breakdown.cash = n(paymentInput?.cash);
   breakdown.card = n(paymentInput?.card);
   breakdown.transfer = n(paymentInput?.transfer);
+  breakdown.platform = n(paymentInput?.platform);
+  if ([breakdown.cash, breakdown.card, breakdown.transfer, breakdown.platform].some((amount) => amount < 0)) {
+    throw badRequest('Los importes de pago no pueden ser negativos');
+  }
   if (breakdown.card > 0) {
     if (!['debit', 'credit'].includes(cardType)) throw badRequest('Selecciona si la tarjeta es de débito o crédito');
     breakdown.cardType = cardType;
   }
-  const used = [breakdown.cash, breakdown.card, breakdown.transfer].filter((value) => value > 0).length;
-  const paid = n(breakdown.cash + breakdown.card + breakdown.transfer);
+  const used = [breakdown.cash, breakdown.card, breakdown.transfer, breakdown.platform].filter((value) => value > 0).length;
+  const paid = n(breakdown.cash + breakdown.card + breakdown.transfer + breakdown.platform);
   if (used < 2) throw badRequest('El pago mixto debe usar al menos dos medios de pago');
   if (!sameMoney(paid, total)) throw badRequest('La suma de pagos no coincide con el total de la venta');
   if (breakdown.cash > 0) {
