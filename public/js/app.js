@@ -1273,13 +1273,20 @@ $('#configureTimezoneBtn')?.addEventListener('click', async () => {
   setTimeout(() => select?.focus({ preventScroll: true }), 420);
 });
 
-document.querySelectorAll('.sidebar nav a').forEach((a) =>
+document.querySelectorAll('.sidebar nav a').forEach((a) => {
+  if (a.dataset.view) {
+    const label = a.querySelector('span:nth-child(2)')?.textContent.trim();
+    if (label) {
+      a.title = label;
+      a.setAttribute('aria-label', label);
+    }
+  }
   a.addEventListener('click', (e) => {
     if (!a.dataset.view) return; // enlaces externos (ej. /notificaciones) — dejar pasar
     e.preventDefault();
     navigate(a.dataset.view);
-  })
-);
+  });
+});
 
 globalThis.addEventListener('hashchange', () => {
   const targetView = (location.hash || '').replace(/^#/, '');

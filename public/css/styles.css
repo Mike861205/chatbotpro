@@ -11034,3 +11034,52 @@ body.onboarding-open { overflow: hidden; }
 .pos-close-approval-panel p{margin:0 0 12px;color:#6c5873;line-height:1.45}
 .pos-close-approval-controls{display:flex;gap:8px;flex-wrap:wrap}
 .pos-close-approval-panel input{width:100%;margin:10px 0 6px;padding:10px;border:1px solid #d8dce7;border-radius:9px;font:inherit}
+
+/* POS en monitores compactos: el contenido crece con la pagina y el ticket sigue visible. */
+@media (min-width: 761px) and (max-width: 1180px),
+       (min-width: 761px) and (max-height: 820px) {
+  html:has(body[data-current-view="pos"]),
+  body[data-current-view="pos"] { overflow-x: clip; }
+  .pos-shell { height: auto; align-items: stretch; }
+  .pos-main, .pos-side { height: auto; }
+  .pos-side {
+    display: block;
+    position: sticky;
+    top: 12px;
+    align-self: start;
+  }
+  .pos-catalog-card {
+    height: auto;
+    overflow: visible;
+  }
+  .pos-catalog-head { position: static; }
+  .pos-checkout-card {
+    height: auto;
+    max-height: calc(100dvh - 24px);
+  }
+}
+@media (min-width: 761px) and (max-width: 1180px) {
+  .pos-shell { grid-template-columns: minmax(0, 1fr) clamp(290px, 31vw, 360px); }
+  .pos-grid { grid-template-columns: repeat(auto-fill, minmax(135px, 1fr)); }
+}
+
+/* El menu pasa a una barra de iconos solo en el POS de escritorio angosto. */
+@media (min-width: 881px) and (max-width: 1180px) {
+  body[data-current-view="pos"] { --sidebar-w: 76px; }
+  body[data-current-view="pos"] .main { padding: 18px 20px 48px; }
+  body[data-current-view="pos"] .sidebar .brand { justify-content: center; padding: 16px 8px; }
+  body[data-current-view="pos"] .sidebar .brand > div,
+  body[data-current-view="pos"] .sidebar nav .nav-label,
+  body[data-current-view="pos"] .sidebar nav a > span:not(.nav-ic),
+  body[data-current-view="pos"] .sidebar .user-chip .meta { display: none; }
+  body[data-current-view="pos"] .sidebar nav { align-items: center; padding: 10px 6px; }
+  body[data-current-view="pos"] .sidebar nav a {
+    justify-content: center;
+    width: 56px;
+    min-height: 52px;
+    padding: 8px;
+  }
+  body[data-current-view="pos"] .sidebar nav a:hover { transform: none; }
+  body[data-current-view="pos"] .sidebar .foot { padding: 10px 6px; }
+  body[data-current-view="pos"] .sidebar .user-chip { flex-direction: column; gap: 8px; }
+}
