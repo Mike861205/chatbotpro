@@ -1226,6 +1226,7 @@ async function navigate(view) {
       return;
     }
   }
+  closePosCartDrawer(false);
   CURRENT_VIEW = nextView;
   document.body.setAttribute('data-current-view', nextView);
 
@@ -1237,6 +1238,7 @@ async function navigate(view) {
     s.setAttribute('aria-hidden', String(!isActive));
     if ('inert' in s) s.inert = !isActive;
   });
+  syncPosCartDrawerMode();
 
   if (location.hash !== `#${nextView}`) {
     history.replaceState(null, '', `#${nextView}`);
@@ -5588,6 +5590,57 @@ function addPosProduct(productId) {
   renderPosCart();
 }
 
+const POS_CART_DRAWER_QUERY = '(min-width: 761px) and (max-width: 1600px)';
+function isPosCartDrawer() {
+  return matchMedia(POS_CART_DRAWER_QUERY).matches && document.body.dataset.currentView === 'pos';
+}
+function syncPosCartDrawerMode() {
+  const panel = $('#posCartPanel');
+  const toggle = $('#posCartToggle');
+  const backdrop = $('#posCartBackdrop');
+  const drawer = isPosCartDrawer();
+  const open = drawer && document.body.classList.contains('pos-cart-open');
+  if (!drawer) document.body.classList.remove('pos-cart-open');
+  panel?.setAttribute('aria-hidden', String(drawer && !open));
+  if (drawer) {
+    panel?.setAttribute('role', 'dialog');
+    panel?.setAttribute('aria-modal', String(open));
+  } else {
+    panel?.removeAttribute('role');
+    panel?.removeAttribute('aria-modal');
+  }
+  toggle?.setAttribute('aria-expanded', String(open));
+  if (backdrop) backdrop.hidden = !open;
+}
+function openPosCartDrawer() {
+  if (!isPosCartDrawer()) return;
+  document.body.classList.add('pos-cart-open');
+  syncPosCartDrawerMode();
+  $('#posCartClose')?.focus({ preventScroll: true });
+}
+function closePosCartDrawer(restoreFocus = true) {
+  const wasOpen = document.body.classList.contains('pos-cart-open');
+  document.body.classList.remove('pos-cart-open');
+  syncPosCartDrawerMode();
+  if (wasOpen && restoreFocus) $('#posCartToggle')?.focus({ preventScroll: true });
+}
+$('#posCartToggle')?.addEventListener('click', openPosCartDrawer);
+$('#posCartClose')?.addEventListener('click', () => closePosCartDrawer());
+$('#posCartBackdrop')?.addEventListener('click', () => closePosCartDrawer());
+window.addEventListener('resize', () => {
+  if (!matchMedia(POS_CART_DRAWER_QUERY).matches) closePosCartDrawer(false);
+  else syncPosCartDrawerMode();
+});
+document.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape' && document.body.classList.contains('pos-cart-open')) closePosCartDrawer();
+});
+function updatePosCartToggle() {
+  const count = POS_CART.reduce((sum, item) => sum + Number(item.qty || 1), 0);
+  const label = POS_TABLE_ACCOUNT ? 'Cuenta de mesa' : 'Ticket';
+  if ($('#posCartToggleLabel')) $('#posCartToggleLabel').textContent = `${label} (${count})`;
+  if ($('#posCartToggleTotal')) $('#posCartToggleTotal').textContent = fmtMoney(posGrandTotal());
+}
+
 // ── Modal configurador de producto (POS) ──
 let POS_CONFIG_PRODUCT = null;
 let POS_CONFIG_VARIANT_ID = null;
@@ -5965,7 +6018,8 @@ async function editPosCreditSale(sale) {
   POS_CHECKOUT_FINGERPRINT = '';
   LAST_POS_SALE = null;
   renderPosCart();
-  $('#posCartCard')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  if (isPosCartDrawer()) openPosCartDrawer();
+  else $('#posCartCard')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   toast(`Crédito #${sale.id} abierto para editar`);
 }
 
@@ -6449,6 +6503,7 @@ function renderPosCart() {
   const el = $('#posCartCard');
   const creditEdit = POS_EDITING_CREDIT_SALE;
   const total = posGrandTotal();
+  updatePosCartToggle();
   const subtotalItems = posCartTotal();
   const deliveryFeeAmt = POS_IS_DELIVERY ? moneyNum(Number(POS_DELIVERY_FEE) || 0) : 0;
   const sarRelief = POS_SAR_EXONERATION.enabled && ME?.tenant?.phoneCountry === 'HN' ? moneyNum(subtotalItems + deliveryFeeAmt - total) : 0;
@@ -6669,6 +6724,7 @@ function renderPosCart() {
   });
   $('#posDeliveryFee')?.addEventListener('input', (e) => {
     POS_DELIVERY_FEE = e.target.value;
+    updatePosCartToggle();
     if (POS_PAYMENT_METHOD === 'cash') {
       const newTotal = posGrandTotal();
       const cashInput = $('#posCashReceived');
@@ -6752,6 +6808,7 @@ function renderPosCart() {
         : checkoutAccount ? `Cuenta de mesa ${tableNumber} cerrada` : 'Venta registrada en punto de venta');
       POS_TABLE_ACCOUNT = null;
       clearPosCart();
+      closePosCartDrawer(false);
       setTimeout(() => {
         if (LAST_POS_SALE) printPosSaleOutputs(reservedPrintWindow);
       }, 100);
