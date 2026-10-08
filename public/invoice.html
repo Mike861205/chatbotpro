@@ -166,9 +166,9 @@
             </select></div>
           </div>
           <div class="form-field full-field" id="receiverPaymentFormRow" hidden>
-            <label for="receiverPaymentForm">Forma de pago de la tarjeta</label>
+            <label for="receiverPaymentForm" id="receiverPaymentFormLabel">Forma de pago de la tarjeta</label>
             <div class="input-shell select-shell"><i class="ph-bold ph-credit-card"></i><select id="receiverPaymentForm"><option value="">Selecciona débito o crédito</option><option value="28">28 · Tarjeta de débito</option><option value="04">04 · Tarjeta de crédito</option></select></div>
-            <small>El ticket indica pago con tarjeta; confirma el tipo utilizado.</small>
+            <small id="receiverPaymentFormHint">El ticket indica pago con tarjeta; confirma el tipo utilizado.</small>
           </div>
           <div class="form-field full-field">
             <label for="receiverEmail">Correo de contacto <span>Opcional</span></label>
@@ -209,6 +209,6 @@
       </footer>
     </section>
   </main>
-  <script src="/static/js/invoice.js?v=20260823fullcatalog" defer></script>
+  <script src="/static/js/invoice.js?v=20261007-platform-form" defer></script>
 </body>
 </html>

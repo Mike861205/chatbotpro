@@ -712,7 +712,14 @@ async function issueGlobalInvoice({ tenant, tenantDb, orderIds, conceptMode = 't
   }
 }
 
-async function issueSaleInvoice({ tenant, tenantDb, orderId, receiverInput, requestedPaymentForm = '', requestedPaymentMethod = 'PUE', relationInput = {}, conceptMode = 'detailed', actor = '', publicToken = '' }) {
+function requirePublicPlatformPaymentForm(sale, requestedPaymentForm, publicAccess) {
+  if (!publicAccess || sale.payment_method !== 'platform') return;
+  if (!['03', '04', '28', '31'].includes(String(requestedPaymentForm || ''))) {
+    throw Object.assign(new Error('Confirma cómo se pagó en la plataforma antes de timbrar'), { status: 400 });
+  }
+}
+
+async function issueSaleInvoice({ tenant, tenantDb, orderId, receiverInput, requestedPaymentForm = '', requestedPaymentMethod = 'PUE', relationInput = {}, conceptMode = 'detailed', actor = '', publicToken = '', publicAccess = false }) {
   const paymentMethod = normalizePaymentMethod(requestedPaymentMethod);
   const sale = await tenantDb.get(
     `SELECT id, items, subtotal::float AS subtotal, total::float AS total, status, channel, payment_status, payment_method, payment_breakdown,
@@ -721,7 +728,7 @@ async function issueSaleInvoice({ tenant, tenantDb, orderId, receiverInput, requ
     [orderId]
   );
   if (!sale || sale.channel !== 'pos') throw Object.assign(new Error('Ticket de punto de venta no encontrado'), { status: 404 });
-  if (publicToken && !invoiceAccessMatches(sale, publicToken)) throw Object.assign(new Error('El código de facturación no es válido'), { status: 404 });
+  if (publicAccess && !invoiceAccessMatches(sale, publicToken)) throw Object.assign(new Error('El código de facturación no es válido'), { status: 404 });
   if (sale.status === 'cancelado') throw Object.assign(new Error('No se puede facturar un ticket cancelado'), { status: 409 });
   if (sale.payment_status === 'pending' && paymentMethod !== 'PPD') throw Object.assign(new Error('La venta a crédito debe emitirse como PPD o liquidarse antes de facturar'), { status: 409 });
   const profile = await getEmitter(tenantDb, 0, sale.service_branch_id);
@@ -745,6 +752,7 @@ async function issueSaleInvoice({ tenant, tenantDb, orderId, receiverInput, requ
     [sale.id]
   );
   if (current) return { invoice: invoiceSummary({ ...current, order_total: sale.total }), reused: true };
+  requirePublicPlatformPaymentForm(sale, requestedPaymentForm, publicAccess);
 
   const rawItems = typeof sale.items === 'string' ? parseJson(sale.items, []) : sale.items;
   const productIds = [...new Set((rawItems || []).map((item) => Number(item.id || item.productId || 0)).filter((id) => id > 0))];
@@ -1388,6 +1396,7 @@ router.post('/public/:slug/issue', publicLimiter, async (req, res, next) => {
       conceptMode: req.body?.conceptMode,
       actor: 'autofacturación',
       publicToken: token,
+      publicAccess: true,
     });
     res.json({ ok: true, ...result, token });
   } catch (error) {

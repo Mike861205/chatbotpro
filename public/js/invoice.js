@@ -209,11 +209,20 @@
   function configureTicketPayment(ticket = {}) {
     const row = $('#receiverPaymentFormRow');
     const select = $('#receiverPaymentForm');
-    const cardPayment = String(ticket.paymentMethod || '').toLowerCase() === 'card';
+    const method = String(ticket.paymentMethod || '').toLowerCase();
+    const cardPayment = method === 'card';
+    const platformPayment = method === 'platform';
     const cardType = String(ticket.paymentBreakdown?.cardType || ticket.paymentBreakdown?.card_type || '').toLowerCase();
-    row.hidden = !cardPayment;
-    select.required = cardPayment;
-    select.value = cardType === 'debit' ? '28' : cardType === 'credit' ? '04' : '';
+    row.hidden = !(cardPayment || platformPayment);
+    select.required = cardPayment || platformPayment;
+    $('#receiverPaymentFormLabel').textContent = platformPayment ? '¿Cómo se pagó en la plataforma?' : 'Forma de pago de la tarjeta';
+    $('#receiverPaymentFormHint').textContent = platformPayment
+      ? 'Selecciona el medio real. Usa 31 sólo si la plataforma no informó al negocio cómo recibió el pago.'
+      : 'El ticket indica pago con tarjeta; confirma el tipo utilizado.';
+    select.innerHTML = platformPayment
+      ? '<option value="">Selecciona cómo pagaste</option><option value="28">28 · Tarjeta de débito</option><option value="04">04 · Tarjeta de crédito</option><option value="03">03 · Transferencia electrónica</option><option value="31">31 · La plataforma no informó el medio</option>'
+      : '<option value="">Selecciona débito o crédito</option><option value="28">28 · Tarjeta de débito</option><option value="04">04 · Tarjeta de crédito</option>';
+    select.value = cardPayment ? (cardType === 'debit' ? '28' : cardType === 'credit' ? '04' : '') : '';
   }
 
   function invoiceDownloads(invoice, token) {
