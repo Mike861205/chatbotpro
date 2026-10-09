@@ -38,7 +38,9 @@ async function sendTenantPush(slug, payload, options = {}) {
   if (!canSendWebPush()) return { sent: 0, skipped: 'vapid' };
   try {
     const t = tdb(slug);
-    const subscriptions = await t.all('SELECT endpoint, p256dh, auth FROM {s}.push_subscriptions');
+    // Devices subscribe to 'orders', 'whatsapp' or 'all'; each event only reaches its own audience.
+    const topics = [options.topic || 'orders', 'all'];
+    const subscriptions = await t.all('SELECT endpoint, p256dh, auth FROM {s}.push_subscriptions WHERE topic = ANY($1)', [topics]);
     if (!Array.isArray(subscriptions)) throw new TypeError('Resultado de suscripciones inválido');
     if (!subscriptions.length) return { sent: 0, skipped: 'no_subscriptions' };
 

@@ -1,6 +1,7 @@
-// Service Worker - ChatBotPro Notificaciones
-const CACHE_NAME = 'cbp-notify-v3';
-const PRECACHE = ['/notificaciones', '/sw.js'];
+// Service Worker - ChatBotPro Notificaciones y Bandeja WhatsApp
+const CACHE_NAME = 'cbp-notify-v4';
+const OFFLINE_PAGES = ['/notificaciones', '/bandeja'];
+const PRECACHE = [...OFFLINE_PAGES, '/sw.js'];
 
 self.addEventListener('install', (e) => {
   e.waitUntil(
@@ -20,9 +21,9 @@ self.addEventListener('activate', (e) => {
 self.addEventListener('fetch', (e) => {
   if (e.request.method !== 'GET' || !e.request.url.startsWith(self.location.origin)) return;
   const url = new URL(e.request.url);
-  // El worker sólo da soporte offline a Notificaciones y sus estáticos.
+  // El worker sólo da soporte offline a las apps instalables y sus estáticos.
   // Nunca debe servir logins ni respuestas de API desde caché.
-  if (url.pathname !== '/notificaciones' && url.pathname !== '/sw.js' && !url.pathname.startsWith('/static/')) return;
+  if (!OFFLINE_PAGES.includes(url.pathname) && url.pathname !== '/sw.js' && !url.pathname.startsWith('/static/')) return;
   e.respondWith(
     fetch(e.request)
       .then((res) => {
@@ -32,7 +33,7 @@ self.addEventListener('fetch', (e) => {
         }
         return res;
       })
-      .catch(() => caches.match(e.request))
+      .catch(() => caches.match(e.request, { ignoreSearch: true }))
   );
 });
 
@@ -42,29 +43,43 @@ self.addEventListener('push', (e) => {
     if (e.data) data = { ...data, ...JSON.parse(e.data.text()) };
   } catch {}
 
-  const options = {
-    body: data.body,
-    icon: '/static/icons/icon-192.png',
-    badge: '/static/icons/badge-72.png',
-    tag: data.orderId ? `order-${data.orderId}` : `${data.event || 'chatbot'}-${data.sessionId || Date.now()}`,
-    renotify: true,
-    requireInteraction: true,
-    silent: false,
-    timestamp: Date.now(),
-    vibrate: [200, 100, 200, 100, 400],
-    data: {
-      url: data.url || '/notificaciones',
-      slug: data.slug,
-      orderId: data.orderId,
-      event: data.event,
-    },
-    actions: [
-      { action: 'open', title: 'Ver pedidos' },
-      { action: 'dismiss', title: 'Cerrar' },
-    ],
-  };
+  const isChat = data.event === 'whatsapp_message';
+  const options = isChat
+    ? {
+      body: data.body,
+      icon: '/static/icons/icon-192.png',
+      badge: '/static/icons/badge-72.png',
+      tag: `wa-${data.conversationId || 'chat'}`,
+      renotify: true,
+      timestamp: Date.now(),
+      vibrate: [120, 60, 120],
+      data: { url: data.url || '/bandeja', conversationId: data.conversationId, event: data.event },
+    }
+    : {
+      body: data.body,
+      icon: '/static/icons/icon-192.png',
+      badge: '/static/icons/badge-72.png',
+      tag: data.orderId ? `order-${data.orderId}` : `${data.event || 'chatbot'}-${data.sessionId || Date.now()}`,
+      renotify: true,
+      requireInteraction: true,
+      silent: false,
+      timestamp: Date.now(),
+      vibrate: [200, 100, 200, 100, 400],
+      data: { url: data.url || '/notificaciones', slug: data.slug, orderId: data.orderId, event: data.event },
+      actions: [
+        { action: 'open', title: 'Ver pedidos' },
+        { action: 'dismiss', title: 'Cerrar' },
+      ],
+    };
 
-  e.waitUntil(self.registration.showNotification(data.title, options));
+  e.waitUntil((async () => {
+    // With the inbox open and visible the page already alerts the user.
+    if (isChat) {
+      const open = await clients.matchAll({ type: 'window', includeUncontrolled: true });
+      if (open.some((client) => client.visibilityState === 'visible' && new URL(client.url).pathname === '/bandeja')) return;
+    }
+    await self.registration.showNotification(data.title, options);
+  })());
 });
 
 self.addEventListener('notificationclick', (e) => {
@@ -72,10 +87,17 @@ self.addEventListener('notificationclick', (e) => {
   if (e.action === 'dismiss') return;
 
   const targetUrl = e.notification.data?.url || '/notificaciones';
+  const target = new URL(targetUrl, self.location.origin);
   e.waitUntil(
     clients.matchAll({ type: 'window', includeUncontrolled: true }).then((windowClients) => {
-      const existing = windowClients.find((windowClient) => windowClient.url.includes('/notificaciones') && 'focus' in windowClient);
-      if (existing) return existing.focus();
+      const existing = windowClients.find((windowClient) => {
+        try { return new URL(windowClient.url).pathname === target.pathname && 'focus' in windowClient; } catch { return false; }
+      });
+      if (existing) {
+        const conversationId = e.notification.data?.conversationId;
+        if (conversationId) existing.postMessage({ type: 'open-conversation', id: conversationId });
+        return existing.focus();
+      }
       return clients.openWindow(targetUrl);
     })
   );

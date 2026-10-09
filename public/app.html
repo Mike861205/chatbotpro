@@ -11,7 +11,7 @@
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/fill/style.css" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/duotone/style.css" />
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-  <link rel="stylesheet" href="/static/css/styles.css?v=20261008-gastos-search-pages" />
+  <link rel="stylesheet" href="/static/css/styles.css?v=20261009-whatsapp-inbox-app" />
   <link rel="stylesheet" href="/static/css/sar.css?v=20260929-tabs-1" />
   <link rel="icon" type="image/svg+xml" href="/static/favicon.svg" />
   <link rel="icon" type="image/png" href="/static/chatbotpro100.png" />
@@ -1387,6 +1387,7 @@
         </div>
 
         <div id="whatsappPanelInbox" hidden>
+          <div class="card whatsapp-mobile-app-card"><div><b><i class="ph-bold ph-device-mobile"></i> Bandeja en tu celular</b><span>Abre este enlace en el celular, instálalo en la pantalla de inicio y recibe cada mensaje con aviso, como WhatsApp. Aunque no hayas vinculado el número con QR, podrás responder y tomar el control.</span></div><div class="whatsapp-mobile-app-actions"><a class="btn btn-primary btn-sm" href="/bandeja" target="_blank" rel="noopener"><i class="ph-bold ph-arrow-square-out"></i> Abrir</a><button class="btn btn-ghost btn-sm" type="button" id="whatsappInboxAppCopyBtn"><i class="ph-bold ph-copy"></i> Copiar enlace</button></div></div>
           <div class="whatsapp-inbox-shell">
             <div class="card whatsapp-conversation-list-card"><div class="whatsapp-card-heading"><div><span class="whatsapp-section-kicker">Atención unificada</span><h3><i class="ph-bold ph-chats-circle"></i> Conversaciones</h3></div><button class="btn btn-ghost btn-sm" id="whatsappInboxRefreshBtn" type="button"><i class="ph-bold ph-arrows-clockwise"></i></button></div><div id="whatsappConversationList" class="whatsapp-conversation-list"></div></div>
             <div class="card whatsapp-chat-card"><div id="whatsappChatHeader" class="whatsapp-chat-header"><div><span>Selecciona una conversación</span><b>Los mensajes del bot y del equipo aparecerán aquí.</b></div></div><div id="whatsappMessageList" class="whatsapp-message-list"><div class="whatsapp-empty-state"><i class="ph-duotone ph-chat-circle-dots"></i><b>Bandeja lista</b><span>Cuando llegue un mensaje, aquí podrás responder y tomar control humano.</span></div></div><form id="whatsappSendForm" class="whatsapp-send-form"><input id="whatsappMessageInput" maxlength="10000" placeholder="Escribe una respuesta…" disabled /><button class="btn btn-primary" type="submit" disabled><i class="ph-bold ph-paper-plane-tilt"></i> Enviar</button></form></div>
@@ -3755,7 +3756,7 @@
   </div>
   <script src="/socket.io/socket.io.js"></script>
   <script src="/static/vendor/qz-tray.js?v=2.3.0"></script>
-  <script src="/static/js/whatsapp.js?v=20260928-zernio-setup"></script>
+  <script src="/static/js/whatsapp.js?v=20261009-whatsapp-inbox-app"></script>
   <script src="/static/js/app.js?v=20261008-gastos-search-pages"></script>
   <script src="/static/js/sar.js?v=20260929-tabs-1"></script>
 </body>

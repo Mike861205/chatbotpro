@@ -1019,6 +1019,7 @@ async function createTenantSchema(slug) {
       user_agent TEXT,
       created_at TIMESTAMPTZ DEFAULT now()
     );
+    ALTER TABLE "${s}".push_subscriptions ADD COLUMN IF NOT EXISTS topic TEXT NOT NULL DEFAULT 'orders';
     CREATE TABLE IF NOT EXISTS "${s}".inventory_items (
       id SERIAL PRIMARY KEY,
       product_id INTEGER NOT NULL UNIQUE,

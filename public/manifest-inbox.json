@@ -1,0 +1,19 @@
+{
+  "name": "ChatBotPro — Bandeja WhatsApp",
+  "short_name": "Bandeja",
+  "description": "Mensajes de WhatsApp de tu negocio en tiempo real, con control humano desde el celular",
+  "id": "/bandeja",
+  "start_url": "/bandeja",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#efeae2",
+  "theme_color": "#0f766e",
+  "orientation": "portrait",
+  "icons": [
+    { "src": "/static/icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/static/icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "maskable" },
+    { "src": "/static/icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/static/icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ],
+  "categories": ["business", "productivity"]
+}

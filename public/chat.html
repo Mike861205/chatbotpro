@@ -66,10 +66,6 @@
     .cart-bar.show { display: flex; }
     .cart-bar .ci { font-size: 13px; font-weight: 800; color: var(--ink); display: flex; align-items: center; gap: 8px; }
     .cart-bar .ci i { color: var(--primary); font-size: 17px; }
-    #cartInfo { display: inline-flex; flex-wrap: wrap; align-items: baseline; column-gap: 4px; }
-    #cartInfo { cursor: pointer; }
-    #cartInfo .cart-rate { flex-basis: 100%; font-size: 10px; font-weight: 700; color: var(--muted); }
-    #cartInfo strong { color: var(--primary); font-weight: 900; }
     .cart-bar .delta {
       margin-left: 2px;
       padding: 2px 8px;
@@ -170,69 +166,8 @@
       border-radius: 10px;
       padding: 5px 9px;
     }
-    .bank-transfer-card {
-      width: min(92%, 390px);
-      flex-shrink: 0;
-      align-self: flex-start;
-      overflow: hidden;
-      border: 1px solid color-mix(in srgb, var(--primary) 22%, #dce1ec);
-      border-radius: 18px 18px 18px 6px;
-      background: #fff;
-      box-shadow: 0 5px 18px rgba(15,18,32,0.08);
-      animation: popIn 0.3s var(--ease);
-    }
-    .bank-transfer-head {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 10px;
-      padding: 13px 14px;
-      background: color-mix(in srgb, var(--primary) 7%, #fff);
-      border-bottom: 1px solid color-mix(in srgb, var(--primary) 14%, #e5e7eb);
-    }
-    .bank-transfer-head b { display: block; font-size: 13px; color: #171c2e; }
-    .bank-transfer-head small { display: block; margin-top: 2px; color: #72798a; font-size: 10.5px; }
-    .bank-transfer-head i { color: var(--primary); }
-    .bank-copy-all,
-    .bank-copy-field {
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      gap: 5px;
-      border: 1px solid color-mix(in srgb, var(--primary) 38%, #d9deea);
-      background: #fff;
-      color: var(--primary);
-      font: inherit;
-      font-size: 11px;
-      font-weight: 800;
-      cursor: pointer;
-      transition: background 0.18s, color 0.18s, transform 0.18s;
-    }
-    .bank-copy-all { flex-shrink: 0; min-height: 34px; padding: 7px 9px; border-radius: 10px; }
-    .bank-copy-field { flex: 0 0 34px; width: 34px; height: 34px; padding: 0; border-radius: 9px; }
-    .bank-copy-all:hover,
-    .bank-copy-field:hover,
-    .bank-copy-all.copied,
-    .bank-copy-field.copied { background: var(--primary); color: #fff; }
-    .bank-copy-all:active,
-    .bank-copy-field:active { transform: scale(0.97); }
-    .bank-account-chat { padding: 13px 14px; }
-    .bank-account-chat + .bank-account-chat { border-top: 1px solid #e9ecf2; }
-    .bank-account-chat-title { display: flex; align-items: center; gap: 7px; margin-bottom: 8px; color: #171c2e; font-size: 13px; }
-    .bank-account-chat-title i { color: var(--primary); font-size: 17px; }
-    .bank-detail-row { display: grid; grid-template-columns: minmax(62px, .75fr) minmax(0, 1.25fr) 34px; align-items: center; gap: 7px; margin-top: 6px; font-size: 12px; }
-    .bank-detail-row span { color: #7a8191; }
-    .bank-detail-row strong { color: #252a38; overflow-wrap: anywhere; user-select: all; }
-    .bank-transfer-foot { padding: 9px 14px 11px; color: #72798a; font-size: 10.5px; border-top: 1px solid #e9ecf2; }
-    @media (max-width: 420px) {
-      .bank-transfer-card { width: 96%; }
-      .bank-transfer-head { align-items: stretch; flex-direction: column; }
-      .bank-copy-all { width: 100%; }
-    }
     /* ── Product cards ── */
     .prods { display: flex; flex-direction: column; gap: 9px; align-self: stretch; animation: popIn 0.3s var(--ease); }
-    .product-category-heading { display:flex;align-items:center;gap:8px;margin:8px 2px 0;padding:7px 10px;border-radius:11px;background:color-mix(in srgb,var(--primary) 11%,#fff);color:color-mix(in srgb,var(--primary) 78%,#172031);font-size:12px;font-weight:900;letter-spacing:.02em; }
-    .product-category-heading::before { content:'\1F4C1';font-size:14px; }
     .prod {
       background: #fff; border-radius: 18px; padding: 11px 13px; display: flex; gap: 13px;
       align-items: center; box-shadow: 0 2px 8px rgba(15,18,32,0.06);
@@ -244,34 +179,14 @@
       width: 60px; height: 60px; border-radius: 15px;
       background: linear-gradient(135deg, color-mix(in srgb, var(--primary) 12%, #fff), color-mix(in srgb, var(--primary) 5%, #fff));
       display: flex; align-items: center; justify-content: center; font-size: 26px; overflow: hidden; flex-shrink: 0;
-      color: color-mix(in srgb, var(--primary) 65%, #fff); border: 0; padding: 0; font-family: inherit;
+      color: color-mix(in srgb, var(--primary) 65%, #fff);
     }
     .prod .pimg img { width: 100%; height: 100%; object-fit: cover; }
-    .prod button.pimg { position: relative; cursor: zoom-in; }
-    .prod button.pimg::after {
-      content: '+';
-      position: absolute; right: 4px; bottom: 4px;
-      width: 19px; height: 19px; border-radius: 999px;
-      display: grid; place-items: center;
-      color: #fff; background: rgba(15, 18, 32, .72);
-      font-family: inherit; font-size: 13px; font-weight: 900;
-      box-shadow: 0 2px 7px rgba(15, 18, 32, .28);
-    }
-    .prod button.pimg:focus-visible { outline: 3px solid color-mix(in srgb, var(--primary) 42%, transparent); outline-offset: 3px; }
     .prod .pinfo { flex: 1; min-width: 0; }
-    .prod .pname { overflow-wrap:anywhere;font-weight: 800; font-size: 14px; line-height:1.28;letter-spacing: -0.1px; }
+    .prod .pname { font-weight: 800; font-size: 14px; letter-spacing: -0.1px; }
     .prod .pdesc { font-size: 12px; color: #8b91a6; overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; margin-top: 2px; }
     .prod .pright { display: flex; flex-direction: column; align-items: flex-end; gap: 7px; flex-shrink: 0; }
     .prod .pprice { font-weight: 800; color: var(--primary); font-size: 14.5px; }
-    .prod .pprice-old { color: #94a3b8; font-size: 10px; font-weight: 700; text-decoration: line-through; }
-    .prod .price-stack { display:flex;align-items:flex-end;flex-direction:column;gap:1px; }
-    .prod.has-promotion { position:relative;overflow:hidden;border-color:#34d399;background:linear-gradient(145deg,#fff 55%,#ecfdf5);box-shadow:0 0 0 1px rgba(52,211,153,.18),0 7px 22px rgba(16,185,129,.18);animation:chatPromoNeon 3.2s ease-in-out infinite; }
-    .prod.has-promotion::before { content:"";position:absolute;inset:0 auto 0 0;width:3px;background:linear-gradient(180deg,#5eead4,#22c55e,#a3e635);box-shadow:0 0 10px #34d399; }
-    .prod .promo-subtitle { display:flex;min-width:0;max-width:100%;flex-direction:column;align-items:flex-start;gap:2px;margin-top:6px;padding:6px 8px;border:1px solid rgba(52,211,153,.75);border-radius:9px;background:linear-gradient(135deg,#062d29,#064e3b);color:#fff;line-height:1.2;box-shadow:inset 0 0 12px rgba(45,212,191,.14),0 0 10px rgba(16,185,129,.2); }
-    .prod .promo-kicker { display:inline-flex;align-items:center;gap:4px;color:#99f6e4;font-size:8px;font-weight:950;letter-spacing:.11em;text-shadow:0 0 5px rgba(94,234,212,.9); }
-    .prod .promo-kind { max-width:100%;color:#ecfccb;font-size:10px;font-weight:850;overflow-wrap:anywhere;text-shadow:0 0 6px rgba(163,230,53,.55); }
-    @keyframes chatPromoNeon { 0%,100% { box-shadow:0 0 0 1px rgba(52,211,153,.16),0 6px 18px rgba(16,185,129,.12); } 50% { box-shadow:0 0 0 1px rgba(45,212,191,.3),0 9px 26px rgba(16,185,129,.24); } }
-    @media (prefers-reduced-motion: reduce) { .prod.has-promotion { animation:none; } }
     .prod .qty-ctl {
       display: inline-flex;
       align-items: center;
@@ -334,80 +249,6 @@
     }
     .bulk-send-btn:hover { transform: scale(1.03); }
     .bulk-send-btn:disabled { opacity: .5; cursor: not-allowed; transform: none; box-shadow: none; }
-    /* ── Expanded product detail ── */
-    body.product-detail-open { overflow: hidden; }
-    .product-detail-modal[hidden] { display: none; }
-    .product-detail-modal {
-      position: fixed; inset: 0; z-index: 100;
-      display: grid; place-items: center;
-      padding: max(16px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) max(16px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
-    }
-    .product-detail-backdrop { position: absolute; inset: 0; border: 0; background: rgba(9, 13, 26, .72); backdrop-filter: blur(7px); cursor: pointer; }
-    .product-detail-card {
-      position: relative; z-index: 1;
-      width: min(100%, 460px); max-height: calc(100dvh - 32px);
-      display: flex; flex-direction: column; overflow: hidden;
-      border: 1px solid rgba(255, 255, 255, .7); border-radius: 25px;
-      background: #fff; color: var(--ink);
-      box-shadow: 0 28px 80px rgba(9, 13, 26, .42);
-      animation: productDetailIn .28s var(--ease);
-    }
-    @keyframes productDetailIn { from { opacity: 0; transform: translateY(18px) scale(.97); } }
-    .product-detail-close {
-      position: absolute; z-index: 2; top: 12px; right: 12px;
-      width: 42px; height: 42px; border: 1px solid rgba(255, 255, 255, .62); border-radius: 999px;
-      display: grid; place-items: center;
-      color: #fff; background: rgba(15, 18, 32, .7); backdrop-filter: blur(10px);
-      font-size: 20px; cursor: pointer;
-    }
-    .product-detail-close:focus-visible { outline: 3px solid #fff; outline-offset: 2px; }
-    .product-detail-photo {
-      flex: 0 1 auto; min-height: 220px; max-height: 48dvh;
-      display: grid; place-items: center; overflow: hidden;
-      background: linear-gradient(145deg, color-mix(in srgb, var(--primary) 10%, #fff), #eef1f7);
-    }
-    .product-detail-photo img { width: 100%; height: 100%; min-height: 220px; max-height: 48dvh; object-fit: contain; }
-    .product-detail-body { min-height: 0; overflow-y: auto; padding: 20px 21px 10px; }
-    .product-detail-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; }
-    .product-detail-heading h2 { min-width: 0; font-size: clamp(19px, 5vw, 24px); line-height: 1.2; letter-spacing: -.35px; overflow-wrap: anywhere; }
-    .product-detail-price { flex-shrink: 0; color: var(--primary); font-size: 18px; font-weight: 900; white-space: nowrap; }
-    .product-detail-old-price { display: block; color: #94a3b8; font-size: 11px; font-weight: 700; text-align: right; text-decoration: line-through; }
-    .product-detail-promotion { display: inline-flex; align-items: center; gap: 6px; margin-top: 12px; padding: 7px 10px; border-radius: 10px; background: #064e3b; color: #ecfccb; font-size: 11px; font-weight: 850; }
-    .product-detail-description { margin-top: 13px; color: #687086; font-size: 14px; line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; }
-    .product-detail-actions {
-      flex-shrink: 0; display: grid; grid-template-columns: auto minmax(130px, 1fr); align-items: end; gap: 12px;
-      padding: 14px 21px max(18px, env(safe-area-inset-bottom)); border-top: 1px solid #e8ebf2; background: #fff;
-      box-shadow: 0 -8px 24px rgba(15, 18, 32, .06);
-    }
-    .product-detail-quantity > span { display: block; margin: 0 0 7px 4px; color: #687086; font-size: 11px; font-weight: 800; }
-    .product-detail-qty-control { display: grid; grid-template-columns: 48px 48px 48px; align-items: center; overflow: hidden; border: 1px solid #dfe4f2; border-radius: 15px; background: #f5f7fc; }
-    .product-detail-qty-control button { width: 48px; height: 48px; border: 0; color: var(--primary); background: transparent; font-size: 18px; cursor: pointer; }
-    .product-detail-qty-control button:disabled { color: #b5bdcc; cursor: not-allowed; }
-    .product-detail-qty { text-align: center; font-size: 16px; font-weight: 900; }
-    .product-detail-send {
-      min-height: 50px; border: 0; border-radius: 15px; padding: 11px 15px;
-      color: #fff; background: linear-gradient(135deg, var(--primary), color-mix(in srgb, var(--primary) 70%, #ffb088));
-      box-shadow: 0 7px 18px color-mix(in srgb, var(--primary) 30%, transparent);
-      font: 800 13px/1.2 inherit; cursor: pointer;
-    }
-    .product-detail-send:disabled { opacity: .52; box-shadow: none; cursor: not-allowed; }
-    @media (max-width: 519px) {
-      .product-detail-modal { padding: 0; place-items: stretch; }
-      .product-detail-card { width: 100%; height: 100dvh; max-height: none; border: 0; border-radius: 0; }
-      .product-detail-photo { min-height: min(44dvh, 360px); max-height: 46dvh; }
-      .product-detail-photo img { min-height: min(44dvh, 360px); max-height: 46dvh; }
-      .product-detail-close { top: max(12px, env(safe-area-inset-top)); right: max(12px, env(safe-area-inset-right)); }
-      .product-detail-body { padding: 18px 18px 10px; }
-      .product-detail-actions { padding: 13px 18px max(14px, env(safe-area-inset-bottom)); }
-    }
-    @media (max-width: 370px) {
-      .product-detail-heading { flex-direction: column; gap: 7px; }
-      .product-detail-old-price { display: inline; margin-right: 5px; text-align: left; }
-      .product-detail-actions { grid-template-columns: 1fr; align-items: stretch; }
-      .product-detail-qty-control { grid-template-columns: 1fr 48px 1fr; }
-      .product-detail-qty-control button { width: 100%; }
-    }
-    @media (prefers-reduced-motion: reduce) { .product-detail-card { animation: none; } }
     /* ── Quick replies ── */
     .options {
       display: grid;
@@ -463,66 +304,9 @@
     }
     .opt:hover::after { opacity: 1; }
     .opt:active { transform: scale(0.96); }
-    .opt.opt-promotions { color:#9a3412;border-color:#fdba74;background:linear-gradient(135deg,#fff7ed,#ffedd5);text-shadow:none;box-shadow:0 5px 16px rgba(249,115,22,.15); }
-    .opt.opt-promotions:hover { color:#7c2d12;border-color:#fb923c;background:linear-gradient(135deg,#ffedd5,#fed7aa); }
-    .options .opt:not(.modifier-choice) {
-      color: #fff;
-      border: 1px solid color-mix(in srgb, var(--primary) 75%, #fff);
-      background: linear-gradient(135deg, color-mix(in srgb, var(--primary) 55%, #172031), color-mix(in srgb, var(--primary) 32%, #111827));
-      text-shadow: 0 1px 3px rgba(0,0,0,.35);
-      box-shadow: inset 0 1px 0 rgba(255,255,255,.34), 0 0 0 2px color-mix(in srgb, var(--primary) 14%, transparent), 0 5px 18px color-mix(in srgb, var(--primary) 48%, transparent);
-      min-height: 48px;
-    }
-    .options .opt:not(.modifier-choice):hover,
-    .options .opt:not(.modifier-choice):focus-visible {
-      background: linear-gradient(135deg, color-mix(in srgb, var(--primary) 63%, #172031), color-mix(in srgb, var(--primary) 42%, #1d2a40));
-      box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 22%, transparent), 0 0 24px color-mix(in srgb, var(--primary) 65%, transparent);
-      outline: none;
-    }
-    .options-hint { grid-column: 1 / -1; text-align: center; color: color-mix(in srgb, var(--primary) 75%, #23304a); font-size: 11px; font-weight: 800; letter-spacing: .03em; padding: 1px 2px 3px; }
-    .products-hint { align-self: stretch; padding: 10px 13px; border: 1px solid color-mix(in srgb, var(--primary) 50%, #dce3f4); border-radius: 13px; background: color-mix(in srgb, var(--primary) 11%, #fff); color: color-mix(in srgb, var(--primary) 72%, #172031); box-shadow: 0 3px 13px color-mix(in srgb, var(--primary) 18%, transparent); font-size: 12px; font-weight: 800; line-height: 1.4; text-align: center; }
-    .cart-editor { align-self: stretch; display: flex; flex-direction: column; gap: 8px; background: #fff; border: 1px solid color-mix(in srgb, var(--primary) 26%, #dbe2ee); border-radius: 18px; padding: 12px; box-shadow: 0 6px 22px rgba(15,18,32,.09); }
-    .cart-editor-title { font-size: 13px; font-weight: 900; color: var(--ink); }
-    .cart-editor-row { display: flex; align-items: center; gap: 7px; border-top: 1px solid #e9edf5; padding-top: 8px; }
-    .cart-editor-name { flex: 1; min-width: 0; font-size: 12px; font-weight: 750; overflow-wrap: anywhere; }
-    .cart-editor-row button { border: 1px solid color-mix(in srgb, var(--primary) 40%, #d9deea); border-radius: 9px; background: #fff; color: var(--primary); font: inherit; font-size: 12px; font-weight: 900; min-width: 29px; min-height: 30px; cursor: pointer; }
-    .cart-editor-row button.remove { color: #bd3434; border-color: #f3c0c0; }
-    .cart-editor-row button.save { min-width: 55px; background: var(--primary); color: #fff; border-color: var(--primary); }
-    .cart-editor-row button:disabled { opacity: .45; cursor: default; }
-    .cart-editor-qty { min-width: 18px; text-align: center; font-size: 12px; font-weight: 900; }
-    @media (prefers-reduced-motion: reduce) { .options, .opt { animation: none; transition: none; } }
-    .modifier-picker { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-    .modifier-picker-status {
-      grid-column: 1 / -1;
-      display: flex;
-      justify-content: space-between;
-      gap: 10px;
-      padding: 2px 3px;
-      color: #626b80;
-      font-size: 12px;
-      font-weight: 750;
-    }
-    .modifier-choice.selected {
-      color: #fff;
-      border-color: var(--primary);
-      background: linear-gradient(135deg, var(--primary), color-mix(in srgb, var(--primary) 72%, #ff9d6b));
-      box-shadow: 0 7px 18px color-mix(in srgb, var(--primary) 30%, transparent);
-      text-shadow: none;
-    }
-    .modifier-choice:disabled:not(.selected) { opacity: .45; cursor: not-allowed; transform: none; }
-    .opt.modifier-submit { grid-column: 1 / -1; color: #fff; background: var(--primary); }
-    .modifier-submit:disabled { opacity: .45; cursor: not-allowed; box-shadow: none; transform: none; }
-    .modifier-clear[hidden] { display: none; }
     @media (max-width: 430px) {
       .options { grid-template-columns: 1fr 1fr; }
       .opt { font-size: 12.5px; padding: 9px 12px; }
-      .prod { display:grid;grid-template-columns:52px minmax(0,1fr);align-items:start;gap:9px;padding:10px 11px; }
-      .prod .pimg { width:52px;height:52px;border-radius:13px;font-size:23px; }
-      .prod .pname { font-size:13px; }
-      .prod .pdesc { font-size:11px;-webkit-line-clamp:1; }
-      .prod .pright { grid-column:1/-1;display:flex;width:100%;flex-direction:row;align-items:center;justify-content:space-between;gap:9px;padding-top:2px; }
-      .prod .price-stack { align-items:flex-start; }
-      .prod .promo-subtitle { width:100%; }
     }
     /* ── WhatsApp CTA ── */
     .wa-btn {
@@ -534,20 +318,6 @@
     }
     .wa-btn:active { transform: scale(0.97); }
     .wa-btn i { font-size: 20px; }
-    .preview-signup-card {
-      align-self: stretch; position: relative; overflow: hidden; flex: 0 0 auto; min-height: 205px;
-      padding: 18px; border-radius: 22px; color: #fff;
-      background: radial-gradient(circle at 92% 0, rgba(255,255,255,.25), transparent 32%), linear-gradient(135deg, #7c3aed, #ec4899 56%, #f97316);
-      box-shadow: 0 14px 32px rgba(124,58,237,.3); animation: popIn .35s var(--ease);
-    }
-    .preview-signup-card::after { content:''; position:absolute; width:110px; height:110px; right:-42px; bottom:-55px; border-radius:50%; border:20px solid rgba(255,255,255,.12); }
-    .preview-signup-card > * { position: relative; z-index: 1; }
-    .preview-signup-card span { display:flex; align-items:center; gap:6px; font-size:10px; font-weight:900; text-transform:uppercase; letter-spacing:.09em; opacity:.86; }
-    .preview-signup-card h2 { margin:7px 0 5px; font-size:19px; line-height:1.16; }
-    .preview-signup-card p { margin:0 0 13px; font-size:11.5px; line-height:1.5; font-weight:600; opacity:.9; }
-    .preview-signup-card a { display:flex; align-items:center; justify-content:center; gap:8px; min-height:47px; padding:11px 14px; border-radius:14px; color:#6326a5; background:#fff; text-decoration:none; font-size:13px; font-weight:900; box-shadow:0 8px 18px rgba(63,20,105,.2); }
-    body.preview-embed { background:#f0f2f8; }
-    body.preview-embed .chat-app { height:100dvh; max-width:none; border-radius:0; box-shadow:none; }
     /* ── Typing ── */
     .typing { display: flex; gap: 5px; padding: 14px 18px; background: #fff; border-radius: 20px; border-bottom-left-radius: 6px; align-self: flex-start; box-shadow: 0 2px 8px rgba(15,18,32,0.06); }
     .typing span { width: 7px; height: 7px; border-radius: 50%; background: #c2c8d8; animation: blink 1.2s infinite; }
@@ -595,7 +365,7 @@
       <button id="cartCheckout">Sería todo, gracias. <i class="ph-bold ph-arrow-right"></i></button>
     </div>
     <div class="chat-stage">
-      <div class="floating-bg" id="floatingBg" aria-hidden="true">
+      <div class="floating-bg">
         <div class="floating-icon">🍕</div>
         <div class="floating-icon">💵</div>
         <div class="floating-icon">🛵</div>
@@ -613,130 +383,12 @@
     </div>
   </div>
 
-  <div class="product-detail-modal" id="productDetailModal" role="dialog" aria-modal="true" aria-labelledby="productDetailName" aria-describedby="productDetailDescription" hidden>
-    <button class="product-detail-backdrop" type="button" data-product-detail-close tabindex="-1" aria-label="Cerrar detalle del producto"></button>
-    <article class="product-detail-card">
-      <button class="product-detail-close" id="productDetailClose" type="button" data-product-detail-close aria-label="Cerrar detalle del producto"><i class="ph-bold ph-x"></i></button>
-      <div class="product-detail-photo"><img id="productDetailImage" src="" alt="" /></div>
-      <div class="product-detail-body">
-        <div class="product-detail-heading">
-          <h2 id="productDetailName"></h2>
-          <div class="product-detail-price"><span class="product-detail-old-price" id="productDetailOldPrice" hidden></span><span id="productDetailPrice"></span></div>
-        </div>
-        <div class="product-detail-promotion" id="productDetailPromotion" hidden><i class="ph-fill ph-lightning"></i><span></span></div>
-        <p class="product-detail-description" id="productDetailDescription"></p>
-      </div>
-      <div class="product-detail-actions">
-        <div class="product-detail-quantity">
-          <span>Cantidad</span>
-          <div class="product-detail-qty-control">
-            <button id="productDetailMinus" type="button" aria-label="Reducir cantidad"><i class="ph-bold ph-minus"></i></button>
-            <strong class="product-detail-qty" id="productDetailQty" aria-live="polite">0</strong>
-            <button id="productDetailPlus" type="button" aria-label="Aumentar cantidad"><i class="ph-bold ph-plus"></i></button>
-          </div>
-        </div>
-        <button class="product-detail-send" id="productDetailSend" type="button" disabled>Selecciona una cantidad</button>
-      </div>
-    </article>
-  </div>
-
   <script>
     const slug = location.pathname.split('/').pop();
-    const queryParams = new URLSearchParams(location.search);
-    const isPreview = queryParams.get('preview') === '1';
-    const previewReseller = queryParams.get('reseller') || '';
-    const sessionKey = `${isPreview ? 'cbp_preview_session_' : 'cbp_session_'}${slug}`;
-    if (isPreview && queryParams.get('embed') === '1') document.body.classList.add('preview-embed');
-    let sessionId = sessionStorage.getItem(sessionKey) || null;
+    let sessionId = sessionStorage.getItem('cbp_session_' + slug) || null;
     let lastCartItemsCount = 0;
     const messagesEl = document.getElementById('messages');
     const inputEl = document.getElementById('input');
-    const productDetailModal = document.getElementById('productDetailModal');
-    let productDetailState = null;
-    let productDetailLastFocus = null;
-
-    function syncProductDetailQuantity(productId, quantity, serverQuantity) {
-      if (!productDetailState || String(productDetailState.product.id) !== String(productId)) return;
-      const qty = Math.max(0, Math.min(50, Number(quantity) || 0));
-      const serverQty = Math.max(0, Number(serverQuantity) || 0);
-      document.getElementById('productDetailQty').textContent = String(qty);
-      document.getElementById('productDetailMinus').disabled = qty <= 0;
-      document.getElementById('productDetailPlus').disabled = qty >= 50;
-      const sendButton = document.getElementById('productDetailSend');
-      sendButton.disabled = qty === serverQty;
-      sendButton.textContent = qty === serverQty
-        ? (qty > 0 ? 'Cantidad guardada' : 'Selecciona una cantidad')
-        : (qty === 0 ? 'Quitar del pedido' : (serverQty > 0 ? `Actualizar a ${qty}` : `Agregar ${qty} al pedido`));
-    }
-
-    function closeProductDetail({ restoreFocus = true } = {}) {
-      if (productDetailModal.hidden) return;
-      productDetailModal.hidden = true;
-      document.body.classList.remove('product-detail-open');
-      productDetailState = null;
-      if (restoreFocus) productDetailLastFocus?.focus?.();
-      productDetailLastFocus = null;
-    }
-
-    function openProductDetail(product, controls, trigger) {
-      productDetailState = { product, controls };
-      productDetailLastFocus = trigger || document.activeElement;
-      const image = document.getElementById('productDetailImage');
-      image.src = product.image;
-      image.alt = `Foto ampliada de ${product.name}`;
-      document.getElementById('productDetailName').textContent = product.name;
-      document.getElementById('productDetailDescription').textContent = product.description || 'Este producto no tiene descripción adicional.';
-      document.getElementById('productDetailPrice').textContent = product.priceLabel || '';
-
-      const oldPrice = document.getElementById('productDetailOldPrice');
-      oldPrice.textContent = product.originalPriceLabel || '';
-      oldPrice.hidden = !product.originalPriceLabel;
-
-      const promotion = document.getElementById('productDetailPromotion');
-      promotion.querySelector('span').textContent = product.promotion?.label || product.promotion?.name || '';
-      promotion.hidden = !product.promotion;
-
-      syncProductDetailQuantity(product.id, controls.getQuantity(), controls.serverQuantity);
-      productDetailModal.hidden = false;
-      document.body.classList.add('product-detail-open');
-      requestAnimationFrame(() => document.getElementById('productDetailClose').focus());
-    }
-
-    productDetailModal.querySelectorAll('[data-product-detail-close]').forEach((button) => button.addEventListener('click', () => closeProductDetail()));
-    document.getElementById('productDetailMinus').addEventListener('click', () => {
-      if (!productDetailState) return;
-      productDetailState.controls.setQuantity(productDetailState.controls.getQuantity() - 1);
-    });
-    document.getElementById('productDetailPlus').addEventListener('click', () => {
-      if (!productDetailState) return;
-      productDetailState.controls.setQuantity(productDetailState.controls.getQuantity() + 1);
-    });
-    document.getElementById('productDetailSend').addEventListener('click', () => {
-      if (!productDetailState) return;
-      const { controls } = productDetailState;
-      closeProductDetail({ restoreFocus: false });
-      controls.sendQuantity();
-    });
-    document.addEventListener('keydown', (event) => {
-      if (productDetailModal.hidden) return;
-      if (event.key === 'Escape') {
-        closeProductDetail();
-        return;
-      }
-      if (event.key !== 'Tab') return;
-      const focusable = Array.from(productDetailModal.querySelectorAll('button:not([disabled])'))
-        .filter((element) => element.tabIndex >= 0);
-      if (!focusable.length) return;
-      const first = focusable[0];
-      const last = focusable[focusable.length - 1];
-      if (event.shiftKey && document.activeElement === first) {
-        event.preventDefault();
-        last.focus();
-      } else if (!event.shiftKey && document.activeElement === last) {
-        event.preventDefault();
-        first.focus();
-      }
-    });
 
     function animateCartDelta(delta) {
       if (!delta || delta <= 0) return;
@@ -775,18 +427,6 @@
     }
     function scrollDown() { messagesEl.scrollTop = messagesEl.scrollHeight; }
 
-    function renderFloatingBackground(icons) {
-      const host = document.getElementById('floatingBg');
-      if (!host) return;
-      host.replaceChildren();
-      (Array.isArray(icons) ? icons : []).slice(0, 8).forEach((icon) => {
-        const item = document.createElement('div');
-        item.className = 'floating-icon';
-        item.textContent = String(icon || '');
-        host.appendChild(item);
-      });
-    }
-
     function addMsg(text, who) {
       const div = document.createElement('div');
       div.className = 'msg ' + who;
@@ -795,119 +435,8 @@
       scrollDown();
     }
 
-    async function copyToClipboard(text, button) {
-      try {
-        if (navigator.clipboard && globalThis.isSecureContext) {
-          await navigator.clipboard.writeText(text);
-        } else {
-          const textarea = document.createElement('textarea');
-          textarea.value = text;
-          textarea.setAttribute('readonly', '');
-          textarea.style.position = 'fixed';
-          textarea.style.opacity = '0';
-          document.body.appendChild(textarea);
-          textarea.select();
-          if (!document.execCommand('copy')) throw new Error('No se pudo copiar');
-          textarea.remove();
-        }
-        const original = button.innerHTML;
-        button.classList.add('copied');
-        button.innerHTML = '<i class="ph-bold ph-check"></i> Copiado';
-        setTimeout(() => {
-          button.classList.remove('copied');
-          button.innerHTML = original;
-        }, 1600);
-      } catch {
-        addMsg('No pude copiar automáticamente. Mantén presionado el número para seleccionarlo.', 'bot');
-      }
-    }
-
-    function renderBankAccounts(accounts, title = 'Datos para Transferencia') {
-      if (!Array.isArray(accounts) || !accounts.length) return false;
-      title = String(title || 'Datos para Transferencia');
-      const typeLabels = { account: 'Número de cuenta', clabe: 'CLABE interbancaria', card: 'Número de tarjeta', phone: 'Teléfono', document: 'Documento / identificación', email: 'Correo electrónico', other: 'Dato para el pago' };
-      const card = document.createElement('section');
-      card.className = 'bank-transfer-card';
-      card.innerHTML = `
-        <div class="bank-transfer-head">
-          <div><b><i class="ph-bold ph-bank"></i> ${esc(title)}</b><small>Elige qué información copiar</small></div>
-          <button class="bank-copy-all" type="button"><i class="ph-bold ph-copy"></i> Copiar todo</button>
-        </div>
-        <div class="bank-transfer-list"></div>
-        <div class="bank-transfer-foot"><i class="ph-bold ph-receipt"></i> Conserva tu comprobante de pago.</div>`;
-      const list = card.querySelector('.bank-transfer-list');
-      accounts.forEach((account, index) => {
-        const fields = Array.isArray(account.fields) ? account.fields : [
-          { label: 'Banco o institución', value: account.bankName },
-          { label: 'Nombre del titular', value: account.holderName },
-          { label: typeLabels[account.identifierType] || 'Dato para el pago', value: account.identifier },
-        ];
-        const item = document.createElement('div');
-        item.className = 'bank-account-chat';
-        item.innerHTML = `
-          <b class="bank-account-chat-title"><i class="ph-bold ph-buildings"></i>${accounts.length > 1 ? `Cuenta ${index + 1}` : 'Datos de la cuenta'}</b>
-          ${fields.map((field, fieldIndex) => `<div class="bank-detail-row"><span>${esc(field.label)}</span><strong>${esc(field.value)}</strong><button class="bank-copy-field" type="button" data-copy-field="${fieldIndex}" title="Copiar ${esc(field.label)}" aria-label="Copiar ${esc(field.label)}"><i class="ph-bold ph-copy"></i></button></div>`).join('')}`;
-        item.querySelectorAll('[data-copy-field]').forEach((button) => button.addEventListener('click', (event) => {
-          copyToClipboard(String(fields[Number(button.dataset.copyField)].value), event.currentTarget);
-        }));
-        list.appendChild(item);
-      });
-      const fullText = accounts.map((account, index) => {
-        const fields = Array.isArray(account.fields) ? account.fields : [
-          { label: 'Banco o institución', value: account.bankName },
-          { label: 'Nombre del titular', value: account.holderName },
-          { label: typeLabels[account.identifierType] || 'Dato para el pago', value: account.identifier },
-        ];
-        const heading = accounts.length > 1 ? `Cuenta ${index + 1}\n` : '';
-        return `${heading}${fields.map((field) => `${field.label}: ${field.value}`).join('\n')}`;
-      }).join('\n\n');
-      card.querySelector('.bank-copy-all').addEventListener('click', (event) => copyToClipboard(fullText, event.currentTarget));
-      messagesEl.appendChild(card);
-      scrollDown();
-      return card.getBoundingClientRect().height > 20;
-    }
-
     function clearInteractive() {
-      closeProductDetail({ restoreFocus: false });
-      messagesEl.querySelectorAll('.options, .prods, .wa-btn, .preview-signup-card, .cart-editor, .products-hint').forEach((el) => el.remove());
-    }
-
-    function renderCartEditor(items) {
-      if (!Array.isArray(items) || !items.length) return;
-      const editor = document.createElement('div');
-      editor.className = 'cart-editor';
-      const title = document.createElement('div');
-      title.className = 'cart-editor-title';
-      title.textContent = '✏️ Edita tu pedido sin empezar de nuevo';
-      editor.appendChild(title);
-      items.forEach((item, index) => {
-        const row = document.createElement('div');
-        row.className = 'cart-editor-row';
-        const name = document.createElement('span');
-        name.className = 'cart-editor-name';
-        name.textContent = item.name;
-        const minus = document.createElement('button');
-        minus.type = 'button'; minus.textContent = '−'; minus.title = 'Reducir cantidad';
-        const count = document.createElement('span');
-        count.className = 'cart-editor-qty';
-        const plus = document.createElement('button');
-        plus.type = 'button'; plus.textContent = '+'; plus.title = 'Aumentar cantidad';
-        const save = document.createElement('button');
-        save.type = 'button'; save.className = 'save'; save.textContent = 'Guardar';
-        const remove = document.createElement('button');
-        remove.type = 'button'; remove.className = 'remove'; remove.textContent = 'Quitar';
-        let qty = Number(item.qty) || 1;
-        const original = qty;
-        function redraw() { count.textContent = String(qty); minus.disabled = qty <= 1; plus.disabled = qty >= 50; save.disabled = qty === original; }
-        minus.addEventListener('click', () => { qty--; redraw(); });
-        plus.addEventListener('click', () => { qty++; redraw(); });
-        save.addEventListener('click', () => send(`cart_line_${index}_${qty}`, `Actualizar ${item.name}: ${qty}`));
-        remove.addEventListener('click', () => send(`cart_line_${index}_0`, `Quitar ${item.name}`));
-        row.append(name, minus, count, plus, save, remove);
-        editor.appendChild(row);
-        redraw();
-      });
-      messagesEl.appendChild(editor);
+      messagesEl.querySelectorAll('.options, .prods, .wa-btn').forEach((el) => el.remove());
     }
 
     async function shareLocation(triggerBtn) {
@@ -965,7 +494,7 @@
       } finally {
         if (triggerBtn) {
           triggerBtn.disabled = false;
-          triggerBtn.textContent = '📍 Comparte tu ubicación';
+          triggerBtn.textContent = '📍 Compartir ubicación';
         }
       }
     }
@@ -985,102 +514,11 @@
     }
     function hideTyping() { document.getElementById('typing')?.remove(); }
 
-    function renderModifierGroup(group) {
-      const options = Array.isArray(group?.options) ? group.options : [];
-      if (!options.length) return false;
-
-      const min = Math.max(0, Number(group.minSelections) || 0);
-      const max = Math.max(1, Number(group.maxSelections) || 1);
-      const selected = new Set(options.filter((option) => option.selected).map((option) => Number(option.id)));
-      const wrap = document.createElement('div');
-      wrap.className = 'options modifier-picker';
-
-      const status = document.createElement('div');
-      status.className = 'modifier-picker-status';
-      wrap.appendChild(status);
-
-      const optionButtons = options.map((option) => {
-        const id = Number(option.id);
-        const button = document.createElement('button');
-        button.type = 'button';
-        button.className = 'opt modifier-choice';
-        button.addEventListener('click', () => {
-          if (selected.has(id)) selected.delete(id);
-          else if (selected.size < max) selected.add(id);
-          redraw();
-          if (max === 1 && selected.size === 1) submitSelection();
-        });
-        wrap.appendChild(button);
-        return { button, option, id };
-      });
-
-      const clearButton = document.createElement('button');
-      clearButton.type = 'button';
-      clearButton.className = 'opt modifier-clear';
-      clearButton.textContent = '🧹 Limpiar selección';
-      clearButton.addEventListener('click', () => {
-        selected.clear();
-        redraw();
-      });
-      wrap.appendChild(clearButton);
-
-      const submitButton = document.createElement('button');
-      submitButton.type = 'button';
-      submitButton.className = 'opt modifier-submit';
-      submitButton.textContent = group.submitLabel || '✅ Enviar selección';
-      submitButton.addEventListener('click', submitSelection);
-      wrap.appendChild(submitButton);
-
-      if (min === 0) {
-        const skipButton = document.createElement('button');
-        skipButton.type = 'button';
-        skipButton.className = 'opt';
-        skipButton.textContent = '⏭️ Omitir';
-        skipButton.addEventListener('click', () => send('mod_apply_', 'Omitir'));
-        wrap.appendChild(skipButton);
-      }
-
-      function submitSelection() {
-        if (selected.size < min || selected.size > max) return;
-        const ordered = options.filter((option) => selected.has(Number(option.id)));
-        const ids = ordered.map((option) => option.id).join(',');
-        const names = ordered.map((option) => option.name).join(', ');
-        send(`mod_apply_${ids}`, names || 'Sin opciones');
-      }
-
-      function redraw() {
-        status.innerHTML = `<span>${selected.size} seleccionada${selected.size === 1 ? '' : 's'}</span><span>Mín. ${min} · Máx. ${max}</span>`;
-        optionButtons.forEach(({ button, option, id }) => {
-          const isSelected = selected.has(id);
-          button.classList.toggle('selected', isSelected);
-          button.setAttribute('aria-pressed', String(isSelected));
-          button.disabled = !isSelected && selected.size >= max;
-          button.textContent = `${isSelected ? '✅ ' : ''}${option.label || option.name}`;
-        });
-        clearButton.hidden = selected.size === 0;
-        submitButton.disabled = selected.size < min || selected.size > max;
-      }
-
-      redraw();
-      messagesEl.appendChild(wrap);
-      return true;
-    }
-
     function renderReply(data) {
       hideTyping();
-      const bankAccountsRendered = renderBankAccounts(data.bankAccounts, data.bankAccountTitle);
-      const messages = Array.isArray(data.messages) ? data.messages : [];
-      messages
-        .filter((message) => !bankAccountsRendered || !String(message).startsWith('Datos para realizar tu pago con '))
-        .forEach((message) => addMsg(message, 'bot'));
-      if (data.editCart) renderCartEditor(data.cart?.items);
+      (data.messages || []).forEach((m) => addMsg(m, 'bot'));
 
-      const hasProducts = Array.isArray(data.products) && data.products.length > 0;
-      if (hasProducts) {
-        const hint = document.createElement('div');
-        hint.className = 'products-hint';
-        hint.textContent = '👆 Elige tus productos aquí: pulsa + y luego Enviar para continuar';
-        messagesEl.appendChild(hint);
+      if (data.products && data.products.length) {
         const wrap = document.createElement('div');
         wrap.className = 'prods';
         const pendingChanges = new Map();
@@ -1091,26 +529,15 @@
           bulkBtn.disabled = pendingChanges.size === 0;
         }
 
-        let currentCategory = null;
         data.products.forEach((p) => {
-          if (data.catalogSortMode === 'category') {
-            const category = String(p.category || 'Sin categoría').trim() || 'Sin categoría';
-            if (category !== currentCategory) {
-              currentCategory = category;
-              const categoryHeading = document.createElement('div');
-              categoryHeading.className = 'product-category-heading';
-              categoryHeading.textContent = category;
-              wrap.appendChild(categoryHeading);
-            }
-          }
           const card = document.createElement('div');
-          card.className = p.promotion ? 'prod has-promotion' : 'prod';
+          card.className = 'prod';
           const serverQty = Number(p.qty || 0);
           card.innerHTML = `
-            ${p.image ? `<button class="pimg" type="button" aria-label="Ver foto ampliada de ${esc(p.name)}" title="Ver foto ampliada"><img src="${esc(p.image)}" alt="${esc(p.name)}" loading="lazy"></button>` : '<div class="pimg" aria-hidden="true"><i class="ph ph-fork-knife"></i></div>'}
-            <div class="pinfo"><div class="pname">${esc(p.name)}</div>${p.promotion ? `<div class="promo-subtitle"><span class="promo-kicker"><i class="ph-fill ph-lightning"></i> PROMOCIÓN</span><span class="promo-kind">${esc(p.promotion.label || p.promotion.name)}</span></div>` : ''}<div class="pdesc">${esc(p.description || '')}</div></div>
+            <div class="pimg">${p.image ? `<img src="${esc(p.image)}" alt="" loading="lazy">` : '<i class="ph ph-fork-knife"></i>'}</div>
+            <div class="pinfo"><div class="pname">${esc(p.name)}</div><div class="pdesc">${esc(p.description || '')}</div></div>
             <div class="pright">
-              <div class="price-stack">${p.originalPriceLabel ? `<span class="pprice-old">${esc(p.originalPriceLabel)}</span>` : ''}<span class="pprice">${esc(p.priceLabel)}</span></div>
+              <span class="pprice">${esc(p.priceLabel)}</span>
               <div class="qty-ctl" data-qty-wrap>
                 <button class="qty-btn minus" type="button" data-dec="${p.id}" ${serverQty <= 0 ? 'disabled' : ''}><i class="ph-bold ph-minus"></i></button>
                 <span class="qty-val">${serverQty}</span>
@@ -1131,39 +558,23 @@
             if (draftQty === serverQty) pendingChanges.delete(String(p.id));
             else pendingChanges.set(String(p.id), draftQty);
             updateBulkState();
-            syncProductDetailQuantity(p.id, draftQty, serverQty);
-          }
-
-          function setQuantity(nextQuantity) {
-            draftQty = Math.max(0, Math.min(50, Number(nextQuantity) || 0));
-            redrawQty();
-          }
-
-          function sendQuantity() {
-            if (draftQty === serverQty) return;
-            send(`prod_set_${p.id}_${draftQty}`, null);
           }
 
           card.querySelector('[data-inc]')?.addEventListener('click', (e) => {
             e.stopPropagation();
-            setQuantity(draftQty + 1);
+            if (draftQty >= 50) return;
+            draftQty += 1;
+            redrawQty();
           });
           card.querySelector('[data-dec]')?.addEventListener('click', (e) => {
             e.stopPropagation();
-            setQuantity(draftQty - 1);
+            if (draftQty <= 0) return;
+            draftQty -= 1;
+            redrawQty();
           });
           card.querySelector('[data-send]')?.addEventListener('click', (e) => {
             e.stopPropagation();
-            sendQuantity();
-          });
-          card.querySelector('button.pimg')?.addEventListener('click', (event) => {
-            event.stopPropagation();
-            openProductDetail(p, {
-              serverQuantity: serverQty,
-              getQuantity: () => draftQty,
-              setQuantity,
-              sendQuantity,
-            }, event.currentTarget);
+            send(`prod_set_${p.id}_${draftQty}`, null);
           });
           redrawQty();
           wrap.appendChild(card);
@@ -1195,26 +606,11 @@
         a.href = data.order.whatsappLink;
         a.target = '_blank';
         a.rel = 'noopener';
-        a.innerHTML = data.order.preview
-          ? '<i class="ph-fill ph-whatsapp-logo"></i> Enviar pedido de prueba por WhatsApp'
-          : '<i class="ph-fill ph-whatsapp-logo"></i> Enviar mi pedido por WhatsApp';
+        a.innerHTML = '<i class="ph-fill ph-whatsapp-logo"></i> Enviar mi pedido por WhatsApp';
         messagesEl.appendChild(a);
       }
 
-      if (data.previewComplete && data.registrationUrl) {
-        const signup = document.createElement('section');
-        signup.className = 'preview-signup-card';
-        signup.innerHTML = `
-          <span><i class="ph-fill ph-sparkle"></i> Ahora hazlo tuyo</span>
-          <h2>Crea el asistente virtual de tu negocio</h2>
-          <p>Registra tu negocio gratis y configura tus productos, colores, pagos y WhatsApp.</p>
-          <a href="${esc(data.registrationUrl)}" target="_top"><i class="ph-bold ph-rocket-launch"></i> Crear mi cuenta</a>`;
-        messagesEl.appendChild(signup);
-      }
-
-      const modifierGroupRendered = renderModifierGroup(data.modifierGroup);
-
-      if (!modifierGroupRendered && data.options && data.options.length) {
+      if (data.options && data.options.length) {
         const optionsRaw = Array.isArray(data.options) ? data.options.slice() : [];
         const grouped = {
           primary: [],
@@ -1225,17 +621,15 @@
         };
         optionsRaw.forEach((o) => {
           const value = String(o?.value || '');
-          if (value === 'menu' || value === 'promotions') grouped.primary.push(o);
-          else if (value.startsWith('cat_') || value.startsWith('promo_cat_')) grouped.categories.push(o);
+          if (value === 'menu') grouped.primary.push(o);
+          else if (value.startsWith('cat_')) grouped.categories.push(o);
           else if (value === 'cart') grouped.cart.push(o);
           else if (value === 'checkout') grouped.checkout.push(o);
           else grouped.rest.push(o);
         });
-        grouped.categories.sort((a, b) => {
-          if (a?.value === 'promo_cat_all') return -1;
-          if (b?.value === 'promo_cat_all') return 1;
-          return String(a?.label || '').localeCompare(String(b?.label || ''), 'es', { sensitivity: 'base' });
-        });
+        grouped.categories.sort((a, b) =>
+          String(a?.label || '').localeCompare(String(b?.label || ''), 'es', { sensitivity: 'base' })
+        );
         const optionsOrdered = [
           ...grouped.primary,
           ...grouped.categories,
@@ -1248,25 +642,18 @@
         wrap.className = 'options';
         optionsOrdered.forEach((o) => {
           const b = document.createElement('button');
-          b.className = String(o?.value || '') === 'promotions' ? 'opt opt-promotions' : 'opt';
+          b.className = 'opt';
           b.textContent = o.label;
           b.addEventListener('click', () => onOption(o, b));
           wrap.appendChild(b);
         });
-        if (!hasProducts && !data.orderComplete) {
-          const hint = document.createElement('div');
-          hint.className = 'options-hint';
-          hint.textContent = '👆 Presiona una opción aquí y continúa';
-          wrap.appendChild(hint);
-        }
         messagesEl.appendChild(wrap);
       }
 
       const bar = document.getElementById('cartBar');
       if (data.cart && data.cart.items.length) {
         const n = data.cart.items.reduce((s, it) => s + it.qty, 0);
-        const cartInfo = document.getElementById('cartInfo');
-        cartInfo.innerHTML = `<span>${esc(`${n} producto${n > 1 ? 's' : ''} · ${data.cart.totalLabel}`)}${data.cart.convertedTotalLabel ? ` · ≈ <strong>${esc(data.cart.convertedTotalLabel)}</strong>` : ''}</span>${data.cart.exchangeRateLabel ? `<small class="cart-rate">Tasa de cambio: ${esc(data.cart.exchangeRateLabel)}</small>` : ''}`;
+        document.getElementById('cartInfo').textContent = `${n} producto${n > 1 ? 's' : ''} · ${data.cart.totalLabel}`;
         bar.classList.add('show');
         const delta = Math.max(0, n - lastCartItemsCount);
         animateCartDelta(delta);
@@ -1286,12 +673,12 @@
         const res = await fetch(`/api/chat/${slug}/message`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ sessionId, message: value, preview: isPreview, reseller: previewReseller }),
+          body: JSON.stringify({ sessionId, message: value }),
         });
         const data = await res.json();
         if (data.sessionId) {
           sessionId = data.sessionId;
-          sessionStorage.setItem(sessionKey, sessionId);
+          sessionStorage.setItem('cbp_session_' + slug, sessionId);
         }
         renderReply(data);
       } catch {
@@ -1310,7 +697,6 @@
       if (e.key === 'Enter') document.getElementById('sendBtn').click();
     });
     document.getElementById('cartCheckout').addEventListener('click', () => send('checkout', '✅ Sería todo, gracias.'));
-    document.getElementById('cartInfo').addEventListener('click', () => send('cart', '🛒 Ver y editar carrito'));
 
     async function init() {
       try {
@@ -1319,13 +705,8 @@
         const info = await res.json();
         document.title = `${info.businessName} — Haz tu pedido`;
         document.getElementById('bizName').textContent = info.businessName;
-        if (isPreview) {
-          document.title = `Prueba el asistente — ${info.businessName}`;
-          document.querySelector('.chat-header .status').innerHTML = '<span class="dot"></span> Pedido de prueba · puedes enviarlo por WhatsApp';
-        }
         if (info.primaryColor) document.documentElement.style.setProperty('--primary', info.primaryColor);
         if (info.logo) document.getElementById('bizLogo').innerHTML = `<img src="${esc(info.logo)}" alt="">`;
-        renderFloatingBackground(info.floatingIcons);
         send('start', null);
       } catch {
         document.getElementById('bizName').textContent = 'Negocio no encontrado';

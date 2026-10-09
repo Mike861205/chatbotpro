@@ -1,69 +1,11 @@
 let SA_TENANTS = [];
 let SA_FILTER = 'all';
 let SA_SUMMARY = null;
-let SA_CLIENTS = [];
-let SA_NON_RENEWALS = [];
-let SA_CLIENT_FILTER = 'all';
-let SA_CLIENT_SUMMARY = null;
-let SA_INVOICING = [];
-let SA_INVOICING_FILTER = 'all';
-let SA_DEMO_LEADS = [];
-let SA_FOLLOW_UP = [];
-let SA_RESELLERS = [];
-let SA_FOLLOWUP_TARGETS = [];
-const SA_SELECTED = new Set();
 let SA_PAYMENT_TENANT_ID = null;
 let SA_SUSPEND_TENANT_ID = null;
 let SA_ACTIVATE_TENANT_ID = null;
 let SA_ACTIVATE_MODE = 'account';
-let SA_STAMP_TENANT_ID = null;
-let SA_STAMP_DATA = null;
 let SA_DEPLOY_POLL_TIMER = null;
-let SA_DELETE_TARGET = null;
-let SA_OPERATION_RESET = null;
-let SA_STORAGE_REPORT = null;
-let SA_STORAGE_ACTION = null;
-let SA_STORAGE_LOADING = false;
-let SA_STORAGE_SORT = { key: 'bytes', dir: null };
-let SA_ACTIVE_VIEW = 'tenants';
-let SA_TENANT_SORT = { key: 'created_at', dir: 'desc' };
-let SA_TENANT_PAGE = 1;
-let SA_TENANT_PER_PAGE = 20;
-let SA_DEMO_SORT = { key: 'last_seen_at', dir: 'desc' };
-let SA_DEMO_PAGE = 1;
-let SA_DEMO_PER_PAGE = 20;
-
-const SA_SALES_STAGES = [
-  ['new', 'Nuevo', 'new'],
-  ['contacted', 'Contactado', 'contacted'],
-  ['interested', 'Interesado', 'interested'],
-  ['potential', 'Potencial a compra', 'potential'],
-  ['follow_up', 'En seguimiento', 'follow-up'],
-  ['won', 'Cierre exitoso', 'won'],
-  ['not_interested', 'No interesado', 'not-interested'],
-  ['lost', 'Cierre no exitoso', 'lost'],
-];
-const SA_DELETABLE_STAGES = new Set(['not_interested', 'lost']);
-
-const SA_MODULE_LABELS = {
-  dashboard: 'Dashboard',
-  pedidos: 'Pedidos',
-  clientes: 'Clientes',
-  pos: 'Punto de venta',
-  kds: 'Pantallas KDS',
-  ventas: 'Ventas',
-  productos: 'Productos',
-  promociones: 'Promociones',
-  costos: 'Costo de ventas',
-  gastos: 'Gastos',
-  inventarios: 'Inventarios',
-  'stock-sucursales': 'Stock por sucursal',
-  compras: 'Compras',
-  empleados: 'Productividad',
-  chatbot: 'Mi chatbot',
-  config: 'Mi negocio',
-  suscripciones: 'Suscripciones',
-};
 
 const $ = (s) => document.querySelector(s);
 let SA_CLOCK_TIMER = null;
@@ -93,75 +35,11 @@ function esc(v) {
   return String(v ?? '').replace(/[&<>"']/g, (m) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[m]));
 }
 
-function countryFlag(code) {
-  return String(code || '').toUpperCase().replace(/[A-Z]/g, (letter) =>
-    String.fromCodePoint(127397 + letter.charCodeAt(0))
-  );
-}
-
-async function copyPhone(value) {
-  const phone = String(value || '').trim();
-  if (!phone) return;
-  if (navigator.clipboard?.writeText) {
-    await navigator.clipboard.writeText(phone);
-  } else {
-    const input = document.createElement('textarea');
-    input.value = phone;
-    input.style.position = 'fixed';
-    input.style.opacity = '0';
-    document.body.appendChild(input);
-    input.select();
-    document.execCommand('copy');
-    input.remove();
-  }
-  toast(`Teléfono copiado: ${phone}`);
-}
-
-function bindPhoneActions() {
-  document.querySelectorAll('[data-sa-copy-phone]').forEach((button) => {
-    button.onclick = () => copyPhone(button.dataset.saCopyPhone).catch(() => toast('No se pudo copiar el teléfono', true));
-  });
-}
-
 function fmtDate(v) {
   if (!v) return '—';
   const d = new Date(v);
   if (Number.isNaN(d.getTime())) return '—';
   return d.toLocaleDateString('es-MX', { year: 'numeric', month: 'short', day: 'numeric' });
-}
-
-function fmtDateTime(v) {
-  if (!v) return '—';
-  const d = new Date(v);
-  if (Number.isNaN(d.getTime())) return '—';
-  return d.toLocaleString('es-MX', { dateStyle: 'medium', timeStyle: 'short' });
-}
-
-function fmtMoney(value) {
-  return new Intl.NumberFormat('es-MX', { style: 'currency', currency: 'MXN' }).format(Number(value || 0));
-}
-
-function findBusiness(id) {
-  return [...SA_TENANTS, ...SA_CLIENTS, ...SA_NON_RENEWALS, ...SA_INVOICING].find((item) => Number(item.id) === Number(id));
-}
-
-function usageModules(entity) {
-  if (Array.isArray(entity?.modules)) return entity.modules;
-  try {
-    const parsed = JSON.parse(entity?.modules || '[]');
-    return Array.isArray(parsed) ? parsed : [];
-  } catch {
-    return [];
-  }
-}
-
-function moduleUsageButton(entity, type) {
-  const moduleCount = Number(entity?.module_count || 0);
-  const views = Number(entity?.module_views || 0);
-  return `<button type="button" class="module-usage-btn" data-sa-modules="${type}:${Number(entity.id)}">
-    <span><i class="ph-bold ph-squares-four"></i> <b>${moduleCount}</b> módulo${moduleCount === 1 ? '' : 's'}</span>
-    <small>${views} acceso${views === 1 ? '' : 's'}${entity?.module_last_seen ? ` · ${fmtDate(entity.module_last_seen)}` : ''}</small>
-  </button>`;
 }
 
 function normalizeLogoUrl(raw) {
@@ -295,100 +173,13 @@ function matchesTenantFilter(tenant, filter) {
   return true;
 }
 
-function matchesModuleFilter(entity, filter) {
-  if (filter === 'all') return true;
-  const moduleCount = Number(entity.module_count || 0);
-  if (filter === '1') return moduleCount >= 1 && moduleCount <= 2;
-  if (filter === '3') return moduleCount >= 3 && moduleCount <= 4;
-  if (filter === '5') return moduleCount >= 5 && moduleCount <= 9;
-  if (filter === '10') return moduleCount >= 10;
-  return true;
-}
-
-function compareBySortKey(a, b, key, dir) {
-  let va, vb;
-  if (key === 'last_seen_at') {
-    va = new Date(a.module_last_seen || a.last_seen_at || a.first_seen_at || a.created_at || 0).getTime();
-    vb = new Date(b.module_last_seen || b.last_seen_at || b.first_seen_at || b.created_at || 0).getTime();
-  } else if (key === 'first_seen_at') {
-    va = new Date(a.first_seen_at || a.created_at || 0).getTime();
-    vb = new Date(b.first_seen_at || b.created_at || 0).getTime();
-  } else if (['created_at', 'module_last_seen', 'module_first_seen'].includes(key)) {
-    va = new Date(a[key] || 0).getTime();
-    vb = new Date(b[key] || 0).getTime();
-  } else if (['module_count', 'module_views', 'demo_count'].includes(key)) {
-    va = Number(a[key] || 0);
-    vb = Number(b[key] || 0);
-  } else {
-    va = String(a[key] || '').toLowerCase();
-    vb = String(b[key] || '').toLowerCase();
-  }
-  const cmp = va < vb ? -1 : va > vb ? 1 : 0;
-  return dir === 'asc' ? cmp : -cmp;
-}
-
-function paginateArray(arr, page, perPage) {
-  const totalPages = Math.max(1, Math.ceil(arr.length / perPage));
-  const safePage = Math.max(1, Math.min(page, totalPages));
-  return { items: arr.slice((safePage - 1) * perPage, safePage * perPage), page: safePage, totalPages, total: arr.length, perPage };
-}
-
-function renderPaginationBar(prefix, pag) {
-  const from = pag.total === 0 ? 0 : ((pag.page - 1) * pag.perPage) + 1;
-  const to = Math.min(pag.page * pag.perPage, pag.total);
-  return `<div class="sa-pagination">
-    <div class="sa-pagination-left">
-      <span>${from}–${to} de ${pag.total}</span>
-      <select data-sa-per-page="${prefix}" aria-label="Registros por página">
-        ${[10, 20, 30].map((n) => `<option value="${n}" ${pag.perPage === n ? 'selected' : ''}>${n} por página</option>`).join('')}
-      </select>
-    </div>
-    <div class="sa-pagination-controls">
-      <button type="button" class="btn btn-ghost btn-sm" data-sa-page-prev="${prefix}" ${pag.page <= 1 ? 'disabled' : ''}><i class="ph-bold ph-caret-left"></i></button>
-      <span>Pág ${pag.page} de ${pag.totalPages}</span>
-      <button type="button" class="btn btn-ghost btn-sm" data-sa-page-next="${prefix}" ${pag.page >= pag.totalPages ? 'disabled' : ''}><i class="ph-bold ph-caret-right"></i></button>
-    </div>
-  </div>`;
-}
-
-function sortableHeader(label, key, currentSort) {
-  const isActive = currentSort.key === key;
-  const arrow = isActive ? (currentSort.dir === 'asc' ? 'ph-caret-up' : 'ph-caret-down') : 'ph-caret-up-down';
-  return `<th class="sortable${isActive ? ' sort-active' : ''}" data-sort-key="${key}">${label} <i class="ph ${arrow}"></i></th>`;
-}
-
-function bindPagination(prefix, renderFn, getPage, setPage, getPerPage, setPerPage) {
-  document.querySelectorAll(`[data-sa-page-prev="${prefix}"]`).forEach((btn) => {
-    btn.onclick = () => { setPage(getPage() - 1); renderFn(); };
-  });
-  document.querySelectorAll(`[data-sa-page-next="${prefix}"]`).forEach((btn) => {
-    btn.onclick = () => { setPage(getPage() + 1); renderFn(); };
-  });
-  document.querySelectorAll(`[data-sa-per-page="${prefix}"]`).forEach((sel) => {
-    sel.onchange = () => { setPerPage(Number(sel.value)); setPage(1); renderFn(); };
-  });
-}
-
 function getFilteredTenants() {
   const search = String($('#saTenantSearch')?.value || '').trim().toLowerCase();
-  const moduleFilter = String($('#saTenantModuleFilter')?.value || 'all');
-  const stage = String($('#saTenantStageFilter')?.value || 'all');
-  const country = String($('#saTenantCountryFilter')?.value || 'all');
-  const reseller = String($('#saTenantResellerFilter')?.value || 'all');
   return SA_TENANTS.filter((t) => {
     if (!matchesTenantFilter(t, SA_FILTER)) return false;
-    if (!matchesModuleFilter(t, moduleFilter)) return false;
-    if (stage !== 'all' && String(t.sales_stage || 'new') !== stage) return false;
-    if (country === 'unknown' && t.phone_country) return false;
-    if (!['all', 'unknown'].includes(country) && String(t.phone_country || '').toUpperCase() !== country) return false;
-    if (reseller === 'direct' && t.reseller_id) return false;
-    if (!['all', 'direct'].includes(reseller) && String(t.reseller_id || '') !== reseller) return false;
     if (!search) return true;
-    return [t.id, t.slug, t.business_name, t.owner_name, t.owner_username, t.phone, t.phone_digits,
-      t.phone_country, t.phone_country_name, t.phone_calling_code, t.reseller_name, t.reseller_slug,
-      t.plan_name, t.sales_stage, t.module_count, t.module_views]
-      .join(' ').toLowerCase().includes(search);
-  }).sort((a, b) => compareBySortKey(a, b, SA_TENANT_SORT.key, SA_TENANT_SORT.dir));
+    return [t.slug, t.business_name, t.owner_name, t.phone].join(' ').toLowerCase().includes(search);
+  });
 }
 
 function syncFilterControls() {
@@ -405,7 +196,6 @@ function syncFilterControls() {
 
 function setTenantFilter(filter, announce = false) {
   SA_FILTER = filter || 'all';
-  SA_TENANT_PAGE = 1;
   syncFilterControls();
   renderTenantTable();
   if (announce) {
@@ -429,9 +219,14 @@ function renderBillingSummary(summary) {
   const el = $('#saBillingSummary');
   if (!el) return;
   const cards = [
-    { label: 'Total prospectos', value: Number(s.total || 0), filter: 'all', tone: 'tone-total' },
-    { label: 'Con acceso', value: Number(s.activeTenants || 0), filter: 'active', tone: 'tone-active' },
+    { label: 'Total tenants', value: Number(s.total || 0), filter: 'all', tone: 'tone-total' },
+    { label: 'Activos', value: Number(s.activeTenants || 0), filter: 'active', tone: 'tone-active' },
     { label: 'Inactivos', value: Number(s.inactiveTenants || 0), filter: 'inactive', tone: 'tone-inactive' },
+    { label: 'Al corriente', value: Number(s.billingCurrent || 0), filter: 'current', tone: 'tone-current' },
+    { label: 'Por pagar', value: Number(s.billingDue || 0), filter: 'due', tone: 'tone-due' },
+    { label: 'Suspendidos', value: Number(s.billingSuspended || 0), filter: 'suspended', tone: 'tone-suspended' },
+    { label: 'Vencen en 5 días', value: Number(s.dueSoon5 || 0), filter: 'dueSoon5', tone: 'tone-soon' },
+    { label: 'En mora', value: Number(s.inMora || 0), filter: 'mora', tone: 'tone-mora' },
   ];
 
   el.innerHTML = cards
@@ -459,1097 +254,58 @@ function renderTenantTable() {
 
   if (!filtered.length) {
     table.innerHTML = '<div class="empty"><i class="ph ph-buildings"></i><b>Sin tenants</b><p>No hay resultados con ese filtro.</p></div>';
-    renderSalesBulkBars();
     return;
   }
 
-  const pag = paginateArray(filtered, SA_TENANT_PAGE, SA_TENANT_PER_PAGE);
-  SA_TENANT_PAGE = pag.page;
-  const pageItems = pag.items;
-
-  const allChecked = pageItems.length > 0 && pageItems.every((item) => SA_SELECTED.has(salesSubjectKey('tenant', item.id)));
   table.innerHTML = `<div class="table-wrap"><table><thead><tr>
-    <th class="sa-select-col"><input type="checkbox" data-sa-select-all="tenant" ${allChecked ? 'checked' : ''} aria-label="Seleccionar prospectos visibles" /></th><th>Prospecto</th><th>Dueño</th><th>Reseller</th><th>Etapa</th>${sortableHeader('Registro', 'created_at', SA_TENANT_SORT)}${sortableHeader('Última actividad', 'module_last_seen', SA_TENANT_SORT)}<th>Acceso</th><th>Plan de interés</th>${sortableHeader('Módulos', 'module_count', SA_TENANT_SORT)}<th>Acciones</th>
-  </tr></thead><tbody>${pageItems
-    .map((t) => {
-      const waUrl = t.phone_valid && t.phone_digits ? `https://wa.me/${t.phone_digits}` : '';
-      const country = t.phone_country_name || t.phone_country || 'Sin país';
-      const key = salesSubjectKey('tenant', t.id);
-      return `<tr class="${SA_SELECTED.has(key) ? 'sa-row-selected' : ''}">
-      <td class="sa-select-col"><input type="checkbox" data-sa-sales-select="${key}" ${SA_SELECTED.has(key) ? 'checked' : ''} aria-label="Seleccionar ${esc(t.business_name)}" /></td>
+    <th>Tenant</th><th>Dueño</th><th>Cuenta</th><th>Pago</th><th>Plan</th><th>Vence</th><th>Acciones</th>
+  </tr></thead><tbody>${filtered
+    .map((t) => `<tr>
       <td><b>${esc(t.business_name)}</b><div class="meta">/${esc(t.slug)}</div></td>
-      <td>${esc(t.owner_name)}
-        <div class="meta">${countryFlag(t.phone_country)} ${esc(country)} · Lada ${t.phone_calling_code ? `+${esc(t.phone_calling_code)}` : '—'}</div>
-        <div class="meta">${esc(t.phone || '—')}${t.phone && !t.phone_valid ? ' · Revisar número histórico' : ''}</div>
-      </td>
-      <td>${t.reseller_name ? `<b>${esc(t.reseller_name)}</b><div class="meta">/${esc(t.reseller_slug)}</div>` : '<span class="meta">Directo</span>'}</td>
-      <td>${salesStageChip(t.sales_stage)}${t.next_follow_up_at ? `<div class="meta">Próximo: ${fmtDateTime(t.next_follow_up_at)}</div>` : ''}</td>
-      <td>${fmtDate(t.created_at)}</td>
-      <td>${t.module_last_seen ? fmtDate(t.module_last_seen) : '<span class="meta">—</span>'}</td>
-      <td>${statusChip('account', t.account_status)}${t.trial_status === 'expired' ? '<div class="meta"><span class="tag err">Prueba vencida</span></div>' : (t.trial_status === 'active' ? `<div class="meta">Prueba: ${Math.max(0, Number(t.trial_ends_on ? Math.ceil((new Date(t.trial_ends_on) - new Date()) / 86400000) : 0))} días</div>` : '')}</td>
-      <td>${esc(t.plan_name || 'starter')}<div class="meta">Hasta ${Number(t.branch_limit || 2)} sucursales activas</div></td>
-      <td>${moduleUsageButton(t, 'tenant')}</td>
+      <td>${esc(t.owner_name)}<div class="meta">${esc(t.phone || '')}</div></td>
+      <td>${statusChip('account', t.account_status)}</td>
+      <td>${statusChip('billing', t.billing_status)}</td>
+      <td>${esc(t.plan_name || 'starter')}</td>
+      <td>${fmtDate(t.billing_due_date)}</td>
       <td>
-        <div class="sa-actions-grid">
+        <div style="display:flex;gap:6px;flex-wrap:wrap">
           <button type="button" class="btn btn-ghost" data-sa-access="${t.id}"><i class="ph-bold ph-sign-in"></i> Entrar</button>
-          <button type="button" class="btn btn-sa-manage" data-sa-manage="tenant:${t.id}"><i class="ph-bold ph-note-pencil"></i> Gestionar</button>
-          ${waUrl ? `<a class="btn btn-ghost" href="${waUrl}" target="_blank" rel="noopener noreferrer"><i class="ph-bold ph-whatsapp-logo" style="color:#22c55e"></i> WhatsApp</a>` : '<button type="button" class="btn btn-ghost" disabled style="opacity:.3"><i class="ph-bold ph-whatsapp-logo"></i> WhatsApp</button>'}
-          <button type="button" class="btn btn-ghost" data-sa-password="${t.id}"><i class="ph-bold ph-key"></i> Clave</button>
-          <button type="button" class="btn btn-ghost" data-sa-users="${t.id}"><i class="ph-bold ph-users-three"></i> Usuarios</button>
+          <button type="button" class="btn btn-ghost" data-sa-password="${t.id}"><i class="ph-bold ph-key"></i> Password</button>
           <button type="button" class="btn btn-ghost" data-sa-payment="${t.id}"><i class="ph-bold ph-currency-circle-dollar"></i> Pago</button>
-          ${(t.phone_country === 'MX' || String(t.phone_calling_code || '').replace('+', '') === '52') ? `<button type="button" class="btn btn-ghost" data-sa-stamps="${t.id}"><i class="ph-bold ph-stamp"></i> ${Number(t.invoicing_enabled) ? 'Facturación activa' : 'Activar facturación'}</button>` : ''}
-          ${t.phone_valid && t.phone_e164 ? `<button type="button" class="btn btn-ghost" data-sa-copy-phone="${esc(t.phone_e164)}"><i class="ph-bold ph-copy"></i> Copiar</button>` : '<button type="button" class="btn btn-ghost" disabled style="opacity:.3"><i class="ph-bold ph-copy"></i> Copiar</button>'}
-          <button type="button" class="btn btn-ghost" data-sa-branches="${t.id}"><i class="ph-bold ph-storefront"></i> Sucursales</button>
           <button type="button" class="btn ${(t.account_status === 'active' && t.billing_status !== 'suspended') ? 'btn-danger' : 'btn-primary'}" data-sa-suspend="${t.id}">
             <i class="ph-bold ${(t.account_status === 'active' && t.billing_status !== 'suspended') ? 'ph-pause-circle' : 'ph-play-circle'}"></i>
             ${(t.account_status === 'active' && t.billing_status !== 'suspended') ? 'Suspender' : 'Activar'}
           </button>
-          <button type="button" class="btn btn-sa-operation-reset" data-sa-operation-reset="${t.id}"><i class="ph-bold ph-arrow-counter-clockwise"></i> Reiniciar ventas</button>
-          <button type="button" class="btn btn-storage-review" data-sa-storage-prospect="${t.id}"><i class="ph-bold ph-hard-drives"></i> Revisar archivos</button>
         </div>
       </td>
-    </tr>`;
-    })
-    .join('')}</tbody></table></div>${renderPaginationBar('tenant', pag)}`;
+    </tr>`)
+    .join('')}</tbody></table></div>`;
+
   document.querySelectorAll('[data-sa-access]').forEach((btn) => {
     btn.addEventListener('click', () => accessTenant(Number(btn.dataset.saAccess)).catch((err) => toast(err.message, true)));
   });
   document.querySelectorAll('[data-sa-password]').forEach((btn) => {
     btn.addEventListener('click', () => changeTenantPassword(Number(btn.dataset.saPassword)).catch((err) => toast(err.message, true)));
   });
-  document.querySelectorAll('[data-sa-users]').forEach((btn) => {
-    btn.addEventListener('click', () => manageTenantUsers(Number(btn.dataset.saUsers)).catch((err) => toast(err.message, true)));
-  });
   document.querySelectorAll('[data-sa-payment]').forEach((btn) => {
     btn.addEventListener('click', () => addTenantPayment(Number(btn.dataset.saPayment)).catch((err) => toast(err.message, true)));
-  });
-  document.querySelectorAll('[data-sa-stamps]').forEach((btn) => {
-    btn.addEventListener('click', () => manageTenantStamps(Number(btn.dataset.saStamps)).catch((err) => toast(err.message, true)));
   });
   document.querySelectorAll('[data-sa-suspend]').forEach((btn) => {
     btn.addEventListener('click', () => toggleTenantSuspend(Number(btn.dataset.saSuspend)).catch((err) => toast(err.message, true)));
   });
-  document.querySelectorAll('#saTenantsTable [data-sa-branches]').forEach((btn) => {
-    btn.addEventListener('click', () => changeBranchLimit(Number(btn.dataset.saBranches)).catch((err) => toast(err.message, true)));
-  });
-  document.querySelectorAll('#saTenantsTable [data-sa-operation-reset]').forEach((btn) => {
-    btn.addEventListener('click', () => openOperationResetModal(Number(btn.dataset.saOperationReset)).catch((err) => toast(err.message, true)));
-  });
-  bindModuleUsageButtons();
-  bindPhoneActions();
-  bindSalesSelection('tenant', filtered);
-  document.querySelectorAll('[data-sa-storage-prospect]').forEach((btn) => {
-    btn.addEventListener('click', () => openStorageAction('delete-prospect', { id: Number(btn.dataset.saStorageProspect) }).catch((error) => toast(error.message, true)));
-  });
-  // Sort bindings
-  document.querySelectorAll('#saTenantsTable .sortable').forEach((th) => {
-    th.onclick = () => {
-      const k = th.dataset.sortKey;
-      SA_TENANT_SORT = { key: k, dir: SA_TENANT_SORT.key === k && SA_TENANT_SORT.dir === 'desc' ? 'asc' : 'desc' };
-      SA_TENANT_PAGE = 1;
-      renderTenantTable();
-    };
-  });
-  bindPagination('tenant', renderTenantTable, () => SA_TENANT_PAGE, (v) => { SA_TENANT_PAGE = v; }, () => SA_TENANT_PER_PAGE, (v) => { SA_TENANT_PER_PAGE = v; });
-}
-
-async function manageTenantStamps(tenantId) {
-  SA_STAMP_TENANT_ID = tenantId;
-  SA_STAMP_DATA = await api(`/api/superadmin/tenants/${tenantId}/stamps`);
-  renderStampControl();
-  $('#saStampModal')?.classList.add('show');
-}
-
-const SA_STAMP_MOVEMENT_LABELS = {
-  courtesy_grant: 'Cortesía inicial', trial_grant: 'Bono inicial', courtesy_policy_adjustment: 'Ajuste de cortesía', credit: 'Recarga', adjustment: 'Ajuste', consumed: 'CFDI timbrado',
-  reserved: 'Reserva', released: 'Reserva liberada', invoicing_enabled: 'Activación', invoicing_disabled: 'Desactivación', environment_changed: 'Cambio de ambiente',
-};
-
-function renderStampControl() {
-  const data = SA_STAMP_DATA || {};
-  const tenant = data.tenant || {};
-  const wallet = data.wallet || {};
-  const active = Boolean(tenant.enabled);
-  const pendingTrial = !tenant.trialGrantedAt;
-  const environmentSelect = $('#saStampEnvironment');
-  if (environmentSelect) {
-    environmentSelect.value = tenant.environment || 'sandbox';
-    environmentSelect.disabled = Boolean(tenant.isDemo);
-  }
-  const productionReady = Boolean(data.provider?.productionConfigured);
-  $('#saStampEnvironmentHelp').textContent = tenant.environment === 'production'
-    ? 'Producción activa: los timbres generan CFDI fiscales reales. Cada emisor necesita su CSD cargado en Producción.'
-    : `Sandbox activo: los CFDI son de prueba.${productionReady ? ' Producción ya está configurada en el servidor.' : ' Faltan credenciales de Producción en el servidor.'}`;
-  $('#saStampBusiness').textContent = tenant.businessName || 'Control de timbres';
-  $('#saStampSlug').textContent = tenant.slug ? `${tenant.slug} · ${active ? 'Licencia activa' : 'Licencia inactiva'}` : '';
-  $('#saStampAvailable').textContent = String(wallet.available ?? wallet.balance ?? 0);
-  $('#saStampBalance').textContent = String(wallet.balance || 0);
-  $('#saStampReserved').textContent = String(wallet.reserved || 0);
-  $('#saStampConsumed').textContent = String(data.totals?.consumed || 0);
-  const license = document.querySelector('.sa-stamp-license');
-  license?.classList.toggle('is-active', active);
-  $('#saStampLicenseTitle').textContent = active ? 'Facturación activa' : 'Facturación desactivada';
-  $('#saStampLicenseHelp').textContent = active
-    ? (pendingTrial ? 'Confirma la activación para preparar los 2 timbres de cortesía.' : `Cortesía inicial aplicada${tenant.activatedBy ? ` por ${tenant.activatedBy}` : ''}.`)
-    : (pendingTrial ? 'Al activar se otorgarán 2 timbres de cortesía una sola vez.' : 'El saldo se conserva y volverá a estar disponible al reactivar.');
-  const activationBtn = $('#saStampActivationBtn');
-  if (activationBtn) {
-    activationBtn.dataset.nextEnabled = (!active || pendingTrial) ? '1' : '0';
-    activationBtn.className = `btn ${active && !pendingTrial ? 'btn-danger' : 'btn-primary'}`;
-    activationBtn.innerHTML = active && !pendingTrial
-      ? '<i class="ph-bold ph-pause-circle"></i> Desactivar facturación'
-      : `<i class="ph-bold ph-power"></i> ${active ? 'Aplicar cortesía de 2' : 'Activar facturación'}`;
-  }
-  const submit = $('#saStampSubmit');
-  if (submit) submit.disabled = !active || pendingTrial;
-  $('#saStampEmitters').innerHTML = (data.emitters || []).length
-    ? data.emitters.map((emitter) => `<div class="sa-stamp-emitter"><div><b>${esc(emitter.label || 'Emisor')}</b><span>${esc(emitter.legalName || '')}</span></div><em>${emitter.enabled ? 'ACTIVO' : 'INACTIVO'}</em><span>RFC ${esc(emitter.rfc)} · Serie ${esc(emitter.series || '—')}</span><span>${emitter.csdUploaded || emitter.sandboxShared ? 'CSD listo' : 'CSD pendiente'} · ${esc(emitter.environment)}</span></div>`).join('')
-    : '<div class="empty-mini">Este tenant todavía no ha registrado emisores fiscales.</div>';
-  $('#saStampHistory').innerHTML = (data.movements || []).length
-    ? data.movements.map((movement) => {
-      const quantity = Number(movement.quantity || 0);
-      return `<div class="sa-stamp-history-row"><small>${esc(fmtDateTime(movement.created_at))}</small><div><b>${esc(SA_STAMP_MOVEMENT_LABELS[movement.movement_type] || movement.movement_type)}</b><small>${esc(movement.detail || '')}${movement.actor ? ` · ${esc(movement.actor)}` : ''}</small></div><strong class="${quantity > 0 ? 'positive' : quantity < 0 ? 'negative' : ''}">${quantity > 0 ? '+' : ''}${quantity}</strong><small>Saldo ${Number(movement.balance_after ?? wallet.balance ?? 0)}</small></div>`;
-    }).join('')
-    : '<div class="empty-mini">Aún no hay movimientos de timbres.</div>';
-}
-
-function closeStampModal() {
-  $('#saStampModal')?.classList.remove('show');
-  SA_STAMP_TENANT_ID = null;
-  SA_STAMP_DATA = null;
-}
-
-async function toggleTenantInvoicing() {
-  if (!SA_STAMP_TENANT_ID) return;
-  const enabled = $('#saStampActivationBtn')?.dataset.nextEnabled === '1';
-  const result = await api(`/api/superadmin/tenants/${SA_STAMP_TENANT_ID}/invoicing`, {
-    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled }),
-  });
-  toast(result.trialGrant ? 'Facturación activada: se otorgaron 2 timbres de cortesía' : (enabled ? 'Facturación activada' : 'Facturación desactivada'));
-  SA_STAMP_DATA = await api(`/api/superadmin/tenants/${SA_STAMP_TENANT_ID}/stamps`);
-  renderStampControl();
-  await Promise.all([loadTenants(), loadClients(), loadNonRenewals()]);
-}
-
-async function submitStampRecharge(event) {
-  event.preventDefault();
-  if (!SA_STAMP_TENANT_ID) return;
-  const quantity = Number($('#saStampQuantity')?.value || 0);
-  const note = String($('#saStampNote')?.value || '').trim();
-  if (!Number.isInteger(quantity) || quantity <= 0) throw new Error('Captura una cantidad entera mayor a cero');
-  await api(`/api/superadmin/tenants/${SA_STAMP_TENANT_ID}/stamps`, {
-    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ quantity, note }),
-  });
-  toast(`Se agregaron ${quantity} timbres al tenant`);
-  SA_STAMP_DATA = await api(`/api/superadmin/tenants/${SA_STAMP_TENANT_ID}/stamps`);
-  renderStampControl();
-}
-
-async function saveTenantInvoicingEnvironment() {
-  if (!SA_STAMP_TENANT_ID) return;
-  const environment = String($('#saStampEnvironment')?.value || 'sandbox');
-  await api(`/api/superadmin/tenants/${SA_STAMP_TENANT_ID}/invoicing-environment`, {
-    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ environment }),
-  });
-  toast(environment === 'production' ? 'Producción activada; carga el CSD real de cada emisor' : 'Tenant cambiado a Sandbox');
-  SA_STAMP_DATA = await api(`/api/superadmin/tenants/${SA_STAMP_TENANT_ID}/stamps`);
-  renderStampControl();
-}
-
-function getFilteredDemoLeads() {
-  const search = String($('#saDemoLeadSearch')?.value || '').trim().toLowerCase();
-  const moduleFilter = String($('#saDemoModuleFilter')?.value || 'all');
-  const stage = String($('#saDemoStageFilter')?.value || 'all');
-  const country = String($('#saDemoCountryFilter')?.value || 'all');
-  return SA_DEMO_LEADS.filter((lead) => {
-    if (!matchesModuleFilter(lead, moduleFilter)) return false;
-    if (stage !== 'all' && String(lead.sales_stage || 'new') !== stage) return false;
-    if (country === 'unknown' && lead.phone_country) return false;
-    if (!['all', 'unknown'].includes(country) && String(lead.phone_country || '').toUpperCase() !== country) return false;
-    if (!search) return true;
-    return [lead.id, lead.contact_name, lead.phone, lead.phone_digits, lead.phone_country,
-      lead.phone_country_name, lead.phone_calling_code, lead.business_giro, lead.source_label,
-      lead.source_page, lead.last_demo_tenant_slug, lead.demo_count, lead.sales_stage,
-      lead.module_count, lead.module_views]
-      .join(' ').toLowerCase().includes(search);
-  }).sort((a, b) => compareBySortKey(a, b, SA_DEMO_SORT.key, SA_DEMO_SORT.dir));
-}
-
-function renderDemoLeadSummary(summary) {
-  const el = $('#saDemoLeadSummary');
-  if (!el) return;
-  const s = summary || { total: 0, landing: 0, login: 0, today: 0, week: 0 };
-  const cards = [
-    { label: 'Total leads', value: Number(s.total || 0), tone: 'tone-total', icon: 'ph-chart-pie-slice' },
-    { label: 'Landing', value: Number(s.landing || 0), tone: 'tone-active', icon: 'ph-globe' },
-    { label: 'Login', value: Number(s.login || 0), tone: 'tone-current', icon: 'ph-door-open' },
-    { label: 'Hoy', value: Number(s.today || 0), tone: 'tone-soon', icon: 'ph-bell-ringing' },
-    { label: 'Últimos 7 días', value: Number(s.week || 0), tone: 'tone-due', icon: 'ph-calendar-check' },
-  ];
-
-  el.innerHTML = cards
-    .map((card) => `
-      <div class="pos-mini-stat sa-summary-card demo-summary-card ${card.tone}">
-        <span><i class="ph-bold ${card.icon}"></i> ${esc(card.label)}</span>
-        <b>${card.value}</b>
-      </div>
-    `)
-    .join('');
-}
-
-function renderDemoLeadsTable() {
-  const table = $('#saDemoLeadsTable');
-  const filtered = getFilteredDemoLeads();
-
-  if (!table) return;
-  if (!filtered.length) {
-    table.innerHTML = '<div class="empty"><i class="ph ph-rocket-launch"></i><b>Sin leads demo</b><p>No hay resultados con ese filtro.</p></div>';
-    renderSalesBulkBars();
-    return;
-  }
-
-  const pag = paginateArray(filtered, SA_DEMO_PAGE, SA_DEMO_PER_PAGE);
-  SA_DEMO_PAGE = pag.page;
-  const pageItems = pag.items;
-
-  const allChecked = pageItems.length > 0 && pageItems.every((item) => SA_SELECTED.has(salesSubjectKey('demo_lead', item.id)));
-  table.innerHTML = `<div class="table-wrap"><table><thead><tr>
-    <th class="sa-select-col"><input type="checkbox" data-sa-select-all="demo_lead" ${allChecked ? 'checked' : ''} aria-label="Seleccionar leads visibles" /></th>${sortableHeader('Nombre', 'contact_name', SA_DEMO_SORT)}${sortableHeader('Etapa', 'sales_stage', SA_DEMO_SORT)}<th>País</th><th>Lada / teléfono</th><th>Giro</th><th>Origen</th>${sortableHeader('Veces', 'demo_count', SA_DEMO_SORT)}${sortableHeader('Primera vez', 'first_seen_at', SA_DEMO_SORT)}${sortableHeader('Última vez', 'last_seen_at', SA_DEMO_SORT)}${sortableHeader('Módulos', 'module_count', SA_DEMO_SORT)}<th>Acciones</th>
-  </tr></thead><tbody>${pageItems
-    .map((lead) => {
-      const digits = String(lead.phone_digits || '').replace(/\D/g, '');
-      const waUrl = lead.phone_valid && digits ? `https://wa.me/${digits}` : '';
-      const key = salesSubjectKey('demo_lead', lead.id);
-      const firstSeen = lead.first_seen_at || lead.created_at;
-      const lastSeen = lead.module_last_seen || lead.last_seen_at || firstSeen;
-      return `<tr class="${SA_SELECTED.has(key) ? 'sa-row-selected' : ''}">
-        <td class="sa-select-col"><input type="checkbox" data-sa-sales-select="${key}" ${SA_SELECTED.has(key) ? 'checked' : ''} aria-label="Seleccionar ${esc(lead.contact_name)}" /></td>
-        <td><b>${esc(lead.contact_name)}</b><div class="meta">ID #${lead.id}</div></td>
-        <td>${salesStageChip(lead.sales_stage)}${lead.next_follow_up_at ? `<div class="meta">Próximo: ${fmtDateTime(lead.next_follow_up_at)}</div>` : ''}</td>
-        <td>${countryFlag(lead.phone_country)} ${esc(lead.phone_country_name || lead.phone_country || '—')}</td>
-        <td><b>${lead.phone_calling_code ? `+${esc(lead.phone_calling_code)}` : '—'}</b><div class="meta">${digits ? esc(lead.phone) : '—'}${lead.phone && !lead.phone_valid ? ' · Revisar número histórico' : ''}</div></td>
-        <td>${esc(lead.business_giro)}</td>
-        <td><span class="tag">${esc(lead.source_label || 'Landing')}</span></td>
-        <td><b>${Number(lead.demo_count || 0)}</b></td>
-        <td>${fmtDate(firstSeen)}</td>
-        <td>${lastSeen ? fmtDate(lastSeen) : '<span class="meta">—</span>'}</td>
-        <td>${moduleUsageButton(lead, 'lead')}</td>
-        <td>
-          <div class="sa-actions-grid-2">
-            ${waUrl ? `<a class="btn btn-ghost" href="${waUrl}" target="_blank" rel="noopener noreferrer"><i class="ph-bold ph-whatsapp-logo"></i> WhatsApp</a>` : '<button type="button" class="btn btn-ghost" disabled style="opacity:.3"><i class="ph-bold ph-whatsapp-logo"></i> WhatsApp</button>'}
-            ${lead.phone_valid && lead.phone_e164 ? `<button type="button" class="btn btn-ghost" data-sa-copy-phone="${esc(lead.phone_e164)}"><i class="ph-bold ph-copy"></i> Copiar</button>` : '<button type="button" class="btn btn-ghost" disabled style="opacity:.3"><i class="ph-bold ph-copy"></i> Copiar</button>'}
-            <button type="button" class="btn btn-sa-manage" data-sa-manage="demo_lead:${lead.id}"><i class="ph-bold ph-note-pencil"></i> Gestionar</button>
-            <button type="button" class="btn btn-danger" data-sa-delete-lead="${lead.id}"><i class="ph-bold ph-trash"></i> Eliminar</button>
-          </div>
-        </td>
-      </tr>`;
-    })
-    .join('')}</tbody></table></div>${renderPaginationBar('demo_lead', pag)}`;
-
-  bindModuleUsageButtons();
-  bindPhoneActions();
-  bindSalesSelection('demo_lead', filtered);
-  document.querySelectorAll('[data-sa-delete-lead]').forEach((btn) => {
-    btn.addEventListener('click', () => openDeleteModal('lead', Number(btn.dataset.saDeleteLead)));
-  });
-  // Sort bindings
-  document.querySelectorAll('#saDemoLeadsTable .sortable').forEach((th) => {
-    th.onclick = () => {
-      const k = th.dataset.sortKey;
-      SA_DEMO_SORT = { key: k, dir: SA_DEMO_SORT.key === k && SA_DEMO_SORT.dir === 'desc' ? 'asc' : 'desc' };
-      SA_DEMO_PAGE = 1;
-      renderDemoLeadsTable();
-    };
-  });
-  bindPagination('demo_lead', renderDemoLeadsTable, () => SA_DEMO_PAGE, (v) => { SA_DEMO_PAGE = v; }, () => SA_DEMO_PER_PAGE, (v) => { SA_DEMO_PER_PAGE = v; });
-}
-
-function salesStageMeta(value) {
-  const found = SA_SALES_STAGES.find(([key]) => key === String(value || 'new')) || SA_SALES_STAGES[0];
-  return { value: found[0], label: found[1], tone: found[2] };
-}
-
-function salesStageChip(value) {
-  const stage = salesStageMeta(value);
-  return `<span class="sa-stage-chip stage-${stage.tone}">${esc(stage.label)}</span>`;
-}
-
-function salesStageOptions({ includeAll = false, includeActive = false, includeKeep = false } = {}) {
-  const options = [];
-  if (includeKeep) options.push('<option value="">Mantener etapa actual</option>');
-  if (includeAll) options.push('<option value="all">Todas las etapas</option>');
-  if (includeActive) options.push('<option value="active">Candidatos activos</option>');
-  options.push(...SA_SALES_STAGES.map(([value, label]) => `<option value="${value}">${esc(label)}</option>`));
-  return options.join('');
-}
-
-function salesSubjectKey(type, id) {
-  return `${type}:${Number(id)}`;
-}
-
-function findSalesSubject(type, id) {
-  if (type === 'tenant') return SA_TENANTS.find((item) => Number(item.id) === Number(id))
-    || SA_FOLLOW_UP.find((item) => item.entity_type === type && Number(item.id) === Number(id));
-  return SA_DEMO_LEADS.find((item) => Number(item.id) === Number(id))
-    || SA_FOLLOW_UP.find((item) => item.entity_type === type && Number(item.id) === Number(id));
-}
-
-function selectionSubjects(type = null) {
-  return [...SA_SELECTED].map((key) => {
-    const [subjectType, rawId] = key.split(':');
-    const entity = findSalesSubject(subjectType, Number(rawId));
-    return entity ? { type: subjectType, id: Number(rawId), entity } : null;
-  }).filter((item) => item && (!type || item.type === type));
-}
-
-function initSalesStageControls() {
-  const tenantFilter = $('#saTenantStageFilter');
-  const demoFilter = $('#saDemoStageFilter');
-  const followFilter = $('#saFollowUpStageFilter');
-  const modalStage = $('#saFollowUpStage');
-  if (tenantFilter) tenantFilter.innerHTML = salesStageOptions({ includeAll: true });
-  if (demoFilter) demoFilter.innerHTML = salesStageOptions({ includeAll: true });
-  if (followFilter) {
-    followFilter.innerHTML = salesStageOptions({ includeAll: true, includeActive: true });
-    followFilter.value = 'active';
-  }
-  if (modalStage) modalStage.innerHTML = salesStageOptions();
-}
-
-function subjectDisplayName(subject) {
-  if (subject.type === 'tenant') return subject.entity.business_name || subject.entity.name || `Prospecto #${subject.id}`;
-  return subject.entity.contact_name || subject.entity.name || `Lead #${subject.id}`;
-}
-
-function renderSalesBulkBars() {
-  const configs = [['#saTenantBulkBar', 'tenant'], ['#saDemoBulkBar', 'demo_lead'], ['#saFollowUpBulkBar', null]];
-  configs.forEach(([selector, type]) => {
-    const bar = $(selector);
-    if (!bar) return;
-    const subjects = selectionSubjects(type);
-    bar.hidden = subjects.length === 0;
-    if (!subjects.length) { bar.innerHTML = ''; return; }
-    const deletable = subjects.every((item) => SA_DELETABLE_STAGES.has(String(item.entity.sales_stage || 'new')));
-    const scope = type || 'all';
-    bar.innerHTML = `<div><b>${subjects.length}</b> seleccionado${subjects.length === 1 ? '' : 's'}</div>
-      <div class="sa-bulk-actions">
-        <button type="button" class="btn btn-primary" data-sa-bulk-manage="${scope}"><i class="ph-bold ph-note-pencil"></i> Agregar gestión</button>
-        <button type="button" class="btn btn-danger" data-sa-bulk-delete="${scope}" ${deletable ? '' : 'disabled title="Marca primero todos como No interesado o Cierre no exitoso"'}><i class="ph-bold ph-trash"></i> Eliminar</button>
-        <button type="button" class="btn btn-ghost" data-sa-bulk-clear="${scope}">Quitar selección</button>
-      </div>`;
-  });
-  document.querySelectorAll('[data-sa-bulk-manage]').forEach((button) => {
-    button.onclick = () => {
-      const scope = button.dataset.saBulkManage;
-      openFollowUpModal(selectionSubjects(scope === 'all' ? null : scope));
-    };
-  });
-  document.querySelectorAll('[data-sa-bulk-delete]').forEach((button) => {
-    button.onclick = () => {
-      const scope = button.dataset.saBulkDelete;
-      openBulkDelete(selectionSubjects(scope === 'all' ? null : scope));
-    };
-  });
-  document.querySelectorAll('[data-sa-bulk-clear]').forEach((button) => {
-    button.onclick = () => {
-      const scope = button.dataset.saBulkClear;
-      selectionSubjects(scope === 'all' ? null : scope).forEach((item) => SA_SELECTED.delete(salesSubjectKey(item.type, item.id)));
-      renderTenantTable(); renderDemoLeadsTable(); renderFollowUpTable();
-    };
-  });
-}
-
-function bindSalesSelection(type, visibleItems) {
-  document.querySelectorAll('[data-sa-sales-select]').forEach((checkbox) => {
-    checkbox.onchange = () => {
-      if (checkbox.checked) SA_SELECTED.add(checkbox.dataset.saSalesSelect);
-      else SA_SELECTED.delete(checkbox.dataset.saSalesSelect);
-      checkbox.closest('tr')?.classList.toggle('sa-row-selected', checkbox.checked);
-      renderSalesBulkBars();
-    };
-  });
-  document.querySelectorAll(`[data-sa-select-all="${type || 'all'}"]`).forEach((checkbox) => {
-    checkbox.onchange = () => {
-      visibleItems.forEach((item) => {
-        const itemType = type || item.entity_type;
-        const key = salesSubjectKey(itemType, item.id);
-        if (checkbox.checked) SA_SELECTED.add(key); else SA_SELECTED.delete(key);
-      });
-      if (type === 'tenant') renderTenantTable();
-      else if (type === 'demo_lead') renderDemoLeadsTable();
-      else renderFollowUpTable();
-    };
-  });
-  document.querySelectorAll('[data-sa-manage]').forEach((button) => {
-    button.onclick = () => {
-      const [subjectType, rawId] = String(button.dataset.saManage || '').split(':');
-      const entity = findSalesSubject(subjectType, Number(rawId));
-      if (entity) openFollowUpModal([{ type: subjectType, id: Number(rawId), entity }]);
-    };
-  });
-  renderSalesBulkBars();
-}
-
-function toDateTimeLocal(value) {
-  if (!value) return '';
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return '';
-  return new Date(date.getTime() - date.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
-}
-
-function closeFollowUpModal() {
-  $('#saFollowUpModal')?.classList.remove('show');
-  SA_FOLLOWUP_TARGETS = [];
-}
-
-async function openFollowUpModal(subjects) {
-  if (!Array.isArray(subjects) || !subjects.length) return;
-  SA_FOLLOWUP_TARGETS = subjects;
-  const isBulk = subjects.length > 1;
-  const stage = $('#saFollowUpStage');
-  stage.innerHTML = salesStageOptions({ includeKeep: isBulk });
-  stage.required = !isBulk;
-  stage.value = isBulk ? '' : String(subjects[0].entity.sales_stage || 'new');
-  $('#saFollowUpActivityType').value = 'contact';
-  $('#saFollowUpDate').value = isBulk ? '' : toDateTimeLocal(subjects[0].entity.next_follow_up_at);
-  $('#saFollowUpNote').value = '';
-  $('#saFollowUpSubject').textContent = isBulk ? `${subjects.length} contactos seleccionados. La gestión se agregará a todos.` : subjectDisplayName(subjects[0]);
-  $('#saFollowUpHistoryWrap').hidden = isBulk;
-  $('#saFollowUpHistory').innerHTML = isBulk ? '' : '<div class="hint">Cargando historial...</div>';
-  $('#saFollowUpModal')?.classList.add('show');
-  if (!isBulk) {
-    try {
-      const subject = subjects[0];
-      const payload = await api(`/api/superadmin/follow-up/${subject.type}/${subject.id}/activities`);
-      renderFollowUpHistory(payload.activities || []);
-    } catch (error) {
-      $('#saFollowUpHistory').innerHTML = `<div class="hint">${esc(error.message)}</div>`;
-    }
-  }
-}
-
-function renderFollowUpHistory(activities) {
-  const el = $('#saFollowUpHistory');
-  if (!el) return;
-  if (!activities.length) {
-    el.innerHTML = '<div class="empty sa-history-empty"><i class="ph ph-note"></i><b>Sin gestiones todavía</b></div>';
-    return;
-  }
-  const typeLabels = { contact: 'Contactación', follow_up: 'Seguimiento', note: 'Nota', close_won: 'Cierre exitoso', close_lost: 'Cierre no exitoso', stage_change: 'Cambio de etapa' };
-  el.innerHTML = `<div class="sa-activity-list">${activities.map((item) => `<article class="sa-activity-item">
-    <div><b>${esc(typeLabels[item.activity_type] || item.activity_type)}</b><time>${fmtDateTime(item.created_at)}</time></div>
-    ${item.stage_from !== item.stage_to ? `<div>${salesStageChip(item.stage_from)} <i class="ph-bold ph-arrow-right"></i> ${salesStageChip(item.stage_to)}</div>` : ''}
-    ${item.note ? `<p>${esc(item.note)}</p>` : ''}
-    ${item.follow_up_at ? `<small><i class="ph-bold ph-calendar-check"></i> Próximo: ${fmtDateTime(item.follow_up_at)}</small>` : ''}
-    <small>Por ${esc(item.created_by || 'superadmin')}</small>
-  </article>`).join('')}</div>`;
-}
-
-async function submitFollowUp(event) {
-  event.preventDefault();
-  if (!SA_FOLLOWUP_TARGETS.length) return;
-  const targets = [...SA_FOLLOWUP_TARGETS];
-  const isBulk = targets.length > 1;
-  const followUpDate = $('#saFollowUpDate').value;
-  const payload = { activityType: $('#saFollowUpActivityType').value, note: $('#saFollowUpNote').value };
-  if (followUpDate) payload.nextFollowUpAt = new Date(followUpDate).toISOString();
-  else if (!isBulk) payload.nextFollowUpAt = null;
-  const selectedStage = $('#saFollowUpStage').value;
-  if (selectedStage) payload.stage = selectedStage;
-  if (isBulk) {
-    payload.subjects = targets.map(({ type, id }) => ({ type, id }));
-    await api('/api/superadmin/follow-up/bulk/update', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
-  } else {
-    const subject = targets[0];
-    await api(`/api/superadmin/follow-up/item/${subject.type}/${subject.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
-  }
-  closeFollowUpModal();
-  toast(isBulk ? `Gestión agregada a ${targets.length} contactos` : 'Gestión comercial guardada');
-  SA_SELECTED.clear();
-  await Promise.all([loadTenants(), loadDemoLeads(), loadFollowUp()]);
-}
-
-function isActiveSalesStage(stage) {
-  return ['contacted', 'interested', 'potential', 'follow_up'].includes(String(stage || 'new'));
-}
-
-function getFilteredFollowUp() {
-  const search = String($('#saFollowUpSearch')?.value || '').trim().toLowerCase();
-  const stage = String($('#saFollowUpStageFilter')?.value || 'active');
-  const type = String($('#saFollowUpTypeFilter')?.value || 'all');
-  return SA_FOLLOW_UP.filter((item) => {
-    if (type !== 'all' && item.entity_type !== type) return false;
-    if (stage === 'active' && !isActiveSalesStage(item.sales_stage)) return false;
-    if (stage !== 'all' && stage !== 'active' && String(item.sales_stage || 'new') !== stage) return false;
-    if (!search) return true;
-    return [item.name, item.contact_name, item.phone, item.phone_country_name, item.detail, item.last_note].join(' ').toLowerCase().includes(search);
-  });
-}
-
-function renderFollowUpSummary() {
-  const el = $('#saFollowUpSummary');
-  if (!el) return;
-  el.innerHTML = ['contacted', 'interested', 'potential', 'follow_up'].map((stage) => {
-    const meta = salesStageMeta(stage);
-    const count = SA_FOLLOW_UP.filter((item) => item.sales_stage === stage).length;
-    return `<button type="button" class="card sa-followup-stage-card stage-${meta.tone}" data-sa-followup-stage="${stage}"><span>${esc(meta.label)}</span><b>${count}</b></button>`;
-  }).join('');
-  document.querySelectorAll('[data-sa-followup-stage]').forEach((button) => {
-    button.onclick = () => { $('#saFollowUpStageFilter').value = button.dataset.saFollowupStage; renderFollowUpTable(); };
-  });
-}
-
-function renderFollowUpTable() {
-  const table = $('#saFollowUpTable');
-  if (!table) return;
-  const filtered = getFilteredFollowUp();
-  if (!filtered.length) {
-    table.innerHTML = '<div class="empty"><i class="ph ph-path"></i><b>Sin candidatos en esta etapa</b><p>Gestiona prospectos o leads demo para incorporarlos al seguimiento.</p></div>';
-    renderSalesBulkBars(); return;
-  }
-  const allChecked = filtered.every((item) => SA_SELECTED.has(salesSubjectKey(item.entity_type, item.id)));
-  table.innerHTML = `<div class="table-wrap"><table><thead><tr><th class="sa-select-col"><input type="checkbox" data-sa-select-all="all" ${allChecked ? 'checked' : ''} aria-label="Seleccionar candidatos visibles" /></th><th>Candidato</th><th>Origen</th><th>Etapa</th><th>Próximo seguimiento</th><th>Última gestión</th><th>Acciones</th></tr></thead><tbody>${filtered.map((item) => {
-    const key = salesSubjectKey(item.entity_type, item.id);
-    const overdue = item.next_follow_up_at && new Date(item.next_follow_up_at).getTime() < Date.now();
-    const waUrl = item.phone_valid && item.phone_digits ? `https://wa.me/${item.phone_digits}` : '';
-    return `<tr class="${SA_SELECTED.has(key) ? 'sa-row-selected' : ''}"><td class="sa-select-col"><input type="checkbox" data-sa-sales-select="${key}" ${SA_SELECTED.has(key) ? 'checked' : ''} /></td><td><b>${esc(item.name || item.contact_name)}</b><div class="meta">${esc(item.contact_name || '')} · ${esc(item.phone || '—')}</div></td><td><span class="tag">${item.entity_type === 'tenant' ? 'Prospecto' : 'Lead demo'}</span></td><td>${salesStageChip(item.sales_stage)}</td><td><span class="${overdue ? 'sa-followup-overdue' : ''}">${item.next_follow_up_at ? fmtDateTime(item.next_follow_up_at) : 'Sin programar'}</span></td><td>${item.last_note ? `<span class="sa-last-note">${esc(item.last_note)}</span>` : '<span class="meta">Sin notas</span>'}<div class="meta">${Number(item.activity_count || 0)} gestiones · ${fmtDateTime(item.last_activity_at)}</div></td><td><div class="sa-row-actions"><button type="button" class="btn btn-primary" data-sa-manage="${key}"><i class="ph-bold ph-note-pencil"></i> Gestionar</button>${waUrl ? `<a class="btn btn-ghost" href="${waUrl}" target="_blank" rel="noopener noreferrer"><i class="ph-bold ph-whatsapp-logo"></i> WhatsApp</a>` : ''}</div></td></tr>`;
-  }).join('')}</tbody></table></div>`;
-  bindSalesSelection(null, filtered);
-}
-
-async function loadFollowUp() {
-  const payload = await api('/api/superadmin/follow-up');
-  SA_FOLLOW_UP = Array.isArray(payload?.items) ? payload.items : [];
-  renderFollowUpSummary(); renderFollowUpTable();
-}
-
-function matchesClientFilter(client, filter) {
-  if (filter === 'all') return true;
-  if (filter === 'active') return client.account_status === 'active' && client.billing_status === 'active';
-  if (filter === 'due') return client.billing_status === 'due';
-  if (filter === 'suspended') return client.billing_status === 'suspended';
-  if (filter === 'mora') return Number(client.mora_days || 0) > 0;
-  return true;
-}
-
-function getFilteredClients() {
-  const search = String($('#saClientSearch')?.value || '').trim().toLowerCase();
-  return SA_CLIENTS.filter((client) => {
-    if (!matchesClientFilter(client, SA_CLIENT_FILTER)) return false;
-    if (!search) return true;
-    return [client.slug, client.business_name, client.owner_name, client.phone, client.phone_country_name, client.phone_calling_code]
-      .join(' ').toLowerCase().includes(search);
-  });
-}
-
-function setClientFilter(filter, announce = false) {
-  SA_CLIENT_FILTER = filter || 'all';
-  document.querySelectorAll('#saClientFilters button').forEach((button) => {
-    const active = button.dataset.status === SA_CLIENT_FILTER;
-    button.classList.toggle('active', active);
-    button.classList.toggle('on', active);
-  });
-  document.querySelectorAll('[data-sa-client-summary-filter]').forEach((card) => {
-    card.classList.toggle('active', card.dataset.saClientSummaryFilter === SA_CLIENT_FILTER);
-  });
-  renderClientsTable();
-  if (announce) {
-    const count = getFilteredClients().length;
-    toast(`Mostrando ${count} cliente${count === 1 ? '' : 's'}`);
-  }
-}
-
-function renderClientSummary(summary) {
-  SA_CLIENT_SUMMARY = summary || SA_CLIENT_SUMMARY;
-  const s = SA_CLIENT_SUMMARY || {};
-  const cards = [
-    { label: 'Número de clientes', value: Number(s.totalClients || 0), filter: 'all', tone: 'tone-total', icon: 'ph-users-three' },
-    { label: 'Clientes activos', value: Number(s.activeClients || 0), filter: 'active', tone: 'tone-active', icon: 'ph-check-circle' },
-    { label: 'Por pagar', value: Number(s.billingDue || 0), filter: 'due', tone: 'tone-due', icon: 'ph-clock-countdown' },
-    { label: 'En mora', value: Number(s.inMora || 0), filter: 'mora', tone: 'tone-mora', icon: 'ph-warning-circle' },
-    { label: 'Ingresos acumulados', value: fmtMoney(s.incomeTotal), tone: 'tone-current', icon: 'ph-currency-circle-dollar' },
-    { label: 'Número de licencias', value: Number(s.licenseCount || 0), tone: 'tone-soon', icon: 'ph-key' },
-  ];
-  const el = $('#saClientSummary');
-  if (!el) return;
-  el.innerHTML = cards.map((card) => `
-    <button type="button" class="pos-mini-stat sa-client-summary-card ${card.tone}" ${card.filter ? `data-sa-client-summary-filter="${card.filter}"` : ''}>
-      <span><i class="ph-bold ${card.icon}"></i> ${esc(card.label)}</span><b>${esc(card.value)}</b>
-    </button>`).join('');
-  document.querySelectorAll('[data-sa-client-summary-filter]').forEach((card) => {
-    card.addEventListener('click', () => setClientFilter(card.dataset.saClientSummaryFilter, true));
-  });
-  setClientFilter(SA_CLIENT_FILTER);
-}
-
-function renderClientsTable() {
-  const table = $('#saClientsTable');
-  if (!table) return;
-  const filtered = getFilteredClients();
-  if (!filtered.length) {
-    table.innerHTML = '<div class="empty"><i class="ph ph-handshake"></i><b>Sin clientes</b><p>Los prospectos aparecerán aquí automáticamente al registrar su primer pago.</p></div>';
-    return;
-  }
-
-  table.innerHTML = `<div class="table-wrap"><table><thead><tr>
-    <th>Cliente</th><th>Contacto</th><th>Cliente desde</th><th>Estado</th><th>Plan / cupos</th><th>Timbres</th><th>Último pago</th><th>Vencimiento</th><th>Ingresos</th><th>Acciones</th>
-  </tr></thead><tbody>${filtered.map((client) => {
-    const waUrl = client.phone_valid && client.phone_digits ? `https://wa.me/${client.phone_digits}` : '';
-    return `<tr>
-      <td><b>${esc(client.business_name)}</b><div class="meta">/${esc(client.slug)}</div></td>
-      <td>${esc(client.owner_name)}<div class="meta">${countryFlag(client.phone_country)} ${esc(client.phone || '—')}</div></td>
-      <td>${fmtDate(client.customer_since)}</td>
-      <td>${statusChip('billing', client.billing_status)}<div class="meta">${Number(client.mora_days || 0) > 0 ? `${Number(client.mora_days)} días de mora` : 'Cuenta ' + (client.account_status === 'active' ? 'activa' : 'inactiva')}</div></td>
-      <td><b>${esc(client.plan_name || 'starter')}</b><div class="meta">${Number(client.license_count || 1)} licencia${Number(client.license_count || 1) === 1 ? '' : 's'} · Hasta ${Number(client.branch_limit || 2)} sucursales</div></td>
-      <td>${Number(client.invoicing_enabled) ? `<b>${client.stamp_unlimited ? 'Ilimitados' : Number(client.stamp_available || 0)} disponibles</b><div class="meta">${Number(client.stamp_consumed || 0)} gastados</div>` : '<span class="meta">No activa</span>'}</td>
-      <td>${fmtMoney(client.last_payment_amount)}<div class="meta">${fmtDate(client.last_payment_at)} · ${esc(client.last_payment_method || '—')}</div></td>
-      <td>${fmtDate(client.billing_due_date)}</td>
-      <td><b>${fmtMoney(client.total_paid)}</b><div class="meta">${Number(client.payment_count || 0)} pago${Number(client.payment_count || 0) === 1 ? '' : 's'}</div></td>
-      <td><div class="sa-actions-grid">
-        <button type="button" class="btn btn-ghost" data-sa-access="${client.id}"><i class="ph-bold ph-sign-in"></i> Entrar</button>
-          <button type="button" class="btn btn-ghost" data-sa-password="${client.id}"><i class="ph-bold ph-key"></i> Clave</button>
-          <button type="button" class="btn btn-ghost" data-sa-users="${client.id}"><i class="ph-bold ph-users-three"></i> Usuarios</button>
-        <button type="button" class="btn btn-ghost" data-sa-payment="${client.id}"><i class="ph-bold ph-currency-circle-dollar"></i> Pago</button>
-        <button type="button" class="btn btn-ghost" data-sa-payments="${client.id}"><i class="ph-bold ph-receipt"></i> Historial</button>
-        <button type="button" class="btn btn-ghost" data-sa-licenses="${client.id}"><i class="ph-bold ph-key"></i> Licencias</button>
-        <button type="button" class="btn btn-ghost" data-sa-branches="${client.id}"><i class="ph-bold ph-storefront"></i> Sucursales</button>
-        ${(Number(client.invoicing_enabled) || client.phone_country === 'MX' || String(client.phone_calling_code || '').replace('+', '') === '52') ? `<button type="button" class="btn btn-ghost" data-sa-stamps="${client.id}"><i class="ph-bold ph-stamp"></i> ${Number(client.invoicing_enabled) ? 'Facturación activa' : 'Activar facturación'}</button>` : ''}
-        ${waUrl ? `<a class="btn btn-ghost" href="${waUrl}" target="_blank" rel="noopener noreferrer"><i class="ph-bold ph-whatsapp-logo" style="color:#22c55e"></i> WhatsApp</a>` : '<button type="button" class="btn btn-ghost" disabled style="opacity:.3"><i class="ph-bold ph-whatsapp-logo"></i> WhatsApp</button>'}
-        <button type="button" class="btn ${(client.account_status === 'active' && client.billing_status !== 'suspended') ? 'btn-danger' : 'btn-primary'}" data-sa-suspend="${client.id}">
-          <i class="ph-bold ${(client.account_status === 'active' && client.billing_status !== 'suspended') ? 'ph-pause-circle' : 'ph-play-circle'}"></i>
-          ${(client.account_status === 'active' && client.billing_status !== 'suspended') ? 'Suspender' : 'Activar'}
-        </button>
-        <button type="button" class="btn btn-sa-operation-reset" data-sa-operation-reset="${client.id}"><i class="ph-bold ph-arrow-counter-clockwise"></i> Reiniciar ventas</button>
-        <button type="button" class="btn btn-sa-non-renewal" data-sa-non-renewal="${client.id}"><i class="ph-bold ph-user-minus"></i> No renovó</button>
-        <span class="sa-client-protected"><i class="ph-bold ph-shield-check"></i> Cliente protegido</span>
-      </div></td>
-    </tr>`;
-  }).join('')}</tbody></table></div>`;
-
-  document.querySelectorAll('#saClientsTable [data-sa-access]').forEach((button) => button.onclick = () => accessTenant(Number(button.dataset.saAccess)).catch((error) => toast(error.message, true)));
-  document.querySelectorAll('#saClientsTable [data-sa-password]').forEach((button) => button.onclick = () => changeTenantPassword(Number(button.dataset.saPassword)).catch((error) => toast(error.message, true)));
-  document.querySelectorAll('#saClientsTable [data-sa-users]').forEach((button) => button.onclick = () => manageTenantUsers(Number(button.dataset.saUsers)).catch((error) => toast(error.message, true)));
-  document.querySelectorAll('#saClientsTable [data-sa-payment]').forEach((button) => button.onclick = () => addTenantPayment(Number(button.dataset.saPayment)).catch((error) => toast(error.message, true)));
-  document.querySelectorAll('#saClientsTable [data-sa-payments]').forEach((button) => button.onclick = () => openPaymentsModal(Number(button.dataset.saPayments)).catch((error) => toast(error.message, true)));
-  document.querySelectorAll('#saClientsTable [data-sa-licenses]').forEach((button) => button.onclick = () => changeClientLicenses(Number(button.dataset.saLicenses)).catch((error) => toast(error.message, true)));
-  document.querySelectorAll('#saClientsTable [data-sa-branches]').forEach((button) => button.onclick = () => changeBranchLimit(Number(button.dataset.saBranches)).catch((error) => toast(error.message, true)));
-  document.querySelectorAll('#saClientsTable [data-sa-stamps]').forEach((button) => button.onclick = () => manageTenantStamps(Number(button.dataset.saStamps)).catch((error) => toast(error.message, true)));
-  document.querySelectorAll('#saClientsTable [data-sa-suspend]').forEach((button) => button.onclick = () => toggleTenantSuspend(Number(button.dataset.saSuspend)).catch((error) => toast(error.message, true)));
-  document.querySelectorAll('#saClientsTable [data-sa-operation-reset]').forEach((button) => button.onclick = () => openOperationResetModal(Number(button.dataset.saOperationReset)).catch((error) => toast(error.message, true)));
-  document.querySelectorAll('#saClientsTable [data-sa-non-renewal]').forEach((button) => button.onclick = () => openNonRenewalModal(Number(button.dataset.saNonRenewal)));
-  bindModuleUsageButtons();
-}
-
-function renderNonRenewals() {
-  const summary = $('#saNonRenewalSummary');
-  const totalPaid = SA_NON_RENEWALS.reduce((sum, client) => sum + Number(client.total_paid || 0), 0);
-  const suspended = SA_NON_RENEWALS.filter((client) => client.account_status !== 'active' || client.billing_status === 'suspended').length;
-  summary.innerHTML = `
-    <div class="pos-mini-stat sa-client-summary-card tone-total"><span><i class="ph-bold ph-folder-open"></i> Expedientes</span><b>${SA_NON_RENEWALS.length}</b></div>
-    <div class="pos-mini-stat sa-client-summary-card tone-current"><span><i class="ph-bold ph-currency-circle-dollar"></i> Ingresos históricos</span><b>${fmtMoney(totalPaid)}</b></div>
-    <div class="pos-mini-stat sa-client-summary-card tone-mora"><span><i class="ph-bold ph-pause-circle"></i> Sin acceso</span><b>${suspended}</b></div>`;
-  const search = String($('#saNonRenewalSearch')?.value || '').trim().toLowerCase();
-  const clients = SA_NON_RENEWALS.filter((client) => !search || [client.business_name, client.slug, client.owner_name, client.phone, client.non_renewal_reason]
-    .join(' ').toLowerCase().includes(search));
-  const table = $('#saNonRenewalsTable');
-  if (!clients.length) {
-    table.innerHTML = '<div class="empty"><i class="ph ph-folder-open"></i><b>Sin expedientes</b><p>Los clientes marcados como no renovados aparecerán aquí.</p></div>';
-    return;
-  }
-  table.innerHTML = `<div class="table-wrap"><table><thead><tr><th>Cliente</th><th>Contacto</th><th>No renovó</th><th>Motivo</th><th>Plan</th><th>Último pago</th><th>Vencimiento</th><th>Ingresos</th><th>Estado</th><th>Acciones</th></tr></thead><tbody>${clients.map((client) => {
-    const waUrl = client.phone_valid && client.phone_digits ? `https://wa.me/${client.phone_digits}` : '';
-    return `<tr>
-      <td><b>${esc(client.business_name)}</b><div class="meta">/${esc(client.slug)}</div></td>
-      <td>${esc(client.owner_name)}<div class="meta">${countryFlag(client.phone_country)} ${esc(client.phone || '—')}</div></td>
-      <td>${fmtDate(client.non_renewal_at)}<div class="meta">${esc(client.non_renewal_by || '')}</div></td>
-      <td class="sa-non-renewal-reason">${esc(client.non_renewal_reason || 'Sin motivo registrado')}</td>
-      <td>${esc(client.plan_name || 'starter')}<div class="meta">${Number(client.license_count || 1)} licencia(s)</div></td>
-      <td>${fmtMoney(client.last_payment_amount)}<div class="meta">${fmtDate(client.last_payment_at)}</div></td>
-      <td>${fmtDate(client.billing_due_date)}</td>
-      <td><b>${fmtMoney(client.total_paid)}</b><div class="meta">${Number(client.payment_count || 0)} pago(s)</div></td>
-      <td>${statusChip('billing', client.billing_status)}<div class="meta">Cuenta ${client.account_status === 'active' ? 'activa' : 'inactiva'}</div></td>
-      <td><div class="sa-actions-grid sa-non-renewal-actions">
-        <button type="button" class="btn btn-ghost" data-sa-archive-payments="${client.id}"><i class="ph-bold ph-receipt"></i> Historial</button>
-        <button type="button" class="btn btn-ghost" data-sa-archive-payment="${client.id}"><i class="ph-bold ph-currency-circle-dollar"></i> Pago</button>
-        ${waUrl ? `<a class="btn btn-ghost" href="${waUrl}" target="_blank" rel="noopener noreferrer"><i class="ph-bold ph-whatsapp-logo"></i> WhatsApp</a>` : ''}
-        <button type="button" class="btn btn-primary" data-sa-archive-restore="${client.id}"><i class="ph-bold ph-arrow-u-up-left"></i> Volver a Clientes</button>
-      </div></td>
-    </tr>`;
-  }).join('')}</tbody></table></div>`;
-  table.querySelectorAll('[data-sa-archive-payments]').forEach((button) => button.onclick = () => openPaymentsModal(Number(button.dataset.saArchivePayments)).catch((error) => toast(error.message, true)));
-  table.querySelectorAll('[data-sa-archive-payment]').forEach((button) => button.onclick = () => addTenantPayment(Number(button.dataset.saArchivePayment)).catch((error) => toast(error.message, true)));
-  table.querySelectorAll('[data-sa-archive-restore]').forEach((button) => button.onclick = () => restoreNonRenewal(Number(button.dataset.saArchiveRestore)).catch((error) => toast(error.message, true)));
-}
-
-async function loadNonRenewals() {
-  const payload = await api('/api/superadmin/non-renewals');
-  SA_NON_RENEWALS = Array.isArray(payload?.clients) ? payload.clients : [];
-  renderNonRenewals();
-}
-
-function openNonRenewalModal(id) {
-  const client = SA_CLIENTS.find((item) => Number(item.id) === Number(id));
-  if (!client) return;
-  $('#saNonRenewalClientId').value = String(id);
-  $('#saNonRenewalBusiness').textContent = client.business_name;
-  $('#saNonRenewalReason').value = '';
-  $('#saNonRenewalSuspendNow').checked = false;
-  $('#saNonRenewalModal').classList.add('show');
-  $('#saNonRenewalReason').focus();
-}
-
-function closeNonRenewalModal() {
-  $('#saNonRenewalModal').classList.remove('show');
-}
-
-async function submitNonRenewal(event) {
-  event.preventDefault();
-  const id = Number($('#saNonRenewalClientId').value);
-  if (!id) return;
-  const button = $('#saNonRenewalConfirm');
-  button.disabled = true;
-  try {
-    await api(`/api/superadmin/clients/${id}/non-renewal`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ reason: $('#saNonRenewalReason').value, suspendNow: $('#saNonRenewalSuspendNow').checked }),
-    });
-    closeNonRenewalModal();
-    await Promise.all([loadClients(), loadNonRenewals()]);
-    toast('Cliente enviado a No renovación; expediente conservado');
-  } finally {
-    button.disabled = false;
-  }
-}
-
-async function restoreNonRenewal(id) {
-  await api(`/api/superadmin/non-renewals/${id}/restore`, { method: 'POST' });
-  await Promise.all([loadClients(), loadNonRenewals()]);
-  toast('Cliente devuelto a la cartera; puedes registrar un nuevo pago');
-}
-
-function closeModulesModal() {
-  $('#saModulesModal')?.classList.remove('show');
-}
-
-function openModulesModal(type, id) {
-  const entity = type === 'tenant'
-    ? findBusiness(id)
-    : SA_DEMO_LEADS.find((item) => Number(item.id) === Number(id));
-  if (!entity) return;
-
-  const modules = usageModules(entity);
-  const name = type === 'tenant' ? entity.business_name : entity.contact_name;
-  const totalViews = Number(entity.module_views || 0);
-
-  // Calcular tiempo total activo: suma del tiempo activo en cada módulo individual
-  let totalActiveMs = 0;
-  for (const m of modules) {
-    if (m.firstSeenAt && m.lastSeenAt) {
-      const d1 = new Date(m.firstSeenAt).getTime();
-      const d2 = new Date(m.lastSeenAt).getTime();
-      if (!Number.isNaN(d1) && !Number.isNaN(d2) && d2 > d1) {
-        totalActiveMs += (d2 - d1);
-      }
-    }
-  }
-
-  let tiempoTotal = '—';
-  if (totalActiveMs > 0) {
-    if (totalActiveMs < 60000) {
-      tiempoTotal = `${Math.round(totalActiveMs / 1000)} seg`;
-    } else if (totalActiveMs < 3600000) {
-      tiempoTotal = `${Math.round(totalActiveMs / 60000)} min`;
-    } else {
-      const hrs = Math.floor(totalActiveMs / 3600000);
-      const mins = Math.round((totalActiveMs % 3600000) / 60000);
-      tiempoTotal = mins > 0 ? `${hrs}h ${mins}min` : `${hrs}h`;
-    }
-  } else if (totalViews > 0) {
-    tiempoTotal = '< 1 min';
-  }
-
-  $('#saModulesSubject').textContent = `${type === 'tenant' ? 'Tenant' : 'Lead demo'}: ${name}`;
-  $('#saModulesSummary').innerHTML = `
-    <div><span>Módulos utilizados</span><b>${Number(entity.module_count || modules.length)}</b></div>
-    <div><span>Accesos totales</span><b>${totalViews}</b></div>
-    <div><span>Primera actividad</span><b class="module-first-seen">${fmtDateTime(entity.module_first_seen)}</b></div>
-    <div><span>Última actividad</span><b class="module-last-seen">${fmtDateTime(entity.module_last_seen)}</b></div>
-    <div><span>Tiempo total en sistema</span><b class="module-total-time">${tiempoTotal}</b></div>
-  `;
-
-  $('#saModulesDetail').innerHTML = modules.length
-    ? `<div class="table-wrap"><table class="module-detail-table"><thead><tr>
-        <th>Módulo</th><th>Veces que ingresó</th><th>Primera vez</th><th>Última vez</th>
-      </tr></thead><tbody>${modules.map((item) => `<tr>
-        <td><b>${esc(SA_MODULE_LABELS[item.key] || item.key)}</b></td>
-        <td><span class="tag ok">${Number(item.count || 0)} acceso${Number(item.count || 0) === 1 ? '' : 's'}</span></td>
-        <td>${fmtDateTime(item.firstSeenAt)}</td>
-        <td>${fmtDateTime(item.lastSeenAt)}</td>
-      </tr>`).join('')}</tbody></table></div>`
-    : '<div class="empty module-empty"><i class="ph ph-chart-bar"></i><b>Sin actividad registrada</b><p>Los accesos aparecerán aquí cuando ingrese a un módulo.</p></div>';
-
-  $('#saModulesModal')?.classList.add('show');
-}
-
-
-function bindModuleUsageButtons() {
-  document.querySelectorAll('[data-sa-modules]').forEach((btn) => {
-    btn.onclick = () => {
-      const [type, id] = String(btn.dataset.saModules || '').split(':');
-      openModulesModal(type, Number(id));
-    };
-  });
-}
-
-function syncOperationResetConfirm() {
-  const confirmButton = $('#saOperationResetConfirm');
-  if (!confirmButton) return;
-  const phraseMatches = String($('#saOperationResetPhrase')?.value || '').trim() === String(SA_OPERATION_RESET?.confirmationPhrase || '');
-  const acknowledged = Boolean($('#saOperationResetAck')?.checked);
-  confirmButton.disabled = !SA_OPERATION_RESET?.canReset || !phraseMatches || !acknowledged || Boolean(SA_OPERATION_RESET?.processing);
-}
-
-function renderOperationResetPreview(data) {
-  const host = $('#saOperationResetPreview');
-  if (!host) return;
-  const sales = data.preview?.sales || {};
-  const purchases = data.preview?.purchases || {};
-  const inventory = data.preview?.inventory || {};
-  host.innerHTML = `
-    <div class="sa-operation-reset-grid">
-      <article><span><i class="ph-bold ph-receipt"></i> Ventas</span><b>${Number(sales.orders || 0)}</b><small>pedidos · ${Number(sales.posSessions || 0)} cortes/cajas · importe ${Number(sales.total || 0).toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</small></article>
-      <article><span><i class="ph-bold ph-shopping-cart"></i> Compras</span><b>${Number(purchases.orders || 0)}</b><small>órdenes · ${Number(purchases.items || 0)} partidas</small></article>
-      <article><span><i class="ph-bold ph-package"></i> Inventario</span><b>${Number(inventory.movements || 0)}</b><small>movimientos · ${Number(inventory.transfers || 0)} transferencias · ${Number(inventory.counts || 0)} conteos</small></article>
-    </div>
-    <div class="sa-operation-reset-detail">
-      <span>${Number(sales.tableAccounts || 0)} cuentas de mesa</span>
-      <span>${Number(sales.kdsStates || 0)} estados KDS</span>
-      <span>${Number(sales.selfServicePayments || 0)} pagos de autoservicio</span>
-      <span>${Number(inventory.branchStockRows || 0)} existencias por sucursal a poner en cero</span>
-    </div>`;
-
-  const blockersHost = $('#saOperationResetBlockers');
-  const messages = Array.isArray(data.blockerMessages) ? data.blockerMessages : [];
-  if (blockersHost) {
-    blockersHost.hidden = messages.length === 0;
-    blockersHost.innerHTML = messages.length
-      ? `<b><i class="ph-bold ph-warning-circle"></i> Reinicio bloqueado</b><ul>${messages.map((message) => `<li>${esc(message)}</li>`).join('')}</ul>`
-      : '';
-  }
-}
-
-function closeOperationResetModal() {
-  if (SA_OPERATION_RESET?.processing) return;
-  $('#saOperationResetModal')?.classList.remove('show');
-  SA_OPERATION_RESET = null;
-  if ($('#saOperationResetPhrase')) $('#saOperationResetPhrase').value = '';
-  if ($('#saOperationResetAck')) $('#saOperationResetAck').checked = false;
-}
-
-async function openOperationResetModal(tenantId) {
-  const tenant = findBusiness(tenantId);
-  if (!tenant) throw new Error('Tenant no encontrado en la lista actual');
-  SA_OPERATION_RESET = { tenantId: Number(tenantId), processing: false, canReset: false, confirmationPhrase: '' };
-  $('#saOperationResetTenant').textContent = `${tenant.business_name} · /${tenant.slug}`;
-  $('#saOperationResetExpected').textContent = 'cargando…';
-  $('#saOperationResetPhrase').value = '';
-  $('#saOperationResetAck').checked = false;
-  $('#saOperationResetPreview').innerHTML = '<div class="sa-operation-reset-loading"><i class="ph-bold ph-circle-notch"></i> Revisando información del tenant…</div>';
-  $('#saOperationResetBlockers').hidden = true;
-  $('#saOperationResetBlockers').innerHTML = '';
-  $('#saOperationResetModal')?.classList.add('show');
-  syncOperationResetConfirm();
-
-  try {
-    const data = await api(`/api/superadmin/tenants/${tenantId}/operation-reset-preview`);
-    if (Number(SA_OPERATION_RESET?.tenantId) !== Number(tenantId)) return;
-    SA_OPERATION_RESET = {
-      ...SA_OPERATION_RESET,
-      data,
-      canReset: Boolean(data.canReset),
-      confirmationPhrase: String(data.confirmationPhrase || ''),
-    };
-    $('#saOperationResetExpected').textContent = SA_OPERATION_RESET.confirmationPhrase;
-    renderOperationResetPreview(data);
-    syncOperationResetConfirm();
-  } catch (error) {
-    closeOperationResetModal();
-    throw error;
-  }
-}
-
-async function confirmOperationReset() {
-  const state = SA_OPERATION_RESET;
-  if (!state || !state.canReset || state.processing) return;
-  const confirmation = String($('#saOperationResetPhrase')?.value || '').trim();
-  if (confirmation !== state.confirmationPhrase || !$('#saOperationResetAck')?.checked) return;
-
-  state.processing = true;
-  const button = $('#saOperationResetConfirm');
-  const originalHtml = button?.innerHTML || '';
-  if (button) {
-    button.disabled = true;
-    button.innerHTML = '<i class="ph-bold ph-circle-notch spin"></i> Reiniciando…';
-  }
-  try {
-    const result = await api(`/api/superadmin/tenants/${state.tenantId}/operation-reset`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ confirmation, acknowledge: true }),
-    });
-    state.processing = false;
-    closeOperationResetModal();
-    toast(result.message || 'Ventas y operación reiniciadas correctamente');
-    await Promise.all([loadTenants(), loadClients()]);
-  } catch (error) {
-    state.processing = false;
-    if (button) button.innerHTML = originalHtml;
-    syncOperationResetConfirm();
-    throw error;
-  }
-}
-
-function closeDeleteModal() {
-  $('#saDeleteModal')?.classList.remove('show');
-  SA_DELETE_TARGET = null;
-  const confirmBtn = $('#saDeleteConfirm');
-  if (confirmBtn) confirmBtn.disabled = false;
-}
-
-function openDeleteModal(type, id) {
-  const entity = type === 'tenant'
-    ? findBusiness(id)
-    : SA_DEMO_LEADS.find((item) => Number(item.id) === Number(id));
-  if (!entity) return;
-
-  SA_DELETE_TARGET = { type, id: Number(id), name: type === 'tenant' ? entity.business_name : entity.contact_name };
-  $('#saDeleteMessage').textContent = `¿Seguro que deseas eliminar ${type === 'tenant' ? 'el tenant' : 'el lead demo'} “${SA_DELETE_TARGET.name}”?`;
-  $('#saDeleteHint').textContent = type === 'tenant'
-    ? 'Esta acción es permanente: elimina usuarios, pagos, métricas y todos los datos del negocio.'
-    : 'Esta acción es permanente y también elimina su historial de uso de módulos.';
-  $('#saDeleteModal')?.classList.add('show');
-}
-
-function openBulkDelete(subjects) {
-  if (!Array.isArray(subjects) || !subjects.length) return;
-  if (subjects.some((item) => item.type === 'tenant')) {
-    return toast('Los prospectos se eliminan individualmente desde Higiene de almacenamiento para incluir sus archivos', true);
-  }
-  if (!subjects.every((item) => SA_DELETABLE_STAGES.has(String(item.entity.sales_stage || 'new')))) {
-    return toast('Solo puedes eliminar en masa contactos marcados como No interesado o Cierre no exitoso', true);
-  }
-  SA_DELETE_TARGET = { type: 'bulk', subjects: subjects.map(({ type, id }) => ({ type, id })) };
-  $('#saDeleteMessage').textContent = `¿Seguro que deseas eliminar permanentemente ${subjects.length} contactos descartados?`;
-  $('#saDeleteHint').textContent = 'Se eliminarán sus datos e historial. Esta acción no incluye clientes y no se puede deshacer.';
-  $('#saDeleteModal')?.classList.add('show');
-}
-
-async function confirmDelete() {
-  const target = SA_DELETE_TARGET;
-  if (!target) return;
-  const confirmBtn = $('#saDeleteConfirm');
-  if (confirmBtn) confirmBtn.disabled = true;
-  try {
-    if (target.type === 'bulk') {
-      await api('/api/superadmin/follow-up/bulk', {
-        method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ subjects: target.subjects }),
-      });
-      const deletedCount = target.subjects.length;
-      closeDeleteModal();
-      SA_SELECTED.clear();
-      toast(`${deletedCount} contacto${deletedCount === 1 ? '' : 's'} eliminado${deletedCount === 1 ? '' : 's'}`);
-      await Promise.all([loadTenants(), loadDemoLeads(), loadFollowUp()]);
-      return;
-    }
-    const endpoint = target.type === 'tenant'
-      ? `/api/superadmin/tenants/${target.id}`
-      : `/api/superadmin/demo-leads/${target.id}`;
-    await api(endpoint, { method: 'DELETE' });
-    const deletedLabel = target.type === 'tenant' ? 'Tenant eliminado' : 'Lead demo eliminado';
-    closeDeleteModal();
-    toast(deletedLabel);
-    if (target.type === 'tenant') await Promise.all([loadTenants(), loadClients()]);
-    else await loadDemoLeads();
-  } catch (err) {
-    if (confirmBtn) confirmBtn.disabled = false;
-    throw err;
-  }
-}
-
-async function loadDemoLeads() {
-  const payload = await api('/api/superadmin/demo-leads');
-  SA_DEMO_LEADS = Array.isArray(payload?.demoLeads) ? payload.demoLeads : [];
-  renderCountryFilter('#saDemoCountryFilter', SA_DEMO_LEADS);
-  renderDemoLeadSummary(payload?.summary || null);
-  renderDemoLeadsTable();
 }
 
 async function loadTenants() {
   const payload = await api('/api/superadmin/tenants');
   SA_TENANTS = Array.isArray(payload?.tenants) ? payload.tenants : [];
-  renderTenantCountryFilter();
   renderBillingSummary(payload?.summary || null);
   renderTenantTable();
 }
 
-async function loadClients() {
-  const payload = await api('/api/superadmin/clients');
-  SA_CLIENTS = Array.isArray(payload?.clients) ? payload.clients : [];
-  renderClientSummary(payload?.summary || null);
-  renderClientsTable();
-}
-
-function renderInvoicingSummary(summary = {}) {
-  const cards = [
-    ['Registros', summary.total || 0, 'ph-storefront', 'tone-total'],
-    ['Prospectos', summary.prospects || 0, 'ph-user-plus', 'tone-due'],
-    ['Clientes', summary.customers || 0, 'ph-handshake', 'tone-active'],
-    ['Activados', summary.activated || 0, 'ph-power', 'tone-current'],
-    ['Listos para timbrar', summary.ready || 0, 'ph-seal-check', 'tone-soon'],
-    ['CFDI emitidos', summary.issued || 0, 'ph-files', 'tone-active'],
-  ];
-  $('#saInvoicingSummary').innerHTML = cards.map(([label, value, icon, tone]) => `<div class="pos-mini-stat sa-client-summary-card ${tone}"><span><i class="ph-bold ${icon}"></i> ${esc(label)}</span><b>${Number(value).toLocaleString('es-MX')}</b></div>`).join('');
-}
-
-function invoicingStage(item) {
-  if (!Number(item.invoicing_enabled)) return ['Pendiente de activación', 'warn'];
-  if (!item.fiscal_profile_complete) return ['Faltan datos fiscales', 'warn'];
-  if (!item.csd_ready) return ['Falta CSD', 'warn'];
-  return ['Listo para timbrar', 'ok'];
-}
-
-function renderInvoicingTable() {
-  const query = String($('#saInvoicingSearch')?.value || '').trim().toLowerCase();
-  const rows = SA_INVOICING.filter((item) => {
-    const ready = Number(item.invoicing_enabled) && item.fiscal_profile_complete && item.csd_ready;
-    if (SA_INVOICING_FILTER === 'prospect' && item.customer_since) return false;
-    if (SA_INVOICING_FILTER === 'customer' && !item.customer_since) return false;
-    if (SA_INVOICING_FILTER === 'pending' && ready) return false;
-    if (SA_INVOICING_FILTER === 'ready' && !ready) return false;
-    return !query || [item.business_name, item.owner_name, item.owner_username, item.issuer_rfc, item.slug].some((value) => String(value || '').toLowerCase().includes(query));
-  });
-  const target = $('#saInvoicingTable');
-  if (!rows.length) { target.innerHTML = '<div class="empty"><i class="ph ph-file-text"></i><b>Sin cuentas de facturación</b><p>No hay resultados con este filtro.</p></div>'; return; }
-  target.innerHTML = `<div class="table-wrap"><table><thead><tr><th>Negocio</th><th>Contacto</th><th>Tipo</th><th>Avance fiscal</th><th>Timbres</th><th>Actividad</th><th>Acciones</th></tr></thead><tbody>${rows.map((item) => {
-    const [stage, tone] = invoicingStage(item);
-    const waUrl = item.phone_valid && item.phone_digits ? `https://wa.me/${item.phone_digits}` : '';
-    return `<tr><td><b>${esc(item.business_name)}</b><div class="meta">/${esc(item.slug)} · ${esc(item.issuer_rfc || 'RFC pendiente')}</div></td><td>${esc(item.owner_name)}<div class="meta">${esc(item.phone || '—')} · @${esc(item.owner_username || '—')}</div></td><td>${item.customer_since ? '<span class="tag ok">Cliente</span>' : '<span class="tag warn">Prospecto</span>'}<div class="meta">${fmtDate(item.created_at)}</div></td><td><span class="tag ${tone}">${esc(stage)}</span><div class="meta">${Number(item.invoicing_enabled) ? 'Servicio activado' : 'Sin activar'}</div></td><td><b>${item.stamp_unlimited ? 'Ilimitados' : Number(item.stamp_available || 0)}</b><div class="meta">disponibles</div></td><td><b>${Number(item.invoice_count || 0)} CFDI</b><div class="meta">${item.last_invoice_at ? `Último: ${fmtDate(item.last_invoice_at)}` : 'Sin emisiones'}</div></td><td><div class="sa-actions-grid"><button type="button" class="btn btn-ghost" data-iv-access="${item.id}"><i class="ph-bold ph-sign-in"></i> Entrar</button><button type="button" class="btn btn-sa-manage" data-iv-follow="${item.id}"><i class="ph-bold ph-note-pencil"></i> Seguimiento</button><button type="button" class="btn btn-ghost" data-iv-stamps="${item.id}"><i class="ph-bold ph-stamp"></i> Timbres</button>${waUrl ? `<a class="btn btn-ghost" href="${waUrl}" target="_blank" rel="noopener"><i class="ph-bold ph-whatsapp-logo"></i> WhatsApp</a>` : ''}</div></td></tr>`;
-  }).join('')}</tbody></table></div>`;
-  target.querySelectorAll('[data-iv-access]').forEach((button) => button.onclick = async () => { const item = SA_INVOICING.find((row) => Number(row.id) === Number(button.dataset.ivAccess)); await api(`/api/superadmin/tenants/${item.id}/access`, { method: 'POST' }); window.open('/facturacion/panel', '_blank'); toast(`Sesión fiscal iniciada para ${item.business_name}`); });
-  target.querySelectorAll('[data-iv-stamps]').forEach((button) => button.onclick = () => manageTenantStamps(Number(button.dataset.ivStamps)).catch((error) => toast(error.message, true)));
-  target.querySelectorAll('[data-iv-follow]').forEach((button) => button.onclick = () => openFollowUpModal('tenant', Number(button.dataset.ivFollow)));
-}
-
-async function loadInvoicingBusinesses() {
-  const data = await api('/api/superadmin/invoicing-businesses');
-  SA_INVOICING = data.businesses || [];
-  renderInvoicingSummary(data.summary);
-  renderInvoicingTable();
-}
-
 async function refreshBilling() {
   const payload = await api('/api/superadmin/billing/refresh', { method: 'POST' });
-  await Promise.all([loadTenants(), loadClients()]);
+  renderBillingSummary(payload?.summary || null);
+  await loadTenants();
   const movedDue = Number(payload?.refreshed?.movedToDue || 0);
   const movedSuspended = Number(payload?.refreshed?.movedToSuspended || 0);
   toast(`Cobranza actualizada: ${movedDue} a por pagar, ${movedSuspended} a suspendido`);
@@ -1574,9 +330,7 @@ function openPaymentModal(tenant) {
   SA_PAYMENT_TENANT_ID = Number(tenant.id);
   $('#saPayTenantId').value = String(tenant.id);
   $('#saPayTenantName').value = tenant.business_name || tenant.slug || `Tenant #${tenant.id}`;
-  const currentPlan = String(tenant.plan_name || '').toLowerCase();
-  $('#saPayPlan').value = ['mensual', 'annual', 'invoicing_sat'].includes(currentPlan) ? currentPlan : 'mensual';
-  $('#saPayAmount').value = currentPlan === 'invoicing_sat' ? '1499' : '';
+  $('#saPayAmount').value = '';
   $('#saPayMethod').value = 'stripe';
   $('#saPayNote').value = '';
   $('#saPayDate').value = fmtInputDate(new Date());
@@ -1625,7 +379,7 @@ function openActivateModal(tenant, mode) {
 }
 
 async function accessTenant(id) {
-  const tenant = findBusiness(id);
+  const tenant = SA_TENANTS.find((t) => Number(t.id) === Number(id));
   if (!tenant) return;
   await api(`/api/superadmin/tenants/${id}/access`, { method: 'POST' });
   window.open('/app', '_blank');
@@ -1633,7 +387,7 @@ async function accessTenant(id) {
 }
 
 async function changeTenantPassword(id) {
-  const tenant = findBusiness(id);
+  const tenant = SA_TENANTS.find((t) => Number(t.id) === Number(id));
   if (!tenant) return;
   const pass = String(prompt(`Nueva contraseña para ${tenant.business_name} (mínimo 8 caracteres):`, '') || '').trim();
   if (!pass) return;
@@ -1646,68 +400,8 @@ async function changeTenantPassword(id) {
   toast('Contraseña actualizada');
 }
 
-const SA_USER_ROLE_LABELS = { owner: 'Propietario', staff: 'Personal', cashier: 'Cajero' };
-let SA_USERS_TENANT_ID = null;
-let SA_TENANT_USERS = [];
-
-async function manageTenantUsers(tenantId) {
-  const data = await api(`/api/superadmin/tenants/${tenantId}/users`);
-  SA_USERS_TENANT_ID = tenantId;
-  SA_TENANT_USERS = data.users || [];
-  $('#saUsersTitle').textContent = `Usuarios · ${data.tenant?.businessName || data.tenant?.slug || 'Tenant'}`;
-  renderTenantUsers();
-  $('#saUsersModal')?.classList.add('show');
-}
-
-function renderTenantUsers() {
-  const target = $('#saUsersList');
-  if (!target) return;
-  target.innerHTML = SA_TENANT_USERS.length
-    ? SA_TENANT_USERS.map((user) => `<div class="sa-user-admin-row">
-        <div class="sa-user-admin-main"><b>${esc(user.displayName || user.username)}</b><span>@${esc(user.username)} · ${esc(SA_USER_ROLE_LABELS[user.role] || user.role)}</span>${user.jobTitle ? `<small>${esc(user.jobTitle)}</small>` : ''}</div>
-        <span class="tag ${user.active ? 'ok' : 'err'}">${user.active ? 'Activo' : 'Bloqueado'}</span>
-        <div class="sa-user-admin-actions">
-          <button type="button" class="btn btn-ghost" data-sa-user-password="${user.id}"><i class="ph-bold ph-key"></i> Restablecer clave</button>
-          <button type="button" class="btn ${user.active ? 'btn-danger' : 'btn-primary'}" data-sa-user-active="${user.id}" data-active="${user.active ? '0' : '1'}"><i class="ph-bold ${user.active ? 'ph-lock' : 'ph-lock-open'}"></i> ${user.active ? 'Bloquear' : 'Desbloquear'}</button>
-        </div>
-      </div>`).join('')
-    : '<div class="empty-mini">Este tenant no tiene usuarios registrados.</div>';
-  target.querySelectorAll('[data-sa-user-password]').forEach((button) => button.addEventListener('click', () => resetTenantUserPassword(Number(button.dataset.saUserPassword)).catch((error) => toast(error.message, true))));
-  target.querySelectorAll('[data-sa-user-active]').forEach((button) => button.addEventListener('click', () => setTenantUserActive(Number(button.dataset.saUserActive), button.dataset.active === '1').catch((error) => toast(error.message, true))));
-}
-
-function closeTenantUsersModal() {
-  $('#saUsersModal')?.classList.remove('show');
-  SA_USERS_TENANT_ID = null;
-  SA_TENANT_USERS = [];
-}
-
-async function resetTenantUserPassword(userId) {
-  const user = SA_TENANT_USERS.find((item) => Number(item.id) === userId);
-  if (!user || !SA_USERS_TENANT_ID) return;
-  const password = String(prompt(`Nueva contraseña para @${user.username} (mínimo 8 caracteres):`, '') || '').trim();
-  if (!password) return;
-  if (password.length < 8) return toast('La contraseña debe tener al menos 8 caracteres', true);
-  await api(`/api/superadmin/tenants/${SA_USERS_TENANT_ID}/users/${userId}`, {
-    method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ newPassword: password }),
-  });
-  toast(`Contraseña actualizada para @${user.username}`);
-}
-
-async function setTenantUserActive(userId, active) {
-  if (!SA_USERS_TENANT_ID) return;
-  const user = SA_TENANT_USERS.find((item) => Number(item.id) === userId);
-  if (!user) return;
-  await api(`/api/superadmin/tenants/${SA_USERS_TENANT_ID}/users/${userId}`, {
-    method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ active }),
-  });
-  user.active = active;
-  renderTenantUsers();
-  toast(`${active ? 'Acceso activado' : 'Usuario bloqueado'} para @${user.username}`);
-}
-
 async function toggleTenantSuspend(id) {
-  const tenant = findBusiness(id);
+  const tenant = SA_TENANTS.find((t) => Number(t.id) === Number(id));
   if (!tenant) return;
   const needsActivation = tenant.account_status !== 'active' || tenant.billing_status === 'suspended';
   if (!needsActivation) {
@@ -1720,7 +414,7 @@ async function toggleTenantSuspend(id) {
 }
 
 async function addTenantPayment(id) {
-  const tenant = findBusiness(id);
+  const tenant = SA_TENANTS.find((t) => Number(t.id) === Number(id));
   if (!tenant) return;
   openPaymentModal(tenant);
 }
@@ -1742,93 +436,16 @@ async function submitPaymentForm(e) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(paidAt)) return toast('Fecha de pago inválida', true);
 
   const note = String($('#saPayNote')?.value || '').trim();
-  const planCode = String($('#saPayPlan')?.value || '').trim().toLowerCase();
-  if (!['mensual', 'annual', 'invoicing_sat'].includes(planCode)) return toast('Selecciona un plan válido', true);
 
   const payload = await api(`/api/superadmin/tenants/${tenantId}/payment`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ amount, method, note, paidAt, planCode }),
+    body: JSON.stringify({ amount, method, note, paidAt }),
   });
 
   closePaymentModal();
-  const bonusText = payload?.stampBonusGranted ? ' Se acreditaron 100 timbres de bienvenida.' : '';
-  toast((payload?.becameClient
-    ? `Pago aplicado: el prospecto ya es cliente. Vence ${fmtDate(payload?.nextDueDate)}`
-    : `Pago aplicado. Próximo vencimiento: ${fmtDate(payload?.nextDueDate)}`) + bonusText);
-  await Promise.all([loadTenants(), loadClients(), loadNonRenewals()]);
-}
-
-function closePaymentsModal() {
-  $('#saPaymentsModal')?.classList.remove('show');
-}
-
-async function openPaymentsModal(clientId) {
-  const client = findBusiness(clientId);
-  if (!client) return;
-  const payload = await api(`/api/superadmin/clients/${clientId}/payments`);
-  const payments = Array.isArray(payload?.payments) ? payload.payments : [];
-  $('#saPaymentsSubject').textContent = `${client.business_name} · ${payments.length} pago${payments.length === 1 ? '' : 's'}`;
-  $('#saPaymentsDetail').innerHTML = payments.length
-    ? `<div class="table-wrap"><table><thead><tr><th>Fecha</th><th>Monto</th><th>Método</th><th>Referencia / nota</th><th>Registró</th></tr></thead><tbody>${payments.map((payment) => `<tr>
-        <td>${fmtDate(payment.paid_at)}</td><td><b>${fmtMoney(payment.amount)}</b></td><td><span class="tag ok">${esc(payment.method || 'manual')}</span></td><td>${esc(payment.note || '—')}</td><td>${esc(payment.created_by || '—')}</td>
-      </tr>`).join('')}</tbody></table></div>`
-    : '<div class="empty"><i class="ph ph-receipt"></i><b>Sin pagos</b><p>Aún no hay movimientos registrados.</p></div>';
-  $('#saPaymentsModal')?.classList.add('show');
-}
-
-async function changeClientLicenses(clientId) {
-  const client = findBusiness(clientId);
-  if (!client) return;
-  const raw = prompt(`Número de licencias para ${client.business_name}:`, String(client.license_count || 1));
-  if (raw === null) return;
-  const licenseCount = Number(raw);
-  if (!Number.isInteger(licenseCount) || licenseCount < 1 || licenseCount > 100000) {
-    return toast('Captura un número de licencias válido', true);
-  }
-  await api(`/api/superadmin/tenants/${clientId}`, {
-    method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ license_count: licenseCount }),
-  });
-  toast('Número de licencias actualizado');
-  await loadClients();
-}
-
-async function changeBranchLimit(tenantId) {
-  const tenant = findBusiness(tenantId);
-  if (!tenant) return;
-  const details = await api(`/api/superadmin/tenants/${tenantId}/stats`);
-  const activeBranches = Number(details?.stats?.activeBranches || 0);
-  const totalBranches = Number(details?.stats?.totalBranches || 0);
-  $('#saBranchLimitTenantId').value = String(tenant.id);
-  $('#saBranchLimitTenantName').value = tenant.business_name || tenant.slug || `Tenant #${tenant.id}`;
-  $('#saBranchLimitValue').value = String(Number(tenant.branch_limit || 2));
-  $('#saBranchLimitUsage').textContent = `Uso actual: ${activeBranches} sucursal${activeBranches === 1 ? '' : 'es'} activa${activeBranches === 1 ? '' : 's'} de ${totalBranches} registrada${totalBranches === 1 ? '' : 's'}.`;
-  $('#saBranchLimitModal')?.classList.add('show');
-  setTimeout(() => $('#saBranchLimitValue')?.focus(), 60);
-}
-
-function closeBranchLimitModal() {
-  $('#saBranchLimitModal')?.classList.remove('show');
-}
-
-async function submitBranchLimitForm(event) {
-  event.preventDefault();
-  const tenantId = Number($('#saBranchLimitTenantId')?.value || 0);
-  const branchLimit = Number($('#saBranchLimitValue')?.value || 0);
-  if (!tenantId) return toast('No se encontró el negocio', true);
-  if (!Number.isInteger(branchLimit) || branchLimit < 1 || branchLimit > 1000) {
-    return toast('Captura un límite de 1 a 1000 sucursales', true);
-  }
-  await api(`/api/superadmin/tenants/${tenantId}`, {
-    method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ branch_limit: branchLimit }),
-  });
-  closeBranchLimitModal();
-  toast(`Cupo actualizado: hasta ${branchLimit} sucursales activas`);
-  await Promise.all([loadTenants(), loadClients()]);
+  toast(`Pago aplicado. Próximo vencimiento: ${fmtDate(payload?.nextDueDate)}`);
+  await loadTenants();
 }
 
 async function submitSuspendForm(e) {
@@ -1846,7 +463,7 @@ async function submitSuspendForm(e) {
 
   closeSuspendModal();
   toast(mode === 'billing' ? 'Tenant suspendido por falta de pago' : 'Sistema suspendido para tenant');
-  await Promise.all([loadTenants(), loadClients()]);
+  await loadTenants();
 }
 
 async function confirmActivateTenant() {
@@ -1860,14 +477,13 @@ async function confirmActivateTenant() {
   });
   closeActivateModal();
   toast(mode === 'billing' ? 'Servicio reactivado por cobranza' : 'Sistema activado para tenant');
-  await Promise.all([loadTenants(), loadClients()]);
+  await loadTenants();
 }
 
 async function loadIntegrations() {
   const cfg = await api('/api/superadmin/integrations');
   $('#saOpenAiEnabled').value = cfg.openaiEnabled ? '1' : '0';
   applyOpenAiModelSelection(cfg.openaiModel || 'gpt-4o-mini');
-  $('#saOpenAiImageModel').value = cfg.openaiImageModel || 'gpt-image-2.5-flare';
   $('#saOpenAiBaseUrl').value = cfg.openaiBaseUrl || '';
   $('#saWebhookUrl').value = cfg.webhookUrl || '';
   $('#saOpenAiKey').value = '';
@@ -1896,7 +512,6 @@ async function saveIntegrations(e) {
     body: JSON.stringify({
       openaiEnabled: $('#saOpenAiEnabled').value === '1',
       openaiModel: getSelectedOpenAiModel(),
-      openaiImageModel: ($('#saOpenAiImageModel').value || '').trim() || 'gpt-image-2.5-flare',
       openaiBaseUrl: $('#saOpenAiBaseUrl').value,
       webhookUrl: $('#saWebhookUrl').value,
       openaiApiKey: $('#saOpenAiKey').value || undefined,
@@ -1956,7 +571,7 @@ async function loadGitDeployStatus() {
   if (hint) {
     const git = payload?.git || {};
     const dirtyCount = Number(git.dirtyCount || 0);
-    hint.textContent = `Git: rama local ${git.currentBranch || '-'} | destino ${git.remote || 'origin'}/${git.branch || 'main'} | PM2 ${git.pm2App || 'chatbotpro'} | health ${git.healthUrl || 'http://127.0.0.1:3003/'} | cambios pendientes ${dirtyCount}`;
+    hint.textContent = `Git: rama local ${git.currentBranch || '-'} | destino ${git.remote || 'origin'}/${git.branch || 'main'} | cambios pendientes ${dirtyCount}`;
   }
   return payload;
 }
@@ -2036,114 +651,6 @@ function getSelectedOpenAiModel() {
   return presetValue || 'gpt-4o-mini';
 }
 
-function renderResellerFilter() {
-  const select = $('#saTenantResellerFilter');
-  if (!select) return;
-  const current = select.value || 'all';
-  select.innerHTML = '<option value="all">Todos los resellers</option><option value="direct">Registro directo</option>'
-    + SA_RESELLERS.map((item) => `<option value="${Number(item.id)}">${esc(item.display_name)}</option>`).join('');
-  select.value = [...select.options].some((option) => option.value === current) ? current : 'all';
-}
-
-function renderTenantCountryFilter() {
-  renderCountryFilter('#saTenantCountryFilter', SA_TENANTS);
-}
-
-function renderCountryFilter(selector, entities) {
-  const select = $(selector);
-  if (!select) return;
-  const current = select.value || 'all';
-  const countries = new Map();
-  let hasUnknown = false;
-  entities.forEach((entity) => {
-    const code = String(entity.phone_country || '').trim().toUpperCase();
-    if (!code) {
-      hasUnknown = true;
-      return;
-    }
-    countries.set(code, String(entity.phone_country_name || code).trim());
-  });
-  const options = [...countries.entries()]
-    .sort((a, b) => a[1].localeCompare(b[1], 'es', { sensitivity: 'base' }))
-    .map(([code, name]) => `<option value="${esc(code)}">${countryFlag(code)} ${esc(name)}</option>`);
-  if (hasUnknown) options.push('<option value="unknown">Sin país registrado</option>');
-  select.innerHTML = '<option value="all">Todos los países</option>' + options.join('');
-  select.value = [...select.options].some((option) => option.value === current) ? current : 'all';
-}
-
-function renderResellers() {
-  const table = $('#saResellersTable');
-  if (!table) return;
-  if (!SA_RESELLERS.length) {
-    table.innerHTML = '<div class="empty"><i class="ph ph-users-four"></i><b>Sin resellers</b><p>Crea el primer acceso y comparte su enlace de captación.</p></div>';
-    return;
-  }
-  table.innerHTML = `<div class="table-wrap"><table><thead><tr><th>Reseller</th><th>Contacto</th><th>Enlaces</th><th>Prospectos</th><th>Clientes</th><th>Leads demo</th><th>Estado</th><th>Acciones</th></tr></thead><tbody>${SA_RESELLERS.map((item) => {
-    const referral = `${location.origin}/${item.slug}`;
-    const login = `${location.origin}/resellers/${item.slug}`;
-    return `<tr><td><b>${esc(item.display_name)}</b><div class="meta">Usuario: ${esc(item.username)}</div></td><td>${esc(item.contact_name || '—')}<div class="meta">${esc(item.contact_phone || '')}</div></td><td><div class="meta">Clientes: /${esc(item.slug)}</div><div class="meta">Acceso: /resellers/${esc(item.slug)}</div></td><td><b>${Number(item.prospect_count || 0)}</b></td><td><b>${Number(item.client_count || 0)}</b></td><td><b>${Number(item.demo_lead_count || 0)}</b></td><td><span class="tag">${Number(item.active) ? 'Activo' : 'Inactivo'}</span></td><td><div class="sa-row-actions"><button class="btn btn-ghost" type="button" data-reseller-copy="${esc(referral)}"><i class="ph-bold ph-copy"></i> Link clientes</button><button class="btn btn-ghost" type="button" data-reseller-copy="${esc(login)}"><i class="ph-bold ph-sign-in"></i> Link acceso</button><button class="btn btn-ghost" type="button" data-reseller-edit="${item.id}"><i class="ph-bold ph-pencil"></i> Editar</button><button class="btn ${Number(item.active) ? 'btn-danger' : 'btn-primary'}" type="button" data-reseller-toggle="${item.id}">${Number(item.active) ? 'Desactivar' : 'Activar'}</button></div></td></tr>`;
-  }).join('')}</tbody></table></div>`;
-  document.querySelectorAll('[data-reseller-copy]').forEach((button) => button.onclick = async () => { await navigator.clipboard.writeText(button.dataset.resellerCopy); toast('Enlace copiado'); });
-  document.querySelectorAll('[data-reseller-edit]').forEach((button) => button.onclick = () => openResellerModal(Number(button.dataset.resellerEdit)));
-  document.querySelectorAll('[data-reseller-toggle]').forEach((button) => button.onclick = () => toggleReseller(Number(button.dataset.resellerToggle)).catch((error) => toast(error.message, true)));
-}
-
-async function loadResellers() {
-  const payload = await api('/api/superadmin/resellers');
-  SA_RESELLERS = Array.isArray(payload.resellers) ? payload.resellers : [];
-  renderResellers();
-  renderResellerFilter();
-  renderTenantTable();
-}
-
-function openResellerModal(id = null) {
-  const item = id ? SA_RESELLERS.find((entry) => Number(entry.id) === Number(id)) : null;
-  $('#saResellerId').value = item ? String(item.id) : '';
-  $('#saResellerName').value = item?.display_name || '';
-  $('#saResellerSlug').value = item?.slug || '';
-  $('#saResellerUsername').value = item?.username || '';
-  $('#saResellerPassword').value = '';
-  $('#saResellerContact').value = item?.contact_name || '';
-  $('#saResellerPhone').value = item?.contact_phone || '';
-  $('#saResellerNotes').value = item?.notes || '';
-  $('#saResellerSlug').readOnly = Boolean(item);
-  $('#saResellerUsername').readOnly = Boolean(item);
-  $('#saResellerPassword').required = !item;
-  $('#saResellerPasswordHint').textContent = item ? '(vacía para conservar)' : '*';
-  $('#saResellerModalTitle').textContent = item ? 'Editar reseller' : 'Nuevo reseller';
-  $('#saResellerModal').classList.add('show');
-}
-
-function closeResellerModal() { $('#saResellerModal')?.classList.remove('show'); }
-
-async function saveReseller(event) {
-  event.preventDefault();
-  const id = Number($('#saResellerId').value || 0);
-  const payload = {
-    displayName: $('#saResellerName').value,
-    contactName: $('#saResellerContact').value,
-    contactPhone: $('#saResellerPhone').value,
-    notes: $('#saResellerNotes').value,
-  };
-  if ($('#saResellerPassword').value) payload.password = $('#saResellerPassword').value;
-  if (!id) {
-    payload.slug = $('#saResellerSlug').value.trim().toLowerCase();
-    payload.username = $('#saResellerUsername').value.trim().toLowerCase();
-  }
-  await api(id ? `/api/superadmin/resellers/${id}` : '/api/superadmin/resellers', { method: id ? 'PATCH' : 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
-  closeResellerModal();
-  await loadResellers();
-  toast(id ? 'Reseller actualizado' : 'Reseller creado');
-}
-
-async function toggleReseller(id) {
-  const item = SA_RESELLERS.find((entry) => Number(entry.id) === Number(id));
-  if (!item) return;
-  await api(`/api/superadmin/resellers/${id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ active: !Number(item.active) }) });
-  await loadResellers();
-  toast(Number(item.active) ? 'Reseller desactivado' : 'Reseller activado');
-}
-
 $('#saOpenAiModelPreset')?.addEventListener('change', () => {
   const presetValue = $('#saOpenAiModelPreset').value;
   if (presetValue === 'custom') {
@@ -2174,313 +681,18 @@ async function uploadSuperAdminLogo(fileParam, options = {}) {
   if (!options.suppressToast) toast('Logo de SuperAdmin actualizado');
 }
 
-function fmtBytes(value) {
-  const bytes = Math.max(0, Number(value || 0));
-  if (bytes < 1024) return `${bytes} B`;
-  const units = ['KB', 'MB', 'GB', 'TB'];
-  let amount = bytes;
-  let unit = -1;
-  do { amount /= 1024; unit += 1; } while (amount >= 1024 && unit < units.length - 1);
-  return `${amount >= 10 ? amount.toFixed(1) : amount.toFixed(2)} ${units[unit]}`;
-}
-
-function storageStatusLabel(status) {
-  const labels = {
-    preparing: 'Preparando', database_deleting: 'Eliminando datos', database_deleted: 'Datos eliminados',
-    quarantined: 'En cuarentena', completed_no_files: 'Completado sin archivos', cleanup_pending: 'Limpieza pendiente', purged: 'Purgado',
-  };
-  return labels[status] || status || 'Desconocido';
-}
-
-function renderStorageSummary() {
-  const summary = SA_STORAGE_REPORT?.summary || {};
-  const target = $('#saStorageSummary');
-  if (!target) return;
-  const cards = [
-    ['ph-shield-check', 'Clientes protegidos', Number(summary.protectedClients || 0), 'green'],
-    ['ph-users-three', 'Prospectos revisables', Number(summary.prospects || 0), 'cyan'],
-    ['ph-warning-circle', 'Revisión recomendada', Number(summary.recommendedProspects || 0), 'amber'],
-    ['ph-folder-dashed', 'Carpetas huérfanas', Number(summary.orphanScopes || 0), 'violet'],
-    ['ph-trash', 'Espacio recuperable', fmtBytes(summary.recoverableBytes), 'red'],
-  ];
-  target.innerHTML = cards.map(([icon, label, value, tone]) => `<article class="tone-${tone}"><i class="ph-bold ${icon}"></i><span>${label}</span><strong>${value}</strong></article>`).join('');
-}
-
-function filteredStorageProspects() {
-  const query = String($('#saStorageSearch')?.value || '').trim().toLowerCase();
-  const rows = Array.isArray(SA_STORAGE_REPORT?.prospects) ? SA_STORAGE_REPORT.prospects : [];
-  const filtered = query ? rows.filter((item) => `${item.businessName} ${item.slug}`.toLowerCase().includes(query)) : rows;
-  if (!SA_STORAGE_SORT.dir) return filtered;
-
-  return filtered
-    .map((item, index) => ({ item, index, bytes: item.storage ? Number(item.storage.bytes || 0) : null }))
-    .sort((left, right) => {
-      // Las revisiones incompletas no tienen una medida confiable; se mantienen al final.
-      if (left.bytes === null || right.bytes === null) {
-        if (left.bytes === right.bytes) return left.index - right.index;
-        return left.bytes === null ? 1 : -1;
-      }
-      const result = left.bytes - right.bytes;
-      return result === 0 ? left.index - right.index : (SA_STORAGE_SORT.dir === 'asc' ? result : -result);
-    })
-    .map(({ item }) => item);
-}
-
-function storageSortIcon() {
-  if (SA_STORAGE_SORT.dir === 'asc') return 'ph-arrow-up';
-  if (SA_STORAGE_SORT.dir === 'desc') return 'ph-arrow-down';
-  return 'ph-arrows-down-up';
-}
-
-function storageSortLabel() {
-  if (SA_STORAGE_SORT.dir === 'asc') return 'Ordenado de menor a mayor almacenamiento';
-  if (SA_STORAGE_SORT.dir === 'desc') return 'Ordenado de mayor a menor almacenamiento';
-  return 'Ordenar por almacenamiento';
-}
-
-function renderStorageProspects() {
-  const target = $('#saStorageProspects');
-  if (!target) return;
-  const rows = filteredStorageProspects();
-  if (!SA_STORAGE_REPORT) {
-    target.innerHTML = '<div class="sa-storage-loading"><i class="ph-bold ph-circle-notch spin"></i> Ejecuta el análisis para comenzar.</div>';
-    return;
-  }
-  if (!rows.length) {
-    target.innerHTML = '<div class="empty"><i class="ph-bold ph-check-circle"></i><b>Sin prospectos en esta vista</b><p>No hay cuentas candidatas con este filtro.</p></div>';
-    return;
-  }
-  target.innerHTML = `<div class="table-wrap"><table class="sa-storage-table"><thead><tr><th>Prospecto</th><th>Actividad</th><th>Almacenamiento</th><th>Huérfanos</th><th>Evaluación</th><th>Acciones</th></tr></thead><tbody>${rows.map((item) => {
-    const storage = item.storage;
-    const status = item.scanComplete ? (item.recommended ? '<span class="tag warn">Revisar</span>' : '<span class="tag ok">Manual</span>') : '<span class="tag danger">Bloqueado</span>';
-    const actions = item.scanComplete
-      ? `<button class="btn btn-ghost" type="button" data-storage-clean="${item.id}" ${Number(storage?.orphanFiles || 0) ? '' : 'disabled'}><i class="ph-bold ph-broom"></i> Limpiar huérfanos</button><button class="btn btn-danger" type="button" data-storage-delete="${item.id}"><i class="ph-bold ph-trash"></i> Eliminar prospecto</button>`
-      : '<span class="sa-storage-blocked"><i class="ph-bold ph-lock"></i> Revisión incompleta</span>';
-    return `<tr><td><b>${esc(item.businessName)}</b><div class="meta">/${esc(item.slug)} · #${item.id}</div></td><td>${fmtDateTime(item.lastActivityAt)}<div class="meta">${item.inactiveDays === null ? 'Sin actividad registrada' : `${item.inactiveDays} días desde actividad`}</div></td><td>${storage ? `<b>${fmtBytes(storage.bytes)}</b><div class="meta">${storage.files} archivo(s) · ${storage.referencedFiles} vigente(s)</div>` : '<span class="meta">No disponible</span>'}</td><td>${storage ? `<b>${storage.orphanFiles}</b><div class="meta">${fmtBytes(storage.orphanBytes)} recuperables</div>${storage.recentUnreferencedFiles ? `<div class="meta">${storage.recentUnreferencedFiles} reciente(s), protegidos 24 h</div>` : ''}` : '—'}</td><td>${status}<div class="meta">${esc(item.scanError || item.reason)}</div></td><td><div class="sa-storage-actions">${actions}</div></td></tr>`;
-  }).join('')}</tbody></table></div>`;
-  const storageHeader = target.querySelector('.sa-storage-table thead th:nth-child(3)');
-  if (storageHeader) {
-    const storageSort = SA_STORAGE_SORT.dir ? (SA_STORAGE_SORT.dir === 'asc' ? 'ascending' : 'descending') : 'none';
-    const label = storageSortLabel();
-    storageHeader.setAttribute('aria-sort', storageSort);
-    storageHeader.innerHTML = `<button type="button" class="sa-storage-sort" data-storage-sort="bytes" aria-label="${label}" title="${label}"><span>Almacenamiento</span><i class="ph-bold ${storageSortIcon()}" aria-hidden="true"></i></button>`;
-  }
-  document.querySelectorAll('[data-storage-sort]').forEach((button) => button.onclick = () => {
-    const nextDirection = SA_STORAGE_SORT.dir === 'desc' ? 'asc' : 'desc';
-    SA_STORAGE_SORT = { key: button.dataset.storageSort, dir: nextDirection };
-    renderStorageProspects();
-  });
-  document.querySelectorAll('[data-storage-delete]').forEach((button) => button.onclick = () => openStorageAction('delete-prospect', { id: Number(button.dataset.storageDelete) }).catch((error) => toast(error.message, true)));
-  document.querySelectorAll('[data-storage-clean]').forEach((button) => button.onclick = () => openStorageAction('clean-files', { id: Number(button.dataset.storageClean) }).catch((error) => toast(error.message, true)));
-}
-
-function renderStorageOrphans() {
-  const target = $('#saStorageOrphans');
-  if (!target) return;
-  const rows = Array.isArray(SA_STORAGE_REPORT?.orphanScopes) ? SA_STORAGE_REPORT.orphanScopes : [];
-  if (!rows.length) {
-    target.innerHTML = '<div class="sa-storage-empty"><i class="ph-bold ph-check-circle"></i><span>No se detectaron carpetas de tenants eliminados.</span></div>';
-    return;
-  }
-  target.innerHTML = `<div class="sa-storage-list">${rows.map((item) => `<article><div><b><i class="ph-bold ph-folder"></i> /${esc(item.scope)}</b><span>${item.files} archivo(s) · ${fmtBytes(item.bytes)}</span>${item.scanError ? `<small>${esc(item.scanError)}</small>` : ''}</div><button type="button" class="btn btn-danger" data-storage-orphan="${esc(item.scope)}" ${item.scanComplete ? '' : 'disabled'}><i class="ph-bold ph-archive"></i> Cuarentena</button></article>`).join('')}</div>`;
-  document.querySelectorAll('[data-storage-orphan]').forEach((button) => button.onclick = () => openStorageAction('orphan-scope', { scope: button.dataset.storageOrphan }).catch((error) => toast(error.message, true)));
-}
-
-function renderStorageJobs() {
-  const target = $('#saStorageJobs');
-  if (!target) return;
-  const jobs = Array.isArray(SA_STORAGE_REPORT?.jobs) ? SA_STORAGE_REPORT.jobs : [];
-  if (!jobs.length) {
-    target.innerHTML = '<div class="sa-storage-empty"><i class="ph-bold ph-clock"></i><span>Todavía no hay operaciones de limpieza.</span></div>';
-    return;
-  }
-  target.innerHTML = `<div class="sa-storage-jobs">${jobs.map((job) => {
-    const deletedProspect = job.action === 'delete_prospect';
-    const due = job.status === 'quarantined' && (deletedProspect || (job.purge_after && new Date(job.purge_after).getTime() <= Date.now()));
-    const purgeDate = !deletedProspect && job.purge_after && job.status === 'quarantined' ? ` · purga desde ${fmtDateTime(job.purge_after)}` : '';
-    return `<article><div><b>#${job.id} · ${esc(job.tenant_slug || job.business_name || 'carpeta')}</b><span>${storageStatusLabel(job.status)} · ${fmtBytes(job.total_bytes)}</span><small>${fmtDateTime(job.created_at)}${purgeDate}</small>${job.error ? `<small class="error">${esc(job.error)}</small>` : ''}</div>${due ? `<button class="btn btn-danger" type="button" data-storage-purge="${job.id}"><i class="ph-bold ph-trash"></i> ${deletedProspect ? 'Purgar ahora' : 'Purgar'}</button>` : ''}</article>`;
-  }).join('')}</div>`;
-  document.querySelectorAll('[data-storage-purge]').forEach((button) => button.onclick = () => openStorageAction('purge', { id: Number(button.dataset.storagePurge) }).catch((error) => toast(error.message, true)));
-}
-
-function renderStorageHygiene() {
-  renderStorageSummary();
-  renderStorageProspects();
-  renderStorageOrphans();
-  renderStorageJobs();
-  const warnings = [...(SA_STORAGE_REPORT?.warnings || [])];
-  if (Number(SA_STORAGE_REPORT?.summary?.incompleteScans || 0)) warnings.push(`${SA_STORAGE_REPORT.summary.incompleteScans} revisión(es) quedaron bloqueadas por seguridad.`);
-  const box = $('#saStorageWarnings');
-  if (box) {
-    box.hidden = warnings.length === 0;
-    box.innerHTML = warnings.length ? `<i class="ph-bold ph-warning"></i><div><b>Atención</b>${warnings.map((warning) => `<span>${esc(warning)}</span>`).join('')}</div>` : '';
-  }
-}
-
-async function loadStorageHygiene() {
-  if (SA_STORAGE_LOADING) return;
-  SA_STORAGE_LOADING = true;
-  const button = $('#saStorageAnalyze');
-  const original = button?.innerHTML || '';
-  if (button) { button.disabled = true; button.innerHTML = '<i class="ph-bold ph-circle-notch spin"></i> Analizando…'; }
-  if ($('#saStorageProspects') && !SA_STORAGE_REPORT) $('#saStorageProspects').innerHTML = '<div class="sa-storage-loading"><i class="ph-bold ph-circle-notch spin"></i> Revisando bases privadas e imágenes…</div>';
-  try {
-    SA_STORAGE_REPORT = await api('/api/superadmin/storage-hygiene');
-    renderStorageHygiene();
-  } finally {
-    SA_STORAGE_LOADING = false;
-    if (button) { button.disabled = false; button.innerHTML = original || '<i class="ph-bold ph-magnifying-glass"></i> Analizar almacenamiento'; }
-  }
-}
-
-function closeStorageAction() {
-  $('#saStorageActionModal')?.classList.remove('show');
-  SA_STORAGE_ACTION = null;
-  if ($('#saStorageActionPhrase')) $('#saStorageActionPhrase').value = '';
-  if ($('#saStorageActionAck')) $('#saStorageActionAck').checked = false;
-}
-
-function syncStorageActionConfirm() {
-  const button = $('#saStorageActionConfirm');
-  if (!button) return;
-  button.disabled = !SA_STORAGE_ACTION || SA_STORAGE_ACTION.processing || String($('#saStorageActionPhrase')?.value || '').trim() !== SA_STORAGE_ACTION.phrase || !$('#saStorageActionAck')?.checked;
-}
-
-async function openStorageAction(kind, subject) {
-  let action;
-  if (kind === 'delete-prospect' || kind === 'clean-files') {
-    const payload = await api(`/api/superadmin/storage-hygiene/prospects/${Number(subject.id)}`);
-    const preview = payload.preview;
-    if (!preview.scanComplete) throw new Error(preview.scanError || 'La revisión del prospecto está incompleta');
-    const deleting = kind === 'delete-prospect';
-    action = {
-      kind, endpoint: `/api/superadmin/storage-hygiene/prospects/${preview.id}/${deleting ? 'delete' : 'orphan-files'}`,
-      phrase: deleting ? payload.confirmationPhrases.delete : payload.confirmationPhrases.orphanFiles,
-      title: deleting ? 'Eliminar prospecto y sus archivos' : 'Limpiar archivos huérfanos',
-      subject: `${preview.businessName} · /${preview.slug}`,
-      summary: deleting
-        ? `<article><span>Archivos</span><b>${preview.storage?.files || 0}</b></article><article><span>Espacio</span><b>${fmtBytes(preview.storage?.bytes)}</b></article><article><span>Destino</span><b>Eliminación inmediata</b></article>`
-        : `<article><span>Huérfanos</span><b>${preview.storage?.orphanFiles || 0}</b></article><article><span>Espacio</span><b>${fmtBytes(preview.storage?.orphanBytes)}</b></article><article><span>Vigentes protegidos</span><b>${preview.storage?.referencedFiles || 0}</b></article>`,
-      safety: deleting ? 'Se eliminarán definitivamente su base privada, usuarios, imágenes y carpeta. Si registra un pago antes de confirmar, el servidor cancelará la operación.' : 'Solo se moverán archivos sin referencia y con más de 24 horas. El prospecto y sus imágenes vigentes permanecen intactos.',
-      ack: deleting ? 'Entiendo que este prospecto nunca fue cliente y que se eliminarán definitivamente su cuenta, base privada y todos sus archivos.' : 'Entiendo que los archivos señalados saldrán del acceso público y permanecerán 7 días en cuarentena.',
-      button: deleting ? '<i class="ph-bold ph-trash"></i> Eliminar prospecto' : '<i class="ph-bold ph-broom"></i> Limpiar huérfanos',
-    };
-  } else if (kind === 'orphan-scope') {
-    const item = (SA_STORAGE_REPORT?.orphanScopes || []).find((row) => row.scope === subject.scope);
-    if (!item || !item.scanComplete) throw new Error('La carpeta huérfana necesita un nuevo análisis');
-    action = {
-      kind, endpoint: `/api/superadmin/storage-hygiene/orphan-scopes/${encodeURIComponent(item.scope)}/quarantine`, phrase: `CUARENTENA ${item.scope}`,
-      title: 'Poner carpeta huérfana en cuarentena', subject: `/${item.scope}`,
-      summary: `<article><span>Archivos</span><b>${item.files}</b></article><article><span>Espacio</span><b>${fmtBytes(item.bytes)}</b></article><article><span>Tenant actual</span><b>No existe</b></article>`,
-      safety: 'El servidor volverá a comprobar que ningún tenant utiliza este slug antes de mover la carpeta.',
-      ack: 'Entiendo que la carpeta dejará de ser pública y se podrá purgar después de 7 días.', button: '<i class="ph-bold ph-archive"></i> Enviar a cuarentena',
-    };
-  } else if (kind === 'purge') {
-    const job = (SA_STORAGE_REPORT?.jobs || []).find((row) => Number(row.id) === Number(subject.id));
-    if (!job) throw new Error('Operación de cuarentena no encontrada');
-    action = {
-      kind, endpoint: `/api/superadmin/storage-hygiene/jobs/${job.id}/purge`, phrase: `PURGAR ${job.id}`,
-      title: 'Liberar espacio definitivamente', subject: `Operación #${job.id} · /${job.tenant_slug}`,
-      summary: `<article><span>Archivos</span><b>${job.file_count}</b></article><article><span>Espacio</span><b>${fmtBytes(job.total_bytes)}</b></article><article><span>Cuarentena</span><b>Finalizada</b></article>`,
-      safety: 'Esta es la única etapa irreversible sobre archivos. No afecta ninguna base de datos activa.',
-      ack: 'Entiendo que los archivos en cuarentena se eliminarán definitivamente y ya no podrán recuperarse.', button: '<i class="ph-bold ph-trash"></i> Purgar definitivamente',
-    };
-  }
-  if (!action) return;
-  SA_STORAGE_ACTION = action;
-  $('#saStorageActionTitle').textContent = action.title;
-  $('#saStorageActionSubject').textContent = action.subject;
-  $('#saStorageActionSummary').innerHTML = action.summary;
-  $('#saStorageActionSafety').textContent = action.safety;
-  $('#saStorageActionExpected').textContent = action.phrase;
-  $('#saStorageActionAckText').textContent = action.ack;
-  $('#saStorageActionPhrase').value = '';
-  $('#saStorageActionAck').checked = false;
-  $('#saStorageActionConfirm').innerHTML = action.button;
-  syncStorageActionConfirm();
-  $('#saStorageActionModal')?.classList.add('show');
-}
-
-async function confirmStorageAction() {
-  const action = SA_STORAGE_ACTION;
-  if (!action || action.processing) return;
-  if (String($('#saStorageActionPhrase')?.value || '').trim() !== action.phrase || !$('#saStorageActionAck')?.checked) return;
-  action.processing = true;
-  const button = $('#saStorageActionConfirm');
-  const original = button.innerHTML;
-  button.disabled = true;
-  button.innerHTML = '<i class="ph-bold ph-circle-notch spin"></i> Procesando…';
-  try {
-    const result = await api(action.endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ confirmation: action.phrase, acknowledge: true }) });
-    closeStorageAction();
-    toast(result.message || 'Operación completada');
-    await loadStorageHygiene();
-    if (action.kind === 'delete-prospect') await Promise.all([loadTenants(), loadFollowUp()]);
-  } catch (error) {
-    action.processing = false;
-    button.innerHTML = original;
-    syncStorageActionConfirm();
-    throw error;
-  }
-}
-
 function setView(view) {
   const isTenants = view === 'tenants';
-  const isStorageHygiene = view === 'storage-hygiene';
-  const isClients = view === 'clients';
-  const isNonRenewals = view === 'non-renewals';
-  const isInvoicing = view === 'invoicing';
-  const isDemoLeads = view === 'demo-leads';
-  const isFollowUp = view === 'follow-up';
-  const isResellers = view === 'resellers';
-  let title = '<i class="ph-bold ph-plugs-connected"></i> Integraciones';
-  let subtitle = 'Configuración central de OpenAI y APIs del chatbot.';
-  if (isTenants) {
-    title = '<i class="ph-bold ph-buildings"></i> Prospectos';
-    subtitle = 'Tenants que todavía no registran su primer pago.';
-  } else if (isClients) {
-    title = '<i class="ph-bold ph-handshake"></i> Clientes';
-    subtitle = 'Cartera de clientes, ingresos, licencias y cobranza.';
-  } else if (isNonRenewals) {
-    title = '<i class="ph-bold ph-folder-open"></i> No renovación';
-    subtitle = 'Expedientes de clientes que no renovaron y pueden volver.';
-  } else if (isInvoicing) {
-    title = '<i class="ph-bold ph-file-text"></i> Facturación';
-    subtitle = 'Prospectos y clientes del portal fiscal independiente.';
-  } else if (isDemoLeads) {
-    title = '<i class="ph-bold ph-rocket-launch"></i> Leads demo';
-    subtitle = 'Contactos que pidieron acceso al demo con sus datos de negocio.';
-  } else if (isFollowUp) {
-    title = '<i class="ph-bold ph-path"></i> Seguimiento';
-    subtitle = 'Pipeline comercial de candidatos con potencial de compra.';
-  } else if (isResellers) {
-    title = '<i class="ph-bold ph-users-four"></i> Resellers';
-    subtitle = 'Accesos, enlaces de captación y resultados por revendedor.';
-  } else if (isStorageHygiene) {
-    title = '<i class="ph-bold ph-hard-drives"></i> Higiene de almacenamiento';
-    subtitle = 'Revisión manual de prospectos, archivos huérfanos y cuarentena.';
-  }
-  SA_ACTIVE_VIEW = view;
   $('#saViewTenants').hidden = !isTenants;
   $('#saViewTenants').classList.toggle('active', isTenants);
-  $('#saViewClients').hidden = !isClients;
-  $('#saViewClients').classList.toggle('active', isClients);
-  $('#saViewNonRenewals').hidden = !isNonRenewals;
-  $('#saViewNonRenewals').classList.toggle('active', isNonRenewals);
-  $('#saViewInvoicing').hidden = !isInvoicing;
-  $('#saViewInvoicing').classList.toggle('active', isInvoicing);
-  $('#saViewDemoLeads').hidden = !isDemoLeads;
-  $('#saViewDemoLeads').classList.toggle('active', isDemoLeads);
-  $('#saViewFollowUp').hidden = !isFollowUp;
-  $('#saViewFollowUp').classList.toggle('active', isFollowUp);
-  $('#saViewResellers').hidden = !isResellers;
-  $('#saViewResellers').classList.toggle('active', isResellers);
-  $('#saViewStorageHygiene').hidden = !isStorageHygiene;
-  $('#saViewStorageHygiene').classList.toggle('active', isStorageHygiene);
-  $('#saViewIntegrations').hidden = isTenants || isStorageHygiene || isClients || isNonRenewals || isInvoicing || isDemoLeads || isFollowUp || isResellers;
-  $('#saViewIntegrations').classList.toggle('active', !isTenants && !isStorageHygiene && !isClients && !isNonRenewals && !isInvoicing && !isDemoLeads && !isFollowUp && !isResellers);
-  $('#saTitle').innerHTML = title;
-  $('#saSub').textContent = subtitle;
+  $('#saViewIntegrations').hidden = isTenants;
+  $('#saViewIntegrations').classList.toggle('active', !isTenants);
+  $('#saTitle').innerHTML = isTenants
+    ? '<i class="ph-bold ph-buildings"></i> Tenants'
+    : '<i class="ph-bold ph-plugs-connected"></i> Integraciones';
+  $('#saSub').textContent = isTenants
+    ? 'Administra tenants activos, por pagar y suspendidos.'
+    : 'Configuración central de OpenAI y APIs del chatbot.';
   document.querySelectorAll('[data-sa-view]').forEach((a) => a.classList.toggle('active', a.dataset.saView === view));
 }
 
@@ -2489,9 +701,7 @@ async function boot() {
     const me = await api('/api/superadmin/me');
     $('#saUserName').textContent = me.username || 'superadmin';
     startSuperAdminClock();
-    initSalesStageControls();
-    await Promise.all([loadTenants(), loadClients(), loadNonRenewals(), loadInvoicingBusinesses(), loadDemoLeads(), loadFollowUp(), loadResellers(), loadIntegrations(), loadDeployStatus(), loadGitDeployStatus()]);
-    if (SA_ACTIVE_VIEW === 'storage-hygiene') await loadStorageHygiene();
+    await Promise.all([loadTenants(), loadIntegrations(), loadDeployStatus(), loadGitDeployStatus()]);
   } catch (err) {
     toast(err.message, true);
   }
@@ -2502,37 +712,10 @@ $('#saBrandLogoFile')?.addEventListener('change', (e) => {
   if (!file) return;
   applySuperAdminLogoFromFile(file);
 });
-$('#saUsersClose')?.addEventListener('click', closeTenantUsersModal);
 $('#saUploadBrandLogo')?.addEventListener('click', () => uploadSuperAdminLogo().catch((e) => toast(e.message, true)));
 
-$('#saTenantSearch')?.addEventListener('input', () => { SA_TENANT_PAGE = 1; renderTenantTable(); });
-$('#saTenantModuleFilter')?.addEventListener('change', () => { SA_TENANT_PAGE = 1; renderTenantTable(); });
-$('#saTenantStageFilter')?.addEventListener('change', () => { SA_TENANT_PAGE = 1; renderTenantTable(); });
-$('#saTenantCountryFilter')?.addEventListener('change', () => { SA_TENANT_PAGE = 1; renderTenantTable(); });
-$('#saTenantResellerFilter')?.addEventListener('change', () => { SA_TENANT_PAGE = 1; renderTenantTable(); });
-$('#saReloadTenants')?.addEventListener('click', () => { SA_TENANT_PAGE = 1; loadTenants().catch((e) => toast(e.message, true)); });
-$('#saStorageAnalyze')?.addEventListener('click', () => loadStorageHygiene().catch((e) => toast(e.message, true)));
-$('#saStorageSearch')?.addEventListener('input', renderStorageProspects);
-$('#saClientSearch')?.addEventListener('input', renderClientsTable);
-$('#saReloadClients')?.addEventListener('click', () => loadClients().catch((e) => toast(e.message, true)));
-$('#saNonRenewalSearch')?.addEventListener('input', renderNonRenewals);
-$('#saReloadNonRenewals')?.addEventListener('click', () => loadNonRenewals().catch((e) => toast(e.message, true)));
-$('#saReloadInvoicing')?.addEventListener('click', () => loadInvoicingBusinesses().catch((e) => toast(e.message, true)));
-$('#saInvoicingSearch')?.addEventListener('input', renderInvoicingTable);
-document.querySelectorAll('#saInvoicingFilters button').forEach((button) => button.addEventListener('click', () => {
-  SA_INVOICING_FILTER = button.dataset.status;
-  document.querySelectorAll('#saInvoicingFilters button').forEach((item) => item.classList.toggle('active', item === button));
-  renderInvoicingTable();
-}));
-$('#saDemoLeadSearch')?.addEventListener('input', () => { SA_DEMO_PAGE = 1; renderDemoLeadsTable(); });
-$('#saDemoModuleFilter')?.addEventListener('change', () => { SA_DEMO_PAGE = 1; renderDemoLeadsTable(); });
-$('#saDemoStageFilter')?.addEventListener('change', () => { SA_DEMO_PAGE = 1; renderDemoLeadsTable(); });
-$('#saDemoCountryFilter')?.addEventListener('change', () => { SA_DEMO_PAGE = 1; renderDemoLeadsTable(); });
-$('#saReloadDemoLeads')?.addEventListener('click', () => { SA_DEMO_PAGE = 1; loadDemoLeads().catch((e) => toast(e.message, true)); });
-$('#saFollowUpSearch')?.addEventListener('input', renderFollowUpTable);
-$('#saFollowUpStageFilter')?.addEventListener('change', renderFollowUpTable);
-$('#saFollowUpTypeFilter')?.addEventListener('change', renderFollowUpTable);
-$('#saReloadFollowUp')?.addEventListener('click', () => loadFollowUp().catch((e) => toast(e.message, true)));
+$('#saTenantSearch')?.addEventListener('input', renderTenantTable);
+$('#saReloadTenants')?.addEventListener('click', () => loadTenants().catch((e) => toast(e.message, true)));
 $('#saBillingRefresh')?.addEventListener('click', () => refreshBilling().catch((e) => toast(e.message, true)));
 $('#saIntegrationForm')?.addEventListener('submit', (e) => saveIntegrations(e).catch((err) => toast(err.message, true)));
 $('#saDeployRun')?.addEventListener('click', () => runProductionDeploy().catch((err) => toast(err.message, true)));
@@ -2548,7 +731,6 @@ document.querySelectorAll('[data-sa-view]').forEach((a) => {
     e.preventDefault();
     setView(a.dataset.saView);
     history.replaceState(null, '', `#${a.dataset.saView}`);
-    if (a.dataset.saView === 'storage-hygiene' && !SA_STORAGE_REPORT) loadStorageHygiene().catch((error) => toast(error.message, true));
   });
 });
 
@@ -2559,25 +741,11 @@ document.querySelectorAll('#saTenantFilters button').forEach((btn) => {
 });
 
 $('#saPayDate')?.addEventListener('change', updatePaymentNextDue);
-$('#saPayPlan')?.addEventListener('change', (event) => {
-  if (event.target.value === 'invoicing_sat') $('#saPayAmount').value = '1499';
-});
 $('#saPayCancel')?.addEventListener('click', closePaymentModal);
 $('#saPaymentModal')?.addEventListener('click', (e) => {
   if (e.target?.id === 'saPaymentModal') closePaymentModal();
 });
 $('#saPaymentForm')?.addEventListener('submit', (e) => submitPaymentForm(e).catch((err) => toast(err.message, true)));
-$('#saStampClose')?.addEventListener('click', closeStampModal);
-$('#saStampCancel')?.addEventListener('click', closeStampModal);
-$('#saStampModal')?.addEventListener('click', (e) => { if (e.target?.id === 'saStampModal') closeStampModal(); });
-$('#saStampActivationBtn')?.addEventListener('click', () => toggleTenantInvoicing().catch((err) => toast(err.message, true)));
-$('#saStampEnvironmentBtn')?.addEventListener('click', () => saveTenantInvoicingEnvironment().catch((err) => toast(err.message, true)));
-$('#saStampForm')?.addEventListener('submit', (e) => submitStampRecharge(e).catch((err) => toast(err.message, true)));
-$('#saBranchLimitCancel')?.addEventListener('click', closeBranchLimitModal);
-$('#saBranchLimitModal')?.addEventListener('click', (e) => {
-  if (e.target?.id === 'saBranchLimitModal') closeBranchLimitModal();
-});
-$('#saBranchLimitForm')?.addEventListener('submit', (e) => submitBranchLimitForm(e).catch((err) => toast(err.message, true)));
 $('#saSuspendCancel')?.addEventListener('click', closeSuspendModal);
 $('#saSuspendModal')?.addEventListener('click', (e) => {
   if (e.target?.id === 'saSuspendModal') closeSuspendModal();
@@ -2588,59 +756,6 @@ $('#saActivateConfirm')?.addEventListener('click', () => confirmActivateTenant()
 $('#saActivateModal')?.addEventListener('click', (e) => {
   if (e.target?.id === 'saActivateModal') closeActivateModal();
 });
-document.querySelectorAll('#saClientFilters button').forEach((btn) => {
-  btn.addEventListener('click', () => setClientFilter(btn.dataset.status, true));
-});
-$('#saModulesClose')?.addEventListener('click', closeModulesModal);
-$('#saModulesModal')?.addEventListener('click', (e) => {
-  if (e.target?.id === 'saModulesModal') closeModulesModal();
-});
-$('#saPaymentsClose')?.addEventListener('click', closePaymentsModal);
-$('#saNonRenewalCancel')?.addEventListener('click', closeNonRenewalModal);
-$('#saNonRenewalModal')?.addEventListener('click', (event) => { if (event.target?.id === 'saNonRenewalModal') closeNonRenewalModal(); });
-$('#saNonRenewalForm')?.addEventListener('submit', (event) => submitNonRenewal(event).catch((error) => toast(error.message, true)));
-$('#saPaymentsModal')?.addEventListener('click', (e) => {
-  if (e.target?.id === 'saPaymentsModal') closePaymentsModal();
-});
-$('#saOperationResetPhrase')?.addEventListener('input', syncOperationResetConfirm);
-$('#saOperationResetAck')?.addEventListener('change', syncOperationResetConfirm);
-$('#saOperationResetCancel')?.addEventListener('click', closeOperationResetModal);
-$('#saOperationResetConfirm')?.addEventListener('click', () => confirmOperationReset().catch((err) => toast(err.message, true)));
-$('#saOperationResetModal')?.addEventListener('click', (e) => {
-  if (e.target?.id === 'saOperationResetModal') closeOperationResetModal();
-});
-$('#saStorageActionPhrase')?.addEventListener('input', syncStorageActionConfirm);
-$('#saStorageActionAck')?.addEventListener('change', syncStorageActionConfirm);
-$('#saStorageActionCancel')?.addEventListener('click', closeStorageAction);
-$('#saStorageActionConfirm')?.addEventListener('click', () => confirmStorageAction().catch((error) => toast(error.message, true)));
-$('#saStorageActionModal')?.addEventListener('click', (event) => { if (event.target?.id === 'saStorageActionModal') closeStorageAction(); });
-$('#saDeleteCancel')?.addEventListener('click', closeDeleteModal);
-$('#saDeleteConfirm')?.addEventListener('click', () => confirmDelete().catch((err) => toast(err.message, true)));
-$('#saDeleteModal')?.addEventListener('click', (e) => {
-  if (e.target?.id === 'saDeleteModal') closeDeleteModal();
-});
 
-$('#saFollowUpCancel')?.addEventListener('click', closeFollowUpModal);
-$('#saFollowUpModal')?.addEventListener('click', (e) => {
-  if (e.target?.id === 'saFollowUpModal') closeFollowUpModal();
-});
-$('#saFollowUpForm')?.addEventListener('submit', (e) => submitFollowUp(e).catch((err) => toast(err.message, true)));
-$('#saFollowUpActivityType')?.addEventListener('change', (e) => {
-  const type = e.target.value;
-  const stage = $('#saFollowUpStage');
-  if (type === 'close_won') stage.value = 'won';
-  if (type === 'close_lost') stage.value = 'lost';
-  if (type === 'follow_up') stage.value = 'follow_up';
-  if (type === 'contact' && stage.value === 'new') stage.value = 'contacted';
-});
-
-$('#saNewReseller')?.addEventListener('click', () => openResellerModal());
-$('#saResellerCancel')?.addEventListener('click', closeResellerModal);
-$('#saResellerModal')?.addEventListener('click', (event) => { if (event.target?.id === 'saResellerModal') closeResellerModal(); });
-$('#saResellerForm')?.addEventListener('submit', (event) => saveReseller(event).catch((error) => toast(error.message, true)));
-
-const SA_INITIAL_VIEW = ['tenants', 'storage-hygiene', 'clients', 'non-renewals', 'invoicing', 'demo-leads', 'follow-up', 'resellers', 'integrations'].includes((location.hash || '#tenants').slice(1))
-  ? (location.hash || '#tenants').slice(1)
-  : 'tenants';
-setView(SA_INITIAL_VIEW);
+setView((location.hash || '#tenants').slice(1) === 'integrations' ? 'integrations' : 'tenants');
 boot();

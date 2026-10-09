@@ -197,12 +197,14 @@ test('WhatsApp expone un resumen analítico filtrable por fechas', () => {
   assert.match(styles, /whatsapp-metric-card\.messages/);
 });
 
-test('WhatsApp reinicia sesiones terminadas después de una hora y evita eventos duplicados', () => {
+test('WhatsApp reinicia sesiones a los 30 minutos y evita eventos duplicados', () => {
   const route = source('src/routes/whatsapp.js');
   const engine = source('src/chatbot/engine.js');
   assert.match(route, /customer_phone_enc=CASE WHEN COALESCE\(EXCLUDED\.customer_phone_enc, ''\) = ''/);
   assert.match(route, /ON CONFLICT\(external_message_id\) DO NOTHING\s+RETURNING id/);
   assert.match(route, /inboundMessageStored/);
   assert.match(engine, /lastOrderCompletedAt/);
-  assert.match(engine, /Date\.now\(\) - completedAt >= 60 \* 60 \* 1000/);
+  assert.match(engine, /CHAT_SESSION_IDLE_MS = 30 \* 60 \* 1000/);
+  assert.match(engine, /Date\.now\(\) - completedAt >= CHAT_SESSION_IDLE_MS/);
+  assert.match(engine, /whatsappFirstContact/);
 });

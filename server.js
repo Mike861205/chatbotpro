@@ -130,6 +130,7 @@ app.get('/facturacion/login', page('invoicing-login.html'));
 app.get('/facturacion/registro', page('invoicing-register.html'));
 app.get('/facturacion/panel', page('invoicing-app.html'));
 app.get('/notificaciones', page('notify.html'));
+app.get('/bandeja', page('inbox.html'));
 app.get('/caja/:slug', validSlug, page('cashier-login.html'));
 app.get('/autorizar-cierre/:slug/:token', validSlug, (req, res) => {
   if (!/^[a-f0-9]{64}$/.test(req.params.token)) return res.status(404).end();

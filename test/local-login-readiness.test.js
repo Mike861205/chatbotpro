@@ -46,8 +46,9 @@ test('los logins de tenant y SuperAdmin reintentan sólo fallos transitorios de 
 test('el service worker no intercepta ni almacena logins o respuestas de API', () => {
   const serviceWorker = read('public', 'sw.js');
 
-  assert.match(serviceWorker, /cbp-notify-v3/);
-  assert.match(serviceWorker, /url\.pathname !== '\/notificaciones'/);
+  assert.match(serviceWorker, /cbp-notify-v4/);
+  assert.match(serviceWorker, /OFFLINE_PAGES\s*=\s*\['\/notificaciones', '\/bandeja'\]/);
+  assert.match(serviceWorker, /!OFFLINE_PAGES\.includes\(url\.pathname\)/);
   assert.match(serviceWorker, /!url\.pathname\.startsWith\('\/static\/'\)/);
   assert.doesNotMatch(serviceWorker, /PRECACHE\s*=\s*\[[^\]]*\/login/);
 });

@@ -4,7 +4,7 @@ const { q, tdb } = require('../db');
 const { encrypt, decrypt, lookupHash } = require('../utils/crypto');
 const { requireAuth, requireOwner, requireModules } = require('../middleware/auth');
 const { handleMessage } = require('../chatbot/engine');
-const { emitWhatsAppUpdate } = require('../notifications');
+const { emitWhatsAppUpdate, sendTenantPush } = require('../notifications');
 const config = require('../config');
 const { connectionChoices, selectConnectionChoice } = require('../utils/zernioSetup');
 
@@ -147,7 +147,19 @@ function connectionPublic(row, req) {
   };
 }
 
-async function zernioRequest({ apiKey, path, method = 'GET', body }) {
+async function zernioRequest({ apiKey, path, method = 'GET', body, retries = 0 }) {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return await zernioRequestOnce({ apiKey, path, method, body });
+    } catch (error) {
+      const transient = error.providerStatus === 429 || error.providerStatus === 502 || error.providerStatus === 503;
+      if (!transient || attempt >= retries) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 600 * (attempt + 1)));
+    }
+  }
+}
+
+async function zernioRequestOnce({ apiKey, path, method = 'GET', body }) {
   const token = String(apiKey || '').trim();
   if (!token) throw Object.assign(new Error('Falta la API key de Zernio'), { status: 400, code: 'ZERNIO_API_KEY_REQUIRED' });
   const controller = new AbortController();
@@ -265,6 +277,31 @@ async function connectionWithSecret(t, id) {
   return row;
 }
 
+// Zernio can echo our own API messages back as message.sent. Whichever copy
+// arrives first is kept so the inbox never shows the same reply twice.
+async function recordOutbound(t, conversation, { messageId, type, body, source, payload }) {
+  const echo = await t.get(
+    `SELECT id FROM {s}.whatsapp_messages
+     WHERE conversation_id=$1 AND direction='outbound' AND body=$2 AND external_message_id<>$3
+       AND source IN ('', 'cellular') AND created_at > now() - interval '2 minutes'
+     ORDER BY id DESC LIMIT 1`,
+    [conversation.id, body, messageId]
+  );
+  if (echo) {
+    await t.run('UPDATE {s}.whatsapp_messages SET source=$1, message_type=$2, payload_json=$3 WHERE id=$4', [source, type, payload, echo.id]);
+  } else {
+    await t.run(
+      `INSERT INTO {s}.whatsapp_messages
+        (conversation_id, external_message_id, direction, message_type, body, source, status, payload_json)
+       VALUES ($1,$2,'outbound',$3,$4,$5,'sent',$6)
+       ON CONFLICT (external_message_id) DO UPDATE SET source=EXCLUDED.source, message_type=EXCLUDED.message_type, payload_json=EXCLUDED.payload_json
+       WHERE {s}.whatsapp_messages.source IN ('', 'cellular')`,
+      [conversation.id, messageId, type, body, source, payload]
+    );
+  }
+  await t.run('UPDATE {s}.whatsapp_conversations SET last_message_at = now(), updated_at = now() WHERE id = $1', [conversation.id]);
+}
+
 async function sendText(t, connection, conversation, text, source = 'bot') {
   const body = clean(text, 10000);
   if (!body) return null;
@@ -273,16 +310,10 @@ async function sendText(t, connection, conversation, text, source = 'bot') {
     path: `/v1/inbox/conversations/${encodeURIComponent(conversation.external_id)}/messages`,
     method: 'POST',
     body: { accountId: connection.zernio_account_id, message: body },
+    retries: 2,
   });
   const messageId = clean(firstValue(data, ['data.messageId', 'messageId', 'data.id', 'id']) || `out_${sha256(`${Date.now()}_${body}`)}`, 180);
-  await t.run(
-    `INSERT INTO {s}.whatsapp_messages
-      (conversation_id, external_message_id, direction, message_type, body, source, status, payload_json)
-     VALUES ($1,$2,'outbound','text',$3,$4,'sent',$5)
-     ON CONFLICT (external_message_id) DO NOTHING`,
-    [conversation.id, messageId, body, source, safePayload(data)]
-  );
-  await t.run('UPDATE {s}.whatsapp_conversations SET last_message_at = now(), updated_at = now() WHERE id = $1', [conversation.id]);
+  await recordOutbound(t, conversation, { messageId, type: 'text', body, source, payload: safePayload(data) });
   return { messageId, data };
 }
 
@@ -579,16 +610,13 @@ async function sendInteractive(t, connection, conversation, message, source = 'b
     path: `/v1/inbox/conversations/${encodeURIComponent(conversation.external_id)}/messages`,
     method: 'POST',
     body,
+    retries: 2,
   });
   const messageId = clean(firstValue(data, ['data.messageId', 'messageId', 'data.id', 'id']) || `out_${sha256(`${Date.now()}_${JSON.stringify(body)}`)}`, 180);
-  await t.run(
-    `INSERT INTO {s}.whatsapp_messages
-      (conversation_id, external_message_id, direction, message_type, body, source, status, payload_json)
-     VALUES ($1,$2,'outbound','interactive',$3,$4,'sent',$5)
-     ON CONFLICT (external_message_id) DO NOTHING`,
-    [conversation.id, messageId, message.bodyText, source, safePayload({ request: body, response: data })]
-  );
-  await t.run('UPDATE {s}.whatsapp_conversations SET last_message_at = now(), updated_at = now() WHERE id = $1', [conversation.id]);
+  await recordOutbound(t, conversation, {
+    messageId, type: 'interactive', body: message.bodyText, source,
+    payload: safePayload({ request: body, response: data }),
+  });
   return { messageId, data };
 }
 
@@ -637,14 +665,10 @@ async function sendProductImage(t, connection, conversation, productId) {
       body,
     });
     const messageId = clean(firstValue(data, ['data.messageId', 'messageId', 'data.id', 'id']) || `out_${sha256(`${Date.now()}_${imageUrl}`)}`, 180);
-    await t.run(
-      `INSERT INTO {s}.whatsapp_messages
-        (conversation_id, external_message_id, direction, message_type, body, source, status, payload_json)
-       VALUES ($1,$2,'outbound','image',$3,'bot','sent',$4)
-       ON CONFLICT (external_message_id) DO NOTHING`,
-      [conversation.id, messageId, caption, safePayload({ request: body, response: data })]
-    );
-    await t.run('UPDATE {s}.whatsapp_conversations SET last_message_at = now(), updated_at = now() WHERE id = $1', [conversation.id]);
+    await recordOutbound(t, conversation, {
+      messageId, type: 'image', body: caption, source: 'bot',
+      payload: safePayload({ request: body, response: data }),
+    });
     return { messageId, data };
   } catch (error) {
     // An unavailable image must never interrupt the tenant's order flow.
@@ -653,50 +677,89 @@ async function sendProductImage(t, connection, conversation, productId) {
   }
 }
 
-async function sendBotReply(t, connection, conversation, reply) {
+const BOT_MESSAGE_GAP_MS = Number.isFinite(Number(process.env.WHATSAPP_BOT_MESSAGE_GAP_MS))
+  ? Math.max(0, Number(process.env.WHATSAPP_BOT_MESSAGE_GAP_MS)) : 350;
+const pause = (ms) => (ms > 0 ? new Promise((resolve) => setTimeout(resolve, ms)) : Promise.resolve());
+
+async function sendBotReply(t, connection, conversation, reply, onSent = () => {}) {
   const bankText = whatsappBankAccountsText(reply.bankAccounts, reply.bankAccountTitle);
   const hasBankCard = Boolean(bankText);
+  let sentCount = 0;
+  // A short pause keeps WhatsApp delivery order stable and reads like a person typing.
+  const deliver = async (label, send) => {
+    if (sentCount > 0) await pause(BOT_MESSAGE_GAP_MS);
+    try {
+      await send();
+      sentCount += 1;
+      onSent();
+    } catch (error) {
+      console.warn(`[whatsapp][${label}]`, error.message);
+    }
+  };
   for (const message of (reply.messages || [])) {
     // The web assistant renders bankAccounts as a visual card. WhatsApp gets
     // one copy-friendly text card instead of receiving the fallback twice.
     if (hasBankCard && /^Datos para realizar tu pago con /i.test(String(message || '').trim())) continue;
-    try {
-      await sendText(t, connection, conversation, whatsappPromptText(message), 'bot');
-    } catch (error) {
-      console.warn('[whatsapp][send-text]', error.message);
-    }
+    await deliver('send-text', () => sendText(t, connection, conversation, whatsappPromptText(message), 'bot'));
   }
-  if (bankText) {
-    try {
-      await sendText(t, connection, conversation, bankText, 'bot');
-    } catch (error) {
-      console.warn('[whatsapp][send-bank-details]', error.message);
-    }
-  }
+  if (bankText) await deliver('send-bank-details', () => sendText(t, connection, conversation, bankText, 'bot'));
   for (const interactive of whatsappInteractiveMessages(reply)) {
-    try {
-      await sendInteractive(t, connection, conversation, interactive, 'bot');
-    } catch (error) {
-      console.warn('[whatsapp][send-interactive]', error.message);
-    }
+    await deliver('send-interactive', () => sendInteractive(t, connection, conversation, interactive, 'bot'));
   }
+  return sentCount;
 }
+
+// Messages from the same chat are handled strictly one at a time; otherwise two
+// quick taps read the same session state and the replies arrive out of order.
+const conversationQueues = new Map();
+function enqueueConversation(key, task) {
+  const next = (conversationQueues.get(key) || Promise.resolve()).catch(() => {}).then(task);
+  conversationQueues.set(key, next);
+  next.catch(() => {}).finally(() => { if (conversationQueues.get(key) === next) conversationQueues.delete(key); });
+  return next;
+}
+
+const MEDIA_ACK = 'Recibí tu archivo 📎 y el equipo del negocio lo revisará. Para continuar con tu pedido elige una opción del último menú o escribe *hola* para empezar de nuevo.';
+const BOT_ERROR_REPLY = 'Tuve un problema para procesar tu mensaje 🙏. Escribe *hola* para retomar tu pedido desde el inicio.';
 
 // Zernio expects a webhook response within five seconds. Persisting the event
 // and the inbound message happens in the request; the potentially slow AI and
 // outbound WhatsApp calls continue after the 2xx response.
-async function processWhatsAppBotReply({ t, tenantSlug, connection, conversation, parsed, externalConversationId }) {
+function processWhatsAppBotReply(args) {
+  const { connection, externalConversationId } = args;
+  return enqueueConversation(`${connection.id}:${externalConversationId}`, () => runWhatsAppBotReply(args));
+}
+
+async function runWhatsAppBotReply({ t, tenantSlug, connection, conversation, parsed, externalConversationId }) {
+  const notify = () => emitWhatsAppUpdate(tenantSlug, { conversationId: Number(conversation.id), event: 'message' });
   try {
+    // A person may have taken the chat while this message was waiting its turn.
+    const live = await t.get('SELECT bot_enabled FROM {s}.whatsapp_conversations WHERE id=$1', [conversation.id]);
+    if (live && Number(live.bot_enabled) !== 1) return;
+    if (!parsed.text) {
+      await sendBotReply(t, connection, conversation, { messages: [MEDIA_ACK] }, notify);
+      return;
+    }
     const sessionId = `wa_${connection.id}_${sha256(externalConversationId).slice(0, 42)}`;
-    const reply = await handleMessage(t, tenantSlug, sessionId, parsed.text, {
-      orderChannel: 'chatbot',
-      sourceChannel: 'whatsapp',
-      customerPhone: parsed.participant,
-      customerName: parsed.senderName,
-    });
+    let reply;
+    try {
+      reply = await handleMessage(t, tenantSlug, sessionId, parsed.text, {
+        orderChannel: 'chatbot',
+        sourceChannel: 'whatsapp',
+        customerPhone: parsed.participant,
+        customerName: parsed.senderName,
+      });
+    } catch (error) {
+      console.error('[whatsapp][engine]', tenantSlug, error.message);
+      await sendBotReply(t, connection, conversation, { messages: [BOT_ERROR_REPLY] }, notify).catch(() => {});
+      return;
+    }
     const selectedProductId = whatsappProductIdFromInput(parsed.text);
-    if (selectedProductId) await sendProductImage(t, connection, conversation, selectedProductId);
-    await sendBotReply(t, connection, conversation, reply);
+    if (selectedProductId) {
+      const image = await sendProductImage(t, connection, conversation, selectedProductId);
+      if (image) notify();
+    }
+    await sendBotReply(t, connection, conversation, reply, notify);
     if (reply.order?.id) {
       await t.run(
         `UPDATE {s}.orders
@@ -718,6 +781,48 @@ async function processWhatsAppBotReply({ t, tenantSlug, connection, conversation
     ).catch(() => {});
     console.error('[whatsapp][bot]', tenantSlug, error.message);
   }
+}
+
+const MEDIA_LABELS = {
+  image: '📷 Imagen', photo: '📷 Imagen', video: '🎥 Video', audio: '🎤 Audio', voice: '🎤 Nota de voz',
+  ptt: '🎤 Nota de voz', document: '📄 Documento', file: '📄 Documento', sticker: '🙂 Sticker',
+  contacts: '👤 Contacto', contact: '👤 Contacto',
+};
+
+// Attachments arrive in several provider shapes; only the kind and a label are
+// needed so the inbox shows the same placeholder WhatsApp would.
+function whatsappMedia(payload) {
+  const list = ['message.attachments', 'data.message.attachments', 'attachments', 'data.attachments']
+    .map((path) => getPath(payload, path)).find((value) => Array.isArray(value) && value.length);
+  const first = list?.[0] && typeof list[0] === 'object' ? list[0] : null;
+  const declared = clean(first?.type || first?.mediaType || firstValue(payload, [
+    'message.type', 'message.messageType', 'data.message.type', 'data.message.messageType', 'messageType', 'data.messageType',
+  ]), 40).toLowerCase();
+  const mime = clean(first?.mimeType || first?.mime_type || first?.contentType || '', 80).toLowerCase();
+  const kind = MEDIA_LABELS[declared] ? declared : (MEDIA_LABELS[mime.split('/')[0]] ? mime.split('/')[0] : (first ? 'document' : ''));
+  if (!kind) return null;
+  return { kind, label: MEDIA_LABELS[kind], url: clean(first?.url || first?.link || '', 1000) };
+}
+
+// Prefer the provider's own send time so rapid or retried webhooks keep the
+// conversation order WhatsApp shows; fall back to arrival time when unusable.
+function providerTimestamp(payload) {
+  const raw = firstValue(payload, [
+    'message.timestamp', 'message.createdAt', 'message.sentAt', 'message.created_at',
+    'data.message.timestamp', 'data.message.createdAt', 'data.message.sentAt', 'data.message.created_at',
+    'data.timestamp', 'data.createdAt', 'timestamp', 'createdAt', 'created_at',
+  ]);
+  if (raw === '') return null;
+  let ms = NaN;
+  if (typeof raw === 'number' || /^\d{9,13}$/.test(String(raw).trim())) {
+    const n = Number(raw);
+    ms = n < 1e12 ? n * 1000 : n;
+  } else {
+    ms = Date.parse(String(raw));
+  }
+  const now = Date.now();
+  if (!Number.isFinite(ms) || ms > now + 60000 || ms < now - 7 * 24 * 3600 * 1000) return null;
+  return new Date(ms).toISOString();
 }
 
 function webhookMessage(payload) {
@@ -777,8 +882,12 @@ function webhookMessage(payload) {
     'button.title', 'button_reply.title', 'interactive.button_reply.title', 'interactive.list_reply.title',
     'data.interactive.button_reply.title', 'data.interactive.list_reply.title',
   ]), 200);
+  const media = whatsappMedia(payload);
   const location = whatsappLocation(payload);
-  const textValue = typeof messageValue === 'object' ? clean(messageValue?.body || messageValue?.text || '') : clean(messageValue, 10000);
+  const rawTextValue = typeof messageValue === 'object' ? clean(messageValue?.body || messageValue?.text || '') : clean(messageValue, 10000);
+  // Attachment events sometimes carry a generic placeholder ("📷 Image") as text.
+  const mediaPlaceholder = /^[^\p{L}\p{N}]*(image|photo|video|audio|voice( note)?|document|file|sticker|imagen|foto|nota de voz|documento|archivo)[^\p{L}\p{N}]*$/iu;
+  const textValue = media && mediaPlaceholder.test(rawTextValue) ? '' : rawTextValue;
   // Zernio returns list/button taps in metadata rather than message text. The
   // ID is intentionally passed to the existing chatbot engine because its
   // machine commands are already the canonical option values.
@@ -788,9 +897,10 @@ function webhookMessage(payload) {
   const locationText = location ? `geo:${location.lat},${location.lng}|${location.label}` : '';
   const text = interactiveId || locationText || textValue || interactiveTitle;
   const source = clean(firstValue(payload, ['source', 'data.source', 'metadata.source']), 80);
+  const timestamp = providerTimestamp(payload);
   const incoming = eventType.includes('received') || eventType.includes('inbound') || eventType === 'message.new';
   const outgoing = eventType.includes('sent') || eventType.includes('outbound') || eventType.includes('outgoing');
-  return { eventType, messageId, conversationId, participant, recipient, senderName, text, interactiveId, interactiveType, interactiveTitle, location, source, incoming, outgoing };
+  return { eventType, messageId, conversationId, participant, recipient, senderName, text, interactiveId, interactiveType, interactiveTitle, location, media, timestamp, source, incoming, outgoing };
 }
 
 function whatsappConversationCustomerName(parsed, connection = null) {
@@ -802,6 +912,32 @@ function whatsappConversationCustomerName(parsed, connection = null) {
   if (!name) return '';
   const channelName = clean(connection?.display_name, 160).toLowerCase().replace(/\s+/g, ' ');
   return channelName && name.toLowerCase().replace(/\s+/g, ' ') === channelName ? '' : name;
+}
+
+// Chats attended by the bot ping at most once per minute; chats a person has
+// taken over notify on every message.
+const pushMarks = new Map();
+const BOT_PUSH_COOLDOWN_MS = 60 * 1000;
+
+function pushInboundMessage({ tenantSlug, conversation, parsed }) {
+  const botAttended = Number(conversation.bot_enabled) === 1;
+  const key = `${tenantSlug}:${conversation.id}`;
+  const now = Date.now();
+  if (botAttended && now - (pushMarks.get(key) || 0) < BOT_PUSH_COOLDOWN_MS) return;
+  pushMarks.set(key, now);
+  if (pushMarks.size > 2000) for (const [mark, at] of pushMarks) if (now - at > BOT_PUSH_COOLDOWN_MS) pushMarks.delete(mark);
+
+  const name = decrypt(conversation.customer_name_enc || '') || decrypt(conversation.customer_phone_enc || '') || 'Cliente WhatsApp';
+  const body = parsed.location ? '\ud83d\udccd Ubicaci\u00f3n compartida'
+    : parsed.interactiveTitle || (parsed.interactiveId ? 'Eligi\u00f3 una opci\u00f3n' : (parsed.text || parsed.media?.label || 'Nuevo mensaje'));
+  sendTenantPush(tenantSlug, {
+    title: name,
+    body: clean(body, 140),
+    slug: tenantSlug,
+    event: 'whatsapp_message',
+    conversationId: Number(conversation.id),
+    url: `/bandeja?c=${Number(conversation.id)}`,
+  }, { ttl: 600, urgency: 'high', topic: 'whatsapp' }).catch(() => {});
 }
 
 async function handleWebhook(req, res, next) {
@@ -840,8 +976,22 @@ async function handleWebhook(req, res, next) {
     );
     if (!inserted) return res.json({ ok: true, duplicate: true });
 
+    const statusMatch = parsed.eventType.match(/^message\.(delivered|read|failed)$/);
+    if (statusMatch && parsed.messageId) {
+      // Ticks/failed state in the inbox come from provider lifecycle events.
+      const changed = await t.get(
+        `UPDATE {s}.whatsapp_messages SET status=$1
+         WHERE external_message_id=$2 AND direction='outbound'
+           AND ($1='failed' OR status NOT IN ('read','failed') AND NOT (status='delivered' AND $1='delivered'))
+         RETURNING conversation_id`,
+        [statusMatch[1], parsed.messageId]
+      );
+      if (changed) emitWhatsAppUpdate(tenantSlug, { conversationId: Number(changed.conversation_id), event: 'status' });
+    }
+
+    const storedMessageId = parsed.messageId || (parsed.text || parsed.media ? `evt_${externalEventId}` : '');
     const shouldStoreMessage = parsed.incoming
-      ? Boolean(parsed.text || parsed.participant || parsed.conversationId)
+      ? Boolean(parsed.text || parsed.media || parsed.participant || parsed.conversationId)
       : Boolean(parsed.outgoing && parsed.text && (parsed.conversationId || parsed.recipient || parsed.participant));
     if (shouldStoreMessage) {
       const externalConversationId = parsed.conversationId || (parsed.incoming ? parsed.participant : (parsed.recipient || parsed.participant)) || `event_${inserted.id}`;
@@ -863,28 +1013,39 @@ async function handleWebhook(req, res, next) {
         [connection.id, externalConversationId, customerPhone ? encrypt(customerPhone) : '', customerPhone ? lookupHash(customerPhone) : '', customerName ? encrypt(customerName) : '']
       );
 
-      let inboundMessageStored = !parsed.messageId;
-      if (parsed.messageId && parsed.text) {
+      let inboundMessageStored = !storedMessageId;
+      if (storedMessageId && (parsed.text || parsed.media)) {
         const messageBody = parsed.location
           ? (parsed.location.label || `Ubicación: ${parsed.location.lat}, ${parsed.location.lng}`)
-          : (parsed.interactiveTitle || parsed.text);
-        const messageRow = await t.get(
+          : (parsed.interactiveTitle || parsed.text || parsed.media?.label || '');
+        const messageType = parsed.location ? 'location' : (parsed.interactiveId ? 'interactive' : (!parsed.text && parsed.media ? parsed.media.kind : 'text'));
+        const messageSource = parsed.source || (parsed.incoming ? 'whatsapp' : 'cellular');
+        const botEcho = !parsed.incoming && await t.get(
+          `SELECT id FROM {s}.whatsapp_messages
+           WHERE conversation_id=$1 AND direction='outbound' AND body=$2 AND (source='bot' OR source LIKE 'human:%')
+             AND created_at > now() - interval '2 minutes' LIMIT 1`,
+          [conversation.id, messageBody]
+        );
+        const messageRow = botEcho ? null : await t.get(
           `INSERT INTO {s}.whatsapp_messages
-            (conversation_id,external_message_id,direction,message_type,body,source,status,payload_json)
-           VALUES($1,$2,$3,$4,$5,$6,$7,$8)
+            (conversation_id,external_message_id,direction,message_type,body,source,status,payload_json,created_at)
+           VALUES($1,$2,$3,$4,$5,$6,$7,$8,COALESCE($9::timestamptz, now()))
            ON CONFLICT(external_message_id) DO NOTHING
            RETURNING id`,
-          [conversation.id, parsed.messageId, parsed.incoming ? 'inbound' : 'outbound', parsed.location ? 'location' : (parsed.interactiveId ? 'interactive' : 'text'), messageBody, parsed.source || (parsed.incoming ? 'whatsapp' : 'cellular'), parsed.incoming ? 'received' : 'sent', safePayload(payload)]
+          [conversation.id, storedMessageId, parsed.incoming ? 'inbound' : 'outbound', messageType, messageBody, messageSource, parsed.incoming ? 'received' : 'sent', safePayload(payload), parsed.timestamp]
         );
         inboundMessageStored = Boolean(messageRow);
       }
 
-      if (parsed.incoming && parsed.text && inboundMessageStored && Number(conversation.bot_enabled) === 1 && Number(connection.enabled) === 1) {
+      if (parsed.incoming && (parsed.text || parsed.media) && inboundMessageStored && Number(conversation.bot_enabled) === 1 && Number(connection.enabled) === 1) {
         setImmediate(() => {
           processWhatsAppBotReply({ t, tenantSlug, connection, conversation, parsed, externalConversationId }).catch((error) => {
             console.error('[whatsapp][bot-queue]', tenantSlug, error.message);
           });
         });
+      }
+      if (parsed.incoming && (parsed.text || parsed.media) && inboundMessageStored) {
+        pushInboundMessage({ tenantSlug, conversation, parsed });
       }
       emitWhatsAppUpdate(tenantSlug, { conversationId: Number(conversation.id), event: 'message' });
     }
@@ -1022,7 +1183,9 @@ router.get('/', async (req, res, next) => {
     const conversations = await req.tdb.all(
       `SELECT c.id,c.external_id,c.status,c.bot_enabled,c.last_message_at,c.updated_at,
               c.customer_phone_enc,c.customer_name_enc,
-              (SELECT body FROM {s}.whatsapp_messages m WHERE m.conversation_id=c.id ORDER BY m.created_at DESC LIMIT 1) AS last_message
+              (SELECT body FROM {s}.whatsapp_messages m WHERE m.conversation_id=c.id ORDER BY m.created_at DESC, m.id DESC LIMIT 1) AS last_message,
+              (SELECT message_type FROM {s}.whatsapp_messages m WHERE m.conversation_id=c.id ORDER BY m.created_at DESC, m.id DESC LIMIT 1) AS last_message_type,
+              (SELECT direction FROM {s}.whatsapp_messages m WHERE m.conversation_id=c.id ORDER BY m.created_at DESC, m.id DESC LIMIT 1) AS last_direction
        FROM {s}.whatsapp_conversations c
        ORDER BY COALESCE(c.last_message_at,c.updated_at) DESC LIMIT 100`
     );
@@ -1031,6 +1194,7 @@ router.get('/', async (req, res, next) => {
       conversations: conversations.map((row) => ({
         id: Number(row.id), externalId: row.external_id, status: row.status, botEnabled: Boolean(Number(row.bot_enabled)),
         lastMessageAt: row.last_message_at, updatedAt: row.updated_at, lastMessage: row.last_message || '',
+        lastMessageType: row.last_message_type || '', lastDirection: row.last_direction || '',
         customerName: decrypt(row.customer_name_enc || '') || '', customerPhone: decrypt(row.customer_phone_enc || '') || '',
       })),
     });
@@ -1385,12 +1549,47 @@ router.delete('/connections/:id', requireOwner, async (req, res, next) => {
   } catch (error) { next(error); }
 });
 
+// Shapes a stored row for the inbox: coordinates for location pins, the
+// buttons/list rows the customer was offered, and the image URL if any.
+function inboxMessageView(row) {
+  const view = {
+    id: row.id, external_message_id: row.external_message_id, direction: row.direction, message_type: row.message_type,
+    body: row.body, source: row.source, status: row.status, created_at: row.created_at,
+  };
+  if (!['location', 'interactive', 'image'].includes(row.message_type)) return view;
+  const payload = safeJson(row.payload_json, {});
+  if (row.message_type === 'location') {
+    const location = whatsappLocation(payload);
+    if (location) view.location = location;
+  } else if (row.message_type === 'interactive') {
+    const request = payload.request || {};
+    const rows = (request.interactive?.action?.sections || []).flatMap((section) => section.rows || []);
+    const titles = [...(request.buttons || []), ...rows].map((item) => clean(item.title, 40)).filter(Boolean);
+    if (request.interactive?.type === 'locationrequestmessage') titles.push('📍 Enviar ubicación');
+    if (titles.length) view.options = titles.slice(0, 12);
+    if (request.interactive?.action?.button) view.listButton = clean(request.interactive.action.button, 40);
+  } else if (row.message_type === 'image') {
+    const url = clean(payload.request?.attachmentUrl, 1000);
+    if (/^https?:\/\//i.test(url)) view.mediaUrl = url;
+  }
+  return view;
+}
+
 router.get('/conversations/:id/messages', async (req, res, next) => {
   try {
     const conversation = await req.tdb.get('SELECT id FROM {s}.whatsapp_conversations WHERE id=$1 LIMIT 1', [Number(req.params.id)]);
     if (!conversation) return res.status(404).json({ error: 'Conversación no encontrada' });
-    const rows = await req.tdb.all('SELECT id,external_message_id,direction,message_type,body,source,status,created_at FROM {s}.whatsapp_messages WHERE conversation_id=$1 ORDER BY created_at ASC LIMIT 300', [conversation.id]);
-    res.json(rows);
+    // Newest 300, returned oldest-first with id as a stable tie-breaker.
+    const rows = await req.tdb.all(
+      `SELECT * FROM (
+         SELECT id,external_message_id,direction,message_type,body,source,status,created_at,
+                CASE WHEN message_type IN ('location','interactive','image') THEN payload_json ELSE '' END AS payload_json
+         FROM {s}.whatsapp_messages WHERE conversation_id=$1 ORDER BY created_at DESC, id DESC LIMIT 300
+       ) latest ORDER BY created_at ASC, id ASC`,
+      [conversation.id]
+    );
+    res.set('Cache-Control', 'no-store');
+    res.json(rows.map(inboxMessageView));
   } catch (error) { next(error); }
 });
 
@@ -1425,5 +1624,7 @@ router.whatsappButtonTitle = whatsappButtonTitle;
 router.whatsappBankAccountsText = whatsappBankAccountsText;
 router.webhookMessage = webhookMessage;
 router.whatsappConversationCustomerName = whatsappConversationCustomerName;
+router.inboxMessageView = inboxMessageView;
+router.enqueueConversation = enqueueConversation;
 
 module.exports = router;

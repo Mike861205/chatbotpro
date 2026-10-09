@@ -303,6 +303,99 @@ function renderWhatsAppSandbox(row = WHATSAPP_SELECTED_CONNECTION) {
   host.innerHTML = `<i class="ph-bold ${state === 'active' ? 'ph-check-circle' : 'ph-clock'}"></i><span><b>${esc(label)}</b>${details ? `<small>${esc(details)}</small>` : ''}${state === 'pending' ? '<small>Responde en WhatsApp el mensaje de activación de Zernio y después revisa el estado.</small>' : ''}</span>`;
 }
 
+function whatsappPlainText(value) {
+  return String(value ?? '').replace(/[*_`~]/g, '').replace(/\s+/g, ' ').trim();
+}
+
+// Same inline styling WhatsApp applies: *negrita*, _cursiva_, `monoespaciado`.
+function whatsappFormatText(value) {
+  return esc(String(value ?? ''))
+    .replace(/`([^`\n]+)`/g, '<code>$1</code>')
+    .replace(/\*([^*\n]+)\*/g, '<b>$1</b>')
+    .replace(/(^|[\s(])_([^_\n]+)_(?=$|[\s).,!?])/g, '$1<i>$2</i>')
+    .replace(/\n/g, '<br>');
+}
+
+function whatsappTime(value) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  const timeZone = ME?.tenant?.timezone || undefined;
+  try { return new Intl.DateTimeFormat('es-MX', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone }).format(date); }
+  catch { return new Intl.DateTimeFormat('es-MX', { hour: '2-digit', minute: '2-digit', hour12: false }).format(date); }
+}
+
+function whatsappDayKey(value) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  return whatsappAnalyticsDateKey(date);
+}
+
+function whatsappDayLabel(value) {
+  const key = whatsappDayKey(value);
+  if (!key) return '';
+  const today = whatsappAnalyticsDateKey();
+  const yesterday = whatsappAnalyticsDateKey(new Date(Date.now() - 86400000));
+  if (key === today) return 'Hoy';
+  if (key === yesterday) return 'Ayer';
+  return new Intl.DateTimeFormat('es-MX', { day: 'numeric', month: 'long', year: 'numeric', timeZone: ME?.tenant?.timezone || undefined }).format(new Date(value));
+}
+
+function whatsappSourceLabel(message) {
+  const source = String(message.source || '');
+  if (message.direction !== 'outbound') return '';
+  if (source === 'bot') return 'Asistente';
+  if (source.startsWith('human')) return 'Equipo';
+  if (source === 'cellular') return 'Celular';
+  if (source === 'sandbox') return 'Prueba';
+  return '';
+}
+
+function whatsappTicks(message) {
+  if (message.direction !== 'outbound') return '';
+  if (message.pending) return '<i class="ph-bold ph-clock wa-tick" title="Enviando"></i>';
+  const status = String(message.status || '').toLowerCase();
+  if (status === 'failed') return '<i class="ph-bold ph-warning-circle wa-tick failed" title="No se pudo enviar"></i>';
+  if (status === 'read') return '<i class="ph-bold ph-checks wa-tick read" title="Leído"></i>';
+  if (status === 'delivered') return '<i class="ph-bold ph-checks wa-tick" title="Entregado"></i>';
+  return '<i class="ph-bold ph-check wa-tick" title="Enviado"></i>';
+}
+
+function whatsappLocationCard(location, label) {
+  const lat = Number(location.lat);
+  const lng = Number(location.lng);
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return '';
+  const coords = `${lat.toFixed(6)}, ${lng.toFixed(6)}`;
+  const href = `https://www.google.com/maps?q=${encodeURIComponent(`${lat},${lng}`)}`;
+  const title = whatsappPlainText(location.label || label || '');
+  return `<a class="wa-location" href="${href}" target="_blank" rel="noopener noreferrer">
+    <span class="wa-location-pin"><i class="ph-fill ph-map-pin"></i></span>
+    <span class="wa-location-copy"><b>Ubicación</b>${title && title !== coords ? `<span>${esc(title)}</span>` : ''}<small>${esc(coords)}</small></span>
+    <span class="wa-location-open">Abrir en Maps <i class="ph-bold ph-arrow-up-right"></i></span>
+  </a>`;
+}
+
+function whatsappMessageBody(message) {
+  const parts = [];
+  if (message.location) parts.push(whatsappLocationCard(message.location, message.body));
+  else if (message.message_type === 'image') {
+    if (message.mediaUrl) parts.push(`<a href="${esc(message.mediaUrl)}" target="_blank" rel="noopener noreferrer"><img class="wa-media" src="${esc(message.mediaUrl)}" alt="Imagen enviada" loading="lazy"></a>`);
+    if (message.body) parts.push(`<span>${whatsappFormatText(message.body)}</span>`);
+  } else if (message.body) {
+    parts.push(`<span>${whatsappFormatText(message.body)}</span>`);
+  }
+  if (Array.isArray(message.options) && message.options.length) {
+    parts.push(`<span class="wa-options">${message.options.map((title) => `<em>${esc(whatsappPlainText(title))}</em>`).join('')}</span>`);
+  }
+  return parts.join('');
+}
+
+function whatsappConversationPreview(row) {
+  const type = String(row.lastMessageType || '');
+  const body = whatsappPlainText(row.lastMessage);
+  const text = type === 'location' ? '📍 Ubicación' : (body || 'Sin mensaje');
+  return `${row.lastDirection === 'outbound' ? 'Tú: ' : ''}${text}`;
+}
+
 function renderWhatsAppInbox() {
   const host = $('#whatsappConversationList');
   if (!host) return;
@@ -312,41 +405,54 @@ function renderWhatsAppInbox() {
     return;
   }
   host.innerHTML = rows.map((row) => `<button type="button" class="whatsapp-conversation-row ${Number(row.id) === Number(WHATSAPP_SELECTED_CONVERSATION?.id) ? 'selected' : ''}" data-whatsapp-conversation="${row.id}">
-    <span class="whatsapp-avatar"><i class="ph-bold ph-user"></i></span><span><b>${esc(row.customerName || row.customerPhone || 'Cliente WhatsApp')}</b><small>${esc(row.lastMessage || 'Sin mensaje')}</small></span>${row.botEnabled ? '<em>Bot</em>' : '<em class="human">Humano</em>'}
+    <span class="whatsapp-avatar"><i class="ph-bold ph-user"></i></span><span><b>${esc(row.customerName || row.customerPhone || 'Cliente WhatsApp')}</b><small>${esc(whatsappConversationPreview(row))}</small></span>${row.botEnabled ? '<em>Bot</em>' : '<em class="human">Humano</em>'}
   </button>`).join('');
   host.querySelectorAll('[data-whatsapp-conversation]').forEach((button) => button.addEventListener('click', () => selectWhatsAppConversation(Number(button.dataset.whatsappConversation))));
 }
 
+const WHATSAPP_PENDING = new Map();
+let WHATSAPP_MESSAGES_REQUEST = 0;
+
 async function loadWhatsAppMessages() {
   const list = $('#whatsappMessageList');
   if (!list || !WHATSAPP_SELECTED_CONVERSATION) return;
-  const messages = await api(`/api/whatsapp/conversations/${WHATSAPP_SELECTED_CONVERSATION.id}/messages`);
+  const conversationId = WHATSAPP_SELECTED_CONVERSATION.id;
+  const requestId = ++WHATSAPP_MESSAGES_REQUEST;
+  const messages = await api(`/api/whatsapp/conversations/${conversationId}/messages`);
+  // A newer request or a different chat won while this one was in flight.
+  if (requestId !== WHATSAPP_MESSAGES_REQUEST || Number(WHATSAPP_SELECTED_CONVERSATION?.id) !== Number(conversationId)) return;
   const visibleMessages = messages.filter((message, index) => {
-    const previous = messages[index - 1];
-    // Zernio represents the prompt and its interactive payload separately.
-    // Hide only the repeated prompt in this inbox; keep both records and the
-    // real WhatsApp delivery intact.
-    return !(message.message_type === 'interactive'
-      && previous?.direction === message.direction
-      && previous?.body === message.body);
+    const next = messages[index + 1];
+    // The prompt text and its interactive payload are stored separately; keep
+    // the interactive one (it carries the buttons) and hide the repeated text.
+    return !(message.message_type === 'text'
+      && next?.message_type === 'interactive'
+      && next.direction === message.direction
+      && String(next.body || '').trim() === String(message.body || '').trim());
   });
-  list.innerHTML = visibleMessages.length
-    ? visibleMessages.map((message) => `<div class="whatsapp-message ${message.direction === 'outbound' ? 'outbound' : 'inbound'}"><span>${esc(message.body || '')}</span><small>${esc(message.source || message.direction || '')} · ${esc(message.created_at || '')}</small></div>`).join('')
+  const pending = (WHATSAPP_PENDING.get(Number(conversationId)) || []).filter((item) => !visibleMessages.some((message) => message.direction === 'outbound' && message.body === item.body && Date.parse(message.created_at) >= item.sentAt - 5000));
+  WHATSAPP_PENDING.set(Number(conversationId), pending);
+  const all = [...visibleMessages, ...pending];
+  const nearBottom = list.scrollHeight - list.scrollTop - list.clientHeight < 120;
+  let lastDay = '';
+  list.innerHTML = all.length
+    ? all.map((message) => {
+      const day = whatsappDayKey(message.created_at);
+      const separator = day && day !== lastDay ? `<div class="wa-day"><span>${esc(whatsappDayLabel(message.created_at))}</span></div>` : '';
+      lastDay = day || lastDay;
+      const who = whatsappSourceLabel(message);
+      return `${separator}<div class="whatsapp-message ${message.direction === 'outbound' ? 'outbound' : 'inbound'}${message.status === 'failed' ? ' failed' : ''}">${whatsappMessageBody(message)}<small>${who ? `${esc(who)} · ` : ''}${esc(whatsappTime(message.created_at))} ${whatsappTicks(message)}</small></div>`;
+    }).join('')
     : `<div class="whatsapp-empty-state"><i class="ph-duotone ph-chat-circle-dots"></i><b>Conversación sin mensajes</b><span>El siguiente mensaje quedará registrado aquí.</span></div>`;
-  list.scrollTop = list.scrollHeight;
+  if (nearBottom || list.dataset.conversation !== String(conversationId)) list.scrollTop = list.scrollHeight;
+  list.dataset.conversation = String(conversationId);
 }
 
-async function selectWhatsAppConversation(id) {
-  WHATSAPP_SELECTED_CONVERSATION = WHATSAPP_DATA.conversations.find((row) => Number(row.id) === Number(id)) || null;
-  renderWhatsAppInbox();
+function renderWhatsAppChatHeader() {
   const row = WHATSAPP_SELECTED_CONVERSATION;
   $('#whatsappChatHeader').innerHTML = row
     ? `<div><span>${esc(row.customerName || row.customerPhone || 'Cliente WhatsApp')}</span><b>${esc(row.customerPhone || '')}</b></div><button class="btn btn-ghost btn-sm" type="button" id="whatsappTakeoverBtn"><i class="ph-bold ph-hand"></i> ${row.botEnabled ? 'Tomar control humano' : 'Reactivar bot'}</button>`
     : `<div><span>Selecciona una conversación</span><b>Los mensajes del bot y del equipo aparecerán aquí.</b></div>`;
-  const input = $('#whatsappMessageInput');
-  const submit = $('#whatsappSendForm button[type="submit"]');
-  if (input) input.disabled = !row;
-  if (submit) submit.disabled = !row;
   $('#whatsappTakeoverBtn')?.addEventListener('click', async () => {
     try {
       await api(`/api/whatsapp/conversations/${row.id}/takeover`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ botEnabled: !row.botEnabled }) });
@@ -355,13 +461,61 @@ async function selectWhatsAppConversation(id) {
       toast(row.botEnabled ? 'El bot fue desactivado para esta conversación' : 'El bot fue reactivado');
     } catch (error) { toast(error.message, true); }
   });
+}
+
+async function selectWhatsAppConversation(id) {
+  WHATSAPP_SELECTED_CONVERSATION = WHATSAPP_DATA.conversations.find((row) => Number(row.id) === Number(id)) || null;
+  renderWhatsAppInbox();
+  renderWhatsAppChatHeader();
+  const row = WHATSAPP_SELECTED_CONVERSATION;
+  const input = $('#whatsappMessageInput');
+  const submit = $('#whatsappSendForm button[type="submit"]');
+  if (input) input.disabled = !row;
+  if (submit) submit.disabled = !row;
   await loadWhatsAppMessages();
+}
+
+// Live refresh: coalesces bursts of events into one lightweight reload of the
+// chat list and the open conversation (no analytics/connection reloads).
+let WHATSAPP_REFRESH_TIMER = null;
+let WHATSAPP_REFRESH_BUSY = false;
+let WHATSAPP_REFRESH_AGAIN = false;
+
+function whatsappInboxVisible() {
+  const panel = $('#whatsappPanelInbox');
+  return Boolean(panel && !panel.hidden && panel.offsetParent !== null && !document.hidden);
+}
+
+function scheduleWhatsAppInboxRefresh(delay = 120) {
+  clearTimeout(WHATSAPP_REFRESH_TIMER);
+  WHATSAPP_REFRESH_TIMER = setTimeout(runWhatsAppInboxRefresh, delay);
+}
+
+async function runWhatsAppInboxRefresh() {
+  if (WHATSAPP_REFRESH_BUSY) { WHATSAPP_REFRESH_AGAIN = true; return; }
+  WHATSAPP_REFRESH_BUSY = true;
+  try {
+    const data = await api('/api/whatsapp');
+    WHATSAPP_DATA = data;
+    const selectedId = WHATSAPP_SELECTED_CONVERSATION?.id;
+    if (selectedId) {
+      WHATSAPP_SELECTED_CONVERSATION = data.conversations.find((row) => Number(row.id) === Number(selectedId)) || WHATSAPP_SELECTED_CONVERSATION;
+    }
+    renderWhatsAppInbox();
+    if (selectedId) renderWhatsAppChatHeader();
+    if (selectedId) await loadWhatsAppMessages();
+  } catch { /* the next event or poll retries */ }
+  finally {
+    WHATSAPP_REFRESH_BUSY = false;
+    if (WHATSAPP_REFRESH_AGAIN) { WHATSAPP_REFRESH_AGAIN = false; scheduleWhatsAppInboxRefresh(60); }
+  }
 }
 
 function setWhatsAppTab(tab) {
   document.querySelectorAll('[data-whatsapp-tab]').forEach((button) => button.classList.toggle('on', button.dataset.whatsappTab === tab));
   ['analytics', 'connection', 'inbox', 'orders', 'help'].forEach((key) => { const panel = $(`#whatsappPanel${key[0].toUpperCase()}${key.slice(1)}`); if (panel) panel.hidden = key !== tab; });
   if (tab === 'analytics') loadWhatsAppAnalytics().catch((error) => toast(error.message, true));
+  if (tab === 'inbox') scheduleWhatsAppInboxRefresh(0);
 }
 
 async function selectWhatsAppConnection(id) {
@@ -373,7 +527,11 @@ async function selectWhatsAppConnection(id) {
 async function loadWhatsApp() {
   WHATSAPP_DATA = await api('/api/whatsapp');
   renderWhatsAppConnections();
+  if (WHATSAPP_SELECTED_CONVERSATION) {
+    WHATSAPP_SELECTED_CONVERSATION = WHATSAPP_DATA.conversations?.find((row) => Number(row.id) === Number(WHATSAPP_SELECTED_CONVERSATION.id)) || WHATSAPP_SELECTED_CONVERSATION;
+  }
   renderWhatsAppInbox();
+  if (WHATSAPP_SELECTED_CONVERSATION) { renderWhatsAppChatHeader(); loadWhatsAppMessages().catch(() => {}); }
   const active = WHATSAPP_DATA.connections?.find((row) => row.enabled) || WHATSAPP_DATA.connections?.[0] || null;
   if (active && !WHATSAPP_SELECTED_CONNECTION) fillWhatsAppConnectionForm(active);
   if (!active) fillWhatsAppConnectionForm(null);
@@ -407,9 +565,14 @@ async function loadWhatsApp() {
   if (typeof window.io === 'function') {
     const socketScope = typeof getAuthScope === 'function' ? getAuthScope() : 'owner';
     WHATSAPP_SOCKET = window.io({ auth: { scope: socketScope || 'owner' }, reconnectionDelay: 2000 });
-    WHATSAPP_SOCKET.on('whatsapp_update', () => { if (!document.hidden) loadWhatsApp().catch(() => {}); });
+    WHATSAPP_SOCKET.on('whatsapp_update', () => { if (whatsappInboxVisible()) scheduleWhatsAppInboxRefresh(); });
+    WHATSAPP_SOCKET.on('connect', () => { if (whatsappInboxVisible()) scheduleWhatsAppInboxRefresh(0); });
   }
+  // Safety net for dropped sockets or proxies that close idle connections.
+  setInterval(() => { if (whatsappInboxVisible()) scheduleWhatsAppInboxRefresh(0); }, 15000);
+  document.addEventListener('visibilitychange', () => { if (whatsappInboxVisible()) scheduleWhatsAppInboxRefresh(0); });
   $('#whatsappOpenOrdersBtn')?.addEventListener('click', () => navigate('pedidos'));
+  $('#whatsappInboxAppCopyBtn')?.addEventListener('click', async () => { try { await navigator.clipboard.writeText(`${location.origin}/bandeja`); toast('Enlace de la bandeja copiado'); } catch { toast('No se pudo copiar el enlace', true); } });
   $('#whatsappMode')?.addEventListener('change', () => {
     WHATSAPP_DISCOVERY_VERSION++;
     renderWhatsAppChannelChoices([]);
@@ -491,5 +654,24 @@ async function loadWhatsApp() {
   $('#whatsappSandboxRefreshBtn')?.addEventListener('click', async () => { try { const row = WHATSAPP_SELECTED_CONNECTION; if (!row) return; const result = await api(`/api/whatsapp/connections/${row.id}/sandbox/session`); WHATSAPP_SELECTED_CONNECTION = result.connection; await loadWhatsApp(); fillWhatsAppConnectionForm(result.connection); toast(result.connection?.sandbox?.status === 'active' ? 'Teléfono sandbox activo' : 'La sesión sigue pendiente'); } catch (error) { toast(error.message, true); } });
   $('#whatsappSandboxStartBtn')?.addEventListener('click', async () => { try { const row = WHATSAPP_SELECTED_CONNECTION; if (!row) return; await api(`/api/whatsapp/connections/${row.id}/sandbox/start-conversation`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }); await loadWhatsApp(); setWhatsAppTab('inbox'); toast('Conversación sandbox iniciada'); } catch (error) { toast(error.message, true); } });
   $('#whatsappSandboxRevokeBtn')?.addEventListener('click', async () => { try { const row = WHATSAPP_SELECTED_CONNECTION; if (!row) return; if (!confirm('¿Revocar la sesión sandbox actual?')) return; const result = await api(`/api/whatsapp/connections/${row.id}/sandbox/session`, { method: 'DELETE' }); WHATSAPP_SELECTED_CONNECTION = result.connection; await loadWhatsApp(); fillWhatsAppConnectionForm(result.connection); toast('Sesión sandbox revocada'); } catch (error) { toast(error.message, true); } });
-  $('#whatsappSendForm')?.addEventListener('submit', async (event) => { event.preventDefault(); const text = $('#whatsappMessageInput').value.trim(); const row = WHATSAPP_SELECTED_CONVERSATION; if (!text || !row) return; try { await api(`/api/whatsapp/conversations/${row.id}/send`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ message: text }) }); $('#whatsappMessageInput').value = ''; await loadWhatsApp(); await selectWhatsAppConversation(row.id); } catch (error) { toast(error.message, true); } });
+  $('#whatsappSendForm')?.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const field = $('#whatsappMessageInput');
+    const text = field.value.trim();
+    const row = WHATSAPP_SELECTED_CONVERSATION;
+    if (!text || !row) return;
+    const pending = { pending: true, direction: 'outbound', source: 'human', message_type: 'text', body: text, created_at: new Date().toISOString(), sentAt: Date.now() };
+    WHATSAPP_PENDING.set(Number(row.id), [...(WHATSAPP_PENDING.get(Number(row.id)) || []), pending]);
+    field.value = '';
+    loadWhatsAppMessages().catch(() => {});
+    try {
+      await api(`/api/whatsapp/conversations/${row.id}/send`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ message: text }) });
+      scheduleWhatsAppInboxRefresh(0);
+    } catch (error) {
+      WHATSAPP_PENDING.set(Number(row.id), (WHATSAPP_PENDING.get(Number(row.id)) || []).filter((item) => item !== pending));
+      if (!field.value) field.value = text;
+      loadWhatsAppMessages().catch(() => {});
+      toast(error.message, true);
+    }
+  });
 }

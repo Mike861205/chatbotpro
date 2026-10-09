@@ -16,7 +16,7 @@ function loadNotifications({ subscriptions = [], queryError = null, sendError = 
     [dbPath, require.cache[dbPath]],
     [webpushPath, require.cache[webpushPath]],
   ]);
-  const calls = { sends: [], deletes: [] };
+  const calls = { sends: [], deletes: [], queries: [] };
 
   require.cache[configPath] = stubModule(configPath, {
     VAPID_PUBLIC_KEY: 'public-key',
@@ -25,7 +25,8 @@ function loadNotifications({ subscriptions = [], queryError = null, sendError = 
   });
   require.cache[dbPath] = stubModule(dbPath, {
     tdb: () => ({
-      all: async () => {
+      all: async (sql, params) => {
+        calls.queries.push({ sql, params });
         if (queryError) throw queryError;
         return subscriptions;
       },
@@ -93,4 +94,14 @@ test('sendTenantPush omite registros inválidos y elimina endpoints expirados', 
   assert.deepEqual(result, { sent: 0, dead: 1, invalid: 1 });
   assert.equal(calls.sends.length, 1);
   assert.deepEqual(calls.deletes[0].params, ['https://push.example/expired']);
+});
+test('sendTenantPush entrega cada evento sólo a los dispositivos de su tema', async () => {
+  const { notifications, calls } = loadNotifications();
+
+  await notifications.sendTenantPush('demo', { title: 'Pedido nuevo' });
+  await notifications.sendTenantPush('demo', { title: 'Mensaje' }, { topic: 'whatsapp' });
+
+  assert.deepEqual(calls.queries[0].params, [['orders', 'all']]);
+  assert.deepEqual(calls.queries[1].params, [['whatsapp', 'all']]);
+  assert.match(calls.queries[0].sql, /WHERE topic = ANY\(\$1\)/);
 });
