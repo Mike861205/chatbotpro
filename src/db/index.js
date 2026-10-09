@@ -101,6 +101,9 @@ async function initMaster(options = {}) {
       plan_name TEXT DEFAULT 'starter',
       billing_due_date DATE,
       customer_since TIMESTAMPTZ,
+      non_renewal_at TIMESTAMPTZ,
+      non_renewal_reason TEXT NOT NULL DEFAULT '',
+      non_renewal_by TEXT NOT NULL DEFAULT '',
       license_count INTEGER NOT NULL DEFAULT 1,
       branch_limit INTEGER NOT NULL DEFAULT 2,
       invoicing_enabled INTEGER NOT NULL DEFAULT 0,
@@ -260,6 +263,9 @@ async function initMaster(options = {}) {
   await q(`ALTER TABLE tenants ADD COLUMN IF NOT EXISTS plan_name TEXT DEFAULT 'starter'`);
   await q(`ALTER TABLE tenants ADD COLUMN IF NOT EXISTS billing_due_date DATE`);
   await q(`ALTER TABLE tenants ADD COLUMN IF NOT EXISTS customer_since TIMESTAMPTZ`);
+  await q(`ALTER TABLE tenants ADD COLUMN IF NOT EXISTS non_renewal_at TIMESTAMPTZ`);
+  await q(`ALTER TABLE tenants ADD COLUMN IF NOT EXISTS non_renewal_reason TEXT NOT NULL DEFAULT ''`);
+  await q(`ALTER TABLE tenants ADD COLUMN IF NOT EXISTS non_renewal_by TEXT NOT NULL DEFAULT ''`);
   await q(`ALTER TABLE tenants ADD COLUMN IF NOT EXISTS license_count INTEGER NOT NULL DEFAULT 1`);
   await q(`ALTER TABLE tenants ADD COLUMN IF NOT EXISTS branch_limit INTEGER NOT NULL DEFAULT 2`);
   await q(`ALTER TABLE tenants ADD COLUMN IF NOT EXISTS invoicing_enabled INTEGER`);
@@ -386,6 +392,7 @@ async function initMaster(options = {}) {
       AND t.customer_since IS NULL
   `);
   await q(`CREATE INDEX IF NOT EXISTS idx_tenants_customer_since ON tenants (customer_since)`);
+  await q(`CREATE INDEX IF NOT EXISTS idx_tenants_non_renewal_at ON tenants (non_renewal_at DESC) WHERE non_renewal_at IS NOT NULL`);
   await q(`ALTER TABLE users ADD COLUMN IF NOT EXISTS display_name TEXT DEFAULT ''`);
   await q(`ALTER TABLE users ADD COLUMN IF NOT EXISTS branch_id INTEGER`);
   await q(`ALTER TABLE users ADD COLUMN IF NOT EXISTS cashier_slug TEXT`);
@@ -1046,6 +1053,27 @@ async function createTenantSchema(slug) {
     );
     CREATE INDEX IF NOT EXISTS idx_${s}_business_expenses_date ON "${s}".business_expenses(expense_date);
     CREATE INDEX IF NOT EXISTS idx_${s}_business_expenses_branch ON "${s}".business_expenses(branch_id);
+    CREATE TABLE IF NOT EXISTS "${s}".deleted_expenses (
+      id BIGSERIAL PRIMARY KEY,
+      source TEXT NOT NULL,
+      source_id INTEGER NOT NULL,
+      branch_id INTEGER,
+      branch_name TEXT NOT NULL DEFAULT '',
+      session_id INTEGER,
+      expense_date DATE NOT NULL,
+      concept TEXT NOT NULL,
+      amount NUMERIC(14,2) NOT NULL,
+      notes TEXT NOT NULL DEFAULT '',
+      created_by TEXT NOT NULL DEFAULT '',
+      original_created_at TIMESTAMPTZ,
+      deleted_by TEXT NOT NULL,
+      deleted_role TEXT NOT NULL,
+      authorized_by TEXT NOT NULL DEFAULT '',
+      deleted_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      UNIQUE (source, source_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_${s}_deleted_expenses_date ON "${s}".deleted_expenses(expense_date DESC, id DESC);
+    CREATE INDEX IF NOT EXISTS idx_${s}_deleted_expenses_branch ON "${s}".deleted_expenses(branch_id);
     CREATE TABLE IF NOT EXISTS "${s}".suppliers (
       id SERIAL PRIMARY KEY, name TEXT NOT NULL, tax_id TEXT DEFAULT '', contact_name TEXT DEFAULT '',
       phone TEXT DEFAULT '', email TEXT DEFAULT '', address TEXT DEFAULT '', notes TEXT DEFAULT '', active INTEGER DEFAULT 1,

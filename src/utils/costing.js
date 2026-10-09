@@ -20,6 +20,27 @@ async function ensureCostingSchema(t) {
     );
     CREATE INDEX IF NOT EXISTS idx_business_expenses_date ON {s}.business_expenses(expense_date);
     CREATE INDEX IF NOT EXISTS idx_business_expenses_branch ON {s}.business_expenses(branch_id);
+    CREATE TABLE IF NOT EXISTS {s}.deleted_expenses (
+      id BIGSERIAL PRIMARY KEY,
+      source TEXT NOT NULL,
+      source_id INTEGER NOT NULL,
+      branch_id INTEGER,
+      branch_name TEXT NOT NULL DEFAULT '',
+      session_id INTEGER,
+      expense_date DATE NOT NULL,
+      concept TEXT NOT NULL,
+      amount NUMERIC(14,2) NOT NULL,
+      notes TEXT NOT NULL DEFAULT '',
+      created_by TEXT NOT NULL DEFAULT '',
+      original_created_at TIMESTAMPTZ,
+      deleted_by TEXT NOT NULL,
+      deleted_role TEXT NOT NULL,
+      authorized_by TEXT NOT NULL DEFAULT '',
+      deleted_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      UNIQUE (source, source_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_deleted_expenses_date ON {s}.deleted_expenses(expense_date DESC, id DESC);
+    CREATE INDEX IF NOT EXISTS idx_deleted_expenses_branch ON {s}.deleted_expenses(branch_id);
   `);
   ensuredSchemas.add(t.schema);
 }

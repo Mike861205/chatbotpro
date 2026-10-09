@@ -1,6 +1,6 @@
 const MODULES = Object.freeze([
   ['dashboard', 'Dashboard'], ['pedidos', 'Pedidos'], ['clientes', 'Clientes'],
-  ['pos', 'Punto de venta'], ['ventas', 'Ventas'], ['facturacion', 'Facturacion MX'],
+  ['pos', 'Punto de venta'], ['gastos', 'Gastos'], ['ventas', 'Ventas'], ['facturacion', 'Facturacion MX'],
   ['cfdi', 'CFDI emitidos'], ['cancelaciones', 'Cancelaciones'], ['cortes', 'Cortes'],
   ['kds', 'Pantallas KDS'], ['productos', 'Productos'], ['promociones', 'Promociones'], ['costos', 'Costo de ventas'],
   ['inventarios', 'Inventarios'], ['stock-sucursales', 'Stock por sucursal'],

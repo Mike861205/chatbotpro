@@ -1,11 +1,13 @@
 const express = require('express');
+const bcrypt = require('bcryptjs');
 const { requireAuth, requireOwner, requireModules } = require('../middleware/auth');
 const { ensureCostingSchema, money, preciseCost } = require('../utils/costing');
+const { getSetting } = require('../db');
+const { createRateLimiter } = require('../middleware/security');
 
 const router = express.Router();
+const expenseDeleteLimiter = createRateLimiter({ windowMs: 15 * 60 * 1000, max: 12, message: 'Demasiados intentos. Espera unos minutos.' });
 router.use(requireAuth);
-router.use(requireModules('costos'));
-router.use(requireOwner);
 router.use(async (req, res, next) => {
   try {
     await ensureCostingSchema(req.tdb);
@@ -19,12 +21,23 @@ function safeText(value, max = 180) {
   return String(value || '').trim().slice(0, max);
 }
 
-function validDate(value) {
-  const date = String(value || '').trim();
-  return /^\d{4}-\d{2}-\d{2}$/.test(date) ? date : '';
+function matchesExpenseSearch(row, query) {
+  if (!query) return true;
+  const text = [row.concept, row.notes, row.branch_name, row.created_by, row.deleted_by]
+    .map((value) => String(value || ''))
+    .join(' ')
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+  return text.includes(query);
 }
 
-router.get('/products', async (req, res, next) => {
+function validDate(value) {
+  const date = String(value || '').trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return '';
+  const parsed = new Date(`${date}T00:00:00Z`);
+  return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === date ? date : '';
+}
+
+router.get('/products', requireModules('costos'), requireOwner, async (req, res, next) => {
   try {
     res.set('Cache-Control', 'no-store');
     const sort = String(req.query.sort || 'alphabetical') === 'category' ? 'category' : 'alphabetical';
@@ -67,7 +80,7 @@ router.get('/products', async (req, res, next) => {
   }
 });
 
-router.put('/products', async (req, res, next) => {
+router.put('/products', requireModules('costos'), requireOwner, async (req, res, next) => {
   try {
     const items = Array.isArray(req.body?.items) ? req.body.items : [];
     if (!items.length) return res.status(400).json({ error: 'No hay costos para guardar' });
@@ -105,26 +118,45 @@ router.put('/products', async (req, res, next) => {
   }
 });
 
-router.get('/expenses', async (req, res, next) => {
+router.get('/expenses', requireModules('gastos'), async (req, res, next) => {
   try {
     res.set('Cache-Control', 'no-store');
+    const branchRestricted = req.user.role !== 'owner';
+    const userBranchId = Number(req.user.branchId || 0);
+    if (branchRestricted && !userBranchId) return res.status(403).json({ error: 'El usuario no tiene una sucursal asignada' });
+    const search = safeText(req.query.q, 120);
+    const normalizedSearch = search.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
     const now = new Date();
     const year = Math.max(2000, Math.min(2100, Number(req.query.year) || now.getFullYear()));
     const month = Math.max(1, Math.min(12, Number(req.query.month) || now.getMonth() + 1));
-    const branch = String(req.query.branch || 'all').trim().toLowerCase();
-    const params = [year, month];
+    const allDates = req.query.period === 'all';
+    const customRange = req.query.from !== undefined || req.query.to !== undefined;
+    let from = '';
+    let to = '';
+    if (!allDates && customRange) {
+      from = validDate(req.query.from);
+      to = validDate(req.query.to);
+      if (!from || !to || from > to) return res.status(400).json({ error: 'Selecciona un rango de fechas válido' });
+    } else if (!allDates) {
+      from = `${year}-${String(month).padStart(2, '0')}-01`;
+      to = new Date(Date.UTC(year, month, 0)).toISOString().slice(0, 10);
+    }
+    const branch = branchRestricted ? String(userBranchId) : String(req.query.branch || 'all').trim().toLowerCase();
+    const params = allDates ? [] : [from, to];
+    const manualDates = allDates ? '' : 'AND e.expense_date BETWEEN $1::date AND $2::date';
+    const posDates = allDates ? '' : `AND (m.created_at AT TIME ZONE '${req.timezone}')::date BETWEEN $1::date AND $2::date`;
+    const deletedDates = allDates ? '' : 'AND d.expense_date BETWEEN $1::date AND $2::date';
     let manualBranch = '';
     let posBranch = '';
-    if (branch === 'general') {
-      manualBranch = 'AND COALESCE(e.branch_id, 0) = 0';
-      posBranch = 'AND COALESCE(ps.branch_id, 0) = 0';
-    } else if (/^\d+$/.test(branch) && Number(branch) > 0) {
-      params.push(Number(branch));
+    let deletedBranch = '';
+    if (branchRestricted) {
+      params.push(userBranchId);
       manualBranch = `AND e.branch_id = $${params.length}`;
       posBranch = `AND ps.branch_id = $${params.length}`;
+      deletedBranch = `AND d.branch_id = $${params.length}`;
     }
 
-    const rows = await req.tdb.all(
+    const [rows, branches, deletedRows] = await Promise.all([req.tdb.all(
       `SELECT * FROM (
          SELECT e.id, 'manual'::text AS source, e.expense_date,
                 e.branch_id, COALESCE(NULLIF(e.branch_name, ''), b.name, 'Sin sucursal') AS branch_name,
@@ -132,8 +164,8 @@ router.get('/expenses', async (req, res, next) => {
                 to_char(e.created_at AT TIME ZONE '${req.timezone}', 'DD/MM/YYYY HH24:MI') AS created_at
          FROM {s}.business_expenses e
          LEFT JOIN {s}.branches b ON b.id = e.branch_id
-         WHERE EXTRACT(YEAR FROM e.expense_date)::int = $1
-           AND EXTRACT(MONTH FROM e.expense_date)::int = $2
+         WHERE TRUE
+           ${manualDates}
            ${manualBranch}
          UNION ALL
          SELECT -m.id AS id, 'pos'::text AS source,
@@ -146,28 +178,71 @@ router.get('/expenses', async (req, res, next) => {
          JOIN {s}.pos_sessions ps ON ps.id = m.session_id
          LEFT JOIN {s}.branches b ON b.id = ps.branch_id
          WHERE m.kind = 'expense'
-           AND EXTRACT(YEAR FROM m.created_at AT TIME ZONE '${req.timezone}')::int = $1
-           AND EXTRACT(MONTH FROM m.created_at AT TIME ZONE '${req.timezone}')::int = $2
+           ${posDates}
            ${posBranch}
        ) expenses
        ORDER BY expense_date DESC, id DESC`,
       params
+    ), req.tdb.all(
+      branchRestricted
+        ? 'SELECT id, name, active FROM {s}.branches WHERE id = $1 ORDER BY name'
+        : 'SELECT id, name, active FROM {s}.branches ORDER BY active DESC, name',
+      branchRestricted ? [userBranchId] : []
+    ), req.tdb.all(
+      `SELECT d.id, d.source, d.source_id, d.branch_id, d.branch_name, d.session_id,
+              d.expense_date, d.concept, d.amount::float AS amount, d.notes, d.created_by,
+              d.deleted_by, d.deleted_role, d.authorized_by,
+              to_char(d.deleted_at AT TIME ZONE '${req.timezone}', 'DD/MM/YYYY HH24:MI') AS deleted_at
+       FROM {s}.deleted_expenses d
+       WHERE TRUE ${deletedDates} ${deletedBranch}
+       ORDER BY d.deleted_at DESC, d.id DESC`,
+      params
+    )]);
+    const scopedRows = (branchRestricted ? rows.filter((row) => Number(row.branch_id) === userBranchId) : rows)
+      .filter((row) => matchesExpenseSearch(row, normalizedSearch));
+    const scopedDeletedRows = (branchRestricted ? deletedRows.filter((row) => Number(row.branch_id) === userBranchId) : deletedRows)
+      .filter((row) => matchesExpenseSearch(row, normalizedSearch));
+    const visibleRows = branchRestricted || branch === 'all' ? scopedRows : scopedRows.filter((row) =>
+      branch === 'general' ? !row.branch_id : /^\d+$/.test(branch) && Number(row.branch_id) === Number(branch)
     );
+    const visibleDeletedRows = branchRestricted || branch === 'all' ? scopedDeletedRows : scopedDeletedRows.filter((row) =>
+      branch === 'general' ? !row.branch_id : /^\d+$/.test(branch) && Number(row.branch_id) === Number(branch)
+    );
+    const branchTotals = branches.map((row) => {
+      const expenseRows = scopedRows.filter((expense) => Number(expense.branch_id) === Number(row.id));
+      return { id: Number(row.id), name: row.name, active: Number(row.active), total: money(expenseRows.reduce((sum, expense) => sum + Number(expense.amount || 0), 0)), count: expenseRows.length };
+    });
+    const generalRows = branchRestricted ? [] : scopedRows.filter((row) => !row.branch_id);
     res.json({
       year,
       month,
+      from,
+      to,
+      allDates,
       branch,
-      total: money(rows.reduce((sum, row) => sum + Number(row.amount || 0), 0)),
-      expenses: rows.map((row) => ({ ...row, id: Number(row.id), amount: money(row.amount), branch_id: row.branch_id ? Number(row.branch_id) : null })),
+      branchRestricted,
+      search,
+      branches: branches.map((row) => ({ id: Number(row.id), name: row.name, active: Number(row.active) })),
+      globalTotal: money(scopedRows.reduce((sum, row) => sum + Number(row.amount || 0), 0)),
+      globalCount: scopedRows.length,
+      branchTotals,
+      generalTotal: money(generalRows.reduce((sum, row) => sum + Number(row.amount || 0), 0)),
+      generalCount: generalRows.length,
+      total: money(visibleRows.reduce((sum, row) => sum + Number(row.amount || 0), 0)),
+      expenses: visibleRows.map((row) => ({ ...row, id: Number(row.id), amount: money(row.amount), branch_id: row.branch_id ? Number(row.branch_id) : null })),
+      deletedExpenses: visibleDeletedRows.map((row) => ({ ...row, amount: money(row.amount) })),
     });
   } catch (error) {
     next(error);
   }
 });
 
-router.post('/expenses', async (req, res, next) => {
+router.post('/expenses', requireModules('gastos'), async (req, res, next) => {
   try {
     const branchId = Number(req.body?.branchId || 0) || null;
+    if (req.user.role !== 'owner' && (!req.user.branchId || branchId !== Number(req.user.branchId))) {
+      return res.status(403).json({ error: 'Solo puedes registrar gastos de tu sucursal' });
+    }
     const expenseDate = validDate(req.body?.expenseDate);
     const concept = safeText(req.body?.concept, 120);
     const amount = Number(req.body?.amount);
@@ -194,14 +269,72 @@ router.post('/expenses', async (req, res, next) => {
   }
 });
 
-router.delete('/expenses/:id', async (req, res, next) => {
+router.delete('/expenses/:id', requireModules('gastos'), expenseDeleteLimiter, async (req, res, next) => {
   try {
     const id = Number(req.params.id);
-    if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: 'Gasto inválido' });
-    const result = await req.tdb.run('DELETE FROM {s}.business_expenses WHERE id = $1', [id]);
-    if (!result.rowCount) return res.status(404).json({ error: 'Gasto no encontrado o generado desde caja' });
+    if (!Number.isSafeInteger(id) || id === 0) return res.status(400).json({ error: 'Gasto inválido' });
+    const cashier = req.user.role === 'cashier';
+    if (!cashier && req.user.role !== 'owner') return res.status(403).json({ error: 'Solo el dueño o un cajero autorizado puede borrar gastos' });
+    if (cashier && !req.user.branchId) return res.status(403).json({ error: 'El cajero no tiene una sucursal asignada' });
+    let authorizedBy = 'Dueño';
+    if (cashier) {
+      const pinHash = await getSetting(req.tdb, 'pos_authorization_pin_hash', '');
+      if (!pinHash) return res.status(409).json({ error: 'Configura primero el NIP de autorización en Mi negocio' });
+      if (!(await bcrypt.compare(String(req.body?.pin || ''), pinHash))) return res.status(403).json({ error: 'NIP de autorización incorrecto' });
+      authorizedBy = 'NIP del negocio';
+    }
+    const source = id < 0 ? 'pos' : 'manual';
+    const sourceId = Math.abs(id);
+    await req.tdb.tx(async (tx) => {
+      let expense;
+      if (source === 'manual') {
+        expense = await tx.get(
+          `SELECT e.id, e.branch_id, e.branch_name, NULL::int AS session_id,
+                  e.expense_date, e.concept, e.amount, e.notes, e.created_by, e.created_at
+           FROM {s}.business_expenses e WHERE e.id=$1 ${cashier ? 'AND e.branch_id=$2' : ''} FOR UPDATE`,
+          cashier ? [sourceId, req.user.branchId] : [sourceId]
+        );
+      } else {
+        expense = await tx.get(
+          `SELECT m.id, ps.branch_id, ps.branch_name, ps.id AS session_id,
+                  (m.created_at AT TIME ZONE $2)::date AS expense_date,
+                  COALESCE(NULLIF(m.note, ''), 'Gasto de caja') AS concept,
+                  m.amount, ''::text AS notes, m.created_by, m.created_at
+           FROM {s}.pos_cash_movements m
+           JOIN {s}.pos_sessions ps ON ps.id=m.session_id
+           WHERE m.id=$1 AND m.kind='expense' ${cashier ? 'AND ps.branch_id=$3' : ''}
+           FOR UPDATE OF m`,
+          cashier ? [sourceId, req.timezone, req.user.branchId] : [sourceId, req.timezone]
+        );
+      }
+      if (!expense) throw Object.assign(new Error('Gasto no encontrado en la sucursal autorizada'), { statusCode: 404 });
+      if (source === 'pos') await tx.get('SELECT id FROM {s}.pos_sessions WHERE id=$1 FOR UPDATE', [expense.session_id]);
+      await tx.run(
+        `INSERT INTO {s}.deleted_expenses
+         (source, source_id, branch_id, branch_name, session_id, expense_date, concept,
+          amount, notes, created_by, original_created_at, deleted_by, deleted_role, authorized_by)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
+        [source, sourceId, expense.branch_id, expense.branch_name || '', expense.session_id,
+          expense.expense_date, expense.concept, expense.amount, expense.notes || '',
+          expense.created_by || '', expense.created_at, req.user.username, req.user.role, authorizedBy]
+      );
+      if (source === 'manual') {
+        await tx.run('DELETE FROM {s}.business_expenses WHERE id=$1', [sourceId]);
+      } else {
+        await tx.run("DELETE FROM {s}.pos_cash_movements WHERE id=$1 AND kind='expense'", [sourceId]);
+        await tx.run("UPDATE {s}.pos_close_approvals SET status='stale' WHERE session_id=$1 AND status='approved'", [expense.session_id]);
+        await tx.run(
+          `UPDATE {s}.pos_sessions
+           SET expected_amount = expected_amount + $2,
+               difference_amount = closing_amount - (expected_amount + $2)
+           WHERE id=$1 AND status='closed'`,
+          [expense.session_id, expense.amount]
+        );
+      }
+    });
     res.json({ ok: true });
   } catch (error) {
+    if (error.statusCode) return res.status(error.statusCode).json({ error: error.message });
     next(error);
   }
 });

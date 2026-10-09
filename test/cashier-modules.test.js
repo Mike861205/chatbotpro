@@ -22,7 +22,7 @@ test('el cajero tiene acceso a pedidos, cancelaciones y cortes con aislamiento d
   assert.match(pos, /const isCashier = req\.user\?\.role === 'cashier'/);
 
   // Frontend allowed views & scoping
-  assert.match(app, /CASHIER_ALLOWED_VIEWS = new Set\(\['pos', 'pedidos', 'cancelaciones', 'cortes'\]\)/);
+  assert.match(app, /CASHIER_ALLOWED_VIEWS = new Set\(\['pos', 'gastos', 'pedidos', 'cancelaciones', 'cortes'\]\)/);
   assert.match(app, /if \(isCashierUser\(\)\) \{\s*return CASHIER_ALLOWED_VIEWS\.has\(view\) \? view : 'pos';\s*\}/);
   assert.match(app, /AUDIT_BRANCH = ME\?\.branchId \? String\(ME\.branchId\) : 'general'/);
   assert.match(app, /CUTS_BRANCH = ME\?\.branchId \? String\(ME\.branchId\) : 'general'/);

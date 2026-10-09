@@ -7,7 +7,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/regular/style.css" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/bold/style.css" />
-  <link rel="stylesheet" href="/static/css/styles.css?v=20260921-storage-hygiene" />
+  <link rel="stylesheet" href="/static/css/styles.css?v=20261008-non-renewals" />
   <link rel="icon" type="image/svg+xml" href="/static/favicon.svg?v=20260623" />
   <link rel="icon" type="image/png" href="/static/chatbotpro100.png?v=20260623" />
   <link rel="shortcut icon" href="/static/chatbotpro100.png?v=20260623" />
@@ -26,6 +26,7 @@
         <a href="#tenants" data-sa-view="tenants" data-color="cyan" class="active"><span class="nav-ic"><i class="ph-fill ph-buildings"></i></span><span>Prospectos</span><span class="sa-module-icon"><i class="ph-bold ph-users-three"></i></span></a>
         <a href="#storage-hygiene" data-sa-view="storage-hygiene" data-color="amber"><span class="nav-ic"><i class="ph-fill ph-broom"></i></span><span>Higiene</span><span class="sa-module-icon"><i class="ph-bold ph-hard-drives"></i></span></a>
         <a href="#clients" data-sa-view="clients" data-color="green"><span class="nav-ic"><i class="ph-fill ph-handshake"></i></span><span>Clientes</span><span class="sa-module-icon"><i class="ph-bold ph-identification-card"></i></span></a>
+        <a href="#non-renewals" data-sa-view="non-renewals" data-color="rose"><span class="nav-ic"><i class="ph-fill ph-user-minus"></i></span><span>No renovación</span><span class="sa-module-icon"><i class="ph-bold ph-folder-open"></i></span></a>
         <a href="#invoicing" data-sa-view="invoicing" data-color="amber"><span class="nav-ic"><i class="ph-fill ph-file-text"></i></span><span>Facturación</span><span class="sa-module-icon"><i class="ph-bold ph-stamp"></i></span></a>
         <a href="#demo-leads" data-sa-view="demo-leads" data-color="violet"><span class="nav-ic"><i class="ph-fill ph-rocket-launch"></i></span><span>Leads demo</span><span class="sa-module-icon"><i class="ph-bold ph-phone-call"></i></span></a>
         <a href="#follow-up" data-sa-view="follow-up" data-color="cyan"><span class="nav-ic"><i class="ph-fill ph-path"></i></span><span>Seguimiento</span><span class="sa-module-icon"><i class="ph-bold ph-kanban"></i></span></a>
@@ -151,6 +152,25 @@
             <input id="saClientSearch" type="search" placeholder="Buscar cliente, dueño, país o teléfono" style="max-width:360px" />
           </div>
           <div id="saClientsTable"></div>
+        </div>
+      </section>
+
+      <section id="saViewNonRenewals" class="section" hidden>
+        <div class="card clients-hero-card" style="padding:18px;margin-bottom:14px">
+          <div>
+            <span class="clients-hero-kicker"><i class="ph-bold ph-folder-open"></i> Expedientes conservados</span>
+            <h3>Clientes que no renovaron</h3>
+            <p>Consulta el motivo, los pagos y el contacto. Un nuevo pago devuelve automáticamente el cliente a la cartera.</p>
+          </div>
+          <button type="button" class="btn btn-ghost" id="saReloadNonRenewals"><i class="ph-bold ph-arrows-clockwise"></i> Actualizar</button>
+        </div>
+        <div class="card" style="padding:16px;margin-bottom:14px"><div id="saNonRenewalSummary" class="client-summary-grid"></div></div>
+        <div class="card" style="padding:16px">
+          <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:12px">
+            <label for="saNonRenewalSearch" style="position:absolute;left:-9999px;width:1px;height:1px;overflow:hidden">Buscar expedientes</label>
+            <input id="saNonRenewalSearch" type="search" placeholder="Buscar negocio, contacto o motivo" style="max-width:380px" />
+          </div>
+          <div id="saNonRenewalsTable"></div>
         </div>
       </section>
 
@@ -507,6 +527,23 @@
     </div>
   </div>
 
+  <div class="modal-bg" id="saNonRenewalModal" role="dialog" aria-modal="true" aria-labelledby="saNonRenewalTitle">
+    <div class="modal" style="max-width:540px">
+      <h3 id="saNonRenewalTitle"><i class="ph-bold ph-user-minus"></i> Enviar a No renovación</h3>
+      <p id="saNonRenewalBusiness" style="color:var(--ink-2);margin:-8px 0 16px"></p>
+      <form id="saNonRenewalForm">
+        <input type="hidden" id="saNonRenewalClientId" />
+        <div class="field"><label for="saNonRenewalReason">Motivo o nota para el expediente</label><textarea id="saNonRenewalReason" rows="3" maxlength="500" placeholder="Ej. Cerró el negocio o no renovará este ciclo"></textarea></div>
+        <label class="sa-non-renewal-switch"><input type="checkbox" id="saNonRenewalSuspendNow" /><span>Suspender el acceso de inmediato</span></label>
+        <p class="hint">Si no marcas la suspensión, el acceso seguirá las reglas actuales de vencimiento. Se conservarán su cuenta, datos e historial de pagos.</p>
+        <div class="modal-actions">
+          <button type="button" class="btn btn-ghost" id="saNonRenewalCancel">Cancelar</button>
+          <button type="submit" class="btn btn-danger" id="saNonRenewalConfirm"><i class="ph-bold ph-folder-plus"></i> Guardar expediente</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
   <div class="modal-bg" id="saOperationResetModal" role="dialog" aria-modal="true" aria-labelledby="saOperationResetTitle">
     <div class="modal sa-operation-reset-modal">
       <div class="sa-operation-reset-head">
@@ -637,6 +674,6 @@
       </form>
     </div>
   </div>
-  <script src="/static/js/superadmin.js?v=20260922-direct-prospect-purge"></script>
+  <script src="/static/js/superadmin.js?v=20261008-non-renewals"></script>
 </body>
 </html>

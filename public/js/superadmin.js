@@ -2,6 +2,7 @@ let SA_TENANTS = [];
 let SA_FILTER = 'all';
 let SA_SUMMARY = null;
 let SA_CLIENTS = [];
+let SA_NON_RENEWALS = [];
 let SA_CLIENT_FILTER = 'all';
 let SA_CLIENT_SUMMARY = null;
 let SA_INVOICING = [];
@@ -54,6 +55,7 @@ const SA_MODULE_LABELS = {
   productos: 'Productos',
   promociones: 'Promociones',
   costos: 'Costo de ventas',
+  gastos: 'Gastos',
   inventarios: 'Inventarios',
   'stock-sucursales': 'Stock por sucursal',
   compras: 'Compras',
@@ -140,7 +142,7 @@ function fmtMoney(value) {
 }
 
 function findBusiness(id) {
-  return [...SA_TENANTS, ...SA_CLIENTS, ...SA_INVOICING].find((item) => Number(item.id) === Number(id));
+  return [...SA_TENANTS, ...SA_CLIENTS, ...SA_NON_RENEWALS, ...SA_INVOICING].find((item) => Number(item.id) === Number(id));
 }
 
 function usageModules(entity) {
@@ -626,7 +628,7 @@ async function toggleTenantInvoicing() {
   toast(result.trialGrant ? 'Facturación activada: se otorgaron 2 timbres de cortesía' : (enabled ? 'Facturación activada' : 'Facturación desactivada'));
   SA_STAMP_DATA = await api(`/api/superadmin/tenants/${SA_STAMP_TENANT_ID}/stamps`);
   renderStampControl();
-  await Promise.all([loadTenants(), loadClients()]);
+  await Promise.all([loadTenants(), loadClients(), loadNonRenewals()]);
 }
 
 async function submitStampRecharge(event) {
@@ -1118,6 +1120,7 @@ function renderClientsTable() {
           ${(client.account_status === 'active' && client.billing_status !== 'suspended') ? 'Suspender' : 'Activar'}
         </button>
         <button type="button" class="btn btn-sa-operation-reset" data-sa-operation-reset="${client.id}"><i class="ph-bold ph-arrow-counter-clockwise"></i> Reiniciar ventas</button>
+        <button type="button" class="btn btn-sa-non-renewal" data-sa-non-renewal="${client.id}"><i class="ph-bold ph-user-minus"></i> No renovó</button>
         <span class="sa-client-protected"><i class="ph-bold ph-shield-check"></i> Cliente protegido</span>
       </div></td>
     </tr>`;
@@ -1133,7 +1136,95 @@ function renderClientsTable() {
   document.querySelectorAll('#saClientsTable [data-sa-stamps]').forEach((button) => button.onclick = () => manageTenantStamps(Number(button.dataset.saStamps)).catch((error) => toast(error.message, true)));
   document.querySelectorAll('#saClientsTable [data-sa-suspend]').forEach((button) => button.onclick = () => toggleTenantSuspend(Number(button.dataset.saSuspend)).catch((error) => toast(error.message, true)));
   document.querySelectorAll('#saClientsTable [data-sa-operation-reset]').forEach((button) => button.onclick = () => openOperationResetModal(Number(button.dataset.saOperationReset)).catch((error) => toast(error.message, true)));
+  document.querySelectorAll('#saClientsTable [data-sa-non-renewal]').forEach((button) => button.onclick = () => openNonRenewalModal(Number(button.dataset.saNonRenewal)));
   bindModuleUsageButtons();
+}
+
+function renderNonRenewals() {
+  const summary = $('#saNonRenewalSummary');
+  const totalPaid = SA_NON_RENEWALS.reduce((sum, client) => sum + Number(client.total_paid || 0), 0);
+  const suspended = SA_NON_RENEWALS.filter((client) => client.account_status !== 'active' || client.billing_status === 'suspended').length;
+  summary.innerHTML = `
+    <div class="pos-mini-stat sa-client-summary-card tone-total"><span><i class="ph-bold ph-folder-open"></i> Expedientes</span><b>${SA_NON_RENEWALS.length}</b></div>
+    <div class="pos-mini-stat sa-client-summary-card tone-current"><span><i class="ph-bold ph-currency-circle-dollar"></i> Ingresos históricos</span><b>${fmtMoney(totalPaid)}</b></div>
+    <div class="pos-mini-stat sa-client-summary-card tone-mora"><span><i class="ph-bold ph-pause-circle"></i> Sin acceso</span><b>${suspended}</b></div>`;
+  const search = String($('#saNonRenewalSearch')?.value || '').trim().toLowerCase();
+  const clients = SA_NON_RENEWALS.filter((client) => !search || [client.business_name, client.slug, client.owner_name, client.phone, client.non_renewal_reason]
+    .join(' ').toLowerCase().includes(search));
+  const table = $('#saNonRenewalsTable');
+  if (!clients.length) {
+    table.innerHTML = '<div class="empty"><i class="ph ph-folder-open"></i><b>Sin expedientes</b><p>Los clientes marcados como no renovados aparecerán aquí.</p></div>';
+    return;
+  }
+  table.innerHTML = `<div class="table-wrap"><table><thead><tr><th>Cliente</th><th>Contacto</th><th>No renovó</th><th>Motivo</th><th>Plan</th><th>Último pago</th><th>Vencimiento</th><th>Ingresos</th><th>Estado</th><th>Acciones</th></tr></thead><tbody>${clients.map((client) => {
+    const waUrl = client.phone_valid && client.phone_digits ? `https://wa.me/${client.phone_digits}` : '';
+    return `<tr>
+      <td><b>${esc(client.business_name)}</b><div class="meta">/${esc(client.slug)}</div></td>
+      <td>${esc(client.owner_name)}<div class="meta">${countryFlag(client.phone_country)} ${esc(client.phone || '—')}</div></td>
+      <td>${fmtDate(client.non_renewal_at)}<div class="meta">${esc(client.non_renewal_by || '')}</div></td>
+      <td class="sa-non-renewal-reason">${esc(client.non_renewal_reason || 'Sin motivo registrado')}</td>
+      <td>${esc(client.plan_name || 'starter')}<div class="meta">${Number(client.license_count || 1)} licencia(s)</div></td>
+      <td>${fmtMoney(client.last_payment_amount)}<div class="meta">${fmtDate(client.last_payment_at)}</div></td>
+      <td>${fmtDate(client.billing_due_date)}</td>
+      <td><b>${fmtMoney(client.total_paid)}</b><div class="meta">${Number(client.payment_count || 0)} pago(s)</div></td>
+      <td>${statusChip('billing', client.billing_status)}<div class="meta">Cuenta ${client.account_status === 'active' ? 'activa' : 'inactiva'}</div></td>
+      <td><div class="sa-actions-grid sa-non-renewal-actions">
+        <button type="button" class="btn btn-ghost" data-sa-archive-payments="${client.id}"><i class="ph-bold ph-receipt"></i> Historial</button>
+        <button type="button" class="btn btn-ghost" data-sa-archive-payment="${client.id}"><i class="ph-bold ph-currency-circle-dollar"></i> Pago</button>
+        ${waUrl ? `<a class="btn btn-ghost" href="${waUrl}" target="_blank" rel="noopener noreferrer"><i class="ph-bold ph-whatsapp-logo"></i> WhatsApp</a>` : ''}
+        <button type="button" class="btn btn-primary" data-sa-archive-restore="${client.id}"><i class="ph-bold ph-arrow-u-up-left"></i> Volver a Clientes</button>
+      </div></td>
+    </tr>`;
+  }).join('')}</tbody></table></div>`;
+  table.querySelectorAll('[data-sa-archive-payments]').forEach((button) => button.onclick = () => openPaymentsModal(Number(button.dataset.saArchivePayments)).catch((error) => toast(error.message, true)));
+  table.querySelectorAll('[data-sa-archive-payment]').forEach((button) => button.onclick = () => addTenantPayment(Number(button.dataset.saArchivePayment)).catch((error) => toast(error.message, true)));
+  table.querySelectorAll('[data-sa-archive-restore]').forEach((button) => button.onclick = () => restoreNonRenewal(Number(button.dataset.saArchiveRestore)).catch((error) => toast(error.message, true)));
+}
+
+async function loadNonRenewals() {
+  const payload = await api('/api/superadmin/non-renewals');
+  SA_NON_RENEWALS = Array.isArray(payload?.clients) ? payload.clients : [];
+  renderNonRenewals();
+}
+
+function openNonRenewalModal(id) {
+  const client = SA_CLIENTS.find((item) => Number(item.id) === Number(id));
+  if (!client) return;
+  $('#saNonRenewalClientId').value = String(id);
+  $('#saNonRenewalBusiness').textContent = client.business_name;
+  $('#saNonRenewalReason').value = '';
+  $('#saNonRenewalSuspendNow').checked = false;
+  $('#saNonRenewalModal').classList.add('show');
+  $('#saNonRenewalReason').focus();
+}
+
+function closeNonRenewalModal() {
+  $('#saNonRenewalModal').classList.remove('show');
+}
+
+async function submitNonRenewal(event) {
+  event.preventDefault();
+  const id = Number($('#saNonRenewalClientId').value);
+  if (!id) return;
+  const button = $('#saNonRenewalConfirm');
+  button.disabled = true;
+  try {
+    await api(`/api/superadmin/clients/${id}/non-renewal`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ reason: $('#saNonRenewalReason').value, suspendNow: $('#saNonRenewalSuspendNow').checked }),
+    });
+    closeNonRenewalModal();
+    await Promise.all([loadClients(), loadNonRenewals()]);
+    toast('Cliente enviado a No renovación; expediente conservado');
+  } finally {
+    button.disabled = false;
+  }
+}
+
+async function restoreNonRenewal(id) {
+  await api(`/api/superadmin/non-renewals/${id}/restore`, { method: 'POST' });
+  await Promise.all([loadClients(), loadNonRenewals()]);
+  toast('Cliente devuelto a la cartera; puedes registrar un nuevo pago');
 }
 
 function closeModulesModal() {
@@ -1665,7 +1756,7 @@ async function submitPaymentForm(e) {
   toast((payload?.becameClient
     ? `Pago aplicado: el prospecto ya es cliente. Vence ${fmtDate(payload?.nextDueDate)}`
     : `Pago aplicado. Próximo vencimiento: ${fmtDate(payload?.nextDueDate)}`) + bonusText);
-  await Promise.all([loadTenants(), loadClients()]);
+  await Promise.all([loadTenants(), loadClients(), loadNonRenewals()]);
 }
 
 function closePaymentsModal() {
@@ -2337,6 +2428,7 @@ function setView(view) {
   const isTenants = view === 'tenants';
   const isStorageHygiene = view === 'storage-hygiene';
   const isClients = view === 'clients';
+  const isNonRenewals = view === 'non-renewals';
   const isInvoicing = view === 'invoicing';
   const isDemoLeads = view === 'demo-leads';
   const isFollowUp = view === 'follow-up';
@@ -2349,6 +2441,9 @@ function setView(view) {
   } else if (isClients) {
     title = '<i class="ph-bold ph-handshake"></i> Clientes';
     subtitle = 'Cartera de clientes, ingresos, licencias y cobranza.';
+  } else if (isNonRenewals) {
+    title = '<i class="ph-bold ph-folder-open"></i> No renovación';
+    subtitle = 'Expedientes de clientes que no renovaron y pueden volver.';
   } else if (isInvoicing) {
     title = '<i class="ph-bold ph-file-text"></i> Facturación';
     subtitle = 'Prospectos y clientes del portal fiscal independiente.';
@@ -2370,6 +2465,8 @@ function setView(view) {
   $('#saViewTenants').classList.toggle('active', isTenants);
   $('#saViewClients').hidden = !isClients;
   $('#saViewClients').classList.toggle('active', isClients);
+  $('#saViewNonRenewals').hidden = !isNonRenewals;
+  $('#saViewNonRenewals').classList.toggle('active', isNonRenewals);
   $('#saViewInvoicing').hidden = !isInvoicing;
   $('#saViewInvoicing').classList.toggle('active', isInvoicing);
   $('#saViewDemoLeads').hidden = !isDemoLeads;
@@ -2380,8 +2477,8 @@ function setView(view) {
   $('#saViewResellers').classList.toggle('active', isResellers);
   $('#saViewStorageHygiene').hidden = !isStorageHygiene;
   $('#saViewStorageHygiene').classList.toggle('active', isStorageHygiene);
-  $('#saViewIntegrations').hidden = isTenants || isStorageHygiene || isClients || isInvoicing || isDemoLeads || isFollowUp || isResellers;
-  $('#saViewIntegrations').classList.toggle('active', !isTenants && !isStorageHygiene && !isClients && !isInvoicing && !isDemoLeads && !isFollowUp && !isResellers);
+  $('#saViewIntegrations').hidden = isTenants || isStorageHygiene || isClients || isNonRenewals || isInvoicing || isDemoLeads || isFollowUp || isResellers;
+  $('#saViewIntegrations').classList.toggle('active', !isTenants && !isStorageHygiene && !isClients && !isNonRenewals && !isInvoicing && !isDemoLeads && !isFollowUp && !isResellers);
   $('#saTitle').innerHTML = title;
   $('#saSub').textContent = subtitle;
   document.querySelectorAll('[data-sa-view]').forEach((a) => a.classList.toggle('active', a.dataset.saView === view));
@@ -2393,7 +2490,7 @@ async function boot() {
     $('#saUserName').textContent = me.username || 'superadmin';
     startSuperAdminClock();
     initSalesStageControls();
-    await Promise.all([loadTenants(), loadClients(), loadInvoicingBusinesses(), loadDemoLeads(), loadFollowUp(), loadResellers(), loadIntegrations(), loadDeployStatus(), loadGitDeployStatus()]);
+    await Promise.all([loadTenants(), loadClients(), loadNonRenewals(), loadInvoicingBusinesses(), loadDemoLeads(), loadFollowUp(), loadResellers(), loadIntegrations(), loadDeployStatus(), loadGitDeployStatus()]);
     if (SA_ACTIVE_VIEW === 'storage-hygiene') await loadStorageHygiene();
   } catch (err) {
     toast(err.message, true);
@@ -2418,6 +2515,8 @@ $('#saStorageAnalyze')?.addEventListener('click', () => loadStorageHygiene().cat
 $('#saStorageSearch')?.addEventListener('input', renderStorageProspects);
 $('#saClientSearch')?.addEventListener('input', renderClientsTable);
 $('#saReloadClients')?.addEventListener('click', () => loadClients().catch((e) => toast(e.message, true)));
+$('#saNonRenewalSearch')?.addEventListener('input', renderNonRenewals);
+$('#saReloadNonRenewals')?.addEventListener('click', () => loadNonRenewals().catch((e) => toast(e.message, true)));
 $('#saReloadInvoicing')?.addEventListener('click', () => loadInvoicingBusinesses().catch((e) => toast(e.message, true)));
 $('#saInvoicingSearch')?.addEventListener('input', renderInvoicingTable);
 document.querySelectorAll('#saInvoicingFilters button').forEach((button) => button.addEventListener('click', () => {
@@ -2497,6 +2596,9 @@ $('#saModulesModal')?.addEventListener('click', (e) => {
   if (e.target?.id === 'saModulesModal') closeModulesModal();
 });
 $('#saPaymentsClose')?.addEventListener('click', closePaymentsModal);
+$('#saNonRenewalCancel')?.addEventListener('click', closeNonRenewalModal);
+$('#saNonRenewalModal')?.addEventListener('click', (event) => { if (event.target?.id === 'saNonRenewalModal') closeNonRenewalModal(); });
+$('#saNonRenewalForm')?.addEventListener('submit', (event) => submitNonRenewal(event).catch((error) => toast(error.message, true)));
 $('#saPaymentsModal')?.addEventListener('click', (e) => {
   if (e.target?.id === 'saPaymentsModal') closePaymentsModal();
 });
@@ -2537,7 +2639,7 @@ $('#saResellerCancel')?.addEventListener('click', closeResellerModal);
 $('#saResellerModal')?.addEventListener('click', (event) => { if (event.target?.id === 'saResellerModal') closeResellerModal(); });
 $('#saResellerForm')?.addEventListener('submit', (event) => saveReseller(event).catch((error) => toast(error.message, true)));
 
-const SA_INITIAL_VIEW = ['tenants', 'storage-hygiene', 'clients', 'invoicing', 'demo-leads', 'follow-up', 'resellers', 'integrations'].includes((location.hash || '#tenants').slice(1))
+const SA_INITIAL_VIEW = ['tenants', 'storage-hygiene', 'clients', 'non-renewals', 'invoicing', 'demo-leads', 'follow-up', 'resellers', 'integrations'].includes((location.hash || '#tenants').slice(1))
   ? (location.hash || '#tenants').slice(1)
   : 'tenants';
 setView(SA_INITIAL_VIEW);

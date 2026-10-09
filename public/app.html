@@ -11,7 +11,7 @@
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/fill/style.css" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/duotone/style.css" />
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-  <link rel="stylesheet" href="/static/css/styles.css?v=20261007-pos-five-columns" />
+  <link rel="stylesheet" href="/static/css/styles.css?v=20261008-gastos-search-pages" />
   <link rel="stylesheet" href="/static/css/sar.css?v=20260929-tabs-1" />
   <link rel="icon" type="image/svg+xml" href="/static/favicon.svg" />
   <link rel="icon" type="image/png" href="/static/chatbotpro100.png" />
@@ -48,6 +48,7 @@
         <a href="#pedidos" data-view="pedidos" data-color="orange"><span class="nav-ic"><i class="ph-duotone ph-clipboard-text"></i></span><span>Pedidos</span> <span id="pendingBadge" class="count" style="display:none"></span></a>
         <a href="#clientes" data-view="clientes" data-color="blue"><span class="nav-ic"><i class="ph-duotone ph-identification-card"></i></span><span>Clientes</span></a>
         <a href="#pos" data-view="pos" data-color="emerald"><span class="nav-ic"><i class="ph-duotone ph-cash-register"></i></span><span>Punto de venta</span></a>
+        <a href="#gastos" data-view="gastos" data-color="amber"><span class="nav-ic"><i class="ph-duotone ph-receipt"></i></span><span>Gastos</span></a>
         <a href="#ventas" data-view="ventas" data-color="blue"><span class="nav-ic"><i class="ph-duotone ph-chart-line-up"></i></span><span>Ventas</span></a>
         <a href="#sar" data-view="sar" data-honduras-only="true" data-owner-only data-color="emerald"><span class="nav-ic"><i class="ph-duotone ph-receipt"></i></span><span>Facturación Honduras</span></a>
         <a href="#facturacion" data-view="facturacion" data-mexico-only="true" data-color="emerald"><span class="nav-ic"><i class="ph-duotone ph-file-text"></i></span><span>Facturación MX</span></a>
@@ -526,13 +527,8 @@
             <h2>Costos, precios y utilidad en un solo lugar</h2>
             <p>Captura el costo unitario y el precio de venta. Las entradas de inventario actualizarán el costo promedio y cada venta conservará el costo que tenía al cobrarse.</p>
           </div>
-          <div class="segmented" id="costingTabs">
-            <button type="button" class="on" data-costing-tab="products"><i class="ph-bold ph-package"></i> Productos</button>
-            <button type="button" data-costing-tab="expenses"><i class="ph-bold ph-receipt"></i> Gastos</button>
-          </div>
         </div>
 
-        <div id="costingProductsPanel">
           <div class="costing-stats" id="costingStats"></div>
           <div class="card costing-toolbar">
             <div class="inv-search-wrap costing-search"><i class="ph-bold ph-magnifying-glass"></i><input id="costingSearch" type="text" placeholder="Buscar producto…" autocomplete="off" /></div>
@@ -555,9 +551,16 @@
             <div class="table-wrap"><table class="costing-table"><thead><tr><th>Producto</th><th>Categoría</th><th>Costo unitario</th><th>Precio de venta</th><th>Utilidad unitaria</th><th>Margen</th><th>Estado</th></tr></thead><tbody id="costingProductsTbody"></tbody></table></div>
             <div class="costing-save-footer"><span id="costingPendingLabel">Sin cambios pendientes</span><button class="btn btn-primary" id="costingSaveBottomBtn" type="button"><i class="ph-bold ph-floppy-disk"></i> Guardar cambios</button></div>
           </div>
-        </div>
+      </section>
 
-        <div id="costingExpensesPanel" hidden>
+      <section class="section" id="view-gastos">
+        <div class="costing-hero">
+          <div>
+            <span class="costing-kicker"><i class="ph-bold ph-receipt"></i> Gastos del negocio</span>
+            <h2>Gastos por sucursal</h2>
+            <p>Registra y consulta los gastos manuales y los capturados desde el punto de venta. Se reflejan en la utilidad del reporte de Ventas.</p>
+          </div>
+        </div>
           <div class="card costing-expense-form-card">
             <div class="sales-panel-heading"><div><h3><i class="ph-bold ph-plus-circle"></i> Registrar gasto</h3><p>Los gastos se descuentan de la utilidad de la sucursal en el reporte de Ventas.</p></div></div>
             <form id="costingExpenseForm" class="costing-expense-form">
@@ -569,14 +572,32 @@
               <button class="btn btn-primary" type="submit"><i class="ph-bold ph-plus-circle"></i> Agregar gasto</button>
             </form>
           </div>
+          <div class="card expense-report-toolbar">
+            <div class="expense-report-period">
+              <div class="field"><label for="costingExpenseMonth">Mes</label><input type="month" id="costingExpenseMonth" /></div>
+              <div class="field"><label for="costingExpenseFrom">Desde</label><input type="date" id="costingExpenseFrom" /></div>
+              <div class="field"><label for="costingExpenseTo">Hasta</label><input type="date" id="costingExpenseTo" /></div>
+              <button class="btn btn-ghost" id="costingExpenseAllDates" type="button">Todo el historial</button>
+            </div>
+            <div class="expense-report-exports">
+              <button class="btn btn-ghost" id="costingExpensePdf" type="button" disabled><i class="ph-bold ph-file-pdf"></i> PDF</button>
+              <button class="btn btn-ghost" id="costingExpenseExcel" type="button" disabled><i class="ph-bold ph-file-xls"></i> Excel</button>
+            </div>
+          </div>
+          <div class="expense-summary-cards" id="costingExpenseCards" aria-label="Gastos por sucursal"></div>
           <div class="card costing-expense-history">
             <div class="costing-expense-history-head">
               <div><h3><i class="ph-bold ph-clock-counter-clockwise"></i> Gastos del periodo</h3><p id="costingExpenseTotal">Total: $0.00</p></div>
-              <div class="costing-expense-filters"><input type="month" id="costingExpenseMonth" /><select id="costingExpenseFilterBranch"><option value="all">Todas las sucursales</option><option value="general">Sin sucursal</option></select><button class="btn btn-ghost" id="costingExpenseRefresh" type="button"><i class="ph-bold ph-arrows-clockwise"></i></button></div>
+              <div class="costing-expense-filters"><input type="search" id="costingExpenseSearch" placeholder="Buscar concepto o texto" aria-label="Buscar gastos por concepto o texto" /><select id="costingExpenseFilterBranch" aria-label="Filtrar gastos por sucursal"><option value="all">Todas las sucursales</option><option value="general">Sin sucursal</option></select><button class="btn btn-ghost" id="costingExpenseRefresh" type="button" aria-label="Actualizar gastos"><i class="ph-bold ph-arrows-clockwise"></i></button></div>
             </div>
             <div class="table-wrap" id="costingExpensesTable"></div>
+            <div class="costing-expense-pagination"><label for="costingExpensePageSize">Mostrar <select id="costingExpensePageSize"><option value="10">10</option><option value="20">20</option><option value="50">50</option><option value="100">100</option></select> gastos</label><span id="costingExpensePageInfo" aria-live="polite"></span><div><button type="button" class="btn btn-ghost" id="costingExpensePrev">Anterior</button><button type="button" class="btn btn-ghost" id="costingExpenseNext">Siguiente</button></div></div>
           </div>
-        </div>
+          <div class="card costing-expense-history" id="costingDeletedExpensesSection">
+            <div class="costing-expense-history-head"><div><h3><i class="ph-bold ph-archive"></i> Gastos borrados</h3><p class="hint">Registro de eliminaciones según el periodo y la sucursal seleccionados.</p></div></div>
+            <div class="table-wrap" id="costingDeletedExpensesTable"></div>
+            <div class="costing-expense-pagination"><span id="costingDeletedExpensePageInfo" aria-live="polite"></span><div><button type="button" class="btn btn-ghost" id="costingDeletedExpensePrev">Anterior</button><button type="button" class="btn btn-ghost" id="costingDeletedExpenseNext">Siguiente</button></div></div>
+          </div>
       </section>
 
       <!-- ──────── Inventarios ──────── -->
@@ -3720,10 +3741,22 @@
     </div>
   </div>
 
+  <div class="modal-bg" id="costingDeleteExpenseModal" role="dialog" aria-modal="true" aria-labelledby="costingDeleteExpenseTitle" hidden>
+    <div class="modal" style="max-width:480px">
+      <h3 id="costingDeleteExpenseTitle"><i class="ph-bold ph-trash"></i> Borrar gasto</h3>
+      <p id="costingDeleteExpenseDetail" class="hint"></p>
+      <form id="costingDeleteExpenseForm">
+        <input type="hidden" id="costingDeleteExpenseId" />
+        <div class="field" id="costingDeleteExpensePinWrap" hidden><label for="costingDeleteExpensePin">NIP de autorización de Mi negocio</label><input type="password" id="costingDeleteExpensePin" inputmode="numeric" pattern="[0-9]{4,8}" maxlength="8" autocomplete="off" /></div>
+        <p class="hint">El gasto saldrá de los totales y quedará registrado en Gastos borrados. Los gastos de caja también actualizan su corte.</p>
+        <div class="modal-actions"><button type="button" class="btn btn-ghost" id="costingDeleteExpenseCancel">Cancelar</button><button type="submit" class="btn btn-danger" id="costingDeleteExpenseConfirm"><i class="ph-bold ph-trash"></i> Borrar gasto</button></div>
+      </form>
+    </div>
+  </div>
   <script src="/socket.io/socket.io.js"></script>
   <script src="/static/vendor/qz-tray.js?v=2.3.0"></script>
   <script src="/static/js/whatsapp.js?v=20260928-zernio-setup"></script>
-  <script src="/static/js/app.js?v=20261007-pos-five-columns"></script>
+  <script src="/static/js/app.js?v=20261008-gastos-search-pages"></script>
   <script src="/static/js/sar.js?v=20260929-tabs-1"></script>
 </body>
 </html>

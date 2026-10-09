@@ -33,6 +33,7 @@ const MODULE_LABELS = {
   productos: 'Catálogo de productos',
   promociones: 'Promociones',
   costos: 'Costeo de recetas',
+  gastos: 'Gastos',
   inventarios: 'Control de inventario',
   'stock-sucursales': 'Stock sucursales',
   compras: 'Compras a proveedores',

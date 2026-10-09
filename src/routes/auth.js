@@ -34,6 +34,7 @@ const TRACKABLE_MODULES = new Set([
   'pedidos',
   'clientes',
   'pos',
+  'gastos',
   'facturacion',
   'sar',
   'cfdi',

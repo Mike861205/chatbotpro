@@ -851,14 +851,16 @@ router.get('/demo-leads', requireSuperAdmin, async (req, res, next) => {
   }
 });
 
-router.get('/clients', requireSuperAdmin, async (req, res, next) => {
+async function listClientRecords(req, res, next) {
   try {
     await refreshTenantBillingStatuses();
 
+    const archived = req.path === '/non-renewals';
     const qText = String(req.query.q || '').trim().toLowerCase();
     const statusFilter = parseClientStatusFilter(req.query.status);
     const values = [];
     const where = ['t.customer_since IS NOT NULL'];
+    where.push(archived ? 't.non_renewal_at IS NOT NULL' : 't.non_renewal_at IS NULL');
 
     if (qText) {
       values.push(`%${qText}%`);
@@ -891,6 +893,9 @@ router.get('/clients', requireSuperAdmin, async (req, res, next) => {
         t.invoicing_trial_granted_at,
         t.billing_due_date,
         t.customer_since,
+        t.non_renewal_at,
+        t.non_renewal_reason,
+        t.non_renewal_by,
         t.license_count,
         t.notes,
         t.created_at,
@@ -943,7 +948,7 @@ router.get('/clients', requireSuperAdmin, async (req, res, next) => {
         WHERE mu.tenant_id = t.id AND mu.demo_lead_id IS NULL
       ) usage_stats ON true
       WHERE ${where.join(' AND ')}
-      ORDER BY t.customer_since DESC, t.created_at DESC`,
+      ORDER BY ${archived ? 't.non_renewal_at' : 't.customer_since'} DESC, t.created_at DESC`,
       values
     );
 
@@ -964,6 +969,54 @@ router.get('/clients', requireSuperAdmin, async (req, res, next) => {
     res.json({ clients, summary: buildClientSummary(clients) });
   } catch (e) {
     next(e);
+  }
+}
+
+router.get('/clients', requireSuperAdmin, listClientRecords);
+router.get('/non-renewals', requireSuperAdmin, listClientRecords);
+
+router.post('/clients/:id/non-renewal', requireSuperAdmin, async (req, res, next) => {
+  try {
+    const clientId = Number(req.params.id);
+    if (!Number.isInteger(clientId) || clientId <= 0) return res.status(400).json({ error: 'Cliente inválido' });
+    const reason = String(req.body?.reason || '').trim().slice(0, 500) || 'Sin motivo registrado';
+    const suspendNow = req.body?.suspendNow === true;
+    const actor = String(req.superadmin.username || 'superadmin');
+    const auditNote = `[NO RENOVÓ ${new Date().toISOString().slice(0, 10)}] ${reason} · ${actor}${suspendNow ? ' · acceso suspendido' : ''}`;
+    const updated = await q(
+      `UPDATE tenants
+       SET non_renewal_at = now(), non_renewal_reason = $2, non_renewal_by = $3,
+           account_status = CASE WHEN $4 THEN 'inactive' ELSE account_status END,
+           notes = CASE WHEN COALESCE(notes, '') = '' THEN $5 ELSE notes || E'\n' || $5 END
+       WHERE id = $1 AND customer_since IS NOT NULL AND non_renewal_at IS NULL
+       RETURNING id, non_renewal_at, account_status`,
+      [clientId, reason, actor, suspendNow, auditNote]
+    );
+    if (!updated.rows[0]) return res.status(409).json({ error: 'Cliente no encontrado o ya está en No renovación' });
+    res.json({ ok: true, client: updated.rows[0] });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post('/non-renewals/:id/restore', requireSuperAdmin, async (req, res, next) => {
+  try {
+    const clientId = Number(req.params.id);
+    if (!Number.isInteger(clientId) || clientId <= 0) return res.status(400).json({ error: 'Cliente inválido' });
+    const actor = String(req.superadmin.username || 'superadmin');
+    const auditNote = `[RETOMÓ RENOVACIÓN ${new Date().toISOString().slice(0, 10)}] ${actor}`;
+    const updated = await q(
+      `UPDATE tenants
+       SET non_renewal_at = NULL, non_renewal_reason = '', non_renewal_by = '',
+           notes = CASE WHEN COALESCE(notes, '') = '' THEN $2 ELSE notes || E'\n' || $2 END
+       WHERE id = $1 AND customer_since IS NOT NULL AND non_renewal_at IS NOT NULL
+       RETURNING id, account_status, billing_status`,
+      [clientId, auditNote]
+    );
+    if (!updated.rows[0]) return res.status(409).json({ error: 'Cliente no encontrado o ya está en Clientes' });
+    res.json({ ok: true, client: updated.rows[0] });
+  } catch (error) {
+    next(error);
   }
 });
 
@@ -2112,6 +2165,9 @@ router.post('/tenants/:id/payment', requireSuperAdmin, async (req, res, next) =>
            billing_due_date = $1::date,
            plan_name = $5,
            customer_since = COALESCE(customer_since, $2::date),
+           non_renewal_at = NULL,
+           non_renewal_reason = '',
+           non_renewal_by = '',
            sales_stage = 'won',
            next_follow_up_at = NULL,
            sales_updated_at = now(),

@@ -2336,7 +2336,7 @@ tr:last-child td { border-bottom: none; }
 }
 
 body.cashier-mode .sidebar nav .nav-label:not(.nav-label-principal),
-body.cashier-mode .sidebar nav a:not([data-view="pos"]):not([data-view="pedidos"]):not([data-view="cancelaciones"]):not([data-view="cortes"]),
+body.cashier-mode .sidebar nav a:not([data-view="pos"]):not([data-view="gastos"]):not([data-view="pedidos"]):not([data-view="cancelaciones"]):not([data-view="cortes"]),
 body.cashier-mode .sidebar nav a[href="/notificaciones"],
 body.cashier-mode #openChatLink,
 body.cashier-mode #view-dashboard,
@@ -2356,7 +2356,7 @@ body.cashier-mode #view-instrucciones {
   display: none !important;
 }
 
-/* Cajero: sidebar colapsado solo muestra Punto de venta */
+/* Cajero: sidebar mantiene visibles los módulos de caja */
 body.cashier-mode .sidebar {
   width: var(--sidebar-w);
 }
@@ -5444,6 +5444,13 @@ select.status-sel {
 .sa-client-summary-card.tone-soon { background: #f7f1ff; border-color: #cdb3f3; }
 .sa-client-summary-card.tone-soon b { color: #6d28d9; }
 .sa-client-summary-card.active { outline: 2px solid color-mix(in srgb, var(--primary) 45%, transparent); outline-offset: 2px; }
+.btn-sa-non-renewal { border-color:#fecdd3 !important; background:#fff1f2 !important; color:#be123c !important; }
+.btn-sa-non-renewal:hover { background:#ffe4e6 !important; }
+.sa-non-renewal-switch { display:flex; align-items:center; gap:10px; margin:12px 0; font-size:13px; font-weight:700; color:var(--ink); cursor:pointer; }
+.sa-non-renewal-switch input { width:17px; height:17px; accent-color:#e11d48; }
+.sa-non-renewal-reason { max-width:280px; white-space:normal; overflow-wrap:anywhere; }
+.sa-actions-grid.sa-non-renewal-actions { grid-template-columns:repeat(2,minmax(0,1fr)); min-width:250px; max-width:280px; }
+.sa-non-renewal-actions [data-sa-archive-restore] { grid-column:1 / -1; }
 
 @media (max-width: 720px) {
   .clients-hero-card { align-items: stretch; flex-direction: column; }
@@ -10285,7 +10292,6 @@ kbd {
 .costing-kicker { display:inline-flex; align-items:center; gap:7px; margin-bottom:7px; color:#b45309; font-size:11px; font-weight:900; letter-spacing:.09em; text-transform:uppercase; }
 .costing-hero h2 { margin:0 0 7px; color:var(--ink); font-size:clamp(21px,2vw,29px); }
 .costing-hero p { max-width:760px; margin:0; color:var(--muted); font-size:13px; line-height:1.6; }
-#costingProductsPanel[hidden], #costingExpensesPanel[hidden] { display:none !important; }
 .costing-stats { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:14px; margin-bottom:16px; }
 .costing-stat { display:flex; align-items:center; gap:12px; padding:17px; }
 .costing-stat > i { display:grid; width:45px; height:45px; flex:0 0 45px; place-items:center; border-radius:13px; background:#ecfdf5; color:#059669; font-size:21px; }
@@ -10350,11 +10356,32 @@ kbd {
 .costing-expense-form .field { margin:0; }
 .costing-expense-form .costing-expense-notes { grid-column:span 3; }
 .costing-expense-form button { min-height:42px; }
+.expense-report-toolbar { display:flex; align-items:end; justify-content:space-between; flex-wrap:wrap; gap:14px; margin-bottom:14px; padding:16px; }
+.expense-report-period, .expense-report-exports { display:flex; align-items:end; flex-wrap:wrap; gap:9px; }
+.expense-report-period .field { margin:0; }
+.expense-report-period input { min-width:155px; }
+.expense-report-period .btn, .expense-report-exports .btn { min-height:41px; }
+#costingExpenseAllDates.on { border-color:#22c55e; background:#f0fdf4; color:#15803d; }
+.expense-summary-cards { display:grid; grid-template-columns:repeat(auto-fit,minmax(190px,1fr)); gap:12px; margin-bottom:16px; }
+.expense-summary-card { display:flex; flex-direction:column; align-items:flex-start; gap:5px; min-height:135px; padding:16px; border:1px solid #e2e8f0; border-radius:15px; background:#fff; box-shadow:0 2px 5px rgba(15,23,42,.04); color:var(--ink); cursor:pointer; text-align:left; transition:border-color .15s ease,box-shadow .15s ease,transform .15s ease; }
+.expense-summary-card:hover { border-color:#86efac; transform:translateY(-2px); }
+.expense-summary-card:focus-visible { outline:3px solid rgba(34,197,94,.35); outline-offset:2px; }
+.expense-summary-card.active { border-color:#22c55e; background:#f0fdf4; box-shadow:0 0 0 2px rgba(34,197,94,.14); }
+.expense-summary-card > i { color:#16a34a; font-size:19px; }
+.expense-summary-card > span { font-size:12px; font-weight:800; }
+.expense-summary-card > strong { font-size:21px; line-height:1.2; }
+.expense-summary-card > small { color:var(--muted); font-size:10px; }
 .costing-expense-history-head { display:flex; align-items:flex-end; justify-content:space-between; gap:16px; margin-bottom:14px; }
 .costing-expense-history-head h3 { margin:0 0 4px; }
 .costing-expense-history-head p { margin:0; color:#dc2626; font-size:13px; font-weight:900; }
+#costingDeletedExpensesSection { margin-top:16px; }
+#costingDeletedExpensesSection .costing-expense-history-head p { color:var(--muted); font-weight:500; }
 .costing-expense-filters { display:flex; gap:8px; }
 .costing-expense-filters input, .costing-expense-filters select { min-width:170px; }
+.costing-expense-pagination { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:10px; margin-top:14px; color:var(--muted); font-size:12px; }
+.costing-expense-pagination label, .costing-expense-pagination > div { display:flex; align-items:center; gap:8px; }
+.costing-expense-pagination select { min-width:72px; padding:7px 9px; }
+.costing-expense-pagination .btn { padding:7px 12px; }
 .costing-source { display:inline-flex; padding:5px 8px; border-radius:999px; font-size:9px; font-weight:900; white-space:nowrap; }
 .costing-source.manual { background:#eff6ff; color:#1d4ed8; }
 .costing-source.pos { background:#f0fdf4; color:#15803d; }
@@ -10397,12 +10424,18 @@ kbd {
   .costing-export-actions .btn { flex:1; }
   .costing-expense-form { grid-template-columns:1fr; }
   .costing-expense-form .costing-expense-notes { grid-column:auto; }
+  .expense-report-period, .expense-report-exports { width:100%; }
+  .expense-report-period .field { flex:1 1 145px; }
+  .expense-report-period input { width:100%; min-width:0; }
+  .expense-report-exports .btn { flex:1; }
+  .expense-summary-cards { grid-template-columns:repeat(2,minmax(0,1fr)); }
   .costing-expense-history-head { align-items:stretch; flex-direction:column; }
   .costing-expense-filters { flex-wrap:wrap; }
   .costing-expense-filters input, .costing-expense-filters select { min-width:0; flex:1; }
   .costing-save-footer { align-items:stretch; flex-direction:column; }
 }
 @media (max-width:520px) {
+  .expense-summary-cards { grid-template-columns:1fr; }
   .costing-product-grid { grid-template-columns:1fr; }
   .costing-product-card { padding:15px; }
   .costing-product-card-head { min-height:0; }

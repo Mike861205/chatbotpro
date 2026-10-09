@@ -178,7 +178,7 @@ function requireOwner(req, res, next) {
 function requireModules(...moduleKeys) {
   return (req, res, next) => {
     if (!req.user) return res.status(401).json({ error: 'No autenticado' });
-    if (req.user.role === 'cashier' && moduleKeys.some((key) => ['pos', 'pedidos', 'cortes', 'cancelaciones'].includes(key))) return next();
+    if (req.user.role === 'cashier' && moduleKeys.some((key) => ['pos', 'gastos', 'pedidos', 'cortes', 'cancelaciones'].includes(key))) return next();
     if (req.user.role === 'owner' || (req.user.role === 'staff' && moduleKeys.some((key) => req.user.permissions.includes(key)))) return next();
     return res.status(403).json({ error: 'No tienes permiso para acceder a este modulo' });
   };

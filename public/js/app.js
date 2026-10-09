@@ -20,7 +20,6 @@ let SALES_DETAIL_RANGE_MODE = 'day';
 let COSTING_DATA = { products: [], categories: [], branches: [] };
 let COSTING_DRAFT = new Map();
 let COSTING_DIRTY = new Set();
-let COSTING_TAB = 'products';
 let COSTING_SORT = 'alphabetical';
 let COSTING_CATEGORY = 'all';
 let COSTING_SEARCH = '';
@@ -29,6 +28,16 @@ let COSTING_EXPORT_FORMAT = 'pdf';
 let COSTING_EXPENSE_BRANCH = 'all';
 let COSTING_EXPENSE_YEAR = new Date().getFullYear();
 let COSTING_EXPENSE_MONTH = new Date().getMonth() + 1;
+let COSTING_EXPENSE_RANGE = 'month';
+let COSTING_EXPENSE_FROM = '';
+let COSTING_EXPENSE_TO = '';
+let COSTING_EXPENSE_DATA = null;
+let COSTING_EXPENSE_REQUEST = 0;
+let COSTING_EXPENSE_SEARCH = '';
+let COSTING_EXPENSE_PAGE = 1;
+let COSTING_DELETED_EXPENSE_PAGE = 1;
+let COSTING_EXPENSE_PAGE_SIZE = 10;
+let COSTING_EXPENSE_SEARCH_TIMER = null;
 let COSTING_SAVE_QUEUE = Promise.resolve(true);
 const COSTING_AUTOSAVE_TIMERS = new Map();
 let PURCHASE_DATA = { suppliers: [], branches: [], products: [], branchStock: [] };
@@ -1076,6 +1085,7 @@ const VIEW_META = {
   pedidos: ['Pedidos', 'Administra y actualiza tus pedidos', 'ph-receipt'],
   clientes: ['Clientes', 'Fidelidad y valor de clientes del chatbot', 'ph-users-three'],
   pos: ['Punto de venta', 'Caja, cobro y cierre del día', 'ph-cash-register'],
+  gastos: ['Gastos', 'Registro y consulta de gastos por sucursal', 'ph-receipt'],
   kds: ['Pantallas KDS', 'Comandas automáticas por área de preparación', 'ph-monitor-play'],
   ventas: ['Ventas', 'Reportes diarios y mensuales por sucursal', 'ph-chart-line-up'],
   sar: ['Facturación Honduras', 'CAI, ventas y compras ante el SAR', 'ph-receipt'],
@@ -1085,7 +1095,7 @@ const VIEW_META = {
   cortes: ['Cortes', 'Aperturas, cierres y diferencias de caja', 'ph-safe'],
   productos: ['Productos', 'Tu menú visible en el chatbot', 'ph-hamburger'],
   promociones: ['Promociones', 'Ofertas programadas para POS y asistente virtual', 'ph-tag'],
-  costos: ['Costo de ventas', 'Costos, precios, márgenes y gastos por sucursal', 'ph-coins'],
+  costos: ['Costo de ventas', 'Costos, precios y márgenes por producto', 'ph-coins'],
   inventarios: ['Inventarios', 'Control de stock, entradas, mermas y conteo físico', 'ph-package'],
   'stock-sucursales': ['Stock por sucursal', 'Existencias reales y consolidadas por ubicación', 'ph-buildings'],
   compras: ['Compras', 'Proveedores, órdenes y traslados entre sucursales', 'ph-shopping-cart-simple'],
@@ -1102,6 +1112,7 @@ const VIEW_LOADERS = {
   pedidos: loadOrders,
   clientes: loadCustomers,
   pos: loadPos,
+  gastos: loadCostingExpenses,
   kds: loadKds,
   ventas: loadSalesReport,
   sar: () => window.loadSar?.(),
@@ -1125,7 +1136,7 @@ const VIEW_LOADERS = {
 
 let CURRENT_VIEW = 'dashboard';
 
-const CASHIER_ALLOWED_VIEWS = new Set(['pos', 'pedidos', 'cancelaciones', 'cortes']);
+const CASHIER_ALLOWED_VIEWS = new Set(['pos', 'gastos', 'pedidos', 'cancelaciones', 'cortes']);
 
 function normalizeView(view) {
   if (isCashierUser()) {
@@ -2326,11 +2337,6 @@ function populateCostingFilters() {
   const category = $('#costingCategory');
   category.innerHTML = '<option value="all">Todas las categorías</option>' + COSTING_DATA.categories.map((row) => `<option value="${row.id}">${esc(row.name)}</option>`).join('');
   category.value = COSTING_CATEGORY;
-
-  const branchOptions = COSTING_DATA.branches.map((row) => `<option value="${row.id}">${esc(row.name)}${row.active ? '' : ' (inactiva)'}</option>`).join('');
-  $('#costingExpenseBranch').innerHTML = `<option value="general">Sin sucursal</option>${branchOptions}`;
-  $('#costingExpenseFilterBranch').innerHTML = `<option value="all">Todas las sucursales</option><option value="general">Sin sucursal</option>${branchOptions}`;
-  $('#costingExpenseFilterBranch').value = COSTING_EXPENSE_BRANCH;
 }
 
 function costingFilteredProducts() {
@@ -2706,14 +2712,6 @@ function saveCostingProducts(options = {}) {
   return COSTING_SAVE_QUEUE;
 }
 
-function setCostingTab(tab) {
-  COSTING_TAB = tab === 'expenses' ? 'expenses' : 'products';
-  $('#costingProductsPanel').hidden = COSTING_TAB !== 'products';
-  $('#costingExpensesPanel').hidden = COSTING_TAB !== 'expenses';
-  document.querySelectorAll('#costingTabs [data-costing-tab]').forEach((button) => button.classList.toggle('on', button.dataset.costingTab === COSTING_TAB));
-  if (COSTING_TAB === 'expenses') loadCostingExpenses().catch((error) => toast(error.message || 'No se pudieron cargar los gastos', true));
-}
-
 async function loadCosting() {
   COSTING_DATA = await api(`/api/costs/products?sort=${encodeURIComponent(COSTING_SORT)}`);
   COSTING_DRAFT = new Map(COSTING_DATA.products.map((product) => [Number(product.id), { ...product }]));
@@ -2724,36 +2722,243 @@ async function loadCosting() {
   renderCostingProducts();
   updateCostingPendingLabel();
   if (restored) saveCostingProducts({ silent: true });
-  $('#costingExpenseDate').value ||= getLocalIsoDate();
-  $('#costingExpenseMonth').value = `${COSTING_EXPENSE_YEAR}-${String(COSTING_EXPENSE_MONTH).padStart(2, '0')}`;
-  setCostingTab(COSTING_TAB);
 }
 
 async function loadCostingExpenses() {
-  const query = new URLSearchParams({ year: String(COSTING_EXPENSE_YEAR), month: String(COSTING_EXPENSE_MONTH), branch: COSTING_EXPENSE_BRANCH });
-  const data = await api(`/api/costs/expenses?${query.toString()}`);
-  $('#costingExpenseTotal').textContent = `Total: ${fmtMoney(data.total)}`;
-  const host = $('#costingExpensesTable');
-  if (!data.expenses.length) {
-    host.innerHTML = emptyHTML('ph-receipt', 'Sin gastos en este periodo', 'Los gastos registrados aquí o desde el POS aparecerán en esta lista.');
+  $('#costingExpenseDate').value ||= getLocalIsoDate();
+  if (COSTING_EXPENSE_RANGE === 'month') {
+    const month = `${COSTING_EXPENSE_YEAR}-${String(COSTING_EXPENSE_MONTH).padStart(2, '0')}`;
+    COSTING_EXPENSE_FROM = `${month}-01`;
+    COSTING_EXPENSE_TO = new Date(Date.UTC(COSTING_EXPENSE_YEAR, COSTING_EXPENSE_MONTH, 0)).toISOString().slice(0, 10);
+    $('#costingExpenseMonth').value = month;
+  } else {
+    $('#costingExpenseMonth').value = '';
+  }
+  $('#costingExpenseFrom').value = COSTING_EXPENSE_FROM;
+  $('#costingExpenseTo').value = COSTING_EXPENSE_TO;
+  $('#costingExpenseAllDates').classList.toggle('on', COSTING_EXPENSE_RANGE === 'all');
+  const query = new URLSearchParams({ branch: COSTING_EXPENSE_BRANCH });
+  if (COSTING_EXPENSE_SEARCH.trim()) query.set('q', COSTING_EXPENSE_SEARCH.trim());
+  if (COSTING_EXPENSE_RANGE === 'all') query.set('period', 'all');
+  else { query.set('from', COSTING_EXPENSE_FROM); query.set('to', COSTING_EXPENSE_TO); }
+  const request = ++COSTING_EXPENSE_REQUEST;
+  COSTING_EXPENSE_DATA = null;
+  $('#costingExpensePdf').disabled = true;
+  $('#costingExpenseExcel').disabled = true;
+  $('#costingExpenseTotal').textContent = 'Cargando gastos…';
+  $('#costingExpenseCards').innerHTML = '';
+  $('#costingExpensesTable').innerHTML = '';
+  let data;
+  try { data = await api(`/api/costs/expenses?${query.toString()}`); }
+  catch (error) {
+    if (request === COSTING_EXPENSE_REQUEST) {
+      $('#costingExpenseTotal').textContent = 'No se pudieron cargar los gastos';
+      throw error;
+    }
     return;
   }
-  host.innerHTML = `<table><thead><tr><th>Fecha</th><th>Sucursal</th><th>Concepto</th><th>Origen</th><th>Monto</th><th>Usuario</th><th></th></tr></thead><tbody>${data.expenses.map((expense) => `<tr>
+  if (request !== COSTING_EXPENSE_REQUEST) return;
+  COSTING_EXPENSE_DATA = data;
+  const branchRestricted = Boolean(data.branchRestricted);
+  const branches = Array.isArray(data.branches) ? data.branches : [];
+  const branchOptions = branches.map((row) => `<option value="${row.id}">${esc(row.name)}${row.active ? '' : ' (inactiva)'}</option>`).join('');
+  const entryBranch = $('#costingExpenseBranch');
+  const selectedEntry = entryBranch.value;
+  entryBranch.innerHTML = `${branchRestricted ? '' : '<option value="general">Sin sucursal</option>'}${branchOptions}`;
+  if (branchRestricted) {
+    entryBranch.value = String(data.branch);
+    entryBranch.disabled = true;
+    COSTING_EXPENSE_BRANCH = String(data.branch);
+  } else if ([...entryBranch.options].some((option) => option.value === selectedEntry)) {
+    entryBranch.value = selectedEntry;
+  }
+  const filterBranch = $('#costingExpenseFilterBranch');
+  filterBranch.innerHTML = `${branchRestricted ? '' : '<option value="all">Todas las sucursales</option><option value="general">Sin sucursal</option>'}${branchOptions}`;
+  filterBranch.value = COSTING_EXPENSE_BRANCH;
+  filterBranch.disabled = branchRestricted;
+  $('#costingExpenseTotal').textContent = `Total: ${fmtMoney(data.total)}`;
+  renderExpenseCards(data);
+  renderDeletedExpenses(data.deletedExpenses || []);
+  $('#costingExpensePdf').disabled = !data.expenses.length;
+  $('#costingExpenseExcel').disabled = !data.expenses.length;
+  renderExpenseTable(data.expenses);
+}
+
+function renderExpensePageControls(total, page, infoId, prevId, nextId) {
+  const pages = Math.max(1, Math.ceil(total / COSTING_EXPENSE_PAGE_SIZE));
+  const start = total ? (page - 1) * COSTING_EXPENSE_PAGE_SIZE + 1 : 0;
+  const end = Math.min(page * COSTING_EXPENSE_PAGE_SIZE, total);
+  $(infoId).textContent = `${start}–${end} de ${total} · página ${page} de ${pages}`;
+  $(prevId).disabled = page <= 1;
+  $(nextId).disabled = page >= pages;
+}
+
+function renderExpenseTable(expenses) {
+  const rows = Array.isArray(expenses) ? expenses : [];
+  COSTING_EXPENSE_PAGE = Math.min(COSTING_EXPENSE_PAGE, Math.max(1, Math.ceil(rows.length / COSTING_EXPENSE_PAGE_SIZE)));
+  $('#costingExpensePageSize').value = String(COSTING_EXPENSE_PAGE_SIZE);
+  renderExpensePageControls(rows.length, COSTING_EXPENSE_PAGE, '#costingExpensePageInfo', '#costingExpensePrev', '#costingExpenseNext');
+  const host = $('#costingExpensesTable');
+  if (!rows.length) {
+    host.innerHTML = emptyHTML('ph-receipt', 'Sin gastos para este filtro', 'Prueba otra fecha, sucursal o texto de búsqueda.');
+    return;
+  }
+  const pageRows = rows.slice((COSTING_EXPENSE_PAGE - 1) * COSTING_EXPENSE_PAGE_SIZE, COSTING_EXPENSE_PAGE * COSTING_EXPENSE_PAGE_SIZE);
+  host.innerHTML = `<table><thead><tr><th>Fecha</th><th>Sucursal</th><th>Concepto</th><th>Origen</th><th>Monto</th><th>Usuario</th><th>Acciones</th></tr></thead><tbody>${pageRows.map((expense) => `<tr>
     <td>${esc(String(expense.expense_date || '').slice(0, 10))}</td><td>${esc(expense.branch_name)}</td><td><b>${esc(expense.concept)}</b>${expense.notes ? `<small class="costing-expense-note">${esc(expense.notes)}</small>` : ''}</td>
     <td><span class="costing-source ${expense.source}">${expense.source === 'pos' ? 'Punto de venta' : 'Manual'}</span></td><td><b>${fmtMoney(expense.amount)}</b></td><td>${esc(expense.created_by || '—')}</td>
-    <td>${expense.source === 'manual' ? `<button class="btn btn-ghost btn-sm costing-delete-expense" data-expense-id="${expense.id}" title="Eliminar"><i class="ph-bold ph-trash"></i></button>` : ''}</td></tr>`).join('')}</tbody></table>`;
-  host.querySelectorAll('.costing-delete-expense').forEach((button) => button.addEventListener('click', async () => {
-    if (!await askConfirm('Eliminar gasto', '¿Deseas eliminar este gasto? El reporte de utilidad se actualizará.')) return;
-    try {
-      await api(`/api/costs/expenses/${button.dataset.expenseId}`, { method: 'DELETE' });
-      await loadCostingExpenses();
-      if (SALES_REPORT_DATA) refreshSalesReportSafely();
-      toast('Gasto eliminado');
-    } catch (error) { toast(error.message || 'No se pudo eliminar el gasto', true); }
+    <td>${ME?.role === 'owner' || isCashierUser() ? `<button type="button" class="btn btn-ghost btn-sm costing-delete-expense" data-expense-id="${expense.id}" title="Borrar gasto" aria-label="Borrar gasto ${esc(expense.concept)}"><i class="ph-bold ph-trash"></i> Borrar</button>` : ''}</td></tr>`).join('')}</tbody></table>`;
+  host.querySelectorAll('.costing-delete-expense').forEach((button) => button.addEventListener('click', () => {
+    const expense = rows.find((row) => Number(row.id) === Number(button.dataset.expenseId));
+    if (expense) openDeleteExpenseModal(expense);
   }));
 }
 
-document.querySelectorAll('#costingTabs [data-costing-tab]').forEach((button) => button.addEventListener('click', () => setCostingTab(button.dataset.costingTab)));
+function renderDeletedExpenses(rows) {
+  const host = $('#costingDeletedExpensesTable');
+  if (!host) return;
+  COSTING_DELETED_EXPENSE_PAGE = Math.min(COSTING_DELETED_EXPENSE_PAGE, Math.max(1, Math.ceil(rows.length / COSTING_EXPENSE_PAGE_SIZE)));
+  renderExpensePageControls(rows.length, COSTING_DELETED_EXPENSE_PAGE, '#costingDeletedExpensePageInfo', '#costingDeletedExpensePrev', '#costingDeletedExpenseNext');
+  if (!rows.length) {
+    host.innerHTML = emptyHTML('ph-archive', 'Sin gastos borrados', 'Las eliminaciones del periodo y sucursal seleccionados aparecerán aquí.');
+    return;
+  }
+  const pageRows = rows.slice((COSTING_DELETED_EXPENSE_PAGE - 1) * COSTING_EXPENSE_PAGE_SIZE, COSTING_DELETED_EXPENSE_PAGE * COSTING_EXPENSE_PAGE_SIZE);
+  host.innerHTML = `<table><thead><tr><th>Fecha del gasto</th><th>Sucursal</th><th>Concepto</th><th>Origen</th><th>Monto</th><th>Registró</th><th>Borró</th><th>Autorización</th><th>Fecha de borrado</th></tr></thead><tbody>${pageRows.map((row) => `<tr>
+    <td>${esc(String(row.expense_date || '').slice(0, 10))}</td><td>${esc(row.branch_name || 'Sin sucursal')}</td>
+    <td><b>${esc(row.concept)}</b>${row.notes ? `<small class="costing-expense-note">${esc(row.notes)}</small>` : ''}${row.session_id ? `<small class="costing-expense-note">Caja #${Number(row.session_id)}</small>` : ''}</td>
+    <td><span class="costing-source ${row.source}">${row.source === 'pos' ? 'Punto de venta' : 'Manual'}</span></td><td><b>${fmtMoney(row.amount)}</b></td>
+    <td>${esc(row.created_by || '—')}</td><td>${esc(row.deleted_by || '—')}</td><td>${esc(row.authorized_by || '—')}</td><td>${esc(row.deleted_at || '—')}</td>
+  </tr>`).join('')}</tbody></table>`;
+}
+
+function openDeleteExpenseModal(expense) {
+  $('#costingDeleteExpenseId').value = String(expense.id);
+  $('#costingDeleteExpenseDetail').textContent = `${expense.concept} · ${fmtMoney(expense.amount)} · ${expense.branch_name || 'Sin sucursal'}`;
+  const pinWrap = $('#costingDeleteExpensePinWrap');
+  const pin = $('#costingDeleteExpensePin');
+  pin.value = '';
+  pinWrap.hidden = !isCashierUser();
+  pin.required = isCashierUser();
+  openModal('costingDeleteExpenseModal');
+  if (isCashierUser()) pin.focus();
+}
+
+async function submitDeleteExpense(event) {
+  event.preventDefault();
+  const id = Number($('#costingDeleteExpenseId').value);
+  const expense = COSTING_EXPENSE_DATA?.expenses?.find((row) => Number(row.id) === id);
+  if (!expense) return toast('El gasto ya no está en la lista. Actualiza la vista.', true);
+  const button = $('#costingDeleteExpenseConfirm');
+  button.disabled = true;
+  try {
+    await api(`/api/costs/expenses/${id}`, {
+      method: 'DELETE', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pin: isCashierUser() ? $('#costingDeleteExpensePin').value : '' }),
+    });
+    closeModal('costingDeleteExpenseModal');
+    await loadCostingExpenses();
+    if (SALES_REPORT_DATA) refreshSalesReportSafely();
+    if (expense.source === 'pos' && POS_OVERVIEW) loadPos().catch((error) => toast(error.message, true));
+    toast('Gasto borrado y registrado en el historial');
+  } catch (error) {
+    toast(error.message || 'No se pudo borrar el gasto', true);
+  } finally {
+    $('#costingDeleteExpensePin').value = '';
+    button.disabled = false;
+  }
+}
+
+function renderExpenseCards(data) {
+  const host = $('#costingExpenseCards');
+  const cards = [];
+  const card = (branch, label, amount, count, icon) => `<button type="button" class="expense-summary-card${COSTING_EXPENSE_BRANCH === branch ? ' active' : ''}" data-expense-branch="${branch}" aria-pressed="${COSTING_EXPENSE_BRANCH === branch}"><i class="ph-bold ${icon}"></i><span>${esc(label)}</span><strong>${fmtMoney(amount)}</strong><small>${count} gasto${count === 1 ? '' : 's'}</small></button>`;
+  if (!data.branchRestricted) cards.push(card('all', 'Gasto global', data.globalTotal, data.globalCount, 'ph-globe-hemisphere-west'));
+  for (const branch of data.branchTotals || []) cards.push(card(String(branch.id), branch.name, branch.total, branch.count, 'ph-storefront'));
+  if (!data.branchRestricted) cards.push(card('general', 'Sin sucursal', data.generalTotal, data.generalCount, 'ph-buildings'));
+  host.innerHTML = cards.join('');
+  host.querySelectorAll('[data-expense-branch]').forEach((button) => button.addEventListener('click', () => {
+    const branch = button.dataset.expenseBranch;
+    if (branch === COSTING_EXPENSE_BRANCH) return;
+    COSTING_EXPENSE_BRANCH = branch;
+    COSTING_EXPENSE_PAGE = 1;
+    COSTING_DELETED_EXPENSE_PAGE = 1;
+    loadCostingExpenses().catch((error) => toast(error.message || 'No se pudieron cargar los gastos', true));
+  }));
+}
+
+function expenseExportDetails() {
+  const data = COSTING_EXPENSE_DATA;
+  if (!data?.expenses?.length) return null;
+  const branch = $('#costingExpenseFilterBranch').selectedOptions[0]?.textContent?.trim() || 'Todas las sucursales';
+  const period = data.allDates ? 'Todo el historial' : `${data.from} al ${data.to}`;
+  const fileBranch = branch.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+  const filePeriod = data.allDates ? 'historial' : `${data.from}_${data.to}`;
+  return { data, branch, period, filename: `gastos_${fileBranch || 'global'}_${filePeriod}` };
+}
+
+function exportExpensesExcel() {
+  const report = expenseExportDetails();
+  if (!report) return toast('No hay gastos en el filtro actual', true);
+  if (!globalThis.XLSX) return toast('No se pudo preparar el archivo Excel', true);
+  const { data, branch, period, filename } = report;
+  const workbook = XLSX.utils.book_new();
+  const summary = XLSX.utils.aoa_to_sheet([
+    ['Reporte', 'Gastos'], ['Negocio', ME?.tenant?.businessName || SETTINGS?.business_name || 'Negocio'],
+    ['Periodo', period], ['Sucursal', branch], ['Gastos', data.expenses.length], ['Total', data.total],
+    ['Generado', fmtBusinessDateTime()],
+  ]);
+  const rows = data.expenses.map((expense) => ({
+    Fecha: String(expense.expense_date || '').slice(0, 10),
+    Sucursal: expense.branch_name,
+    Concepto: expense.concept,
+    Notas: expense.notes || '',
+    Origen: expense.source === 'pos' ? 'Punto de venta' : 'Manual',
+    Monto: Number(expense.amount),
+    Usuario: expense.created_by || '',
+    Registro: expense.created_at || '',
+  }));
+  const sheet = XLSX.utils.json_to_sheet(rows);
+  sheet['!cols'] = [14, 25, 34, 34, 19, 14, 18, 20].map((wch) => ({ wch }));
+  XLSX.utils.book_append_sheet(workbook, summary, 'Resumen');
+  XLSX.utils.book_append_sheet(workbook, sheet, 'Gastos');
+  XLSX.writeFile(workbook, `${filename}.xlsx`);
+}
+
+function exportExpensesPdf() {
+  const report = expenseExportDetails();
+  if (!report) return toast('No hay gastos en el filtro actual', true);
+  if (!globalThis.jspdf?.jsPDF) return toast('No se pudo preparar el archivo PDF', true);
+  const { data, branch, period, filename } = report;
+  const doc = new globalThis.jspdf.jsPDF({ orientation: 'landscape', unit: 'mm', format: 'letter' });
+  doc.setFontSize(17);
+  doc.text('Reporte de gastos', 14, 17);
+  doc.setFontSize(10);
+  doc.text(String(ME?.tenant?.businessName || SETTINGS?.business_name || 'Negocio'), 14, 24);
+  doc.text(`Periodo: ${period}  |  Sucursal: ${branch}`, 14, 31);
+  doc.text(`Total: ${fmtMoney(data.total)}  |  ${data.expenses.length} gastos`, 14, 38);
+  doc.autoTable({
+    startY: 44,
+    theme: 'striped',
+    head: [['Fecha', 'Sucursal', 'Concepto y notas', 'Origen', 'Monto', 'Usuario']],
+    body: data.expenses.map((expense) => [
+      String(expense.expense_date || '').slice(0, 10), expense.branch_name,
+      `${expense.concept}${expense.notes ? `\n${expense.notes}` : ''}`,
+      expense.source === 'pos' ? 'Punto de venta' : 'Manual', fmtMoney(expense.amount), expense.created_by || '—',
+    ]),
+    styles: { fontSize: 8, cellPadding: 2.5, overflow: 'linebreak' },
+    headStyles: { fillColor: [31, 134, 79] },
+    margin: { left: 14, right: 14, bottom: 14 },
+  });
+  const pages = doc.internal.getNumberOfPages();
+  for (let page = 1; page <= pages; page += 1) {
+    doc.setPage(page);
+    doc.setFontSize(8);
+    doc.text(`Página ${page} de ${pages}`, doc.internal.pageSize.getWidth() - 14, doc.internal.pageSize.getHeight() - 7, { align: 'right' });
+  }
+  doc.save(`${filename}.pdf`);
+}
+
 document.querySelectorAll('#costingSort [data-cost-sort]').forEach((button) => button.addEventListener('click', () => {
   COSTING_SORT = button.dataset.costSort === 'category' ? 'category' : 'alphabetical';
   document.querySelectorAll('#costingSort [data-cost-sort]').forEach((row) => row.classList.toggle('on', row.dataset.costSort === COSTING_SORT));
@@ -2808,13 +3013,75 @@ $('#costingExpenseMonth')?.addEventListener('change', (event) => {
   const match = String(event.target.value || '').match(/^(\d{4})-(\d{2})$/);
   if (!match) return;
   COSTING_EXPENSE_YEAR = Number(match[1]); COSTING_EXPENSE_MONTH = Number(match[2]);
+  COSTING_EXPENSE_RANGE = 'month';
+  COSTING_EXPENSE_PAGE = 1;
+  COSTING_DELETED_EXPENSE_PAGE = 1;
   loadCostingExpenses().catch((error) => toast(error.message, true));
 });
+function applyExpenseDateRange() {
+  const from = $('#costingExpenseFrom').value;
+  const to = $('#costingExpenseTo').value;
+  if (!from || !to || from > to) {
+    COSTING_EXPENSE_REQUEST += 1;
+    COSTING_EXPENSE_DATA = null;
+    $('#costingExpensePdf').disabled = true;
+    $('#costingExpenseExcel').disabled = true;
+    $('#costingExpenseTotal').textContent = 'Selecciona un rango válido';
+    $('#costingExpenseCards').innerHTML = '';
+    $('#costingExpensesTable').innerHTML = '';
+    return toast(from && to ? 'La fecha inicial debe ser anterior a la final' : 'Selecciona ambas fechas', true);
+  }
+  COSTING_EXPENSE_FROM = from;
+  COSTING_EXPENSE_TO = to;
+  COSTING_EXPENSE_RANGE = 'custom';
+  COSTING_EXPENSE_PAGE = 1;
+  COSTING_DELETED_EXPENSE_PAGE = 1;
+  loadCostingExpenses().catch((error) => toast(error.message, true));
+}
+$('#costingExpenseFrom')?.addEventListener('change', applyExpenseDateRange);
+$('#costingExpenseTo')?.addEventListener('change', applyExpenseDateRange);
+$('#costingExpenseAllDates')?.addEventListener('click', () => {
+  COSTING_EXPENSE_RANGE = 'all';
+  COSTING_EXPENSE_PAGE = 1;
+  COSTING_DELETED_EXPENSE_PAGE = 1;
+  COSTING_EXPENSE_FROM = '';
+  COSTING_EXPENSE_TO = '';
+  loadCostingExpenses().catch((error) => toast(error.message, true));
+});
+$('#costingExpensePdf')?.addEventListener('click', exportExpensesPdf);
+$('#costingExpenseExcel')?.addEventListener('click', exportExpensesExcel);
 $('#costingExpenseFilterBranch')?.addEventListener('change', (event) => {
   COSTING_EXPENSE_BRANCH = event.target.value;
+  COSTING_EXPENSE_PAGE = 1;
+  COSTING_DELETED_EXPENSE_PAGE = 1;
   loadCostingExpenses().catch((error) => toast(error.message, true));
 });
+$('#costingExpenseSearch')?.addEventListener('input', (event) => {
+  COSTING_EXPENSE_SEARCH = event.target.value;
+  COSTING_EXPENSE_PAGE = 1;
+  COSTING_DELETED_EXPENSE_PAGE = 1;
+  clearTimeout(COSTING_EXPENSE_SEARCH_TIMER);
+  COSTING_EXPENSE_SEARCH_TIMER = setTimeout(() => loadCostingExpenses().catch((error) => toast(error.message, true)), 250);
+});
+$('#costingExpensePageSize')?.addEventListener('change', (event) => {
+  const size = Number(event.target.value);
+  if (![10, 20, 50, 100].includes(size)) return;
+  COSTING_EXPENSE_PAGE_SIZE = size;
+  COSTING_EXPENSE_PAGE = 1;
+  COSTING_DELETED_EXPENSE_PAGE = 1;
+  if (COSTING_EXPENSE_DATA) {
+    renderExpenseTable(COSTING_EXPENSE_DATA.expenses);
+    renderDeletedExpenses(COSTING_EXPENSE_DATA.deletedExpenses || []);
+  }
+});
+$('#costingExpensePrev')?.addEventListener('click', () => { COSTING_EXPENSE_PAGE -= 1; renderExpenseTable(COSTING_EXPENSE_DATA?.expenses); });
+$('#costingExpenseNext')?.addEventListener('click', () => { COSTING_EXPENSE_PAGE += 1; renderExpenseTable(COSTING_EXPENSE_DATA?.expenses); });
+$('#costingDeletedExpensePrev')?.addEventListener('click', () => { COSTING_DELETED_EXPENSE_PAGE -= 1; renderDeletedExpenses(COSTING_EXPENSE_DATA?.deletedExpenses || []); });
+$('#costingDeletedExpenseNext')?.addEventListener('click', () => { COSTING_DELETED_EXPENSE_PAGE += 1; renderDeletedExpenses(COSTING_EXPENSE_DATA?.deletedExpenses || []); });
 $('#costingExpenseRefresh')?.addEventListener('click', () => loadCostingExpenses().catch((error) => toast(error.message, true)));
+$('#costingDeleteExpenseCancel')?.addEventListener('click', () => closeModal('costingDeleteExpenseModal'));
+$('#costingDeleteExpenseModal')?.addEventListener('click', (event) => { if (event.target === event.currentTarget) closeModal('costingDeleteExpenseModal'); });
+$('#costingDeleteExpenseForm')?.addEventListener('submit', submitDeleteExpense);
 
 /* ===== Stock por sucursal ===== */
 async function loadBranchStock() {
