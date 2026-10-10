@@ -322,6 +322,9 @@ router.put('/', upload.single('logo'), async (req, res, next) => {
       }
     }
     res.json({ ok: true });
+    if (nextLogoPath) {
+      require('./whatsapp').resyncTenantProfilePhotos({ ...req.tenant, logo: nextLogoPath }).catch(() => {});
+    }
   } catch (e) {
     try {
       if (nextLogoPath) await deleteManagedUpload(nextLogoPath);

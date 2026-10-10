@@ -651,6 +651,10 @@ async function createTenantSchema(slug) {
     ALTER TABLE "${s}".products ADD COLUMN IF NOT EXISTS sale_days TEXT NOT NULL DEFAULT '[]';
     ALTER TABLE "${s}".products ADD COLUMN IF NOT EXISTS barcode TEXT;
     ALTER TABLE "${s}".products ADD COLUMN IF NOT EXISTS sar_tax_category TEXT NOT NULL DEFAULT '';
+    ALTER TABLE "${s}".products ADD COLUMN IF NOT EXISTS pos_active INTEGER;
+    UPDATE "${s}".products SET pos_active = COALESCE(active, 1) WHERE pos_active IS NULL;
+    ALTER TABLE "${s}".products ALTER COLUMN pos_active SET DEFAULT 1;
+    ALTER TABLE "${s}".products ALTER COLUMN pos_active SET NOT NULL;
     CREATE UNIQUE INDEX IF NOT EXISTS idx_${s}_products_barcode
       ON "${s}".products(barcode) WHERE barcode IS NOT NULL AND barcode <> '';
     CREATE TABLE IF NOT EXISTS "${s}".restaurant_tables (

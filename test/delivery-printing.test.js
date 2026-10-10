@@ -63,5 +63,5 @@ test('tickets y comandas imprimen los datos de domicilio disponibles', () => {
 
 test('pedidos históricos conservan el domicilio y la referencia anteriores', () => {
   assert.match(orders, /delivery_address: String\(o\.delivery_address \|\| \(customer \? decrypt\(customer\.address_enc\) : ''\) \|\| ''\)/);
-  assert.match(orders, /delivery_reference: String\(o\.delivery_reference \|\| \(o\.channel === 'chatbot' \? o\.notes : ''\) \|\| ''\)/);
+  assert.match(orders, /delivery_reference: String\(o\.delivery_reference \|\| \(\['chatbot', 'whatsapp'\]\.includes\(o\.channel\) \? o\.notes : ''\) \|\| ''\)/);
 });

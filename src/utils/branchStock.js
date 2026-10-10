@@ -44,7 +44,7 @@ async function isBranchStockInitialized(t) {
 
 async function calculateGlobalStocks(t) {
   const [products, items, movements, orders, globalBaselineRow] = await Promise.all([
-    t.all('SELECT id FROM {s}.products WHERE active=1 ORDER BY id'),
+    t.all('SELECT id FROM {s}.products WHERE (active=1 OR pos_active=1) ORDER BY id'),
     t.all('SELECT product_id, initial_stock::float AS initial_stock, baseline_started_at FROM {s}.inventory_items'),
     t.all('SELECT product_id, type, quantity::float AS quantity, created_at FROM {s}.inventory_movements'),
     t.all("SELECT items, created_at FROM {s}.orders WHERE status!='cancelado'"),

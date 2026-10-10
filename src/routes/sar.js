@@ -36,7 +36,7 @@ router.get('/checkout-config', requireModules('pos'), wrapped(async (req,res) =>
 }));
 
 router.get('/catalog-tax', ownerOnly, wrapped(async (req,res) => {
-  const rows=await req.tdb.all('SELECT id,name,sar_tax_category FROM {s}.products WHERE active=1 ORDER BY name,id');
+  const rows=await req.tdb.all('SELECT id,name,sar_tax_category FROM {s}.products WHERE (active=1 OR pos_active=1) ORDER BY name,id');
   res.json({products:rows});
 }));
 
@@ -45,7 +45,7 @@ router.put('/catalog-tax/bulk', ownerOnly, wrapped(async (req,res) => {
   const category=clean(req.body?.category,20);
   if (!ids.length || ids.length>500 || ids.some((id)=>!Number.isSafeInteger(id) || id<1) || !TAX_CATEGORIES.has(category)) throw fail(400,'Selecciona productos y tratamiento ISV válido');
   await req.tdb.tx(async (tx) => {
-    await tx.run('UPDATE {s}.products SET sar_tax_category=$1 WHERE id=ANY($2::int[]) AND active=1',[category,ids]);
+    await tx.run('UPDATE {s}.products SET sar_tax_category=$1 WHERE id=ANY($2::int[]) AND (active=1 OR pos_active=1)',[category,ids]);
     await tx.run("INSERT INTO {s}.sar_events(subject_type,subject_id,event_type,detail,actor) VALUES ('product',0,'tax_bulk_classified',$1,$2)",[`${category}: ${ids.join(',')}`,actor(req)]);
   });
   res.json({ok:true,count:ids.length});
@@ -72,7 +72,7 @@ router.get('/overview', ownerOnly, wrapped(async (req, res) => {
       FROM {s}.orders o LEFT JOIN {s}.sar_documents d ON d.order_id=o.id AND d.status='issued'
       WHERE o.channel='pos' AND o.status<>'cancelado' ORDER BY o.created_at DESC LIMIT 100`),
     req.tdb.all('SELECT id,name FROM {s}.branches WHERE active=1 ORDER BY name'),
-    req.tdb.get("SELECT COUNT(*)::int AS count FROM {s}.products WHERE active=1 AND sar_tax_category=''"),
+    req.tdb.get("SELECT COUNT(*)::int AS count FROM {s}.products WHERE (active=1 OR pos_active=1) AND sar_tax_category=''"),
     req.tdb.get(`SELECT COUNT(*)::int AS issued_count,
       COALESCE(SUM(o.total) FILTER (WHERE d.status='issued'),0)::float AS sales_total,
       COUNT(*) FILTER (WHERE d.status='annulled')::int AS annulled_count

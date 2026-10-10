@@ -136,7 +136,7 @@ async function buildKdsPayload(tenant, tenantDb, area) {
            OR (
              $3::boolean = TRUE
              AND $2::int IS NULL
-             AND o.channel = 'chatbot'
+             AND o.channel IN ('chatbot', 'whatsapp')
              AND NULLIF(o.service_branch_id, 0) IS NULL
              AND NULLIF(o.pickup_branch_id, 0) IS NULL
              AND (
@@ -388,7 +388,7 @@ router.get('/', async (req, res, next) => {
     const [areas, categories, products, branches] = await Promise.all([
       listAreas(req),
       req.tdb.all('SELECT id, name, sort FROM {s}.categories ORDER BY sort, name'),
-      req.tdb.all('SELECT id, name, category_id FROM {s}.products WHERE active = 1 ORDER BY name'),
+      req.tdb.all('SELECT id, name, category_id FROM {s}.products WHERE (active = 1 OR pos_active = 1) ORDER BY name'),
       req.tdb.all('SELECT id, name, active FROM {s}.branches WHERE active = 1 ORDER BY name'),
     ]);
     res.json({ areas, categories, products, branches });

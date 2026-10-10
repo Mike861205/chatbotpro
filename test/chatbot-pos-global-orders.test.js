@@ -30,6 +30,6 @@ test('el modo por sucursal filtra la cola y bloquea importaciones ajenas', () =>
 test('el modo global permite que la primera caja tome y reasigne el pedido', () => {
   assert.match(pos, /getSetting\(t, 'chatbot_pos_global_orders_enabled', '0'\)/);
   assert.match(pos, /const update = await req\.tdb\.tx\(async \(tx\) => \{[\s\S]+SET channel = 'pos',[\s\S]+service_branch_id = \$7,[\s\S]+service_branch_name = \$8/);
-  assert.match(pos, /WHERE id = \$5[\s\S]+AND channel = 'chatbot'/);
+  assert.match(pos, /WHERE id = \$5[\s\S]+AND channel IN \('chatbot', 'whatsapp'\)/);
   assert.match(pos, /decrementBranchStockForSale\(tx, session\.branch_id, costedSourceItems\)/);
 });

@@ -237,7 +237,7 @@ router.get('/', async (req, res, next) => {
     movQuery += ` ORDER BY created_at DESC`;
     const countBranchClause = branchId ? 'WHERE branch_id=$1' : 'WHERE branch_id IS NULL';
     const [products, items, movements, counts, globalBaseline, branches, branchStocks, transfers] = await Promise.all([
-      t.all(`SELECT id, name FROM {s}.products WHERE active = 1 ORDER BY name`),
+      t.all(`SELECT id, name FROM {s}.products WHERE (active = 1 OR pos_active = 1) ORDER BY name`),
       t.all(`SELECT * FROM {s}.inventory_items`),
       t.all(movQuery, movParams),
       t.all(
@@ -670,7 +670,7 @@ router.get('/export', async (req, res, next) => {
     if (branchId) { movParams.push(branchId); movSql += ` AND m.branch_id=$${movParams.length}`; }
     movSql += ` ORDER BY m.created_at DESC`;
     const [products, items, movements, allCounts, globalBaseline, branchStocks] = await Promise.all([
-      t.all(`SELECT id, name FROM {s}.products WHERE active = 1 ORDER BY name`),
+      t.all(`SELECT id, name FROM {s}.products WHERE (active = 1 OR pos_active = 1) ORDER BY name`),
       t.all(`SELECT * FROM {s}.inventory_items`),
       t.all(movSql, movParams),
       t.all(

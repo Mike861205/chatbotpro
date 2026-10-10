@@ -802,7 +802,7 @@ async function listSoldQtyByProduct(t) {
          END AS qty
        FROM {s}.orders o
        CROSS JOIN LATERAL jsonb_array_elements(COALESCE(o.items::jsonb, '[]'::jsonb)) AS it(item)
-       WHERE o.status <> 'cancelado' AND o.channel IN ('pos', 'chatbot')
+       WHERE o.status <> 'cancelado' AND o.channel IN ('pos', 'chatbot', 'whatsapp')
      ) sold
      WHERE product_id IS NOT NULL
      GROUP BY product_id`,
@@ -901,7 +901,7 @@ async function normalizePosItems(t, inputItems) {
   const ids = [...new Set(items.map((item) => Number(item.productId ?? item.id)).filter((id) => Number.isInteger(id) && id > 0))];
   if (!ids.length) throw badRequest('Los productos del ticket no son válidos');
   const rows = await t.all(
-    `SELECT id, name, price::float AS price, COALESCE(unit_cost, 0)::float AS unit_cost, active, category_id, sale_days, sar_tax_category
+    `SELECT id, name, price::float AS price, COALESCE(unit_cost, 0)::float AS unit_cost, active, pos_active, category_id, sale_days, sar_tax_category
      FROM {s}.products
      WHERE id = ANY($1::int[])`,
     [ids]
@@ -911,7 +911,7 @@ async function normalizePosItems(t, inputItems) {
   const normalized = items.map((item) => {
     const product = byId.get(Number(item.productId ?? item.id));
     const qty = Number(item.qty);
-    if (!product || !product.active || !isProductAvailableToday(product, new Date(), tenantTimeZone(t))) {
+    if (!product || !Number(product.pos_active) || !isProductAvailableToday(product, new Date(), tenantTimeZone(t))) {
       throw badRequest('Uno de los productos no está disponible para venta hoy');
     }
     if (!Number.isInteger(qty) || qty <= 0) throw badRequest('La cantidad de un producto es inválida');
@@ -1394,7 +1394,7 @@ router.get('/overview', async (req, res, next) => {
       `SELECT p.id, p.category_id, p.name, p.description, p.price::float AS price, p.image, p.sale_days, p.barcode, p.sat_product_code, c.name AS category_name
        FROM {s}.products p
        LEFT JOIN {s}.categories c ON c.id = p.category_id
-       WHERE p.active = 1
+       WHERE p.pos_active = 1
        ORDER BY COALESCE(c.sort, 0), c.name NULLS FIRST, p.name`
     );
     const availableProducts = products.filter((product) => isProductAvailableToday(product, new Date(), tenantTimeZone(req.tdb)));
@@ -1484,7 +1484,7 @@ router.get('/chatbot-orders', async (req, res, next) => {
     const totalRow = await req.tdb.get(
       `SELECT COUNT(*)::int AS c
        FROM {s}.orders o
-       WHERE o.channel = 'chatbot'
+       WHERE o.channel IN ('chatbot', 'whatsapp')
          AND o.status = ANY($1::text[])
          ${branchFilter}
          AND (COALESCE(o.scheduled_for, o.created_at) AT TIME ZONE '${req.timezone}')::date = (now() AT TIME ZONE '${req.timezone}')::date`,
@@ -1515,7 +1515,7 @@ router.get('/chatbot-orders', async (req, res, next) => {
               c.name_enc, c.phone_enc, c.address_enc
        FROM {s}.orders o
        LEFT JOIN {s}.customers c ON c.id = o.customer_id
-       WHERE o.channel = 'chatbot'
+       WHERE o.channel IN ('chatbot', 'whatsapp')
          AND o.status = ANY($1::text[])
          ${branchFilter}
          AND (COALESCE(o.scheduled_for, o.created_at) AT TIME ZONE '${req.timezone}')::date = (now() AT TIME ZONE '${req.timezone}')::date
@@ -1568,7 +1568,7 @@ router.post('/chatbot-orders/:id/import', async (req, res, next) => {
 
     const sourceOrder = await loadChatbotOrderForImport(req.tdb, id);
     if (!sourceOrder) return res.status(404).json({ error: 'No se encontró el pedido de chatbot' });
-    if (sourceOrder.channel !== 'chatbot') return res.status(409).json({ error: 'Este pedido ya fue integrado al POS' });
+    if (!['chatbot', 'whatsapp'].includes(sourceOrder.channel)) return res.status(409).json({ error: 'Este pedido ya fue integrado al POS' });
     const globalOrdersEnabled = await areGlobalChatbotPosOrdersEnabled(req.tdb);
     const assignedBranchId = Number(sourceOrder.service_branch_id || sourceOrder.pickup_branch_id || 0);
     if (!globalOrdersEnabled && session.branch_id && assignedBranchId > 0 && assignedBranchId !== Number(session.branch_id)) {
@@ -1645,7 +1645,7 @@ router.post('/chatbot-orders/:id/import', async (req, res, next) => {
           `UPDATE {s}.orders
            SET channel = 'table_account', source_channel = 'chatbot', status = 'preparando', service_branch_id = $1, service_branch_name = $2,
                items = $3, cogs_total = $4, table_account_id = $5, table_number = $6, waiter_name = $7
-           WHERE id = $8 AND channel = 'chatbot' AND status = ANY($9::text[])
+           WHERE id = $8 AND channel IN ('chatbot', 'whatsapp') AND status = ANY($9::text[])
            RETURNING id`,
           [session.branch_id || null, session.branch_name || null, JSON.stringify(costedSourceItems), cogsTotal,
             account.id, table.table_number, waiterName, id, Array.from(CHATBOT_IMPORTABLE_STATUSES)]
@@ -1705,7 +1705,7 @@ router.post('/chatbot-orders/:id/import', async (req, res, next) => {
                ELSE notes || E'\n\n' || $4
              END
          WHERE id = $5
-           AND channel = 'chatbot'
+           AND channel IN ('chatbot', 'whatsapp')
            AND status = ANY($6::text[])
            AND (COALESCE(scheduled_for, created_at) AT TIME ZONE '${req.timezone}')::date = (now() AT TIME ZONE '${req.timezone}')::date
          RETURNING id, total::float AS total, payment_method, payment_breakdown, cash_received::float AS cash_received,

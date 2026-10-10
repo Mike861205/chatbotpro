@@ -95,6 +95,11 @@ test('WhatsApp ofrece sandbox Zernio y conserva el flujo real de pedidos', () =>
   assert.match(route, /attachmentType: 'image'/);
   assert.match(route, /business-profile\/photo/);
   assert.match(route, /profilePhotoSyncedAt/);
+  assert.match(route, /\.resize\(640, 640/);
+  assert.match(route, /\.jpeg\(\{ quality: 88 \}\)/);
+  assert.match(route, /form\.append\('file', new Blob\(\[jpeg\]/);
+  assert.match(route, /autoSyncProfilePhoto/);
+  assert.match(source('src/routes/settings.js'), /resyncTenantProfilePhotos/);
   assert.match(route, /whatsappProductIdFromInput/);
   assert.match(route, /variants\.length > 1/);
   assert.match(engine, /product_variants WHERE product_id = ANY/);

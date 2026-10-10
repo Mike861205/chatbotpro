@@ -1,5 +1,8 @@
 const express = require('express');
 const crypto = require('node:crypto');
+const fs = require('node:fs');
+const sharp = require('sharp');
+const { resolveManagedUploadPath } = require('../utils/uploads');
 const { q, tdb } = require('../db');
 const { encrypt, decrypt, lookupHash } = require('../utils/crypto');
 const { requireAuth, requireOwner, requireModules } = require('../middleware/auth');
@@ -147,6 +150,71 @@ function connectionPublic(row, req) {
   };
 }
 
+async function readTenantLogoBytes(logo) {
+  if (/^https:\/\//i.test(logo)) {
+    const response = await fetch(logo, { signal: AbortSignal.timeout(10000) });
+    if (!response.ok) throw new Error('logo no disponible');
+    return Buffer.from(await response.arrayBuffer());
+  }
+  const absolute = resolveManagedUploadPath(`/${logo.replace(/^\/+/, '')}`);
+  if (!absolute) throw new Error('logo fuera de uploads');
+  return fs.promises.readFile(absolute);
+}
+
+function photoError(message, status = 400) { return Object.assign(new Error(message), { status }); }
+
+async function syncConnectionProfilePhoto({ t, tenant, connection }) {
+  if (connection.mode === 'sandbox') throw photoError('El sandbox no tiene un perfil de WhatsApp propio');
+  if (!connection.zernio_account_id) throw photoError('Conecta tu número de WhatsApp antes de sincronizar la foto');
+  const apiKey = decrypt(connection.api_key_enc);
+  if (!apiKey) throw photoError('Guarda primero la API key de Zernio');
+  const logo = String(tenant.logo || '').trim();
+  if (!logo) throw photoError('Configura primero el logo en Mi negocio');
+  let source;
+  try { source = await readTenantLogoBytes(logo); } catch { throw photoError('No pudimos leer el logo del negocio. Vuelve a subirlo en Mi negocio.'); }
+  let jpeg;
+  try {
+    jpeg = await sharp(source, { failOn: 'none' })
+      .rotate()
+      .flatten({ background: '#ffffff' })
+      .resize(640, 640, { fit: 'cover', position: 'centre' })
+      .jpeg({ quality: 88 })
+      .toBuffer();
+  } catch { throw photoError('El logo no es una imagen válida. Sube un logo JPG, PNG o WebP en Mi negocio.'); }
+
+  const form = new FormData();
+  form.append('accountId', connection.zernio_account_id);
+  form.append('file', new Blob([jpeg], { type: 'image/jpeg' }), 'perfil.jpg');
+  let data;
+  try {
+    data = await zernioRequest({ apiKey, path: '/v1/whatsapp/business-profile/photo', method: 'POST', body: form });
+  } catch (error) {
+    if (Number(error.providerStatus) === 422) throw photoError('La foto está bloqueada por coexistencia. Cámbiala desde la app WhatsApp Business del teléfono.', 409);
+    if (Number(error.providerStatus) === 400) throw photoError(`WhatsApp rechazó la foto: ${error.message}`);
+    throw error;
+  }
+  const metadata = safeJson(connection.metadata_json, {});
+  const updated = await t.get(
+    "UPDATE {s}.whatsapp_connections SET metadata_json=$1,last_error='',updated_at=now() WHERE id=$2 RETURNING *",
+    [JSON.stringify({ ...metadata, profilePhotoLogo: logo, profilePhotoSyncedAt: new Date().toISOString() }), connection.id]
+  );
+  return { connection: updated, data };
+}
+
+async function autoSyncProfilePhoto({ t, tenant, connection }) {
+  try {
+    const metadata = safeJson(connection.metadata_json, {});
+    if (metadata.profilePhotoLogo && metadata.profilePhotoLogo === String(tenant.logo || '').trim()) return null;
+    return await syncConnectionProfilePhoto({ t, tenant, connection });
+  } catch { return null; }
+}
+
+async function resyncTenantProfilePhotos(tenant) {
+  const t = tdb(tenant.slug);
+  const rows = await t.all("SELECT * FROM {s}.whatsapp_connections WHERE mode <> 'sandbox' AND zernio_account_id <> '' AND enabled = 1");
+  for (const row of rows) await autoSyncProfilePhoto({ t, tenant, connection: row });
+}
+
 async function zernioRequest({ apiKey, path, method = 'GET', body, retries = 0 }) {
   for (let attempt = 0; ; attempt += 1) {
     try {
@@ -169,10 +237,10 @@ async function zernioRequestOnce({ apiKey, path, method = 'GET', body }) {
       method,
       headers: {
         Authorization: `Bearer ${token}`,
-        'Content-Type': 'application/json',
+        ...(body instanceof FormData ? {} : { 'Content-Type': 'application/json' }),
         Accept: 'application/json',
       },
-      body: body === undefined ? undefined : JSON.stringify(body),
+      body: body === undefined ? undefined : (body instanceof FormData ? body : JSON.stringify(body)),
       signal: controller.signal,
     });
     const text = await response.text();
@@ -1597,7 +1665,8 @@ router.post('/connections/:id/test', requireOwner, async (req, res, next) => {
     const updated = await req.tdb.get(`UPDATE {s}.whatsapp_connections SET status='active',enabled=1,last_error='',last_health_check=now(),updated_at=now() WHERE id=$1 RETURNING *`, [connection.id]);
     let webhookSetup = { registered: false };
     try { webhookSetup = await ensureZernioWebhook({ req, t: req.tdb, connection: updated }); } catch (error) { webhookSetup = { registered: false, reason: clean(error.message, 300) }; }
-    res.json({ ok: true, connection: connectionPublic(webhookSetup.connection || updated, req), numberInfo: data,
+    const synced = await autoSyncProfilePhoto({ t: req.tdb, tenant: req.tenant, connection: webhookSetup.connection || updated });
+    res.json({ ok: true, connection: connectionPublic(synced?.connection || webhookSetup.connection || updated, req), numberInfo: data,
       webhookSetup: { registered: Boolean(webhookSetup.registered), reason: webhookSetup.reason || '' } });
   } catch (error) {
     await req.tdb.run('UPDATE {s}.whatsapp_connections SET status=\'error\',last_error=$1,last_health_check=now(),updated_at=now() WHERE id=$2', [clean(error.message, 500), Number(req.params.id)]).catch(() => {});
@@ -1608,41 +1677,8 @@ router.post('/connections/:id/test', requireOwner, async (req, res, next) => {
 router.post('/connections/:id/profile-photo', requireOwner, async (req, res, next) => {
   try {
     const connection = await connectionWithSecret(req.tdb, Number(req.params.id));
-    if (connection.mode === 'sandbox') return res.status(400).json({ error: 'El sandbox no tiene un perfil de WhatsApp propio' });
-    if (!connection.zernio_account_id) return res.status(400).json({ error: 'Conecta tu número de WhatsApp antes de sincronizar la foto' });
-    const apiKey = decrypt(connection.api_key_enc);
-    if (!apiKey) return res.status(400).json({ error: 'Guarda primero la API key de Zernio' });
-    const logo = String(req.tenant.logo || '').trim();
-    if (!logo) return res.status(400).json({ error: 'Configura primero el logo en Mi negocio' });
-    const publicBase = String(config.WHATSAPP_PUBLIC_URL || '').replace(/\/+$/, '');
-    const photoUrl = /^https:\/\//i.test(logo)
-      ? logo
-      : publicBase ? `${publicBase}/${logo.replace(/^\/+/, '')}` : '';
-    if (!/^https:\/\//i.test(photoUrl)) {
-      return res.status(400).json({ error: 'Configura PUBLIC_APP_URL o WHATSAPP_PUBLIC_URL con HTTPS para publicar el logo' });
-    }
-
-    let data;
-    try {
-      data = await zernioRequest({
-        apiKey,
-        path: '/v1/whatsapp/business-profile/photo',
-        method: 'POST',
-        body: { accountId: connection.zernio_account_id, url: photoUrl },
-      });
-    } catch (error) {
-      if (Number(error.providerStatus) === 422) {
-        return res.status(409).json({ error: 'La foto está bloqueada por coexistencia. Cámbiala desde la app WhatsApp Business del teléfono.' });
-      }
-      throw error;
-    }
-
-    const metadata = safeJson(connection.metadata_json, {});
-    const updated = await req.tdb.get(
-      'UPDATE {s}.whatsapp_connections SET metadata_json=$1,last_error=\'\',updated_at=now() WHERE id=$2 RETURNING *',
-      [JSON.stringify({ ...metadata, profilePhotoUrl: photoUrl, profilePhotoSyncedAt: new Date().toISOString() }), connection.id]
-    );
-    res.json({ ok: true, connection: connectionPublic(updated || connection, req), profilePhoto: data });
+    const result = await syncConnectionProfilePhoto({ t: req.tdb, tenant: req.tenant, connection });
+    res.json({ ok: true, connection: connectionPublic(result.connection || connection, req), profilePhoto: result.data });
   } catch (error) { next(error); }
 });
 
@@ -1747,3 +1783,4 @@ router.inboxMessageView = inboxMessageView;
 router.enqueueConversation = enqueueConversation;
 
 module.exports = router;
+module.exports.resyncTenantProfilePhotos = resyncTenantProfilePhotos;

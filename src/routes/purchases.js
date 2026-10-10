@@ -86,7 +86,7 @@ router.get('/bootstrap', async (req, res, next) => {
     const [suppliers, branches, products, stock] = await Promise.all([
       req.tdb.all('SELECT * FROM {s}.suppliers ORDER BY active DESC, name'),
       req.tdb.all('SELECT id, name, active FROM {s}.branches ORDER BY active DESC, name'),
-      req.tdb.all(`SELECT p.id, p.name, p.price::float AS price, COALESCE(p.unit_cost,0)::float AS unit_cost, COALESCE(c.name,'Sin categoría') AS category_name FROM {s}.products p LEFT JOIN {s}.categories c ON c.id=p.category_id WHERE p.active=1 ORDER BY p.name`),
+      req.tdb.all(`SELECT p.id, p.name, p.price::float AS price, COALESCE(p.unit_cost,0)::float AS unit_cost, COALESCE(c.name,'Sin categoría') AS category_name FROM {s}.products p LEFT JOIN {s}.categories c ON c.id=p.category_id WHERE (p.active=1 OR p.pos_active=1) ORDER BY p.name`),
       req.tdb.all(`SELECT bi.branch_id, bi.product_id, bi.quantity::float AS quantity FROM {s}.branch_inventory bi ORDER BY bi.branch_id, bi.product_id`),
     ]);
     res.json({
@@ -148,7 +148,7 @@ router.post('/orders', async (req, res, next) => {
       const branch = await tx.get('SELECT id,name FROM {s}.branches WHERE id=$1 AND active=1', [branchId]);
       if (!supplier || !branch) throw badRequest('Proveedor o sucursal no disponible');
       const ids = [...new Set(inputItems.map((row) => Number(row.productId)).filter(Boolean))];
-      const products = await tx.all('SELECT id,name FROM {s}.products WHERE id=ANY($1::int[]) AND active=1', [ids]);
+      const products = await tx.all('SELECT id,name FROM {s}.products WHERE id=ANY($1::int[]) AND (active=1 OR pos_active=1)', [ids]);
       const productMap = new Map(products.map((row) => [Number(row.id), row]));
       const items = inputItems.map((row) => {
         const product = productMap.get(Number(row.productId)); const quantity = Number(row.quantity); const unitCost = Number(row.unitCost);
@@ -206,7 +206,7 @@ router.put('/orders/:id', async (req, res, next) => {
       const branch = await tx.get('SELECT id,name FROM {s}.branches WHERE id=$1', [branchId]);
       if (!supplier || !branch) throw badRequest('Proveedor o sucursal no disponible');
       const ids = [...new Set(inputItems.map((row) => Number(row.productId)).filter(Boolean))];
-      const products = await tx.all('SELECT id,name FROM {s}.products WHERE id=ANY($1::int[]) AND active=1', [ids]);
+      const products = await tx.all('SELECT id,name FROM {s}.products WHERE id=ANY($1::int[]) AND (active=1 OR pos_active=1)', [ids]);
       const productMap = new Map(products.map((row) => [Number(row.id), row]));
       const items = inputItems.map((row) => {
         const product = productMap.get(Number(row.productId)); const quantity = Number(row.quantity); const unitCost = Number(row.unitCost);
@@ -314,7 +314,7 @@ router.get('/transfer-stock', async (req, res, next) => {
        LEFT JOIN {s}.categories c ON c.id=p.category_id
        LEFT JOIN {s}.branch_inventory source ON source.product_id=p.id AND source.branch_id=$1
        LEFT JOIN {s}.branch_inventory destination ON destination.product_id=p.id AND destination.branch_id=$2
-       WHERE p.active=1
+       WHERE (p.active=1 OR p.pos_active=1)
        ORDER BY p.name`,
       [fromId, toId]
     );
@@ -358,7 +358,7 @@ router.post('/transfers', async (req, res, next) => {
       if (!from || !to) throw badRequest('Una sucursal no está disponible');
 
       const ids = [...new Set(input.map((row) => Number(row.productId)).filter((id) => Number.isInteger(id) && id > 0))];
-      const products = await tx.all('SELECT id,name FROM {s}.products WHERE id=ANY($1::int[]) AND active=1', [ids]);
+      const products = await tx.all('SELECT id,name FROM {s}.products WHERE id=ANY($1::int[]) AND (active=1 OR pos_active=1)', [ids]);
       const productMap = new Map(products.map((product) => [Number(product.id), product]));
       const grouped = new Map();
       for (const row of input) {

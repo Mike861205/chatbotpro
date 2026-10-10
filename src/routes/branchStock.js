@@ -26,7 +26,7 @@ router.get('/', async (req, res, next) => {
       req.tdb.all('SELECT id,name,active FROM {s}.branches ORDER BY active DESC,name'),
       req.tdb.all(`SELECT p.id,p.name,COALESCE(c.name,'Sin categoría') AS category_name,
         COALESCE(p.price,0)::float AS price, COALESCE(p.unit_cost,0)::float AS unit_cost FROM {s}.products p
-        LEFT JOIN {s}.categories c ON c.id=p.category_id WHERE p.active=1 ORDER BY p.name`),
+        LEFT JOIN {s}.categories c ON c.id=p.category_id WHERE (p.active=1 OR p.pos_active=1) ORDER BY p.name`),
       req.tdb.all(`SELECT branch_id,product_id,quantity::float AS quantity,initial_quantity::float AS initial_quantity,
         baseline_started_at FROM {s}.branch_inventory`),
     ]);
@@ -75,7 +75,7 @@ router.post('/adjust', async (req, res, next) => {
     const result = await req.tdb.tx(async (tx) => {
       const [branch, product] = await Promise.all([
         tx.get('SELECT id,name FROM {s}.branches WHERE id=$1 AND active=1', [branchId]),
-        tx.get('SELECT id,name,COALESCE(unit_cost,0)::float AS unit_cost FROM {s}.products WHERE id=$1 AND active=1', [productId]),
+        tx.get('SELECT id,name,COALESCE(unit_cost,0)::float AS unit_cost FROM {s}.products WHERE id=$1 AND (active=1 OR pos_active=1)', [productId]),
       ]);
       if (!branch || !product) throw Object.assign(new Error('Sucursal o producto no disponible'), { statusCode: 404 });
       let stock = await tx.get('SELECT quantity::float AS quantity FROM {s}.branch_inventory WHERE branch_id=$1 AND product_id=$2 FOR UPDATE', [branchId, productId]);

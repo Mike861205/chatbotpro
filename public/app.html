@@ -176,6 +176,10 @@
               </button>
             </div>
             <div class="orders-range">
+              <div class="field" id="ordersBranchField" style="margin:0" hidden>
+                <label for="ordersBranchFilter">Sucursal</label>
+                <select id="ordersBranchFilter"><option value="">Todas las sucursales</option></select>
+              </div>
               <div class="field" style="margin:0">
                 <label>Desde</label>
                 <input type="date" id="ordersDateStart" />
@@ -2580,6 +2584,10 @@
           <div class="toggle-row" style="margin-bottom:0">
             <div class="t-info"><i class="ph-bold ph-eye"></i><div><b>Visible en el chatbot</b><span id="prodVisibleHint">Los clientes podrán pedirlo</span></div></div>
             <label class="switch"><input type="checkbox" id="pActive" checked /><span class="track"></span></label>
+          </div>
+          <div class="toggle-row" style="margin-bottom:0">
+            <div class="t-info"><i class="ph-bold ph-cash-register"></i><div><b>Visible en punto de venta</b><span id="prodPosVisibleHint">Disponible para cobrar en caja, independiente del chatbot</span></div></div>
+            <label class="switch"><input type="checkbox" id="pPosActive" checked /><span class="track"></span></label>
           </div>
           <section class="product-sale-schedule">
             <div class="toggle-row">

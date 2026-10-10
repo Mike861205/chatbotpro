@@ -37,7 +37,7 @@ async function decorate(t, o) {
     ...o,
     delivery_address: String(o.delivery_address || (customer ? decrypt(customer.address_enc) : '') || ''),
     delivery_neighborhood: String(o.delivery_neighborhood || ''),
-    delivery_reference: String(o.delivery_reference || (o.channel === 'chatbot' ? o.notes : '') || ''),
+    delivery_reference: String(o.delivery_reference || (['chatbot', 'whatsapp'].includes(o.channel) ? o.notes : '') || ''),
     order_note: operationalOrderNote(o),
     subtotal: Number(o.subtotal || 0),
     total: Number(o.total),
@@ -54,9 +54,17 @@ async function decorate(t, o) {
   };
 }
 
+router.get('/branches', async (req, res, next) => {
+  try {
+    if (req.user?.role === 'cashier') return res.json([]);
+    const rows = await req.tdb.all('SELECT id, name, active FROM {s}.branches ORDER BY active DESC, name ASC');
+    res.json(rows.map((row) => ({ id: Number(row.id), name: row.name, active: Number(row.active) })));
+  } catch (e) { next(e); }
+});
+
 router.get('/', async (req, res, next) => {
   try {
-    const { status, limit, todayOnly, startDate, endDate, scheduled } = req.query;
+    const { status, limit, todayOnly, startDate, endDate, scheduled, branchId } = req.query;
     let sql = `SELECT id, customer_id, items, subtotal::float AS subtotal, total::float AS total,
       delivery_fee::float AS delivery_fee, delivery_zone_name, receiving_mode_label, receiving_mode_behavior, delivery_address, delivery_neighborhood, delivery_reference, cancel_note, status, channel, source_channel, self_service_device_id, self_service_folio, delivery, notes, order_notes, payment_method, payment_breakdown,
         pickup_branch_name, service_branch_name, customer_location_lat, customer_location_lng, customer_location_text, scheduled_for,
@@ -79,6 +87,16 @@ router.get('/', async (req, res, next) => {
     if (status && STATUSES.includes(status)) {
       params.push(status);
       where.push(`status = $${params.length}`);
+    }
+
+    if (req.user?.role !== 'cashier') {
+      const branchFilter = String(branchId || '').trim();
+      if (branchFilter === 'none') {
+        where.push('COALESCE(NULLIF(service_branch_id, 0), NULLIF(pickup_branch_id, 0)) IS NULL');
+      } else if (/^\d+$/.test(branchFilter) && Number(branchFilter) > 0) {
+        params.push(Number(branchFilter));
+        where.push(`COALESCE(NULLIF(service_branch_id, 0), NULLIF(pickup_branch_id, 0)) = $${params.length}`);
+      }
     }
 
     const scheduledOnly = String(scheduled || '').toLowerCase() === 'upcoming';

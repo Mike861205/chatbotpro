@@ -70,6 +70,8 @@ let DASHBOARD_PERIOD = 'day';
 let orderStatusFilter = '';
 let orderScheduledOnly = false;
 let orderPage = 1;
+let orderBranchFilter = '';
+let ORDER_BRANCH_OPTIONS = null;
 const ORDER_PAGE_SIZE = 10;
 let orderTodayOnly = true;
 let orderDateStart = '';
@@ -3618,7 +3620,7 @@ function orderSourceChannel(order) {
   const stored = String(order?.source_channel || '').trim().toLowerCase();
   if (['chatbot', 'whatsapp', 'kiosk', 'pos'].includes(stored)) return stored;
   if (order?.self_service_device_id || order?.self_service_folio) return 'kiosk';
-  if (order?.channel === 'chatbot') return 'chatbot';
+  if (['chatbot', 'whatsapp'].includes(order?.channel)) return 'chatbot';
   if (order?.channel === 'pos' && /Pedido chatbot #/i.test(String(order?.notes || ''))) return 'chatbot';
   return order?.channel === 'kiosk' ? 'kiosk' : 'pos';
 }
@@ -3915,7 +3917,7 @@ function buildComandaHtml(order, areaItems, areaLabel, widthOverride = null, aut
   const notes = esc(operationalOrderNote(order));
   const deliveryAddress = esc(order?.delivery_address || order?.customer?.address || '');
   const deliveryNeighborhood = esc(order?.delivery_neighborhood || '');
-  const deliveryReference = esc(order?.delivery_reference || (order?.channel === 'chatbot' ? order?.notes : '') || '');
+  const deliveryReference = esc(order?.delivery_reference || (['chatbot', 'whatsapp'].includes(order?.channel) ? order?.notes : '') || '');
   const deliveryLocation = esc(order?.customer_location_text || order?.customer_location_resolved || '');
 
   const areaHeader = areaLabel
@@ -4207,10 +4209,26 @@ function syncOrdersFiltersUI() {
   $('#ordersClearDate')?.toggleAttribute('disabled', orderScheduledOnly);
 }
 
+async function syncOrdersBranchFilter() {
+  const field = $('#ordersBranchField');
+  const select = $('#ordersBranchFilter');
+  if (!field || !select) return;
+  if (ORDER_BRANCH_OPTIONS === null) {
+    try { ORDER_BRANCH_OPTIONS = await api('/api/orders/branches'); } catch { ORDER_BRANCH_OPTIONS = []; }
+    select.innerHTML = '<option value="">Todas las sucursales</option>'
+      + ORDER_BRANCH_OPTIONS.map((branch) => `<option value="${branch.id}">${esc(branch.name)}${branch.active ? '' : ' (inactiva)'}</option>`).join('')
+      + (ORDER_BRANCH_OPTIONS.length ? '<option value="none">Sin sucursal asignada</option>' : '');
+  }
+  field.hidden = !ORDER_BRANCH_OPTIONS.length;
+  select.value = orderBranchFilter;
+}
+
 async function loadOrders() {
   syncOrdersFiltersUI();
+  await syncOrdersBranchFilter();
   const params = new URLSearchParams();
   if (orderStatusFilter) params.set('status', orderStatusFilter);
+  if (orderBranchFilter) params.set('branchId', orderBranchFilter);
   if (orderScheduledOnly) params.set('scheduled', 'upcoming');
   if (!orderScheduledOnly && orderTodayOnly) params.set('todayOnly', '1');
   if (!orderScheduledOnly && !orderTodayOnly && orderDateStart) params.set('startDate', orderDateStart);
@@ -4525,7 +4543,14 @@ $('#ordersApplyDate')?.addEventListener('click', () => {
   loadOrders();
 });
 
+$('#ordersBranchFilter')?.addEventListener('change', (event) => {
+  orderBranchFilter = String(event.target.value || '');
+  orderPage = 1;
+  loadOrders();
+});
+
 $('#ordersClearDate')?.addEventListener('click', () => {
+  orderBranchFilter = '';
   orderTodayOnly = false;
   orderDateStart = '';
   orderDateEnd = '';
@@ -8885,6 +8910,12 @@ function syncProductQrControls() {
     : 'Enciéndelo para compartir el menú completo o un producto individual. Cada QR abre una página pública adaptable al celular.';
 }
 
+function productVisibilityBadges(product) {
+  const chat = Number(product?.active) === 1;
+  const pos = Number(product?.pos_active ?? 1) === 1;
+  return `<span class="prod-vis"><span class="state-dot ${chat ? 'on' : 'off'}" title="${chat ? 'Visible en el chatbot y WhatsApp' : 'Oculto en el chatbot y WhatsApp'}">CHATBOT ${chat ? 'SÍ' : 'NO'}</span><span class="state-dot ${pos ? 'on' : 'off'}" title="${pos ? 'Disponible en punto de venta' : 'Oculto en punto de venta'}">POS ${pos ? 'SÍ' : 'NO'}</span></span>`;
+}
+
 function productBarcodeHTML(product) {
   return product.barcode
     ? `<span class="prod-barcode"><i class="ph-bold ph-barcode"></i> Código de barras: <code>${esc(product.barcode)}</code></span>`
@@ -9343,7 +9374,7 @@ function renderProductsGrid() {
           const modBadge = (p.modifierGroups?.length > 0) ? `<span class="prod-badge prod-badge-mod"><i class="ph-bold ph-sliders"></i> ${p.modifierGroups.length} grupo${p.modifierGroups.length > 1 ? 's' : ''}</span>` : '';
           const topBadge = topBadgeHTML(p, idx);
           const scheduleBadge = productSaleScheduleBadge(p);
-          return `<article class="prod-row ${p.active ? '' : 'inactive'}">
+          return `<article class="prod-row ${p.active || Number(p.pos_active) ? '' : 'inactive'}">
       <div class="thumb">
         ${p.image ? `<img src="${esc(p.image)}" alt="" loading="lazy" />` : '<i class="ph ph-fork-knife"></i>'}
       </div>
@@ -9360,7 +9391,7 @@ function renderProductsGrid() {
         ${productBarcodeHTML(p)}
       </div>
       <div class="row-actions">
-        <span class="state-dot ${p.active ? 'on' : 'off'}">${p.active ? 'ACTIVO' : 'OCULTO'}</span>
+        ${productVisibilityBadges(p)}
         ${catalogAiImageButton(p, 'row')}
         ${productQrButtonHTML(p)}
         <button class="btn btn-ghost" data-edit="${p.id}"><i class="ph-bold ph-pencil-simple"></i> Editar</button>
@@ -9381,7 +9412,7 @@ function renderProductsGrid() {
           if (scheduleBadge) extras.push(scheduleBadge);
           if (p.variants?.length > 1) extras.push(`<span class="prod-badge prod-badge-variant"><i class="ph-bold ph-stack"></i>${p.variants.length}</span>`);
           if (p.modifierGroups?.length > 0) extras.push(`<span class="prod-badge prod-badge-mod"><i class="ph-bold ph-sliders"></i>${p.modifierGroups.length}</span>`);
-          return `<article class="prod-mini ${p.active ? '' : 'inactive'}">
+          return `<article class="prod-mini ${p.active || Number(p.pos_active) ? '' : 'inactive'}">
       <div class="mini-thumb">${p.image ? `<img src="${esc(p.image)}" alt="" loading="lazy" />` : '<i class="ph ph-fork-knife"></i>'}</div>
       <div class="mini-name">${esc(p.name)}${extras.length ? ` ${extras.join('')}` : ''}</div>
       ${productBarcodeHTML(p)}
@@ -9404,10 +9435,10 @@ function renderProductsGrid() {
           const modBadge = (p.modifierGroups?.length > 0) ? `<span class="prod-badge prod-badge-mod"><i class="ph-bold ph-sliders"></i> ${p.modifierGroups.length} opc.</span>` : '';
           const topBadge = topBadgeHTML(p, idx);
           const scheduleBadge = productSaleScheduleBadge(p);
-          return `<div class="prod-card ${p.active ? '' : 'inactive'}">
+          return `<div class="prod-card ${p.active || Number(p.pos_active) ? '' : 'inactive'}">
       <div class="img">
         ${p.image ? `<img src="${esc(p.image)}" alt="" loading="lazy" />` : `<div class="prod-ai-placeholder"><i class="ph ph-fork-knife"></i>${catalogAiImageButton(p, 'card')}</div>`}
-        <span class="state-dot ${p.active ? 'on' : 'off'}">${p.active ? 'ACTIVO' : 'OCULTO'}</span>
+        ${productVisibilityBadges(p)}
         <span class="price-tag">${fmtMoney(p.price)}</span>
       </div>
       <div class="body">
@@ -10220,6 +10251,7 @@ function openProdModal(p = null) {
   $('#pSarTaxCategory').value = p?.sar_tax_category || '';
   $('#pCat').value = p && p.category_id ? p.category_id : '';
   $('#pActive').checked = p ? !!p.active : true;
+  $('#pPosActive').checked = p ? Number(p.pos_active ?? 1) === 1 : true;
   const saleDays = normalizeClientProductSaleDays(p?.saleDays ?? p?.sale_days);
   $('#pSaleScheduleEnabled').checked = saleDays.length > 0;
   document.querySelectorAll('input[name="pSaleDay"]').forEach((input) => {
@@ -10827,6 +10859,7 @@ $('#prodForm').addEventListener('submit', async (e) => {
   if (ME?.tenant?.phoneCountry === 'HN') fd.append('sarTaxCategory', $('#pSarTaxCategory').value);
   fd.append('categoryId', $('#pCat').value);
   fd.append('active', $('#pActive').checked ? '1' : '0');
+  fd.append('posActive', $('#pPosActive').checked ? '1' : '0');
   fd.append('saleDays', JSON.stringify(saleDays));
   fd.append('satProductCode', $('#pSatProductCode').value.trim());
   fd.append('satUnitCode', $('#pSatUnitCode').value.trim());

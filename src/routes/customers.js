@@ -22,7 +22,7 @@ router.get('/', async (req, res, next) => {
     const limit = Math.min(Math.max(Number(req.query.limit) || 300, 10), 1000);
 
     const validDate = /^\d{4}-\d{2}-\d{2}$/;
-    const dateFilters = [`channel = 'chatbot'`];
+    const dateFilters = [`channel IN ('chatbot', 'whatsapp')`];
     const params = [];
 
     if (startDate && validDate.test(String(startDate))) {

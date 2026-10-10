@@ -519,7 +519,7 @@ async function listSoldQtyByProduct(tdb) {
          END AS qty
        FROM {s}.orders o
        CROSS JOIN LATERAL jsonb_array_elements(COALESCE(o.items::jsonb, '[]'::jsonb)) AS it(item)
-       WHERE o.status <> 'cancelado' AND o.channel IN ('pos', 'chatbot')
+       WHERE o.status <> 'cancelado' AND o.channel IN ('pos', 'chatbot', 'whatsapp')
      ) sold
      WHERE product_id IS NOT NULL
      GROUP BY product_id`
@@ -531,7 +531,7 @@ async function listSoldQtyByProduct(tdb) {
 router.get('/', async (req, res, next) => {
   try {
     const rows = await req.tdb.all(
-      `SELECT p.id, p.category_id, p.name, p.description, p.price::float AS price, p.image, p.active, p.sale_days, p.barcode,
+      `SELECT p.id, p.category_id, p.name, p.description, p.price::float AS price, p.image, p.active, p.pos_active, p.sale_days, p.barcode,
               p.sat_product_code, p.sat_unit_code, p.sat_unit_name, p.tax_object, p.sar_tax_category,
               p.iva_rate::float AS iva_rate, p.isr_rate::float AS isr_rate,
               c.name AS category_name
@@ -910,7 +910,7 @@ router.post('/ai/import', uploadAiProductImages.array('productImages', 60), asyn
         if (image) usedImages.add(image);
 
         const inserted = await tx.get(
-          'INSERT INTO {s}.products (name, description, price, category_id, image, active, barcode) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id',
+          'INSERT INTO {s}.products (name, description, price, category_id, image, active, pos_active, barcode) VALUES ($1,$2,$3,$4,$5,$6,$6,$7) RETURNING id',
           [product.name, product.description, basePrice, categoryId, image, defaultActive, product.barcode || null]
         );
 
@@ -1166,6 +1166,7 @@ router.post('/', upload.single('image'), async (req, res, next) => {
   let img = null;
   try {
     const { name, description, price, categoryId, active } = req.body || {};
+    const posActive = req.body?.posActive === undefined ? 1 : (req.body.posActive === '0' || req.body.posActive === 0 || req.body.posActive === false ? 0 : 1);
     const barcode = normalizeProductBarcode(req.body?.barcode);
     if (!isValidProductBarcode(barcode)) throw Object.assign(new Error('El código de barras debe tener de 3 a 64 letras, números o . _ - /.'), { status: 400 });
     await assertBarcodeAvailable(req.tdb, barcode);
@@ -1179,10 +1180,10 @@ router.post('/', upload.single('image'), async (req, res, next) => {
     img = req.file ? await optimizeUploadedImage(req.file, { scope: req.tenant.slug, outputPrefix: 'prod' }) : null;
     const row = await req.tdb.get(
       `INSERT INTO {s}.products
-       (name,description,price,category_id,image,active,sale_days,barcode,sat_product_code,sat_unit_code,sat_unit_name,tax_object,iva_rate,isr_rate,sar_tax_category)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) RETURNING id`,
+       (name,description,price,category_id,image,active,sale_days,barcode,sat_product_code,sat_unit_code,sat_unit_name,tax_object,iva_rate,isr_rate,sar_tax_category,pos_active)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16) RETURNING id`,
       [name.trim(), description || '', Number(price) || 0, categoryId || null, img, active === '0' ? 0 : 1,
-        JSON.stringify(saleDays), barcode, fiscal.productCode, fiscal.unitCode, fiscal.unitName, fiscal.taxObject, fiscal.ivaRate, fiscal.isrRate, sarCategory]
+        JSON.stringify(saleDays), barcode, fiscal.productCode, fiscal.unitCode, fiscal.unitName, fiscal.taxObject, fiscal.ivaRate, fiscal.isrRate, sarCategory, posActive]
     );
     res.json(row);
   } catch (e) {
@@ -1214,7 +1215,7 @@ router.put('/:id', upload.single('image'), async (req, res, next) => {
     img = req.file ? await optimizeUploadedImage(req.file, { scope: req.tenant.slug, outputPrefix: 'prod' }) : existing.image;
     await req.tdb.run(
       `UPDATE {s}.products SET name=$1,description=$2,price=$3,category_id=$4,image=$5,active=$6,
-       sale_days=$7,barcode=$8,sat_product_code=$9,sat_unit_code=$10,sat_unit_name=$11,tax_object=$12,iva_rate=$13,isr_rate=$14,sar_tax_category=$16 WHERE id=$15`,
+       sale_days=$7,barcode=$8,sat_product_code=$9,sat_unit_code=$10,sat_unit_name=$11,tax_object=$12,iva_rate=$13,isr_rate=$14,sar_tax_category=$16,pos_active=$17 WHERE id=$15`,
       [
         (name || existing.name).trim(),
         description ?? existing.description,
@@ -1225,6 +1226,7 @@ router.put('/:id', upload.single('image'), async (req, res, next) => {
         JSON.stringify(saleDays), barcode,
         fiscal.productCode, fiscal.unitCode, fiscal.unitName, fiscal.taxObject, fiscal.ivaRate, fiscal.isrRate,
         req.params.id, sarCategory,
+        req.body?.posActive !== undefined ? (req.body.posActive === '0' || req.body.posActive === 0 || req.body.posActive === false ? 0 : 1) : existing.pos_active,
       ]
     );
     if (req.file && existing.image && existing.image !== img) {

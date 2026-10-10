@@ -24,7 +24,7 @@ test('Delivery recibe sólo domicilios y deriva la fase de todas las áreas de p
   assert.match(route, /function orderIsDelivery\(order\)/);
   assert.match(route, /isDeliveryArea && !isDeliveryOrder/);
   assert.match(route, /String\(order\?\.delivery_address \|\| ''\)\.trim\(\)/);
-  assert.match(route, /o\.channel = 'chatbot'[\s\S]+NULLIF\(o\.service_branch_id, 0\) IS NULL[\s\S]+o\.receiving_mode_behavior = 'delivery'/);
+  assert.match(route, /o\.channel IN \('chatbot', 'whatsapp'\)[\s\S]+NULLIF\(o\.service_branch_id, 0\) IS NULL[\s\S]+o\.receiving_mode_behavior = 'delivery'/);
   assert.doesNotMatch(route, /customer_location_(?:lat|lng)[\s\S]{0,120}isDeliveryOrder/);
   assert.match(route, /function deliveryPreparationStatus\(preparationProgress\)/);
   assert.match(route, /preparationProgress\.every/);
@@ -46,7 +46,7 @@ test('KDS normaliza sucursales nulas o cero antes de filtrar pedidos', () => {
   assert.match(chatbot, /let serviceBranchId = isAddressDelivery\(\)[\s\S]+normalizeBranchId\(state\.customer\.(?:deliveryBranchId|branchId)\)/);
   assert.match(route, /NULLIF\(o\.service_branch_id, 0\) = \$2/);
   assert.match(route, /NULLIF\(o\.pickup_branch_id, 0\) = \$2/);
-  assert.match(route, /\$3::boolean = TRUE[\s\S]+\$2::int IS NULL[\s\S]+o\.channel = 'chatbot'/);
+  assert.match(route, /\$3::boolean = TRUE[\s\S]+\$2::int IS NULL[\s\S]+o\.channel IN \('chatbot', 'whatsapp'\)/);
   assert.match(orders, /COALESCE\(NULLIF\(\$1::int, 0\), NULLIF\(\$2::int, 0\)\)/);
   assert.equal(normalizeBranchId(null), null);
   assert.equal(normalizeBranchId(0), null);

@@ -139,7 +139,7 @@ function renderWhatsAppCustomerEntry(row = WHATSAPP_SELECTED_CONNECTION) {
     profilePhotoHint.innerHTML = row?.mode === 'business_app'
       ? '<i class="ph-bold ph-info"></i><span>La foto se toma del logo configurado en <b>Mi negocio</b>. En coexistencia, WhatsApp exige cambiarla desde la app del teléfono.</span>'
       : logo
-        ? '<i class="ph-bold ph-check-circle"></i><span>Usa el logo de <b>Mi negocio</b>. Pulsa <b>Sincronizar foto</b> para enviarlo al perfil de WhatsApp.</span>'
+        ? '<i class="ph-bold ph-check-circle"></i><span>Usa el logo de <b>Mi negocio</b>. Se envía al perfil de WhatsApp al validar el canal o al cambiar el logo; también puedes pulsar <b>Sincronizar foto</b>.</span>'
         : '<i class="ph-bold ph-info"></i><span>Configura primero el logo en <b>Mi negocio</b> para poder sincronizar la foto del perfil.</span>';
   }
 }
