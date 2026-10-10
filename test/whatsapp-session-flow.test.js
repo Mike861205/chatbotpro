@@ -114,3 +114,23 @@ test('los mensajes de una misma conversación se procesan en orden', async () =>
   await Promise.all([slow, fast, other]);
   assert.deepEqual(order, ['otra conversación', 'primero', 'segundo']);
 });
+
+test('"Sin nota" avanza el checkout en vez de repetir la pregunta de la nota', async () => {
+  const state = {
+    step: 'ask_order_note_choice', currency: 'MXN', aiHistory: [],
+    cart: [{ id: 9, name: 'Papas', qty: 1, price: 50 }], customer: {},
+    lastOptions: [{ label: 'Sí, agregar nota', value: 'order_note_yes' }, { label: 'No, continuar', value: 'order_note_no' }],
+  };
+  for (const input of [route.whatsappEngineInput('cb' + Buffer.from('order_note_no').toString('hex')), 'ordernoteno', 'no', 'Sin nota', 'continuar']) {
+    const base = sessionDb({ state, updatedAt: minutesAgo(1) });
+    const db = {
+      get savedState() { return base.savedState; },
+      get: (sql, params) => base.get(sql, params).catch(() => null),
+      all: (sql) => base.all(sql).catch(() => []),
+      run: (sql, params) => base.run(sql, params),
+    };
+    await handleMessage(db, 'restaurante', 'wa_1_note', input, whatsapp);
+    assert.notEqual(db.savedState.step, 'ask_order_note_choice', `"${input}" debe salir del paso de nota`);
+    assert.notEqual(db.savedState.step, 'ask_order_note_text');
+  }
+});

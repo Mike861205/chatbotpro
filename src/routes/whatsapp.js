@@ -353,7 +353,11 @@ function whatsappButtonTitle(value) {
     .replace(/^Omitir\.?$/i, 'Omitir')
     .replace(/^Capturar nueva dirección de entrega$/i, 'Nueva dirección')
     .replace(/^👤\s*Soy cliente nuevo$/i, '👤 Cliente nuevo')
-    .replace(/^🔁\s*Ya he pedido$/i, '🔁 Ya he pedido');
+    .replace(/^🔁\s*Ya he pedido$/i, '🔁 Ya he pedido')
+    .replace(/^🏪\s*Recoger en sucursal$/i, '🏪 Recoger')
+    .replace(/^🍽️\s*Comer en sucursal$/i, '🍽️ Comer aquí')
+    .replace(/^💵\s*Sí, ocupo vuelto.*$/i, '💵 Necesito cambio')
+    .replace(/^✅\s*Pagaré exacto.*$/i, '✅ Pago exacto');
   const short = compact
     .replace(/^⏭️\s*Omitir referencia$/i, 'Omitir ref.')
     .replace(/^📍\s*Ubicación$/i, 'Ubicación')
@@ -364,7 +368,9 @@ function whatsappButtonTitle(value) {
 }
 
 function whatsappTransportId(value) {
-  const canonical = whatsappDisplayText(value, 180);
+  // Los comandos del motor llevan guiones bajos (order_note_no); no se deben
+  // limpiar como texto visible o llegarían alterados al tocar el botón.
+  const canonical = String(value ?? '').replace(/[*`~]/g, '').replace(/\s+/g, ' ').trim().slice(0, 180);
   if (!canonical) return '';
   // Zernio/WhatsApp may normalize punctuation from list-row IDs. Encode
   // command values containing separators so the callback remains lossless.
@@ -450,12 +456,13 @@ function whatsappProductRows(reply) {
     const title = whatsappDisplayText(product.name, 24);
     if (!id || !title || seen.has(id)) continue;
     seen.add(id);
+    const qty = Number(product.qty) || 0;
+    const baseHint = variantHint || product.priceLabel || product.description;
+    const description = qty > 0 ? `${baseHint ? `${baseHint} · ` : ''}✔ Llevas ${qty}` : baseHint;
     rows.push({
       id,
       title,
-      ...(variantHint || product.priceLabel || product.description
-        ? { description: whatsappDisplayText(variantHint || product.priceLabel || product.description, 72) }
-        : {}),
+      ...(description ? { description: whatsappDisplayText(description, 72) } : {}),
     });
   }
   return rows;
@@ -471,7 +478,7 @@ function whatsappUpsellRows(reply) {
     const match = raw.match(/^➕\s*(.*?)\s*\(([^()]*)\)$/);
     const name = match?.[1] || raw.replace(/^➕\s*/i, '');
     const price = match?.[2] || '';
-    const title = whatsappDisplayText(`👉 ${name}`, 24);
+    const title = whatsappDisplayText(name, 24);
     if (!id || !title || seen.has(id)) continue;
     seen.add(id);
     rows.push({
@@ -483,14 +490,67 @@ function whatsappUpsellRows(reply) {
   return rows;
 }
 
-function whatsappOptionRows(reply) {
+// Títulos que dejan claro qué hace cada botón de WhatsApp (máx. 20 caracteres).
+const WHATSAPP_BUTTON_TITLES = {
+  order_note_yes: '✏️ Agregar nota',
+  order_note_no: 'Sin nota',
+  order_note_skip: 'Sin nota',
+};
+
+// Opciones largas (categorías, sucursales) van en una lista nativa en vez de
+// varios botones de 3 con nombres cortados.
+const WHATSAPP_CHOICE_GROUPS = [
+  {
+    key: 'categories',
+    test: /^(cat_\d+|promo_cat_(\d+|all))$/,
+    button: 'Ver categorías',
+    moreButton: 'Más categorías',
+    moreBody: '*Más categorías:*',
+    hint: 'Toca *Ver categorías* y elige una. Dentro de cada categoría puedes agregar varios productos.',
+  },
+  {
+    key: 'branches',
+    test: /^branch_\d+$/,
+    button: 'Ver sucursales',
+    moreButton: 'Más sucursales',
+    moreBody: '*Más sucursales:*',
+    hint: 'Toca *Ver sucursales* y elige una.',
+  },
+];
+
+function whatsappChoiceGroup(reply) {
+  for (const group of WHATSAPP_CHOICE_GROUPS) {
+    const rows = [];
+    const seen = new Set();
+    const values = new Set();
+    let longLabel = false;
+    for (const option of (Array.isArray(reply.options) ? reply.options : [])) {
+      const value = String(option?.value || '').toLowerCase();
+      if (!group.test.test(value)) continue;
+      const id = whatsappTransportId(option.value);
+      const label = whatsappDisplayText(String(option.label || '').replace(/^🏪\s*/, ''), 72);
+      const title = whatsappDisplayText(label, 24);
+      if (!id || !title || seen.has(id)) continue;
+      seen.add(id);
+      values.add(value);
+      if (label.length > 16) longLabel = true;
+      rows.push({ id, title, ...(label.length > title.length ? { description: label } : {}) });
+    }
+    if (rows.length > 3 || (rows.length > 1 && longLabel)) return { ...group, rows, values };
+  }
+  return null;
+}
+
+function whatsappOptionRows(reply, skipValues = new Set()) {
   const rows = [];
   const seen = new Set();
   for (const option of (Array.isArray(reply.options) ? reply.options : [])) {
     if (String(option?.value || '').toLowerCase() === 'share_location') continue;
     if (String(option?.value || '').toLowerCase().startsWith('upsell_add|')) continue;
+    if (skipValues.has(String(option?.value || '').toLowerCase())) continue;
     const id = whatsappTransportId(option.value);
-    const title = whatsappButtonTitle(option.label);
+    const forced = WHATSAPP_BUTTON_TITLES[String(option.value || '').toLowerCase()];
+    const title = forced ? whatsappDisplayText(`👉 ${forced}`, 20) : whatsappButtonTitle(option.label);
     if (!id || !title || seen.has(id)) continue;
     seen.add(id);
     rows.push({ id, title });
@@ -518,11 +578,52 @@ function whatsappBankAccountsText(accounts, title = 'Datos para transferencia') 
   ].join('\n\n');
 }
 
-function whatsappInteractiveMessages(reply) {
+const WHATSAPP_LIST_ROWS = 10;
+const WHATSAPP_PRODUCT_PAGE_ROWS = 8;
+const WHATSAPP_GENERIC_BODY = '*Selecciona una opción:*';
+
+function whatsappProductListMessage(reply, productRows) {
+  const category = whatsappDisplayText(reply.categoryName, 60);
+  const intro = category ? `*${category}*` : '*Productos*';
+  const hint = 'Toca *Ver productos* y elige uno: se agrega a tu pedido. Puedes pedir *varios productos* de esta categoría; después de cada uno toca *Agregar otro* para volver aquí.';
+  let rows = productRows;
+  let range = '';
+  let page = 1;
+  if (productRows.length > WHATSAPP_LIST_ROWS) {
+    const pages = Math.ceil(productRows.length / WHATSAPP_PRODUCT_PAGE_ROWS);
+    page = Math.min(Math.max(1, Number(reply.productPage) || 1), pages);
+    const start = (page - 1) * WHATSAPP_PRODUCT_PAGE_ROWS;
+    rows = productRows.slice(start, start + WHATSAPP_PRODUCT_PAGE_ROWS);
+    range = `\nMostrando ${start + 1}-${start + rows.length} de ${productRows.length}.${page < pages ? ' Usa *Ver más productos* para seguir viendo.' : ''}`;
+    if (page > 1) rows = [{ id: whatsappTransportId(`prods_page_${page - 1}`), title: '◀ Anteriores', description: 'Volver a los productos anteriores' }, ...rows];
+    if (page < pages) rows = [...rows, { id: whatsappTransportId(`prods_page_${page + 1}`), title: 'Ver más productos ▶', description: `Faltan ${productRows.length - (start + WHATSAPP_PRODUCT_PAGE_ROWS)} productos por ver` }];
+  }
+  const bodyText = `${intro}\n${hint}${range}`.slice(0, 1000);
+  return {
+    kind: 'list',
+    bodyText,
+    interactive: {
+      type: 'list',
+      body: { text: bodyText },
+      action: { button: 'Ver productos', sections: [{ rows }] },
+    },
+  };
+}
+
+function whatsappInteractiveMessages(reply, { leadText = '' } = {}) {
   const messages = [];
   const productRows = whatsappProductRows(reply);
   const upsellRows = whatsappUpsellRows(reply);
-  const optionRows = whatsappOptionRows(reply);
+  const choiceGroup = !productRows.length && !upsellRows.length ? whatsappChoiceGroup(reply) : null;
+  const optionRows = whatsappOptionRows(reply, choiceGroup ? choiceGroup.values : new Set());
+  // El texto de la pregunta viaja dentro del primer mensaje interactivo para
+  // que el cliente vea una sola burbuja clara en lugar de texto + "Selecciona".
+  let lead = String(leadText || '').trim();
+  const takeBody = () => {
+    const body = lead || WHATSAPP_GENERIC_BODY;
+    lead = '';
+    return body;
+  };
 
   if ((reply.options || []).some((option) => String(option?.value || '').toLowerCase() === 'share_location')) {
     messages.push({
@@ -532,66 +633,63 @@ function whatsappInteractiveMessages(reply) {
     });
   }
 
-  const addButtonMessages = (rows, bodyText) => {
+  const addButtonMessages = (rows, firstBody) => {
     for (let index = 0; index < rows.length; index += 3) {
       const chunk = rows.slice(index, index + 3);
       messages.push({
         kind: 'buttons',
-        bodyText,
+        bodyText: index === 0 ? firstBody() : WHATSAPP_GENERIC_BODY,
         buttons: chunk.map((row) => ({ type: 'postback', title: row.title, payload: row.id })),
       });
     }
   };
 
   if (upsellRows.length) {
-    const bodyText = '*Selecciona una opción:*';
-    for (let index = 0; index < upsellRows.length; index += 10) {
-      const chunk = upsellRows.slice(index, index + 10);
-      const pageLabel = upsellRows.length > 10 ? ` ${Math.floor(index / 10) + 1}/${Math.ceil(upsellRows.length / 10)}` : '';
+    for (let index = 0; index < upsellRows.length; index += WHATSAPP_LIST_ROWS) {
+      const chunk = upsellRows.slice(index, index + WHATSAPP_LIST_ROWS);
+      const bodyText = index === 0 ? takeBody() : '*Más complementos:*';
       messages.push({
         kind: 'list',
         bodyText,
         interactive: {
           type: 'list',
           body: { text: bodyText },
-          action: {
-            button: whatsappDisplayText(`Ver complementos${pageLabel}`, 20),
-            sections: [{ rows: chunk }],
-          },
+          action: { button: 'Ver complementos', sections: [{ rows: chunk }] },
         },
       });
     }
   } else if (productRows.length) {
-    const bodyText = '*Selecciona un producto:*';
-    // Up to three products can be shown as visible buttons. Larger catalogs
-    // use WhatsApp's native list so the customer can browse without receiving
-    // a long wall of button messages.
-    if (productRows.length <= 3) {
-      addButtonMessages(productRows, bodyText);
+    lead = '';
+    // Hasta tres productos caben como botones; el resto va en UNA lista
+    // nativa. Los catálogos largos se paginan desde el motor (prods_page_N)
+    // para no enviar varias listas iguales.
+    if (productRows.length <= 3 && !reply.categoryName) {
+      addButtonMessages(productRows, () => '*Selecciona un producto:*');
     } else {
-      for (let index = 0; index < productRows.length; index += 10) {
-        const chunk = productRows.slice(index, index + 10);
-        const pageLabel = productRows.length > 10 ? ` ${Math.floor(index / 10) + 1}/${Math.ceil(productRows.length / 10)}` : '';
-        messages.push({
-          kind: 'list',
-          bodyText,
-          interactive: {
-            type: 'list',
-            body: { text: bodyText },
-            action: {
-              button: whatsappDisplayText(`Ver productos${pageLabel}`, 20),
-              sections: [{ rows: chunk }],
-            },
-          },
-        });
-      }
+      messages.push(whatsappProductListMessage(reply, productRows));
+    }
+  } else if (choiceGroup) {
+    for (let index = 0; index < choiceGroup.rows.length; index += WHATSAPP_LIST_ROWS) {
+      const chunk = choiceGroup.rows.slice(index, index + WHATSAPP_LIST_ROWS);
+      const bodyText = index === 0
+        ? `${takeBody()}\n${choiceGroup.hint}`.slice(0, 1000)
+        : choiceGroup.moreBody;
+      messages.push({
+        kind: 'list',
+        bodyText,
+        interactive: {
+          type: 'list',
+          body: { text: bodyText },
+          action: { button: index === 0 ? choiceGroup.button : choiceGroup.moreButton, sections: [{ rows: chunk }] },
+        },
+      });
     }
   }
 
-  // Keep exit/confirmation actions outside product lists so the customer can
-  // always see how to continue or leave the current step.
+  // Las acciones de salida/confirmación quedan fuera de las listas para que
+  // el cliente siempre vea cómo continuar o regresar.
   if (optionRows.length) {
-    addButtonMessages(optionRows, '*Selecciona una opción:*');
+    addButtonMessages(optionRows, takeBody);
   }
   return messages;
 }
@@ -681,6 +779,24 @@ const BOT_MESSAGE_GAP_MS = Number.isFinite(Number(process.env.WHATSAPP_BOT_MESSA
   ? Math.max(0, Number(process.env.WHATSAPP_BOT_MESSAGE_GAP_MS)) : 350;
 const pause = (ms) => (ms > 0 ? new Promise((resolve) => setTimeout(resolve, ms)) : Promise.resolve());
 
+// La última pregunta del bot viaja como cuerpo del primer botón/lista: una
+// sola burbuja clara en lugar de texto + "Selecciona una opción".
+function whatsappReplyPlan(reply, { hasBankCard = false } = {}) {
+  const texts = [...(reply.messages || [])];
+  let leadText = '';
+  const probe = whatsappInteractiveMessages(reply);
+  if (probe.length && ['buttons', 'list'].includes(probe[0].kind) && texts.length) {
+    const last = String(texts[texts.length - 1] || '');
+    const candidate = whatsappPromptText(last);
+    const isBankIntro = hasBankCard && /^Datos para realizar tu pago con /i.test(last.trim());
+    if (!isBankIntro && !reply.bankAccounts?.length && candidate && candidate.length <= 900) {
+      leadText = candidate;
+      texts.pop();
+    }
+  }
+  return { texts, interactives: whatsappInteractiveMessages(reply, { leadText }) };
+}
+
 async function sendBotReply(t, connection, conversation, reply, onSent = () => {}) {
   const bankText = whatsappBankAccountsText(reply.bankAccounts, reply.bankAccountTitle);
   const hasBankCard = Boolean(bankText);
@@ -696,14 +812,15 @@ async function sendBotReply(t, connection, conversation, reply, onSent = () => {
       console.warn(`[whatsapp][${label}]`, error.message);
     }
   };
-  for (const message of (reply.messages || [])) {
+  const { texts, interactives } = whatsappReplyPlan(reply, { hasBankCard });
+  for (const message of texts) {
     // The web assistant renders bankAccounts as a visual card. WhatsApp gets
     // one copy-friendly text card instead of receiving the fallback twice.
     if (hasBankCard && /^Datos para realizar tu pago con /i.test(String(message || '').trim())) continue;
     await deliver('send-text', () => sendText(t, connection, conversation, whatsappPromptText(message), 'bot'));
   }
   if (bankText) await deliver('send-bank-details', () => sendText(t, connection, conversation, bankText, 'bot'));
-  for (const interactive of whatsappInteractiveMessages(reply)) {
+  for (const interactive of interactives) {
     await deliver('send-interactive', () => sendInteractive(t, connection, conversation, interactive, 'bot'));
   }
   return sentCount;
@@ -1620,7 +1737,9 @@ router.post('/conversations/:id/send', async (req, res, next) => {
 // Exposed on the router only for focused unit tests; the HTTP API remains the
 // Express router itself.
 router.whatsappInteractiveMessages = whatsappInteractiveMessages;
+router.whatsappReplyPlan = whatsappReplyPlan;
 router.whatsappButtonTitle = whatsappButtonTitle;
+router.whatsappEngineInput = whatsappEngineInput;
 router.whatsappBankAccountsText = whatsappBankAccountsText;
 router.webhookMessage = webhookMessage;
 router.whatsappConversationCustomerName = whatsappConversationCustomerName;

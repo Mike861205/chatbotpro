@@ -3,10 +3,33 @@ const bcrypt = require('bcryptjs');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
 const config = require('../config');
-const { q, tdb, getSuperAdminSetting, setSuperAdminSetting, refreshTenantBillingStatuses } = require('../db');
+const { pool, q, tdb, schemaName, getSuperAdminSetting, setSuperAdminSetting, refreshTenantBillingStatuses } = require('../db');
 const { encrypt, decrypt } = require('../utils/crypto');
 const { createImageUpload, deleteManagedUpload, optimizeUploadedImage, safeUnlink } = require('../utils/uploads');
 const { signToken, setAuthCookie } = require('../middleware/auth');
+const { createRateLimiter } = require('../middleware/security');
+const { describeStoredPhone, normalizeInternationalPhone } = require('../utils/phone');
+const { buildClientSummary } = require('../utils/customerLifecycle');
+const { isMexicoIdentity } = require('../utils/invoicing');
+const {
+  loadTenantOperationResetPreview,
+  resetBlockerMessages,
+  resetTenantOperations,
+} = require('../utils/tenantOperationReset');
+const {
+  inspectScope,
+  inspectProspectTenant,
+  scanStorageHygiene,
+  tenantIsProtected,
+  moveScopeToQuarantine,
+  moveOrphanFilesToQuarantine,
+  restoreQuarantinedScope,
+  restoreQuarantinedFiles,
+  purgeQuarantine,
+  purgeAfterDate,
+  assertSafeScope,
+} = require('../utils/storageHygiene');
+const { createConfiguredFacturamaClients } = require('../services/facturama');
 const {
   signSuperAdminToken,
   setSuperAdminCookie,
@@ -15,6 +38,53 @@ const {
 } = require('../middleware/superadmin');
 
 const router = express.Router();
+const facturamaClients = createConfiguredFacturamaClients();
+const SALES_STAGES = new Set(['new', 'contacted', 'interested', 'potential', 'follow_up', 'won', 'not_interested', 'lost']);
+const SALES_ACTIVITY_TYPES = new Set(['note', 'contact', 'follow_up', 'close_won', 'close_lost', 'stage_change']);
+const BULK_DELETE_STAGES = new Set(['not_interested', 'lost']);
+const RESELLER_SLUG_RE = /^[a-z0-9](?:[a-z0-9-]{1,38}[a-z0-9])?$/;
+const RESELLER_USERNAME_RE = /^[a-z0-9._-]{3,60}$/;
+const superadminLoginLimiter = createRateLimiter({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  message: 'Demasiados intentos de acceso administrativo.',
+});
+
+function storageTenantSql(whereSql = 't.id = $1') {
+  return `SELECT t.id,t.slug,t.business_name,t.logo,t.account_status,t.trial_status,t.sales_stage,
+                 t.sales_updated_at,t.created_at,t.customer_since,
+                 COALESCE((SELECT COUNT(*) FROM tenant_payments tp WHERE tp.tenant_id=t.id),0)::int AS payment_count,
+                 (SELECT MAX(last_seen_at) FROM module_usage mu WHERE mu.tenant_id=t.id) AS module_last_seen
+          FROM tenants t WHERE ${whereSql}`;
+}
+
+function cleanupManifest(inspection) {
+  const storage = inspection?._inspection;
+  if (!storage) return { scanComplete: false };
+  return {
+    scanComplete: Boolean(inspection.scanComplete),
+    storage: inspection.storage,
+    files: storage.files.slice(0, 5000).map((file) => ({ path: file.relativePath, bytes: file.size })),
+    truncated: storage.files.length > 5000,
+  };
+}
+
+async function createCleanupJob(client, data) {
+  const result = await client.query(
+    `INSERT INTO storage_cleanup_jobs
+      (subject_type,tenant_id,tenant_slug,business_name,action,status,file_count,total_bytes,
+       orphan_file_count,orphan_bytes,manifest_json,created_by,purge_after)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+     RETURNING id`,
+    [
+      data.subjectType, data.tenantId || null, data.slug || '', data.businessName || '', data.action,
+      data.status || 'preparing', Number(data.files || 0), Number(data.bytes || 0),
+      Number(data.orphanFiles || 0), Number(data.orphanBytes || 0), JSON.stringify(data.manifest || {}),
+      data.createdBy || '', data.purgeAfter || purgeAfterDate(),
+    ]
+  );
+  return Number(result.rows[0].id);
+}
 
 const deployState = {
   running: false,
@@ -28,7 +98,7 @@ const deployState = {
 };
 
 function appendDeployLog(raw) {
-  const text = String(raw || '').replace(/\r/g, '');
+  const text = String(raw || '').replaceAll('\r', '');
   if (!text) return;
   const lines = text.split('\n').filter(Boolean);
   const ts = new Date().toISOString();
@@ -76,6 +146,9 @@ function getRemoteDeployArgs(force) {
   const user = String(process.env.DEPLOY_SSH_USER || '').trim();
   const appDir = String(process.env.DEPLOY_REMOTE_APP_DIR || '').trim();
   const identityFile = String(process.env.DEPLOY_SSH_IDENTITY_FILE || '').trim();
+  const branch = String(process.env.DEPLOY_GIT_BRANCH || 'main').trim() || 'main';
+  const pm2App = String(process.env.DEPLOY_PM2_APP || 'chatbotpro').trim() || 'chatbotpro';
+  const healthUrl = String(process.env.DEPLOY_HEALTH_URL || 'http://127.0.0.1:3003/').trim() || 'http://127.0.0.1:3003/';
   const portRaw = Number(process.env.DEPLOY_SSH_PORT || 0);
   const port = Number.isFinite(portRaw) && portRaw > 0 ? Math.floor(portRaw) : 0;
 
@@ -84,6 +157,9 @@ function getRemoteDeployArgs(force) {
   if (user) args.push('-User', user);
   if (port) args.push('-Port', String(port));
   if (appDir) args.push('-AppDir', appDir);
+  args.push('-Branch', branch);
+  args.push('-Pm2App', pm2App);
+  args.push('-HealthUrl', healthUrl);
   if (identityFile) args.push('-IdentityFile', identityFile);
   if (force) args.push('-Force');
   return args;
@@ -162,6 +238,8 @@ async function runGitAndDeploySequence({ commitMessage, forceDeploy, username })
 async function getGitDeployStatus() {
   const remote = String(process.env.DEPLOY_GIT_REMOTE || 'origin').trim() || 'origin';
   const branch = String(process.env.DEPLOY_GIT_BRANCH || 'main').trim() || 'main';
+  const pm2App = String(process.env.DEPLOY_PM2_APP || 'chatbotpro').trim() || 'chatbotpro';
+  const healthUrl = String(process.env.DEPLOY_HEALTH_URL || 'http://127.0.0.1:3003/').trim() || 'http://127.0.0.1:3003/';
   const branchResult = await spawnAndCapture('git', ['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: config.ROOT, captureToDeployLog: false });
   const statusResult = await spawnAndCapture('git', ['status', '--porcelain'], { cwd: config.ROOT, captureToDeployLog: false });
   const lines = String(statusResult.stdout || '')
@@ -171,6 +249,8 @@ async function getGitDeployStatus() {
   return {
     remote,
     branch,
+    pm2App,
+    healthUrl,
     currentBranch: String(branchResult.stdout || '').trim() || '(desconocida)',
     dirtyCount: lines.length,
     dirtyFiles: lines.slice(0, 50),
@@ -179,7 +259,7 @@ async function getGitDeployStatus() {
 
 const uploadSuperadminLogo = createImageUpload({
   scopeResolver: () => 'superadmin',
-  allowedMimePattern: /^image\/(png|jpe?g|webp|svg\+xml)$/i,
+  allowedMimePattern: /^image\/(png|jpe?g|webp|gif)$/i,
   tempPrefix: 'logo_superadmin',
 });
 
@@ -211,6 +291,32 @@ function buildTenantSummary(rows) {
   return summary;
 }
 
+function buildDemoLeadSummary(rows) {
+  const summary = {
+    total: rows.length,
+    landing: 0,
+    login: 0,
+    today: 0,
+    week: 0,
+  };
+  const now = new Date();
+  const todayKey = now.toISOString().slice(0, 10);
+  const weekAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
+
+  for (const row of rows) {
+    if (String(row.source_page || '').toLowerCase() === 'login') summary.login += 1;
+    else summary.landing += 1;
+
+    const lastSeen = new Date(row.last_seen_at || row.created_at || 0);
+    if (!Number.isNaN(lastSeen.getTime())) {
+      if (lastSeen.toISOString().slice(0, 10) === todayKey) summary.today += 1;
+      if (lastSeen.getTime() >= weekAgo) summary.week += 1;
+    }
+  }
+
+  return summary;
+}
+
 function parseStatusFilter(raw) {
   const value = String(raw || '').trim().toLowerCase();
   if (value === 'activos' || value === 'active') return { account: 'active' };
@@ -220,9 +326,107 @@ function parseStatusFilter(raw) {
   return null;
 }
 
+function parseSalesSubject(rawType, rawId) {
+  const type = String(rawType || '').trim().toLowerCase();
+  const id = Number(rawId);
+  if (!['tenant', 'demo_lead'].includes(type) || !Number.isInteger(id) || id <= 0) return null;
+  return { type, id };
+}
+
+function parseOptionalFollowUp(raw) {
+  if (raw === undefined) return undefined;
+  if (raw === null || String(raw).trim() === '') return null;
+  const value = new Date(raw);
+  if (Number.isNaN(value.getTime())) return undefined;
+  return value.toISOString();
+}
+
+function followupSubjectConfig(type) {
+  return type === 'tenant'
+    ? { table: 'tenants', foreignKey: 'tenant_id', extraWhere: 'AND customer_since IS NULL', label: 'business_name' }
+    : { table: 'demo_leads', foreignKey: 'demo_lead_id', extraWhere: '', label: 'contact_name' };
+}
+
+async function updateSalesSubject(client, subject, input, username) {
+  const cfg = followupSubjectConfig(subject.type);
+  const found = await client.query(
+    `SELECT id, ${cfg.label} AS name, sales_stage FROM ${cfg.table} WHERE id = $1 ${cfg.extraWhere} FOR UPDATE`,
+    [subject.id]
+  );
+  const current = found.rows[0];
+  if (!current) return null;
+
+  let stage = input.stage === undefined ? current.sales_stage : String(input.stage || '').trim().toLowerCase();
+  if (!SALES_STAGES.has(stage)) throw Object.assign(new Error('Etapa comercial inválida'), { status: 400 });
+  const activityType = String(input.activityType || (stage !== current.sales_stage ? 'stage_change' : 'note')).trim().toLowerCase();
+  if (!SALES_ACTIVITY_TYPES.has(activityType)) throw Object.assign(new Error('Tipo de gestión inválido'), { status: 400 });
+  if (activityType === 'close_won') stage = 'won';
+  if (activityType === 'close_lost') stage = 'lost';
+  const note = String(input.note || '').trim().slice(0, 4000);
+  let nextFollowUpAt = parseOptionalFollowUp(input.nextFollowUpAt);
+  if (input.nextFollowUpAt !== undefined && nextFollowUpAt === undefined) {
+    throw Object.assign(new Error('Fecha de seguimiento inválida'), { status: 400 });
+  }
+  if (nextFollowUpAt === undefined && ['won', 'not_interested', 'lost'].includes(stage)) nextFollowUpAt = null;
+  if (!note && stage === current.sales_stage && nextFollowUpAt === undefined) {
+    throw Object.assign(new Error('Agrega una nota, cambia la etapa o programa una fecha'), { status: 400 });
+  }
+
+  const values = [stage, subject.id];
+  let followUpSql = '';
+  if (nextFollowUpAt !== undefined) {
+    values.push(nextFollowUpAt);
+    followUpSql = `, next_follow_up_at = $${values.length}`;
+  }
+  await client.query(
+    `UPDATE ${cfg.table} SET sales_stage = $1, sales_updated_at = now()${followUpSql} WHERE id = $2`,
+    values
+  );
+  await client.query(
+    `INSERT INTO sales_followup_activities
+      (${cfg.foreignKey}, activity_type, note, stage_from, stage_to, follow_up_at, created_by)
+     VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+    [subject.id, activityType, note, current.sales_stage, stage, nextFollowUpAt === undefined ? null : nextFollowUpAt, username]
+  );
+  return { ...subject, name: current.name, stage };
+}
+
+function parseClientStatusFilter(raw) {
+  const value = String(raw || '').trim().toLowerCase();
+  if (value === 'active') return { active: true };
+  if (value === 'due') return { billing: 'due' };
+  if (value === 'mora' || value === 'overdue') return { mora: true };
+  if (value === 'suspended') return { billing: 'suspended' };
+  return null;
+}
+
+function mapBusinessRows(rows) {
+  return rows.map((row) => {
+    const phone = describeStoredPhone(decrypt(row.phone_enc) || '', row.phone_country, row.phone_calling_code);
+    return {
+      ...row,
+      phone: phone.international,
+      phone_e164: phone.e164,
+      phone_digits: phone.digits,
+      phone_valid: phone.valid,
+      phone_country: phone.country,
+      phone_country_name: phone.countryName,
+      phone_calling_code: phone.callingCode,
+      due_alert: Number(row.days_to_due) >= 0 && Number(row.days_to_due) <= 5,
+    };
+  });
+}
+
 async function getTenantById(tenantId) {
   const found = await q('SELECT * FROM tenants WHERE id = $1', [tenantId]);
-  return found.rows[0] || null;
+  const tenant = found.rows[0];
+  if (!tenant) return null;
+  const phone = describeStoredPhone(decrypt(tenant.phone_enc) || '', tenant.phone_country, tenant.phone_calling_code);
+  return {
+    ...tenant,
+    phone_country: phone.country || tenant.phone_country || '',
+    phone_calling_code: phone.callingCode || tenant.phone_calling_code || '',
+  };
 }
 
 async function getTenantOwnerUser(tenantId) {
@@ -237,15 +441,20 @@ async function getTenantOwnerUser(tenantId) {
   return row.rows[0] || null;
 }
 
-router.post('/login', async (req, res, next) => {
+router.post('/login', superadminLoginLimiter, async (req, res, next) => {
   try {
     const { username, password } = req.body || {};
     if (!username || !password) {
       return res.status(400).json({ error: 'Usuario y contraseña requeridos' });
     }
-    const found = await q('SELECT * FROM superadmin_users WHERE lower(username) = $1', [String(username).trim().toLowerCase()]);
+    const cleanUsername = String(username).trim().toLowerCase();
+    const cleanPassword = String(password);
+    if (!/^[a-z0-9._-]{3,60}$/.test(cleanUsername) || cleanPassword.length > 128) {
+      return res.status(401).json({ error: 'Credenciales de superadmin inválidas' });
+    }
+    const found = await q('SELECT * FROM superadmin_users WHERE lower(username) = $1', [cleanUsername]);
     const user = found.rows[0];
-    if (!user || !user.active || !(await bcrypt.compare(password, user.password_hash))) {
+    if (!user || !user.active || !(await bcrypt.compare(cleanPassword, user.password_hash))) {
       return res.status(401).json({ error: 'Credenciales de superadmin inválidas' });
     }
     setSuperAdminCookie(res, signSuperAdminToken(user));
@@ -264,10 +473,100 @@ router.get('/me', requireSuperAdmin, (req, res) => {
   res.json({ username: req.superadmin.username, role: 'superadmin' });
 });
 
+router.get('/resellers', requireSuperAdmin, async (req, res, next) => {
+  try {
+    const rows = await q(`
+      SELECT r.id, r.slug, r.display_name, r.username, r.contact_name, r.contact_phone,
+             r.active, r.notes, r.created_at, r.updated_at,
+             COUNT(DISTINCT t.id) FILTER (WHERE t.customer_since IS NULL)::int AS prospect_count,
+             COUNT(DISTINCT t.id) FILTER (WHERE t.customer_since IS NOT NULL)::int AS client_count,
+             COUNT(DISTINCT dl.id) FILTER (WHERE dl.converted_tenant_id IS NULL)::int AS demo_lead_count
+      FROM resellers r
+      LEFT JOIN tenants t ON t.reseller_id = r.id
+      LEFT JOIN demo_leads dl ON dl.reseller_id = r.id
+      GROUP BY r.id
+      ORDER BY r.created_at DESC, r.id DESC`);
+    res.json({ resellers: rows.rows });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post('/resellers', requireSuperAdmin, async (req, res, next) => {
+  try {
+    const slug = String(req.body?.slug || '').trim().toLowerCase();
+    const displayName = String(req.body?.displayName || '').trim().slice(0, 120);
+    const username = String(req.body?.username || '').trim().toLowerCase();
+    const password = String(req.body?.password || '');
+    const contactName = String(req.body?.contactName || '').trim().slice(0, 120);
+    const contactPhone = String(req.body?.contactPhone || '').trim().slice(0, 40);
+    const notes = String(req.body?.notes || '').trim().slice(0, 2000);
+    if (!RESELLER_SLUG_RE.test(slug) || ['api', 'app', 'login', 'register', 'superadmin', 'resellers', 'static', 'uploads'].includes(slug)) {
+      return res.status(400).json({ error: 'Clave de enlace inválida o reservada' });
+    }
+    if (!displayName || !RESELLER_USERNAME_RE.test(username)) {
+      return res.status(400).json({ error: 'Nombre y usuario válidos son obligatorios' });
+    }
+    if (password.length < 8 || password.length > 128) {
+      return res.status(400).json({ error: 'La contraseña debe tener entre 8 y 128 caracteres' });
+    }
+    const tenantConflict = await q('SELECT id FROM tenants WHERE slug = $1 LIMIT 1', [slug]);
+    if (tenantConflict.rows[0]) return res.status(409).json({ error: 'La clave del enlace ya pertenece a un tenant' });
+    const hash = await bcrypt.hash(password, 12);
+    const inserted = await q(
+      `INSERT INTO resellers (slug, display_name, username, password_hash, contact_name, contact_phone, notes)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
+       RETURNING id, slug, display_name, username, contact_name, contact_phone, active, notes, created_at`,
+      [slug, displayName, username, hash, contactName, contactPhone, notes]
+    );
+    res.status(201).json({ ok: true, reseller: inserted.rows[0] });
+  } catch (error) {
+    if (error.code === '23505') return res.status(409).json({ error: 'La clave de enlace o el usuario ya existen' });
+    next(error);
+  }
+});
+
+router.patch('/resellers/:id', requireSuperAdmin, async (req, res, next) => {
+  try {
+    const resellerId = Number(req.params.id);
+    if (!Number.isInteger(resellerId) || resellerId <= 0) return res.status(400).json({ error: 'Reseller inválido' });
+    const updates = [];
+    const values = [];
+    const push = (column, value) => { values.push(value); updates.push(`${column} = $${values.length}`); };
+    if (req.body?.displayName !== undefined) {
+      const value = String(req.body.displayName || '').trim().slice(0, 120);
+      if (!value) return res.status(400).json({ error: 'El nombre es obligatorio' });
+      push('display_name', value);
+    }
+    if (req.body?.contactName !== undefined) push('contact_name', String(req.body.contactName || '').trim().slice(0, 120));
+    if (req.body?.contactPhone !== undefined) push('contact_phone', String(req.body.contactPhone || '').trim().slice(0, 40));
+    if (req.body?.notes !== undefined) push('notes', String(req.body.notes || '').trim().slice(0, 2000));
+    if (req.body?.active !== undefined) push('active', req.body.active ? 1 : 0);
+    if (req.body?.password) {
+      const password = String(req.body.password);
+      if (password.length < 8 || password.length > 128) return res.status(400).json({ error: 'La contraseña debe tener entre 8 y 128 caracteres' });
+      push('password_hash', await bcrypt.hash(password, 12));
+    }
+    if (!updates.length) return res.status(400).json({ error: 'Sin cambios para actualizar' });
+    updates.push('updated_at = now()');
+    values.push(resellerId);
+    const updated = await q(
+      `UPDATE resellers SET ${updates.join(', ')} WHERE id = $${values.length}
+       RETURNING id, slug, display_name, username, contact_name, contact_phone, active, notes, created_at, updated_at`,
+      values
+    );
+    if (!updated.rows[0]) return res.status(404).json({ error: 'Reseller no encontrado' });
+    res.json({ ok: true, reseller: updated.rows[0] });
+  } catch (error) {
+    next(error);
+  }
+});
+
 router.get('/integrations', requireSuperAdmin, async (req, res, next) => {
   try {
     const enabled = await getSuperAdminSetting('openai_enabled', '0');
     const model = await getSuperAdminSetting('openai_model', 'gpt-4o-mini');
+    const imageModel = await getSuperAdminSetting('openai_image_model', process.env.OPENAI_IMAGE_MODEL || 'gpt-image-2.5-flare');
     const baseUrl = await getSuperAdminSetting('openai_base_url', '');
     const enc = await getSuperAdminSetting('openai_api_key_enc', '');
     const decryptedKey = decrypt(enc || '');
@@ -276,6 +575,7 @@ router.get('/integrations', requireSuperAdmin, async (req, res, next) => {
     res.json({
       openaiEnabled: enabled === '1',
       openaiModel: model,
+      openaiImageModel: imageModel,
       openaiBaseUrl: baseUrl,
       webhookUrl,
       superadminLogoUrl,
@@ -297,6 +597,9 @@ router.put('/integrations', requireSuperAdmin, async (req, res, next) => {
     }
     if (body.openaiModel !== undefined) {
       await setSuperAdminSetting('openai_model', String(body.openaiModel || 'gpt-4o-mini').trim() || 'gpt-4o-mini');
+    }
+    if (body.openaiImageModel !== undefined) {
+      await setSuperAdminSetting('openai_image_model', String(body.openaiImageModel || 'gpt-image-2.5-flare').trim() || 'gpt-image-2.5-flare');
     }
     if (body.openaiBaseUrl !== undefined) {
       await setSuperAdminSetting('openai_base_url', String(body.openaiBaseUrl || '').trim());
@@ -342,7 +645,7 @@ router.get('/tenants', requireSuperAdmin, async (req, res, next) => {
     const qText = String(req.query.q || '').trim().toLowerCase();
     const statusFilter = parseStatusFilter(req.query.status);
     const values = [];
-    const where = [];
+    const where = ['t.customer_since IS NULL'];
 
     if (qText) {
       values.push(`%${qText}%`);
@@ -368,11 +671,20 @@ router.get('/tenants', requireSuperAdmin, async (req, res, next) => {
         t.business_name,
         t.owner_name,
         t.phone_enc,
+        t.phone_country,
+        t.phone_calling_code,
         t.logo,
         t.primary_color,
         t.account_status,
         t.billing_status,
         t.plan_name,
+        t.branch_limit,
+        t.invoicing_enabled,
+        t.invoicing_activated_at,
+        t.invoicing_trial_granted_at,
+        t.trial_started_on,
+        t.trial_ends_on,
+        t.trial_status,
         t.billing_due_date,
         CASE
           WHEN t.billing_due_date IS NULL THEN NULL
@@ -383,22 +695,55 @@ router.get('/tenants', requireSuperAdmin, async (req, res, next) => {
           ELSE (CURRENT_DATE - t.billing_due_date)::int
         END AS mora_days,
         t.notes,
+        t.sales_stage,
+        t.next_follow_up_at,
+        t.sales_updated_at,
         t.created_at,
-        COALESCE(u.username, '') AS owner_username
+        t.reseller_id,
+        COALESCE(r.display_name, '') AS reseller_name,
+        COALESCE(r.slug, '') AS reseller_slug,
+        COALESCE(u.username, '') AS owner_username,
+        COALESCE(usage_stats.module_count, 0)::int AS module_count,
+        COALESCE(usage_stats.module_views, 0)::int AS module_views,
+        usage_stats.module_first_seen,
+        usage_stats.module_last_seen,
+        COALESCE(usage_stats.modules, '[]'::json) AS modules,
+        COALESCE(followup_stats.activity_count, 0)::int AS activity_count,
+        followup_stats.last_activity_at,
+        COALESCE(followup_stats.last_note, '') AS last_note
       FROM tenants t
+      LEFT JOIN resellers r ON r.id = t.reseller_id
       LEFT JOIN LATERAL (
         SELECT username FROM users WHERE tenant_id = t.id ORDER BY id ASC LIMIT 1
       ) u ON true
+      LEFT JOIN LATERAL (
+        SELECT
+          COUNT(*)::int AS module_count,
+          COALESCE(SUM(mu.view_count), 0)::int AS module_views,
+          MIN(mu.first_seen_at) AS module_first_seen,
+          MAX(mu.last_seen_at) AS module_last_seen,
+          json_agg(
+            json_build_object(
+              'key', mu.module_key,
+              'count', mu.view_count,
+              'firstSeenAt', mu.first_seen_at,
+              'lastSeenAt', mu.last_seen_at
+            ) ORDER BY mu.view_count DESC, mu.last_seen_at DESC
+          ) AS modules
+        FROM module_usage mu
+        WHERE mu.tenant_id = t.id AND mu.demo_lead_id IS NULL
+      ) usage_stats ON true
+      LEFT JOIN LATERAL (
+        SELECT COUNT(*)::int AS activity_count, MAX(a.created_at) AS last_activity_at,
+          (ARRAY_AGG(a.note ORDER BY a.created_at DESC) FILTER (WHERE a.note <> ''))[1] AS last_note
+        FROM sales_followup_activities a WHERE a.tenant_id = t.id
+      ) followup_stats ON true
       ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
       ORDER BY t.created_at DESC
     `;
 
     const rows = await q(sql, values);
-    const mapped = rows.rows.map((row) => ({
-        ...row,
-        phone: decrypt(row.phone_enc) || '',
-        due_alert: Number(row.days_to_due) >= 0 && Number(row.days_to_due) <= 5,
-      }));
+    const mapped = mapBusinessRows(rows.rows);
 
     res.json({
       tenants: mapped,
@@ -406,6 +751,810 @@ router.get('/tenants', requireSuperAdmin, async (req, res, next) => {
     });
   } catch (e) {
     next(e);
+  }
+});
+
+router.get('/demo-leads', requireSuperAdmin, async (req, res, next) => {
+  try {
+    const qText = String(req.query.q || '').trim().toLowerCase();
+    const values = [];
+    const where = ['dl.converted_tenant_id IS NULL'];
+
+    if (qText) {
+      values.push(`%${qText}%`);
+      where.push(`(
+        lower(dl.contact_name) LIKE $${values.length}
+        OR lower(dl.business_giro) LIKE $${values.length}
+        OR lower(dl.source_page) LIKE $${values.length}
+        OR lower(dl.last_demo_tenant_slug) LIKE $${values.length}
+      )`);
+    }
+
+    const sql = `
+      SELECT
+        dl.id,
+        dl.contact_name,
+        dl.phone_enc,
+        dl.phone_country,
+        dl.phone_calling_code,
+        dl.business_giro,
+        dl.source_page,
+        dl.demo_count,
+        dl.first_seen_at,
+        dl.last_seen_at,
+        dl.last_demo_tenant_slug,
+        dl.notes,
+        dl.sales_stage,
+        dl.next_follow_up_at,
+        dl.sales_updated_at,
+        dl.reseller_id,
+        COALESCE(r.display_name, '') AS reseller_name,
+        COALESCE(r.slug, '') AS reseller_slug,
+        COALESCE(usage_stats.module_count, 0)::int AS module_count,
+        COALESCE(usage_stats.module_views, 0)::int AS module_views,
+        usage_stats.module_first_seen,
+        usage_stats.module_last_seen,
+        COALESCE(usage_stats.modules, '[]'::json) AS modules,
+        COALESCE(followup_stats.activity_count, 0)::int AS activity_count,
+        followup_stats.last_activity_at,
+        COALESCE(followup_stats.last_note, '') AS last_note
+      FROM demo_leads dl
+      LEFT JOIN resellers r ON r.id = dl.reseller_id
+      LEFT JOIN LATERAL (
+        SELECT
+          COUNT(*)::int AS module_count,
+          COALESCE(SUM(mu.view_count), 0)::int AS module_views,
+          MIN(mu.first_seen_at) AS module_first_seen,
+          MAX(mu.last_seen_at) AS module_last_seen,
+          json_agg(
+            json_build_object(
+              'key', mu.module_key,
+              'count', mu.view_count,
+              'firstSeenAt', mu.first_seen_at,
+              'lastSeenAt', mu.last_seen_at
+            ) ORDER BY mu.view_count DESC, mu.last_seen_at DESC
+          ) AS modules
+        FROM module_usage mu
+        WHERE mu.demo_lead_id = dl.id
+      ) usage_stats ON true
+      LEFT JOIN LATERAL (
+        SELECT COUNT(*)::int AS activity_count, MAX(a.created_at) AS last_activity_at,
+          (ARRAY_AGG(a.note ORDER BY a.created_at DESC) FILTER (WHERE a.note <> ''))[1] AS last_note
+        FROM sales_followup_activities a WHERE a.demo_lead_id = dl.id
+      ) followup_stats ON true
+      ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
+      ORDER BY dl.last_seen_at DESC, dl.id DESC
+    `;
+
+    const rows = await q(sql, values);
+    const mapped = rows.rows.map((row) => {
+      const phone = describeStoredPhone(decrypt(row.phone_enc) || '', row.phone_country, row.phone_calling_code);
+      return {
+        ...row,
+        phone: phone.international,
+        phone_e164: phone.e164,
+        phone_digits: phone.digits,
+        phone_valid: phone.valid,
+        phone_country: phone.country,
+        phone_country_name: phone.countryName,
+        phone_calling_code: phone.callingCode,
+        source_label: String(row.source_page || '').toLowerCase() === 'login' ? 'Login' : 'Landing',
+      };
+    });
+
+    res.json({
+      demoLeads: mapped,
+      summary: buildDemoLeadSummary(mapped),
+    });
+  } catch (e) {
+    next(e);
+  }
+});
+
+async function listClientRecords(req, res, next) {
+  try {
+    await refreshTenantBillingStatuses();
+
+    const archived = req.path === '/non-renewals';
+    const qText = String(req.query.q || '').trim().toLowerCase();
+    const statusFilter = parseClientStatusFilter(req.query.status);
+    const values = [];
+    const where = ['t.customer_since IS NOT NULL'];
+    where.push(archived ? 't.non_renewal_at IS NOT NULL' : 't.non_renewal_at IS NULL');
+
+    if (qText) {
+      values.push(`%${qText}%`);
+      where.push(`(lower(t.slug) LIKE $${values.length} OR lower(t.business_name) LIKE $${values.length} OR lower(t.owner_name) LIKE $${values.length})`);
+    }
+    if (statusFilter?.active) where.push(`t.account_status = 'active' AND t.billing_status = 'active'`);
+    if (statusFilter?.billing) {
+      values.push(statusFilter.billing);
+      where.push(`t.billing_status = $${values.length}`);
+    }
+    if (statusFilter?.mora) where.push(`t.billing_due_date IS NOT NULL AND t.billing_due_date < CURRENT_DATE`);
+
+    const rows = await q(
+      `SELECT
+        t.id,
+        t.slug,
+        t.business_name,
+        t.owner_name,
+        t.phone_enc,
+        t.phone_country,
+        t.phone_calling_code,
+        t.logo,
+        t.primary_color,
+        t.account_status,
+        t.billing_status,
+        t.plan_name,
+        t.branch_limit,
+        t.invoicing_enabled,
+        t.invoicing_activated_at,
+        t.invoicing_trial_granted_at,
+        t.billing_due_date,
+        t.customer_since,
+        t.non_renewal_at,
+        t.non_renewal_reason,
+        t.non_renewal_by,
+        t.license_count,
+        t.notes,
+        t.created_at,
+        t.reseller_id,
+        COALESCE(r.display_name, '') AS reseller_name,
+        COALESCE(r.slug, '') AS reseller_slug,
+        CASE WHEN t.billing_due_date IS NULL THEN NULL ELSE (t.billing_due_date - CURRENT_DATE)::int END AS days_to_due,
+        CASE WHEN t.billing_due_date IS NULL OR t.billing_due_date >= CURRENT_DATE THEN 0 ELSE (CURRENT_DATE - t.billing_due_date)::int END AS mora_days,
+        COALESCE(u.username, '') AS owner_username,
+        COALESCE(payments.payment_count, 0)::int AS payment_count,
+        COALESCE(payments.total_paid, 0)::float AS total_paid,
+        payments.last_payment_at,
+        COALESCE(payments.last_payment_amount, 0)::float AS last_payment_amount,
+        COALESCE(payments.last_payment_method, '') AS last_payment_method,
+        COALESCE(usage_stats.module_count, 0)::int AS module_count,
+        COALESCE(usage_stats.module_views, 0)::int AS module_views,
+        usage_stats.module_first_seen,
+        usage_stats.module_last_seen,
+        COALESCE(usage_stats.modules, '[]'::json) AS modules
+      FROM tenants t
+      LEFT JOIN resellers r ON r.id = t.reseller_id
+      LEFT JOIN LATERAL (
+        SELECT username FROM users WHERE tenant_id = t.id ORDER BY id ASC LIMIT 1
+      ) u ON true
+      LEFT JOIN LATERAL (
+        SELECT
+          COUNT(*)::int AS payment_count,
+          COALESCE(SUM(tp.amount), 0) AS total_paid,
+          MAX(tp.paid_at) AS last_payment_at,
+          (ARRAY_AGG(tp.amount ORDER BY tp.paid_at DESC, tp.id DESC))[1] AS last_payment_amount,
+          (ARRAY_AGG(tp.method ORDER BY tp.paid_at DESC, tp.id DESC))[1] AS last_payment_method
+        FROM tenant_payments tp
+        WHERE tp.tenant_id = t.id
+      ) payments ON true
+      LEFT JOIN LATERAL (
+        SELECT
+          COUNT(*)::int AS module_count,
+          COALESCE(SUM(mu.view_count), 0)::int AS module_views,
+          MIN(mu.first_seen_at) AS module_first_seen,
+          MAX(mu.last_seen_at) AS module_last_seen,
+          json_agg(
+            json_build_object(
+              'key', mu.module_key,
+              'count', mu.view_count,
+              'firstSeenAt', mu.first_seen_at,
+              'lastSeenAt', mu.last_seen_at
+            ) ORDER BY mu.view_count DESC, mu.last_seen_at DESC
+          ) AS modules
+        FROM module_usage mu
+        WHERE mu.tenant_id = t.id AND mu.demo_lead_id IS NULL
+      ) usage_stats ON true
+      WHERE ${where.join(' AND ')}
+      ORDER BY ${archived ? 't.non_renewal_at' : 't.customer_since'} DESC, t.created_at DESC`,
+      values
+    );
+
+    const clients = mapBusinessRows(rows.rows);
+    await Promise.all(clients.map(async (client) => {
+      if (!Number(client.invoicing_enabled)) return;
+      const tenantDb = tdb(client.slug);
+      const [wallet, totals] = await Promise.all([
+        tenantDb.get('SELECT unlimited,balance,reserved FROM {s}.stamp_wallet WHERE id=1'),
+        tenantDb.get(`SELECT COUNT(*) FILTER (WHERE movement_type='consumed')::int AS consumed
+                      FROM {s}.stamp_ledger`),
+      ]);
+      const serializedWallet = serializeStampWallet(wallet);
+      client.stamp_available = serializedWallet.available;
+      client.stamp_unlimited = serializedWallet.unlimited;
+      client.stamp_consumed = Number(totals?.consumed || 0);
+    }));
+    res.json({ clients, summary: buildClientSummary(clients) });
+  } catch (e) {
+    next(e);
+  }
+}
+
+router.get('/clients', requireSuperAdmin, listClientRecords);
+router.get('/non-renewals', requireSuperAdmin, listClientRecords);
+
+router.post('/clients/:id/non-renewal', requireSuperAdmin, async (req, res, next) => {
+  try {
+    const clientId = Number(req.params.id);
+    if (!Number.isInteger(clientId) || clientId <= 0) return res.status(400).json({ error: 'Cliente inválido' });
+    const reason = String(req.body?.reason || '').trim().slice(0, 500) || 'Sin motivo registrado';
+    const suspendNow = req.body?.suspendNow === true;
+    const actor = String(req.superadmin.username || 'superadmin');
+    const auditNote = `[NO RENOVÓ ${new Date().toISOString().slice(0, 10)}] ${reason} · ${actor}${suspendNow ? ' · acceso suspendido' : ''}`;
+    const updated = await q(
+      `UPDATE tenants
+       SET non_renewal_at = now(), non_renewal_reason = $2, non_renewal_by = $3,
+           account_status = CASE WHEN $4 THEN 'inactive' ELSE account_status END,
+           notes = CASE WHEN COALESCE(notes, '') = '' THEN $5 ELSE notes || E'\n' || $5 END
+       WHERE id = $1 AND customer_since IS NOT NULL AND non_renewal_at IS NULL
+       RETURNING id, non_renewal_at, account_status`,
+      [clientId, reason, actor, suspendNow, auditNote]
+    );
+    if (!updated.rows[0]) return res.status(409).json({ error: 'Cliente no encontrado o ya está en No renovación' });
+    res.json({ ok: true, client: updated.rows[0] });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post('/non-renewals/:id/restore', requireSuperAdmin, async (req, res, next) => {
+  try {
+    const clientId = Number(req.params.id);
+    if (!Number.isInteger(clientId) || clientId <= 0) return res.status(400).json({ error: 'Cliente inválido' });
+    const actor = String(req.superadmin.username || 'superadmin');
+    const auditNote = `[RETOMÓ RENOVACIÓN ${new Date().toISOString().slice(0, 10)}] ${actor}`;
+    const updated = await q(
+      `UPDATE tenants
+       SET non_renewal_at = NULL, non_renewal_reason = '', non_renewal_by = '',
+           notes = CASE WHEN COALESCE(notes, '') = '' THEN $2 ELSE notes || E'\n' || $2 END
+       WHERE id = $1 AND customer_since IS NOT NULL AND non_renewal_at IS NOT NULL
+       RETURNING id, account_status, billing_status`,
+      [clientId, auditNote]
+    );
+    if (!updated.rows[0]) return res.status(409).json({ error: 'Cliente no encontrado o ya está en Clientes' });
+    res.json({ ok: true, client: updated.rows[0] });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.get('/invoicing-businesses', requireSuperAdmin, async (req, res, next) => {
+  try {
+    await refreshTenantBillingStatuses();
+    const result = await q(
+      `SELECT t.id,t.slug,t.business_name,t.owner_name,t.phone_enc,t.phone_country,t.phone_calling_code,
+              t.logo,t.primary_color,t.account_status,t.billing_status,t.plan_name,t.customer_since,
+              t.invoicing_enabled,t.invoicing_environment,t.invoicing_activated_at,t.trial_status,
+              t.trial_ends_on,t.sales_stage,t.next_follow_up_at,t.created_at,
+              COALESCE(u.username,'') AS owner_username
+       FROM tenants t
+       LEFT JOIN LATERAL (SELECT username FROM users WHERE tenant_id=t.id ORDER BY id LIMIT 1) u ON true
+       WHERE t.product_code='invoicing'
+       ORDER BY t.created_at DESC`
+    );
+    const businesses = mapBusinessRows(result.rows);
+    await Promise.all(businesses.map(async (business) => {
+      try {
+        const tenantDb = tdb(business.slug);
+        const [profile, wallet, activity] = await Promise.all([
+          tenantDb.get('SELECT rfc,legal_name,fiscal_regime,postal_code,csd_uploaded,api_mode,sandbox_shared FROM {s}.fiscal_emitters WHERE id=1'),
+          tenantDb.get('SELECT unlimited,balance,reserved FROM {s}.stamp_wallet WHERE id=1'),
+          tenantDb.get(`SELECT
+            ((SELECT count(*) FROM {s}.invoices)+(SELECT count(*) FROM {s}.global_invoices))::int AS invoice_count,
+            GREATEST((SELECT max(created_at) FROM {s}.invoices),(SELECT max(created_at) FROM {s}.global_invoices)) AS last_invoice_at`),
+        ]);
+        business.fiscal_profile_complete = Boolean(profile?.rfc && profile?.legal_name && profile?.fiscal_regime && profile?.postal_code);
+        business.csd_ready = Boolean(Number(profile?.csd_uploaded) || profile?.api_mode === 'web' || Number(profile?.sandbox_shared));
+        business.issuer_rfc = profile?.rfc || '';
+        business.invoice_count = Number(activity?.invoice_count || 0);
+        business.last_invoice_at = activity?.last_invoice_at || null;
+        const serializedWallet = serializeStampWallet(wallet);
+        business.stamp_available = serializedWallet.available;
+        business.stamp_unlimited = serializedWallet.unlimited;
+      } catch {
+        business.fiscal_profile_complete = false;
+        business.csd_ready = false;
+        business.issuer_rfc = '';
+        business.invoice_count = 0;
+        business.last_invoice_at = null;
+        business.stamp_available = 0;
+        business.stamp_unlimited = false;
+      }
+    }));
+    const summary = {
+      total: businesses.length,
+      prospects: businesses.filter((item) => !item.customer_since).length,
+      customers: businesses.filter((item) => Boolean(item.customer_since)).length,
+      activated: businesses.filter((item) => Number(item.invoicing_enabled)).length,
+      ready: businesses.filter((item) => item.fiscal_profile_complete && item.csd_ready && Number(item.invoicing_enabled)).length,
+      issued: businesses.reduce((total, item) => total + Number(item.invoice_count || 0), 0),
+    };
+    res.json({ businesses, summary });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.get('/clients/:id/payments', requireSuperAdmin, async (req, res, next) => {
+  try {
+    const clientId = Number(req.params.id);
+    if (!Number.isInteger(clientId) || clientId <= 0) return res.status(400).json({ error: 'Cliente inválido' });
+
+    const found = await q(
+      'SELECT id, business_name, customer_since FROM tenants WHERE id = $1 AND customer_since IS NOT NULL',
+      [clientId]
+    );
+    if (!found.rows[0]) return res.status(404).json({ error: 'Cliente no encontrado' });
+
+    const payments = await q(
+      `SELECT id, amount::float AS amount, method, note, created_by, paid_at
+       FROM tenant_payments
+       WHERE tenant_id = $1
+       ORDER BY paid_at DESC, id DESC`,
+      [clientId]
+    );
+    res.json({ client: found.rows[0], payments: payments.rows });
+  } catch (e) {
+    next(e);
+  }
+});
+
+router.get('/follow-up', requireSuperAdmin, async (req, res, next) => {
+  try {
+    const [tenants, leads] = await Promise.all([
+      q(`SELECT t.id, t.business_name AS name, t.owner_name AS contact_name, t.phone_enc,
+                t.phone_country, t.phone_calling_code, t.plan_name AS detail, t.sales_stage,
+                t.next_follow_up_at, t.sales_updated_at, t.created_at,
+                t.reseller_id, COALESCE(r.display_name, '') AS reseller_name, COALESCE(r.slug, '') AS reseller_slug,
+                COALESCE(s.activity_count, 0)::int AS activity_count, s.last_activity_at,
+                COALESCE(s.last_note, '') AS last_note
+         FROM tenants t
+         LEFT JOIN resellers r ON r.id = t.reseller_id
+         LEFT JOIN LATERAL (
+           SELECT COUNT(*)::int AS activity_count, MAX(a.created_at) AS last_activity_at,
+             (ARRAY_AGG(a.note ORDER BY a.created_at DESC) FILTER (WHERE a.note <> ''))[1] AS last_note
+           FROM sales_followup_activities a WHERE a.tenant_id = t.id
+         ) s ON true
+         WHERE t.customer_since IS NULL
+         ORDER BY COALESCE(t.next_follow_up_at, t.sales_updated_at, t.created_at) DESC`),
+      q(`SELECT dl.id, dl.business_giro AS name, dl.contact_name, dl.phone_enc,
+                dl.phone_country, dl.phone_calling_code, dl.business_giro AS detail, dl.sales_stage,
+                dl.next_follow_up_at, dl.sales_updated_at, dl.created_at,
+                dl.reseller_id, COALESCE(r.display_name, '') AS reseller_name, COALESCE(r.slug, '') AS reseller_slug,
+                COALESCE(s.activity_count, 0)::int AS activity_count, s.last_activity_at,
+                COALESCE(s.last_note, '') AS last_note
+         FROM demo_leads dl
+         LEFT JOIN resellers r ON r.id = dl.reseller_id
+         LEFT JOIN LATERAL (
+           SELECT COUNT(*)::int AS activity_count, MAX(a.created_at) AS last_activity_at,
+             (ARRAY_AGG(a.note ORDER BY a.created_at DESC) FILTER (WHERE a.note <> ''))[1] AS last_note
+           FROM sales_followup_activities a WHERE a.demo_lead_id = dl.id
+         ) s ON true
+         WHERE dl.converted_tenant_id IS NULL
+         ORDER BY COALESCE(dl.next_follow_up_at, dl.sales_updated_at, dl.created_at) DESC`),
+    ]);
+
+    const mapRows = (rows, entityType) => rows.map((row) => {
+      const phone = describeStoredPhone(decrypt(row.phone_enc) || '', row.phone_country, row.phone_calling_code);
+      return {
+        ...row,
+        entity_type: entityType,
+        phone: phone.international,
+        phone_e164: phone.e164,
+        phone_digits: phone.digits,
+        phone_valid: phone.valid,
+        phone_country: phone.country,
+        phone_country_name: phone.countryName,
+        phone_calling_code: phone.callingCode,
+      };
+    });
+    const items = [...mapRows(tenants.rows, 'tenant'), ...mapRows(leads.rows, 'demo_lead')];
+    res.json({ items });
+  } catch (e) {
+    next(e);
+  }
+});
+
+router.get('/follow-up/:type/:id/activities', requireSuperAdmin, async (req, res, next) => {
+  try {
+    const subject = parseSalesSubject(req.params.type, req.params.id);
+    if (!subject) return res.status(400).json({ error: 'Contacto inválido' });
+    const cfg = followupSubjectConfig(subject.type);
+    const rows = await q(
+      `SELECT id, activity_type, note, stage_from, stage_to, follow_up_at, created_by, created_at
+       FROM sales_followup_activities WHERE ${cfg.foreignKey} = $1 ORDER BY created_at DESC, id DESC`,
+      [subject.id]
+    );
+    res.json({ activities: rows.rows });
+  } catch (e) {
+    next(e);
+  }
+});
+
+router.patch('/follow-up/item/:type/:id', requireSuperAdmin, async (req, res, next) => {
+  const subject = parseSalesSubject(req.params.type, req.params.id);
+  if (!subject) return res.status(400).json({ error: 'Contacto inválido' });
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const updated = await updateSalesSubject(client, subject, req.body || {}, req.superadmin.username);
+    if (!updated) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ error: 'Contacto no encontrado' });
+    }
+    await client.query('COMMIT');
+    res.json({ ok: true, updated });
+  } catch (e) {
+    try { await client.query('ROLLBACK'); } catch {}
+    if (e.status) return res.status(e.status).json({ error: e.message });
+    next(e);
+  } finally {
+    client.release();
+  }
+});
+
+router.patch('/follow-up/bulk/update', requireSuperAdmin, async (req, res, next) => {
+  const rawSubjects = Array.isArray(req.body?.subjects) ? req.body.subjects : [];
+  const subjects = [...new Map(rawSubjects.map((item) => {
+    const parsed = parseSalesSubject(item?.type, item?.id);
+    return parsed ? [`${parsed.type}:${parsed.id}`, parsed] : null;
+  }).filter(Boolean)).values()];
+  if (!subjects.length || subjects.length > 200) return res.status(400).json({ error: 'Selecciona entre 1 y 200 contactos válidos' });
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const updated = [];
+    for (const subject of subjects) {
+      const result = await updateSalesSubject(client, subject, req.body || {}, req.superadmin.username);
+      if (!result) throw Object.assign(new Error(`No se encontró ${subject.type} #${subject.id}`), { status: 404 });
+      updated.push(result);
+    }
+    await client.query('COMMIT');
+    res.json({ ok: true, updated, count: updated.length });
+  } catch (e) {
+    try { await client.query('ROLLBACK'); } catch {}
+    if (e.status) return res.status(e.status).json({ error: e.message });
+    next(e);
+  } finally {
+    client.release();
+  }
+});
+
+router.delete('/follow-up/bulk', requireSuperAdmin, async (req, res, next) => {
+  const rawSubjects = Array.isArray(req.body?.subjects) ? req.body.subjects : [];
+  const subjects = [...new Map(rawSubjects.map((item) => {
+    const parsed = parseSalesSubject(item?.type, item?.id);
+    return parsed ? [`${parsed.type}:${parsed.id}`, parsed] : null;
+  }).filter(Boolean)).values()];
+  if (!subjects.length || subjects.length > 200) return res.status(400).json({ error: 'Selecciona entre 1 y 200 contactos válidos' });
+
+  const tenantIds = subjects.filter((item) => item.type === 'tenant').map((item) => item.id);
+  const leadIds = subjects.filter((item) => item.type === 'demo_lead').map((item) => item.id);
+  if (tenantIds.length) {
+    return res.status(409).json({ error: 'Los prospectos con base privada deben eliminarse individualmente desde Higiene de almacenamiento' });
+  }
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    let leadRows = [];
+    if (leadIds.length) {
+      const found = await client.query(
+        'SELECT id, sales_stage FROM demo_leads WHERE id = ANY($1::int[]) FOR UPDATE',
+        [leadIds]
+      );
+      leadRows = found.rows;
+    }
+    if (leadRows.length !== leadIds.length) {
+      throw Object.assign(new Error('Uno o más contactos ya no existen o ya son clientes'), { status: 409 });
+    }
+    const unsafe = leadRows.find((row) => !BULK_DELETE_STAGES.has(row.sales_stage));
+    if (unsafe) throw Object.assign(new Error('La eliminación masiva solo permite contactos en No interesado o Cierre no exitoso'), { status: 409 });
+
+    if (leadIds.length) await client.query('DELETE FROM demo_leads WHERE id = ANY($1::int[])', [leadIds]);
+    await client.query('COMMIT');
+    res.json({ ok: true, deleted: subjects.length });
+  } catch (e) {
+    try { await client.query('ROLLBACK'); } catch {}
+    if (e.status) return res.status(e.status).json({ error: e.message });
+    next(e);
+  } finally {
+    client.release();
+  }
+});
+
+router.delete('/demo-leads/:id', requireSuperAdmin, async (req, res, next) => {
+  try {
+    const leadId = Number(req.params.id);
+    if (!Number.isInteger(leadId) || leadId <= 0) return res.status(400).json({ error: 'Lead demo inválido' });
+    const deleted = await q('DELETE FROM demo_leads WHERE id = $1 RETURNING id, contact_name', [leadId]);
+    if (!deleted.rows[0]) return res.status(404).json({ error: 'Lead demo no encontrado' });
+    res.json({ ok: true, deleted: deleted.rows[0] });
+  } catch (e) {
+    next(e);
+  }
+});
+
+router.get('/storage-hygiene', requireSuperAdmin, async (req, res, next) => {
+  try {
+    const report = await scanStorageHygiene({ query: q, tenantDbFactory: tdb });
+    res.json(report);
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.get('/storage-hygiene/prospects/:id', requireSuperAdmin, async (req, res, next) => {
+  try {
+    const tenantId = Number(req.params.id);
+    if (!Number.isInteger(tenantId) || tenantId <= 0) return res.status(400).json({ error: 'Prospecto inválido' });
+    const found = await q(storageTenantSql(), [tenantId]);
+    const tenant = found.rows[0];
+    if (!tenant) return res.status(404).json({ error: 'Prospecto no encontrado' });
+    if (tenantIsProtected(tenant)) return res.status(409).json({ error: 'Cliente protegido: su almacenamiento no puede revisarse ni eliminarse desde esta herramienta' });
+    const inspection = await inspectProspectTenant(tenant, tdb);
+    const { _inspection, ...preview } = inspection;
+    res.json({ preview, confirmationPhrases: { delete: `ELIMINAR PROSPECTO ${tenant.slug}`, orphanFiles: `LIMPIAR ARCHIVOS ${tenant.slug}` } });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post('/storage-hygiene/prospects/:id/delete', requireSuperAdmin, async (req, res, next) => {
+  const tenantId = Number(req.params.id);
+  if (!Number.isInteger(tenantId) || tenantId <= 0) return res.status(400).json({ error: 'Prospecto inválido' });
+  const client = await pool.connect();
+  let committed = false;
+  let tenant;
+  let jobId;
+  let inspection;
+  try {
+    await client.query('BEGIN ISOLATION LEVEL SERIALIZABLE');
+    await client.query('SELECT pg_advisory_xact_lock($1)', [tenantId]);
+    const found = await client.query(`${storageTenantSql()} FOR UPDATE OF t`, [tenantId]);
+    tenant = found.rows[0];
+    if (!tenant) throw Object.assign(new Error('Prospecto no encontrado'), { status: 404 });
+    if (tenantIsProtected(tenant)) throw Object.assign(new Error('Cliente protegido: este tenant tuvo un pago o ya fue convertido y no puede eliminarse'), { status: 409 });
+    const expected = `ELIMINAR PROSPECTO ${tenant.slug}`;
+    if (req.body?.confirmation !== expected || req.body?.acknowledge !== true) {
+      throw Object.assign(new Error(`Escribe exactamente “${expected}” y acepta la confirmación`), { status: 400 });
+    }
+
+    inspection = await inspectProspectTenant(tenant, tdb);
+    if (!inspection.scanComplete) throw Object.assign(new Error(`Revisión incompleta: ${inspection.scanError || 'no se pudo validar su almacenamiento'}`), { status: 409 });
+    jobId = await createCleanupJob(client, {
+      subjectType: 'prospect', tenantId, slug: tenant.slug, businessName: tenant.business_name,
+      action: 'delete_prospect', status: 'database_deleting', files: inspection.storage?.files,
+      bytes: inspection.storage?.bytes, orphanFiles: inspection.storage?.orphanFiles,
+      orphanBytes: inspection.storage?.orphanBytes, manifest: cleanupManifest(inspection), createdBy: req.superadmin.username,
+      purgeAfter: new Date(),
+    });
+
+    await client.query('DELETE FROM tenant_payments WHERE tenant_id=$1', [tenantId]);
+    await client.query('DELETE FROM users WHERE tenant_id=$1', [tenantId]);
+    await client.query('DELETE FROM tenants WHERE id=$1', [tenantId]);
+    await client.query(`DROP SCHEMA IF EXISTS "${schemaName(tenant.slug)}" CASCADE`);
+    await client.query("UPDATE storage_cleanup_jobs SET status='database_deleted' WHERE id=$1", [jobId]);
+    await client.query('COMMIT');
+    committed = true;
+  } catch (error) {
+    try { if (!committed) await client.query('ROLLBACK'); } catch {}
+    client.release();
+    if (error.status) return res.status(error.status).json({ error: error.message });
+    return next(error);
+  }
+  client.release();
+
+  let moved = null;
+  try {
+    // El prospecto ya fue validado y eliminado de la base. La carpeta se saca
+    // primero del área pública y enseguida se purga de forma definitiva.
+    moved = await moveScopeToQuarantine(tenant.slug, jobId);
+    if (moved.moved) {
+      await q(
+        `UPDATE storage_cleanup_jobs
+         SET status='quarantined',quarantine_key=$1,quarantined_at=now(),purge_after=now(),error=''
+         WHERE id=$2`,
+        [moved.key, jobId]
+      );
+      await purgeQuarantine(moved.key);
+      await q(
+        `UPDATE storage_cleanup_jobs
+         SET status='purged',purged_at=now(),error=''
+         WHERE id=$1`,
+        [jobId]
+      );
+    } else {
+      await q(
+        `UPDATE storage_cleanup_jobs
+         SET status='completed_no_files',quarantine_key='',quarantined_at=NULL,purge_after=NULL,error=''
+         WHERE id=$1`,
+        [jobId]
+      );
+    }
+    res.json({
+      ok: true,
+      deleted: { id: tenant.id, slug: tenant.slug, businessName: tenant.business_name },
+      jobId,
+      quarantine: false,
+      purged: moved.moved,
+      purgeAfterDays: 0,
+      message: moved.moved ? 'Prospecto, base privada y archivos eliminados definitivamente' : 'Prospecto eliminado; no tenía archivos físicos',
+    });
+  } catch (error) {
+    const cleanupError = String(error.message || error);
+    if (moved?.key) {
+      // Si la purga falla, los archivos permanecen fuera del acceso público y
+      // se habilita la purga manual inmediata desde el historial.
+      await q(
+        `UPDATE storage_cleanup_jobs
+         SET status='quarantined',quarantine_key=$1,quarantined_at=COALESCE(quarantined_at,now()),
+             purge_after=now(),error=$2
+         WHERE id=$3`,
+        [moved.key, cleanupError, jobId]
+      ).catch(() => {});
+    } else {
+      await q("UPDATE storage_cleanup_jobs SET status='cleanup_pending',error=$1 WHERE id=$2", [cleanupError, jobId]).catch(() => {});
+    }
+    res.status(202).json({
+      ok: true, jobId, cleanupPending: true,
+      message: moved?.key
+        ? 'El prospecto fue eliminado y sus archivos salieron del acceso público, pero la purga definitiva quedó pendiente y ya puede reintentarse desde el historial.'
+        : 'El prospecto fue eliminado de la base, pero su carpeta quedó pendiente de eliminación. El analizador volverá a mostrarla como huérfana.',
+    });
+  }
+});
+
+router.post('/storage-hygiene/prospects/:id/orphan-files', requireSuperAdmin, async (req, res, next) => {
+  const tenantId = Number(req.params.id);
+  if (!Number.isInteger(tenantId) || tenantId <= 0) return res.status(400).json({ error: 'Prospecto inválido' });
+  const client = await pool.connect();
+  let tenant;
+  let inspection;
+  let jobId;
+  let moved = null;
+  try {
+    await client.query('BEGIN ISOLATION LEVEL SERIALIZABLE');
+    await client.query('SELECT pg_advisory_xact_lock($1)', [tenantId]);
+    const found = await client.query(`${storageTenantSql()} FOR UPDATE OF t`, [tenantId]);
+    tenant = found.rows[0];
+    if (!tenant) throw Object.assign(new Error('Prospecto no encontrado'), { status: 404 });
+    if (tenantIsProtected(tenant)) throw Object.assign(new Error('Cliente protegido: no se pueden limpiar sus archivos'), { status: 409 });
+    const expected = `LIMPIAR ARCHIVOS ${tenant.slug}`;
+    if (req.body?.confirmation !== expected || req.body?.acknowledge !== true) throw Object.assign(new Error(`Escribe exactamente “${expected}” y acepta la confirmación`), { status: 400 });
+    inspection = await inspectProspectTenant(tenant, tdb);
+    if (!inspection.scanComplete) throw Object.assign(new Error(`Revisión incompleta: ${inspection.scanError || 'no se pudo validar su almacenamiento'}`), { status: 409 });
+    const orphanFiles = inspection._inspection?.orphanFiles || [];
+    if (!orphanFiles.length) throw Object.assign(new Error('Este prospecto no tiene archivos huérfanos con más de 24 horas'), { status: 409 });
+    jobId = await createCleanupJob(client, {
+      subjectType: 'prospect', tenantId, slug: tenant.slug, businessName: tenant.business_name,
+      action: 'quarantine_orphan_files', status: 'preparing', files: orphanFiles.length,
+      bytes: inspection.storage.orphanBytes, orphanFiles: orphanFiles.length, orphanBytes: inspection.storage.orphanBytes,
+      manifest: { files: orphanFiles.slice(0, 5000).map((file) => ({ path: file.relativePath, bytes: file.size })), truncated: orphanFiles.length > 5000 },
+      createdBy: req.superadmin.username,
+    });
+    moved = await moveOrphanFilesToQuarantine(tenant.slug, jobId, orphanFiles);
+    await client.query(
+      "UPDATE storage_cleanup_jobs SET status='quarantined',quarantine_key=$1,quarantined_at=now(),purge_after=now()+INTERVAL '7 days' WHERE id=$2",
+      [moved.key, jobId]
+    );
+    await client.query('COMMIT');
+    res.json({ ok: true, jobId, files: moved.moved, bytes: inspection.storage.orphanBytes, message: `${moved.moved} archivo(s) huérfano(s) enviados a cuarentena por 7 días` });
+  } catch (error) {
+    try { await client.query('ROLLBACK'); } catch {}
+    if (moved?.key) {
+      // Una falla de auditoría no debe dejar fuera archivos de un prospecto que sigue activo.
+      await restoreQuarantinedFiles(tenant.slug, moved.key).catch(() => {});
+    }
+    if (error.status) return res.status(error.status).json({ error: error.message });
+    next(error);
+  } finally {
+    client.release();
+  }
+});
+
+router.post('/storage-hygiene/orphan-scopes/:scope/quarantine', requireSuperAdmin, async (req, res, next) => {
+  let scope;
+  try { scope = assertSafeScope(req.params.scope); } catch (error) { return res.status(error.status || 400).json({ error: error.message }); }
+  const expected = `CUARENTENA ${scope}`;
+  if (req.body?.confirmation !== expected || req.body?.acknowledge !== true) return res.status(400).json({ error: `Escribe exactamente “${expected}” y acepta la confirmación` });
+  const client = await pool.connect();
+  let jobId;
+  let moved = null;
+  try {
+    await client.query('BEGIN ISOLATION LEVEL SERIALIZABLE');
+    await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`storage:${scope}`]);
+    const exists = await client.query('SELECT id FROM tenants WHERE lower(slug)=lower($1) LIMIT 1', [scope]);
+    if (exists.rows[0]) throw Object.assign(new Error('La carpeta ya pertenece a un tenant existente y quedó protegida'), { status: 409 });
+    const storage = await inspectScope(scope, []);
+    if (!storage.exists) throw Object.assign(new Error('La carpeta huérfana ya no existe'), { status: 404 });
+    if (storage.warnings.length) throw Object.assign(new Error(`Revisión incompleta: ${storage.warnings.join('. ')}`), { status: 409 });
+    jobId = await createCleanupJob(client, {
+      subjectType: 'orphan_scope', slug: scope, businessName: 'Tenant eliminado', action: 'quarantine_orphan_scope',
+      files: storage.fileCount, bytes: storage.totalBytes, orphanFiles: storage.fileCount, orphanBytes: storage.totalBytes,
+      manifest: { files: storage.files.slice(0, 5000).map((file) => ({ path: file.relativePath, bytes: file.size })), truncated: storage.files.length > 5000 },
+      createdBy: req.superadmin.username,
+    });
+    moved = await moveScopeToQuarantine(scope, jobId);
+    if (!moved.moved) throw Object.assign(new Error('La carpeta huérfana ya no existe'), { status: 404 });
+    await client.query(
+      "UPDATE storage_cleanup_jobs SET status='quarantined',quarantine_key=$1,quarantined_at=now(),purge_after=now()+INTERVAL '7 days' WHERE id=$2",
+      [moved.key, jobId]
+    );
+    await client.query('COMMIT');
+    res.json({ ok: true, jobId, files: storage.fileCount, bytes: storage.totalBytes, message: 'Carpeta huérfana enviada a cuarentena por 7 días' });
+  } catch (error) {
+    try { await client.query('ROLLBACK'); } catch {}
+    if (moved?.key) await restoreQuarantinedScope(scope, moved.key).catch(() => {});
+    if (error.status) return res.status(error.status).json({ error: error.message });
+    next(error);
+  } finally {
+    client.release();
+  }
+});
+
+router.post('/storage-hygiene/jobs/:id/purge', requireSuperAdmin, async (req, res, next) => {
+  const jobId = Number(req.params.id);
+  if (!Number.isInteger(jobId) || jobId <= 0) return res.status(400).json({ error: 'Operación de limpieza inválida' });
+  if (req.body?.confirmation !== `PURGAR ${jobId}` || req.body?.acknowledge !== true) return res.status(400).json({ error: `Escribe exactamente “PURGAR ${jobId}” y acepta la confirmación` });
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const found = await client.query('SELECT * FROM storage_cleanup_jobs WHERE id=$1 FOR UPDATE', [jobId]);
+    const job = found.rows[0];
+    if (!job) throw Object.assign(new Error('Operación de limpieza no encontrada'), { status: 404 });
+    if (job.status !== 'quarantined' || !job.quarantine_key) throw Object.assign(new Error('Esta operación no tiene archivos listos para purgar'), { status: 409 });
+    const isDeletedProspect = job.action === 'delete_prospect';
+    if (!isDeletedProspect && (!job.purge_after || new Date(job.purge_after).getTime() > Date.now())) {
+      throw Object.assign(new Error('La cuarentena de 7 días todavía no termina'), { status: 409 });
+    }
+    await purgeQuarantine(job.quarantine_key);
+    await client.query("UPDATE storage_cleanup_jobs SET status='purged',purged_at=now(),error='' WHERE id=$1", [jobId]);
+    await client.query('COMMIT');
+    res.json({ ok: true, jobId, bytes: Number(job.total_bytes || 0), message: 'Archivos eliminados definitivamente y espacio liberado' });
+  } catch (error) {
+    try { await client.query('ROLLBACK'); } catch {}
+    if (error.status) return res.status(error.status).json({ error: error.message });
+    next(error);
+  } finally {
+    client.release();
+  }
+});
+
+router.delete('/tenants/:id', requireSuperAdmin, async (req, res, next) => {
+  const tenantId = Number(req.params.id);
+  if (!Number.isInteger(tenantId) || tenantId <= 0) return res.status(400).json({ error: 'Tenant inválido' });
+
+  const client = await pool.connect();
+  let tenant = null;
+  try {
+    await client.query('BEGIN');
+    const found = await client.query(
+      `SELECT t.id,t.slug,t.business_name,t.logo,t.customer_since,
+              EXISTS(SELECT 1 FROM tenant_payments tp WHERE tp.tenant_id=t.id) AS has_payment
+       FROM tenants t WHERE t.id=$1 FOR UPDATE OF t`,
+      [tenantId]
+    );
+    tenant = found.rows[0] || null;
+    if (!tenant) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ error: 'Tenant no encontrado' });
+    }
+
+    if (tenant.customer_since || tenant.has_payment) {
+      await client.query('ROLLBACK');
+      return res.status(409).json({ error: 'Cliente protegido: los tenants que tuvieron pagos no pueden eliminarse' });
+    }
+    await client.query('ROLLBACK');
+    return res.status(409).json({ error: 'Elimina este prospecto desde Higiene de almacenamiento para incluir su esquema e imágenes en cuarentena' });
+
+  } catch (e) {
+    try { await client.query('ROLLBACK'); } catch {}
+    next(e);
+  } finally {
+    client.release();
   }
 });
 
@@ -428,6 +1577,54 @@ router.post('/billing/refresh', requireSuperAdmin, async (req, res, next) => {
   }
 });
 
+router.get('/tenants/:id/operation-reset-preview', requireSuperAdmin, async (req, res, next) => {
+  try {
+    const tenantId = Number(req.params.id);
+    if (!Number.isInteger(tenantId) || tenantId <= 0) return res.status(400).json({ error: 'Tenant inválido' });
+    const tenant = await getTenantById(tenantId);
+    if (!tenant) return res.status(404).json({ error: 'Tenant no encontrado' });
+
+    const preview = await loadTenantOperationResetPreview(tdb(tenant.slug));
+    const blockerMessages = resetBlockerMessages(preview);
+    res.json({
+      tenant: { id: tenant.id, slug: tenant.slug, businessName: tenant.business_name },
+      preview,
+      canReset: blockerMessages.length === 0,
+      blockerMessages,
+      confirmationPhrase: `REINICIAR ${tenant.slug}`,
+      preserves: ['Catálogo y productos', 'Imágenes', 'Clientes', 'Usuarios', 'Sucursales', 'Configuración', 'Promociones'],
+    });
+  } catch (error) { next(error); }
+});
+
+router.post('/tenants/:id/operation-reset', requireSuperAdmin, async (req, res, next) => {
+  try {
+    const tenantId = Number(req.params.id);
+    if (!Number.isInteger(tenantId) || tenantId <= 0) return res.status(400).json({ error: 'Tenant inválido' });
+    const tenant = await getTenantById(tenantId);
+    if (!tenant) return res.status(404).json({ error: 'Tenant no encontrado' });
+
+    const expectedPhrase = `REINICIAR ${tenant.slug}`;
+    if (req.body?.acknowledge !== true || String(req.body?.confirmation || '').trim() !== expectedPhrase) {
+      return res.status(400).json({ error: `Escribe exactamente “${expectedPhrase}” para confirmar.` });
+    }
+
+    const cleared = await resetTenantOperations(tdb(tenant.slug), tenant, req.superadmin.username);
+    res.json({
+      ok: true,
+      tenant: { id: tenant.id, slug: tenant.slug, businessName: tenant.business_name },
+      cleared,
+      message: 'Todas las ventas, compras e inventario existentes fueron reiniciados. El siguiente pedido comenzará en #1.',
+    });
+  } catch (error) {
+    if (error?.code === '40001') {
+      return res.status(409).json({ error: 'Hubo actividad concurrente en el tenant. Intenta el reinicio nuevamente.' });
+    }
+    if (error.status) return res.status(error.status).json({ error: error.message, blockers: error.blockers || undefined });
+    next(error);
+  }
+});
+
 router.get('/tenants/:id/stats', requireSuperAdmin, async (req, res, next) => {
   try {
     const tenantId = Number(req.params.id);
@@ -438,11 +1635,12 @@ router.get('/tenants/:id/stats', requireSuperAdmin, async (req, res, next) => {
     if (!tenant) return res.status(404).json({ error: 'Tenant no encontrado' });
 
     const t = tdb(tenant.slug);
-    const [orders, products, openSessions, sales] = await Promise.all([
+    const [orders, products, openSessions, sales, branches] = await Promise.all([
       t.get('SELECT COUNT(*)::int AS count, MAX(created_at) AS last_order_at FROM {s}.orders'),
       t.get('SELECT COUNT(*)::int AS count FROM {s}.products WHERE active = 1'),
       t.get("SELECT COUNT(*)::int AS count FROM {s}.pos_sessions WHERE status = 'open'"),
-      t.get("SELECT COALESCE(SUM(total),0)::float AS total FROM {s}.orders WHERE channel = 'pos'")
+      t.get("SELECT COALESCE(SUM(total),0)::float AS total FROM {s}.orders WHERE channel = 'pos'"),
+      t.get('SELECT COUNT(*)::int AS total, COUNT(*) FILTER (WHERE active = 1)::int AS active FROM {s}.branches')
     ]);
 
     res.json({
@@ -451,11 +1649,22 @@ router.get('/tenants/:id/stats', requireSuperAdmin, async (req, res, next) => {
         slug: tenant.slug,
         business_name: tenant.business_name,
         owner_name: tenant.owner_name,
-        phone: decrypt(tenant.phone_enc) || '',
+        ...(() => {
+          const phone = describeStoredPhone(decrypt(tenant.phone_enc) || '', tenant.phone_country, tenant.phone_calling_code);
+          return {
+            phone: phone.international,
+            phone_e164: phone.e164,
+            phone_valid: phone.valid,
+            phone_country: phone.country,
+            phone_country_name: phone.countryName,
+            phone_calling_code: phone.callingCode,
+          };
+        })(),
         primary_color: tenant.primary_color || '#ff6b35',
         account_status: tenant.account_status,
         billing_status: tenant.billing_status,
         plan_name: tenant.plan_name,
+        branch_limit: Number(tenant.branch_limit || 2),
         billing_due_date: tenant.billing_due_date,
         notes: tenant.notes || '',
       },
@@ -464,6 +1673,8 @@ router.get('/tenants/:id/stats', requireSuperAdmin, async (req, res, next) => {
         activeProducts: Number(products?.count || 0),
         openPosSessions: Number(openSessions?.count || 0),
         posSalesTotal: Number(sales?.total || 0),
+        activeBranches: Number(branches?.active || 0),
+        totalBranches: Number(branches?.total || 0),
         lastOrderAt: orders?.last_order_at || null,
       },
     });
@@ -488,7 +1699,12 @@ router.patch('/tenants/:id', requireSuperAdmin, async (req, res, next) => {
 
     if (body.business_name !== undefined) push('business_name', String(body.business_name || '').trim());
     if (body.owner_name !== undefined) push('owner_name', String(body.owner_name || '').trim());
-    if (body.phone !== undefined) push('phone_enc', encrypt(String(body.phone || '').trim()));
+    if (body.phone !== undefined) {
+      const phone = normalizeInternationalPhone(body.phone, body.phone_country || body.phoneCountry);
+      push('phone_enc', encrypt(phone.e164));
+      push('phone_country', phone.country);
+      push('phone_calling_code', phone.callingCode);
+    }
     if (body.primary_color !== undefined && /^#[0-9a-fA-F]{6}$/.test(String(body.primary_color || ''))) {
       push('primary_color', String(body.primary_color));
     }
@@ -503,7 +1719,29 @@ router.patch('/tenants/:id', requireSuperAdmin, async (req, res, next) => {
       push('billing_status', value);
     }
     if (body.plan_name !== undefined) push('plan_name', String(body.plan_name || '').trim());
+    if (body.branch_limit !== undefined) {
+      const branchLimit = Number(body.branch_limit);
+      if (!Number.isInteger(branchLimit) || branchLimit < 1 || branchLimit > 1000) {
+        return res.status(400).json({ error: 'El límite de sucursales debe estar entre 1 y 1000' });
+      }
+      const tenant = await getTenantById(tenantId);
+      if (!tenant) return res.status(404).json({ error: 'Tenant no encontrado' });
+      const activeBranches = await tdb(tenant.slug).get('SELECT COUNT(*)::int AS count FROM {s}.branches WHERE active = 1');
+      if (Number(activeBranches?.count || 0) > branchLimit) {
+        return res.status(409).json({
+          error: `Este negocio tiene ${Number(activeBranches.count)} sucursales activas. Desactiva algunas antes de reducir el límite.`,
+        });
+      }
+      push('branch_limit', branchLimit);
+    }
     if (body.billing_due_date !== undefined) push('billing_due_date', body.billing_due_date || null);
+    if (body.license_count !== undefined) {
+      const licenseCount = Number(body.license_count);
+      if (!Number.isInteger(licenseCount) || licenseCount < 1 || licenseCount > 100000) {
+        return res.status(400).json({ error: 'Número de licencias inválido' });
+      }
+      push('license_count', licenseCount);
+    }
     if (body.notes !== undefined) push('notes', String(body.notes || '').trim());
 
     if (!updates.length) return res.status(400).json({ error: 'Sin cambios para actualizar' });
@@ -513,6 +1751,197 @@ router.patch('/tenants/:id', requireSuperAdmin, async (req, res, next) => {
     res.json({ ok: true });
   } catch (e) {
     next(e);
+  }
+});
+
+function serializeStampWallet(wallet) {
+  const balance = Number(wallet?.balance || 0);
+  const reserved = Number(wallet?.reserved || 0);
+  const unlimited = Boolean(Number(wallet?.unlimited));
+  return {
+    unlimited,
+    balance,
+    reserved,
+    available: unlimited ? null : Math.max(0, balance - reserved),
+    lowBalanceThreshold: Number(wallet?.low_balance_threshold || 20),
+  };
+}
+
+router.get('/tenants/:id/stamps', requireSuperAdmin, async (req, res, next) => {
+  try {
+    const tenant = await getTenantById(Number(req.params.id));
+    if (!tenant) return res.status(404).json({ error: 'Tenant no encontrado' });
+    if (!isMexicoIdentity(tenant) && tenant.slug !== config.DEMO_TENANT_SLUG) return res.status(403).json({ error: 'Los timbres sólo aplican a tenants de México' });
+    const tenantDb = tdb(tenant.slug);
+    const [wallet, movements, emitters, totals] = await Promise.all([
+      tenantDb.get('SELECT * FROM {s}.stamp_wallet WHERE id=1'),
+      tenantDb.all('SELECT * FROM {s}.stamp_ledger ORDER BY id DESC LIMIT 50'),
+      tenantDb.all(`SELECT id,label,rfc,legal_name,series,enabled,csd_uploaded,sandbox_shared,environment
+                    FROM {s}.fiscal_emitters ORDER BY enabled DESC,id`),
+      tenantDb.get(`SELECT
+        COUNT(*) FILTER (WHERE movement_type='consumed')::int AS consumed,
+        COALESCE(SUM(quantity) FILTER (WHERE movement_type IN ('credit','trial_grant')),0)::int AS granted
+        FROM {s}.stamp_ledger`),
+    ]);
+    res.json({
+      tenant: {
+        id: Number(tenant.id), slug: tenant.slug, businessName: tenant.business_name,
+        enabled: Boolean(Number(tenant.invoicing_enabled)),
+        isDemo: tenant.slug === config.DEMO_TENANT_SLUG,
+        environment: tenant.slug === config.DEMO_TENANT_SLUG ? 'sandbox' : (tenant.invoicing_environment || 'sandbox'),
+        activatedAt: tenant.invoicing_activated_at,
+        trialGrantedAt: tenant.invoicing_trial_granted_at,
+        activatedBy: tenant.invoicing_activated_by || '',
+      },
+      provider: {
+        sandboxConfigured: Boolean(config.FACTURAMA_SANDBOX_USERNAME && config.FACTURAMA_SANDBOX_PASSWORD),
+        productionConfigured: Boolean(config.FACTURAMA_PRODUCTION_USERNAME && config.FACTURAMA_PRODUCTION_PASSWORD),
+      },
+      wallet: serializeStampWallet(wallet),
+      totals: { consumed: Number(totals?.consumed || 0), granted: Number(totals?.granted || 0) },
+      emitters: emitters.map((row) => ({
+        id: Number(row.id), label: row.label || '', rfc: row.rfc || '', legalName: row.legal_name || '',
+        series: row.series || '', enabled: Boolean(Number(row.enabled)), csdUploaded: Boolean(Number(row.csd_uploaded)),
+        sandboxShared: Boolean(Number(row.sandbox_shared)), environment: row.environment || 'sandbox',
+      })),
+      movements,
+    });
+  } catch (error) { next(error); }
+});
+
+router.post('/tenants/:id/invoicing-environment', requireSuperAdmin, async (req, res, next) => {
+  try {
+    const tenant = await getTenantById(Number(req.params.id));
+    if (!tenant) return res.status(404).json({ error: 'Tenant no encontrado' });
+    if (!isMexicoIdentity(tenant) && tenant.slug !== config.DEMO_TENANT_SLUG) return res.status(403).json({ error: 'La facturación sólo aplica para tenants de México' });
+    const environment = String(req.body?.environment || '').trim().toLowerCase();
+    if (!['sandbox', 'production'].includes(environment)) return res.status(400).json({ error: 'Selecciona Sandbox o Producción' });
+    if (tenant.slug === config.DEMO_TENANT_SLUG && environment !== 'sandbox') return res.status(409).json({ error: 'El tenant demo siempre debe permanecer en Sandbox' });
+    if (environment === 'production' && !(config.FACTURAMA_PRODUCTION_USERNAME && config.FACTURAMA_PRODUCTION_PASSWORD)) {
+      return res.status(409).json({ error: 'Configura primero las credenciales de Facturama Producción en el servidor' });
+    }
+    if (environment === 'production') {
+      try {
+        await Promise.all([
+          facturamaClients.production.request('/api/BranchOffice'),
+          facturamaClients.production.request('/api-lite/csds'),
+        ]);
+      } catch (error) {
+        return res.status(409).json({ error: `Facturama Producción no autenticó API Web y Multiemisor: ${error.message}` });
+      }
+    }
+    const tenantDb = tdb(tenant.slug);
+    await tenantDb.tx(async (tx) => {
+      const previous = tenant.invoicing_environment || 'sandbox';
+      await tx.run('UPDATE public.tenants SET invoicing_environment=$1 WHERE id=$2', [environment, tenant.id]);
+      await tx.run(
+        `UPDATE {s}.fiscal_profiles SET environment=$1,api_mode=CASE WHEN $1='production' AND upper(rfc)=$2 THEN 'web' WHEN $1='production' THEN 'multi' ELSE api_mode END,
+         sandbox_shared=CASE WHEN $1='production' THEN 0 ELSE sandbox_shared END,
+         csd_uploaded=CASE WHEN environment<>$1 THEN 0 ELSE csd_uploaded END,updated_at=now()`, [environment, config.FACTURAMA_PRODUCTION_RFC]
+      );
+      await tx.run(
+        `UPDATE {s}.fiscal_emitters SET environment=$1,api_mode=CASE WHEN $1='production' AND upper(rfc)=$2 THEN 'web' WHEN $1='production' THEN 'multi' ELSE api_mode END,
+         sandbox_shared=CASE WHEN $1='production' THEN 0 ELSE sandbox_shared END,
+         csd_uploaded=CASE WHEN environment<>$1 THEN 0 ELSE csd_uploaded END,updated_at=now()`, [environment, config.FACTURAMA_PRODUCTION_RFC]
+      );
+      const wallet = await tx.get('SELECT balance FROM {s}.stamp_wallet WHERE id=1');
+      await tx.run(
+        `INSERT INTO {s}.stamp_ledger(movement_type,quantity,balance_after,detail,actor)
+         VALUES('environment_changed',0,$1,$2,$3)`,
+        [Number(wallet?.balance || 0), `Facturama ${previous} → ${environment}. Se requiere CSD registrado en el ambiente seleccionado.`, req.superadmin.username]
+      );
+    });
+    res.json({ ok: true, environment, requiresCsd: true });
+  } catch (error) { next(error); }
+});
+
+router.post('/tenants/:id/invoicing', requireSuperAdmin, async (req, res, next) => {
+  try {
+    const tenant = await getTenantById(Number(req.params.id));
+    if (!tenant) return res.status(404).json({ error: 'Tenant no encontrado' });
+    if (!isMexicoIdentity(tenant) && tenant.slug !== config.DEMO_TENANT_SLUG) return res.status(403).json({ error: 'La facturación sólo puede activarse para tenants de México (+52)' });
+    if (typeof req.body?.enabled !== 'boolean') return res.status(400).json({ error: 'Indica si deseas activar o desactivar la facturación' });
+    const enabled = req.body?.enabled === true;
+    const tenantDb = tdb(tenant.slug);
+    const result = await tenantDb.tx(async (tx) => {
+      const lockedTenant = await tx.get('SELECT * FROM public.tenants WHERE id=$1 FOR UPDATE', [tenant.id]);
+      await tx.run(`INSERT INTO {s}.stamp_wallet(id,unlimited,balance,reserved)
+                    VALUES(1,0,0,0) ON CONFLICT(id) DO NOTHING`);
+      const wallet = await tx.get('SELECT * FROM {s}.stamp_wallet WHERE id=1 FOR UPDATE');
+      const trialGrant = enabled && !lockedTenant.invoicing_trial_granted_at ? 2 : 0;
+      const nextBalance = Number(wallet.balance || 0) + trialGrant;
+      const updatedWallet = await tx.get(
+        'UPDATE {s}.stamp_wallet SET unlimited=0,balance=$1,updated_at=now() WHERE id=1 RETURNING *',
+        [nextBalance]
+      );
+      const updatedTenant = await tx.get(
+        `UPDATE public.tenants SET
+          invoicing_enabled=$1,
+          invoicing_activated_at=CASE WHEN $1=1 THEN COALESCE(invoicing_activated_at,now()) ELSE invoicing_activated_at END,
+          invoicing_trial_granted_at=CASE WHEN $2=1 THEN COALESCE(invoicing_trial_granted_at,now()) ELSE invoicing_trial_granted_at END,
+          invoicing_activated_by=$3,
+          phone_country=CASE WHEN $1=1 AND $4='MX' THEN 'MX' ELSE phone_country END,
+          phone_calling_code=CASE WHEN $1=1 AND $5='52' THEN '52' ELSE phone_calling_code END
+         WHERE id=$6 RETURNING *`,
+        [enabled ? 1 : 0, trialGrant ? 1 : 0, req.superadmin.username,
+          tenant.phone_country || '', String(tenant.phone_calling_code || '').replace('+', ''), tenant.id]
+      );
+      if (trialGrant) {
+        await tx.run(
+          `INSERT INTO {s}.stamp_ledger(movement_type,quantity,balance_after,detail,actor)
+           VALUES('courtesy_grant',$1,$2,'2 timbres de cortesía para pruebas de Facturación MX',$3)`,
+          [trialGrant, nextBalance, req.superadmin.username]
+        );
+      }
+      await tx.run(
+        `INSERT INTO {s}.stamp_ledger(movement_type,quantity,balance_after,detail,actor)
+         VALUES($1,0,$2,$3,$4)`,
+        [enabled ? 'invoicing_enabled' : 'invoicing_disabled', nextBalance,
+          enabled ? 'Facturación habilitada por SuperAdmin' : 'Facturación deshabilitada por SuperAdmin', req.superadmin.username]
+      );
+      return { updatedTenant, updatedWallet, trialGrant };
+    });
+    res.json({
+      ok: true,
+      enabled: Boolean(Number(result.updatedTenant.invoicing_enabled)),
+      trialGrant: result.trialGrant,
+      trialGrantedAt: result.updatedTenant.invoicing_trial_granted_at,
+      wallet: serializeStampWallet(result.updatedWallet),
+    });
+  } catch (error) { next(error); }
+});
+
+router.post('/tenants/:id/stamps', requireSuperAdmin, async (req, res, next) => {
+  try {
+    const tenant = await getTenantById(Number(req.params.id));
+    if (!tenant) return res.status(404).json({ error: 'Tenant no encontrado' });
+    if (!isMexicoIdentity(tenant) && tenant.slug !== config.DEMO_TENANT_SLUG) return res.status(403).json({ error: 'Los timbres sólo aplican a tenants de México' });
+    if (!Number(tenant.invoicing_enabled)) return res.status(409).json({ error: 'Activa primero la facturación del tenant' });
+    const quantity = Number(req.body?.quantity || 0);
+    if (!Number.isInteger(quantity) || quantity === 0 || Math.abs(quantity) > 1000000) {
+      return res.status(400).json({ error: 'Indica una cantidad entera distinta de cero' });
+    }
+    const tenantDb = tdb(tenant.slug);
+    const result = await tenantDb.tx(async (tx) => {
+      const wallet = await tx.get('SELECT * FROM {s}.stamp_wallet WHERE id=1 FOR UPDATE');
+      const nextBalance = Number(wallet.balance || 0) + quantity;
+      if (nextBalance < Number(wallet.reserved || 0)) throw Object.assign(new Error('El saldo no puede quedar por debajo de los timbres reservados'), { status: 409 });
+      const updated = await tx.get(
+        'UPDATE {s}.stamp_wallet SET unlimited=0,balance=$1,updated_at=now() WHERE id=1 RETURNING *',
+        [nextBalance]
+      );
+      await tx.run(
+        `INSERT INTO {s}.stamp_ledger(movement_type,quantity,balance_after,detail,actor)
+         VALUES($1,$2,$3,$4,$5)`,
+        [quantity > 0 ? 'credit' : 'adjustment', quantity, nextBalance,
+          String(req.body?.note || (quantity > 0 ? 'Recarga manual de timbres' : 'Ajuste por superadministrador')).slice(0,300), req.superadmin.username]
+      );
+      return updated;
+    });
+    res.json({ ok: true, wallet: serializeStampWallet(result) });
+  } catch (error) {
+    if (error.status) return res.status(error.status).json({ error: error.message });
+    next(error);
   }
 });
 
@@ -527,10 +1956,100 @@ router.post('/tenants/:id/access', requireSuperAdmin, async (req, res, next) => 
     const owner = await getTenantOwnerUser(tenantId);
     if (!owner) return res.status(404).json({ error: 'El tenant no tiene usuario de acceso' });
 
-    setAuthCookie(res, signToken(owner, tenant));
+    setAuthCookie(res, signToken(owner, tenant, 'owner', { impersonated: true }));
     res.json({ ok: true, redirect: '/app' });
   } catch (e) {
     next(e);
+  }
+});
+
+router.get('/tenants/:id/users', requireSuperAdmin, async (req, res, next) => {
+  try {
+    const tenantId = Number(req.params.id);
+    if (!Number.isInteger(tenantId) || tenantId <= 0) return res.status(400).json({ error: 'Tenant inválido' });
+
+    const tenant = await getTenantById(tenantId);
+    if (!tenant) return res.status(404).json({ error: 'Tenant no encontrado' });
+
+    const users = await q(
+      `SELECT id, username, role, display_name, job_title, branch_id, cashier_slug, active, created_at
+       FROM users WHERE tenant_id = $1
+       ORDER BY CASE WHEN role = 'owner' THEN 0 WHEN role = 'staff' THEN 1 ELSE 2 END, active DESC, id ASC`,
+      [tenantId]
+    );
+    res.json({
+      tenant: { id: tenant.id, slug: tenant.slug, businessName: tenant.business_name },
+      users: users.rows.map((user) => ({
+        id: Number(user.id),
+        username: user.username,
+        role: user.role || 'owner',
+        displayName: user.display_name || user.username,
+        jobTitle: user.job_title || '',
+        branchId: user.branch_id ? Number(user.branch_id) : null,
+        cashierSlug: user.cashier_slug || '',
+        active: Boolean(Number(user.active)),
+        createdAt: user.created_at,
+      })),
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.patch('/tenants/:tenantId/users/:userId', requireSuperAdmin, async (req, res, next) => {
+  try {
+    const tenantId = Number(req.params.tenantId);
+    const userId = Number(req.params.userId);
+    if (!Number.isInteger(tenantId) || tenantId <= 0 || !Number.isInteger(userId) || userId <= 0) {
+      return res.status(400).json({ error: 'Tenant o usuario inválido' });
+    }
+
+    const tenant = await getTenantById(tenantId);
+    if (!tenant) return res.status(404).json({ error: 'Tenant no encontrado' });
+
+    const current = await q('SELECT id, username, role, active FROM users WHERE id = $1 AND tenant_id = $2', [userId, tenantId]);
+    const user = current.rows[0];
+    if (!user) return res.status(404).json({ error: 'Usuario no encontrado en este tenant' });
+
+    const updates = [];
+    const values = [];
+    if (req.body?.active !== undefined) {
+      if (![true, false, 0, 1].includes(req.body.active)) return res.status(400).json({ error: 'Estado de usuario inválido' });
+      values.push(req.body.active === true || req.body.active === 1 ? 1 : 0);
+      updates.push(`active = $${values.length}`);
+    }
+    if (req.body?.newPassword !== undefined) {
+      const newPassword = String(req.body.newPassword || '').trim();
+      if (newPassword.length < 8 || newPassword.length > 128) {
+        return res.status(400).json({ error: 'La contraseña debe tener entre 8 y 128 caracteres' });
+      }
+      values.push(await bcrypt.hash(newPassword, 12));
+      updates.push(`password_hash = $${values.length}`);
+    }
+    if (!updates.length) return res.status(400).json({ error: 'Indica una contraseña o un estado para actualizar' });
+
+    values.push(userId, tenantId);
+    const updated = await q(
+      `UPDATE users SET ${updates.join(', ')} WHERE id = $${values.length - 1} AND tenant_id = $${values.length}
+       RETURNING id, username, role, display_name, job_title, branch_id, cashier_slug, active, created_at`,
+      values
+    );
+    res.json({
+      ok: true,
+      user: {
+        id: Number(updated.rows[0].id),
+        username: updated.rows[0].username,
+        role: updated.rows[0].role || 'owner',
+        displayName: updated.rows[0].display_name || updated.rows[0].username,
+        jobTitle: updated.rows[0].job_title || '',
+        branchId: updated.rows[0].branch_id ? Number(updated.rows[0].branch_id) : null,
+        cashierSlug: updated.rows[0].cashier_slug || '',
+        active: Boolean(Number(updated.rows[0].active)),
+        createdAt: updated.rows[0].created_at,
+      },
+    });
+  } catch (error) {
+    next(error);
   }
 });
 
@@ -586,14 +2105,21 @@ router.post('/tenants/:id/suspend', requireSuperAdmin, async (req, res, next) =>
     }
 
     const nextStatus = suspend ? 'inactive' : 'active';
-    await q('UPDATE tenants SET account_status = $1 WHERE id = $2', [nextStatus, tenantId]);
-    res.json({ ok: true, mode, account_status: nextStatus });
+    await q(
+      `UPDATE tenants
+       SET account_status = $1,
+           trial_status = CASE WHEN $1 = 'active' AND trial_status = 'expired' THEN 'unlocked' ELSE trial_status END
+       WHERE id = $2`,
+      [nextStatus, tenantId]
+    );
+    res.json({ ok: true, mode, account_status: nextStatus, trialUnlocked: !suspend });
   } catch (e) {
     next(e);
   }
 });
 
 router.post('/tenants/:id/payment', requireSuperAdmin, async (req, res, next) => {
+  const client = await pool.connect();
   try {
     const tenantId = Number(req.params.id);
     if (!tenantId) return res.status(400).json({ error: 'Tenant inválido' });
@@ -606,39 +2132,103 @@ router.post('/tenants/:id/payment', requireSuperAdmin, async (req, res, next) =>
     const methodRaw = String(req.body?.method || '').trim().toLowerCase();
     const method = ['stripe', 'transferencia', 'deposito'].includes(methodRaw) ? methodRaw : 'transferencia';
     const note = String(req.body?.note || '').trim().slice(0, 240);
+    const planCode = String(req.body?.planCode || '').trim().toLowerCase();
+    if (!['mensual', 'annual', 'invoicing_sat'].includes(planCode)) {
+      return res.status(400).json({ error: 'Plan contratado inválido' });
+    }
     if (!Number.isFinite(amount) || amount <= 0) {
       return res.status(400).json({ error: 'Monto de pago inválido' });
     }
 
-    await q(
+    await client.query('BEGIN');
+    const tenantResult = await client.query('SELECT id, slug, customer_since, sales_stage, invoicing_plan_bonus_granted_at FROM tenants WHERE id = $1 FOR UPDATE', [tenantId]);
+    const tenant = tenantResult.rows[0];
+    if (!tenant) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ error: 'Tenant no encontrado' });
+    }
+
+    await client.query(
       'INSERT INTO tenant_payments (tenant_id, amount, method, note, created_by, paid_at) VALUES ($1, $2, $3, $4, $5, $6::date)',
       [tenantId, amount, method, note, req.superadmin.username, paidAt]
     );
 
-    const dueDateRow = await q('SELECT ($1::date + INTERVAL \'1 month\')::date AS next_due_date', [paidAt]);
+    const dueDateRow = await client.query('SELECT ($1::date + INTERVAL \'1 month\')::date AS next_due_date', [paidAt]);
     const nextDueDate = dueDateRow.rows[0]?.next_due_date;
-    const paymentNote = `[PAGO ${paidAt}] ${amount.toFixed(2)} (${method})${note ? ` - ${note}` : ''}`;
+    const paymentNote = `[PAGO ${paidAt}] ${amount.toFixed(2)} (${method}) [plan:${planCode}]${note ? ` - ${note}` : ''}`;
 
-    await q(
+    await client.query(
       `UPDATE tenants
        SET billing_status = 'active',
            account_status = 'active',
+           trial_status = 'converted',
            billing_due_date = $1::date,
+           plan_name = $5,
+           customer_since = COALESCE(customer_since, $2::date),
+           non_renewal_at = NULL,
+           non_renewal_reason = '',
+           non_renewal_by = '',
+           sales_stage = 'won',
+           next_follow_up_at = NULL,
+           sales_updated_at = now(),
            notes = CASE
-             WHEN COALESCE(notes, '') = '' THEN $2
-             ELSE notes || E'\n' || $2
+             WHEN COALESCE(notes, '') = '' THEN $3
+             ELSE notes || E'\n' || $3
            END
-       WHERE id = $3`,
+       WHERE id = $4`,
       [
         nextDueDate,
+        paidAt,
         paymentNote,
         tenantId,
+        planCode,
       ]
     );
 
-    res.json({ ok: true, nextDueDate });
+    if (!tenant.customer_since) {
+      await client.query(
+        `INSERT INTO sales_followup_activities
+          (tenant_id, activity_type, note, stage_from, stage_to, created_by)
+         VALUES ($1, 'close_won', $2, $3, 'won', $4)`,
+        [tenantId, `Cierre exitoso por primer pago de ${amount.toFixed(2)} (${method})`, tenant.sales_stage || 'new', req.superadmin.username]
+      );
+    }
+
+    let stampBonusGranted = false;
+    if (planCode === 'invoicing_sat' && !tenant.invoicing_plan_bonus_granted_at) {
+      const tenantSchema = schemaName(tenant.slug);
+      await client.query(`INSERT INTO "${tenantSchema}".stamp_wallet(id,unlimited,balance,reserved) VALUES(1,0,0,0) ON CONFLICT(id) DO NOTHING`);
+      const walletResult = await client.query(`SELECT unlimited,balance,reserved FROM "${tenantSchema}".stamp_wallet WHERE id=1 FOR UPDATE`);
+      const wallet = walletResult.rows[0] || { unlimited: 0, balance: 0, reserved: 0 };
+      const nextBalance = (Number(wallet.unlimited) ? 0 : Number(wallet.balance || 0)) + 100;
+      await client.query(
+        `UPDATE "${tenantSchema}".stamp_wallet SET unlimited=0,balance=$1,updated_at=now() WHERE id=1`,
+        [nextBalance]
+      );
+      await client.query(
+        `INSERT INTO "${tenantSchema}".stamp_ledger(movement_type,quantity,balance_after,detail,actor)
+         VALUES('subscription_bonus',100,$1,'100 timbres de bienvenida del Plan Facturación Electrónica SAT',$2)`,
+        [nextBalance, `superadmin:${req.superadmin.username}`]
+      );
+      await client.query(
+        `UPDATE tenants
+         SET invoicing_enabled=1,
+             invoicing_activated_at=COALESCE(invoicing_activated_at,now()),
+             invoicing_plan_bonus_granted_at=now(),
+             invoicing_activated_by=$1
+         WHERE id=$2`,
+        [`superadmin:${req.superadmin.username}`, tenantId]
+      );
+      stampBonusGranted = true;
+    }
+
+    await client.query('COMMIT');
+    res.json({ ok: true, nextDueDate, becameClient: !tenant.customer_since, stampBonusGranted, stampBonusQuantity: stampBonusGranted ? 100 : 0 });
   } catch (e) {
+    try { await client.query('ROLLBACK'); } catch {}
     next(e);
+  } finally {
+    client.release();
   }
 });
 

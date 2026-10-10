@@ -5,11 +5,34 @@ const config = require('../config');
 const OpenAI = require('openai');
 const { q, getSetting, getSuperAdminSetting } = require('../db');
 const { encrypt, decrypt, lookupHash } = require('../utils/crypto');
+const { emitNewOrder, emitSessionUpdate } = require('../notifications');
+const { ensurePurchasingSchema } = require('../utils/purchasing');
+const { ensureBranchStockSchema, initializeBranchStock, applyBranchSaleStock } = require('../utils/branchStock');
+const { parseCustomPaymentMethods } = require('../utils/paymentMethods');
+const { resolveCurrencyConversion, convertedMoney, formatCurrencyAmount, conversionRateLabel } = require('../utils/currencyConversion');
+const { loadProductTaxConfig, applyProductTaxToCatalogProduct, productTaxLineSnapshot } = require('../utils/productTax');
+const { applyPromotions, getActivePromotions, decorateCatalogProducts } = require('../utils/promotions');
+const { isProductAvailableToday } = require('../utils/productAvailability');
+const {
+  DAY_NAMES,
+  businessDateKey,
+  businessStatusAt,
+  formatBusinessDate,
+  formatBusinessDateTime,
+  normalizeBusinessHours,
+  parseRequestedDateTime,
+  validateScheduledDate,
+} = require('../utils/businessHours');
 
 let aiConfigCache = { expiresAt: 0, value: null };
 const aiClientCache = new Map();
 const reverseGeoCache = new Map();
 let aiKeyDecryptWarningShown = false;
+
+function normalizeBranchId(value) {
+  const id = Number(value);
+  return Number.isInteger(id) && id > 0 ? id : null;
+}
 
 const SPANISH_STOPWORDS = new Set([
   'de', 'la', 'el', 'los', 'las', 'un', 'una', 'unos', 'unas', 'por', 'para', 'con', 'sin', 'que',
@@ -82,7 +105,9 @@ function buildAiMenuText(products, maxChars = 4200) {
   const lines = [];
   let used = 0;
   for (const p of products) {
-    const line = `- ${p.name} (${p.category || 'General'}): ${money(p.price, 'MXN')}. ${String(p.description || '').trim()}`;
+    const price = p.promotionalPrice ?? p.price;
+    const promo = p.activePromotion ? ` Promoción: ${p.activePromotion.label || p.activePromotion.name}.` : '';
+    const line = `- ${p.name} (${p.category || 'General'}): ${money(price, 'MXN')}.${promo} ${String(p.description || '').trim()}`;
     if (used + line.length > maxChars) break;
     lines.push(line);
     used += line.length + 1;
@@ -155,6 +180,8 @@ function parseDeliveryZones(raw) {
           name,
           fee,
           color: String(props?.color || zone?.color || '#0ea5e9'),
+          branchId: normalizeBranchId(props?.branchId ?? zone?.branchId),
+          branchName: String(props?.branchName || zone?.branchName || '').trim(),
           points,
           active: props?.active !== false,
         };
@@ -266,19 +293,16 @@ async function resolveDeliveryFee(geo, address, rules, zones = []) {
   // Si hay zonas dibujadas, la resolución es 100% por polígono para evitar latencia innecesaria.
   if (activeZones.length) {
     const zoneMatch = activeZones.find((zone) => pointInPolygon([geo.lat, geo.lng], zone.points));
-    const reverseGeo = await reverseGeocodeLocation(geo.lat, geo.lng);
-    const colony = extractColonyLabel(reverseGeo);
-    const resolvedLabel = colony || reverseGeo?.display_name || (zoneMatch ? zoneMatch.name : '');
     if (zoneMatch) {
       return {
         fee: zoneMatch.fee,
         zoneName: zoneMatch.name,
-        branchId: zoneMatch.branchId != null && zoneMatch.branchId !== '' ? Number(zoneMatch.branchId) : null,
+        branchId: normalizeBranchId(zoneMatch.branchId),
         branchName: zoneMatch.branchName || '',
-        resolvedLabel,
+        resolvedLabel: zoneMatch.name,
       };
     }
-    return { fee: 0, zoneName: '', branchId: null, branchName: '', resolvedLabel };
+    return { fee: 0, zoneName: '', branchId: null, branchName: '', resolvedLabel: '' };
   }
 
   if (!rules.length) {
@@ -298,6 +322,10 @@ function deliveryZoneServiceLabel(customer) {
   const branchName = String(customer?.deliveryBranchName || '').trim();
   if (zoneName && branchName) return `${zoneName} · sucursal ${branchName}`;
   return zoneName || branchName;
+}
+
+function deliveryPendingReview(customer) {
+  return Boolean(customer?.deliveryPendingReview);
 }
 
 async function getAiRuntimeConfig() {
@@ -340,7 +368,139 @@ function getOpenAiClient(key, baseUrl) {
 }
 
 function money(n, currency = 'MXN') {
-  return new Intl.NumberFormat('es-MX', { style: 'currency', currency }).format(n || 0);
+  return formatCurrencyAmount(n, currency);
+}
+
+function moneyWithCurrency(n, currency = 'MXN') {
+  const code = String(currency || 'MXN').trim().toUpperCase();
+  const formatted = money(n, code);
+  return formatted.toUpperCase().includes(code) ? formatted : `${formatted} ${code}`;
+}
+
+function roundMoney(value) {
+  return Math.round((Number(value) + Number.EPSILON) * 100) / 100;
+}
+
+function parseNumericCashAmount(raw) {
+  const match = String(raw || '').match(/\d[\d\s.,]*/);
+  if (!match) return null;
+  let value = match[0].replace(/\s+/g, '');
+  const lastDot = value.lastIndexOf('.');
+  const lastComma = value.lastIndexOf(',');
+
+  if (lastDot >= 0 && lastComma >= 0) {
+    const decimalSeparator = lastDot > lastComma ? '.' : ',';
+    const thousandsSeparator = decimalSeparator === '.' ? ',' : '.';
+    value = value.split(thousandsSeparator).join('').replace(decimalSeparator, '.');
+  } else {
+    const separator = lastDot >= 0 ? '.' : (lastComma >= 0 ? ',' : '');
+    if (separator) {
+      const parts = value.split(separator);
+      const looksGrouped = parts.length > 2 || (parts.length === 2 && parts[1].length === 3);
+      value = looksGrouped ? parts.join('') : `${parts[0]}.${parts[1] || '0'}`;
+    }
+  }
+
+  const amount = Number(value);
+  return Number.isFinite(amount) && amount >= 0 ? roundMoney(amount) : null;
+}
+
+function parseSpanishInteger(tokens) {
+  const values = {
+    cero: 0, un: 1, uno: 1, una: 1, dos: 2, tres: 3, cuatro: 4, cinco: 5, seis: 6,
+    siete: 7, ocho: 8, nueve: 9, diez: 10, once: 11, doce: 12, trece: 13, catorce: 14,
+    quince: 15, dieciseis: 16, diecisiete: 17, dieciocho: 18, diecinueve: 19, veinte: 20,
+    veintiuno: 21, veintiun: 21, veintidos: 22, veintitres: 23, veinticuatro: 24,
+    veinticinco: 25, veintiseis: 26, veintisiete: 27, veintiocho: 28, veintinueve: 29,
+    treinta: 30, cuarenta: 40, cincuenta: 50, sesenta: 60, setenta: 70, ochenta: 80,
+    noventa: 90, cien: 100, ciento: 100, doscientos: 200, trescientos: 300,
+    cuatrocientos: 400, quinientos: 500, seiscientos: 600, setecientos: 700,
+    ochocientos: 800, novecientos: 900,
+  };
+  let total = 0;
+  let current = 0;
+  let recognized = 0;
+
+  for (const token of tokens) {
+    if (token === 'y') continue;
+    if (Object.hasOwn(values, token)) {
+      current += values[token];
+      recognized += 1;
+      continue;
+    }
+    if (token === 'mil') {
+      total += (current || 1) * 1000;
+      current = 0;
+      recognized += 1;
+      continue;
+    }
+    if (token === 'millon' || token === 'millones') {
+      total = (total + (current || 1)) * 1000000;
+      current = 0;
+      recognized += 1;
+    }
+  }
+
+  return recognized ? total + current : null;
+}
+
+function parseCashAmount(raw) {
+  const numeric = parseNumericCashAmount(raw);
+  if (numeric !== null) return numeric;
+
+  const normalized = normalizeSearchText(raw);
+  if (!normalized) return null;
+  const tokens = normalized.split(' ');
+  const decimalIndex = tokens.findIndex((token) => token === 'punto' || token === 'coma');
+  const integerTokens = decimalIndex >= 0 ? tokens.slice(0, decimalIndex) : tokens;
+  const integer = parseSpanishInteger(integerTokens);
+  if (integer === null) return null;
+
+  if (decimalIndex < 0) {
+    const centIndex = tokens.findIndex((token) => token === 'centavo' || token === 'centavos');
+    if (centIndex > 0) {
+      const cents = parseSpanishInteger(tokens.slice(0, centIndex));
+      return cents === null ? null : roundMoney(cents / 100);
+    }
+    return roundMoney(integer);
+  }
+
+  const decimalTokens = tokens.slice(decimalIndex + 1);
+  const decimal = parseSpanishInteger(decimalTokens);
+  if (decimal === null) return roundMoney(integer);
+  const decimalDigits = decimal < 10 ? decimal / 10 : decimal / (10 ** String(Math.trunc(decimal)).length);
+  return roundMoney(integer + decimalDigits);
+}
+
+function cashChangeSummaryLines(customer, total, currency) {
+  if (customer?.paymentMethod !== 'cash') return [];
+  if (customer.cashChangePreference === 'exact') {
+    return ['💵 Cambio / vuelto: No ocupa; pagará exacto.'];
+  }
+  if (customer.cashChangePreference !== 'change' || !Number.isFinite(Number(customer.cashTendered))) return [];
+  const tendered = Number(customer.cashTendered);
+  const change = roundMoney(tendered - Number(total || 0));
+  if (change < 0) return [];
+  return [
+    `💵 Pagará con: ${moneyWithCurrency(tendered, currency)}`,
+    `↩️ Cambio / vuelto: ${moneyWithCurrency(change, currency)}`,
+  ];
+}
+
+function conversionSummaryLines(amount, conversion) {
+  const label = convertedMoney(amount, conversion);
+  if (!label) return [];
+  const rate = conversionRateLabel(conversion);
+  return [
+    `Equivalente informativo: *${label}*`,
+    ...(rate ? [`_Tasa de cambio: ${rate}_`] : []),
+    ...(conversion?.mode === 'automatic' ? [`_Fuente: ${conversion.providerUrl}_`] : []),
+  ];
+}
+
+function conversionTotalLine(amount, conversion) {
+  const lines = conversionSummaryLines(amount, conversion);
+  return lines.length ? `\n${lines.join('\n')}` : '';
 }
 
 function paymentMethodLabel(method) {
@@ -348,20 +508,57 @@ function paymentMethodLabel(method) {
     cash: 'Efectivo',
     transfer: 'Transferencia',
     card: 'Tarjeta',
+    platform: 'Plataforma',
   }[String(method || '')] || 'Sin definir';
 }
 
-function enabledPaymentOptions(settings) {
+function enabledPaymentOptions(settings, customMethods = []) {
   const options = [];
   if (settings.cash) options.push({ label: '💵 Efectivo', value: 'pay_cash', method: 'cash' });
   if (settings.transfer) options.push({ label: '🏦 Transferencia', value: 'pay_transfer', method: 'transfer' });
   if (settings.card) options.push({ label: '💳 Tarjeta', value: 'pay_card', method: 'card' });
+  if (settings.platform) options.push({ label: '📱 Plataforma', value: 'pay_platform', method: 'platform' });
+  for (const method of customMethods.filter((item) => item.active)) {
+    options.push({ label: `📲 ${method.label}`, value: `pay_${method.id}`, method: method.id, plainLabel: method.label });
+  }
   return options;
 }
 
+function parseBankAccounts(raw) {
+  try {
+    const accounts = JSON.parse(String(raw || '[]'));
+    if (!Array.isArray(accounts)) return [];
+    const typeLabels = { account: 'Número de cuenta', clabe: 'CLABE interbancaria', card: 'Número de tarjeta', phone: 'Teléfono', document: 'Documento / identificación', email: 'Correo electrónico', other: 'Dato para el pago' };
+    return accounts.map((account) => {
+      const sourceFields = Array.isArray(account?.fields) ? account.fields : [
+        { label: 'Banco o institución', value: account?.bankName },
+        { label: 'Nombre del titular', value: account?.holderName },
+        { label: typeLabels[account?.identifierType] || 'Dato para el pago', value: account?.identifier },
+      ];
+      const fields = sourceFields.filter((field) => field?.label && field?.value).slice(0, 12);
+      return fields.length ? { fields } : null;
+    }).filter(Boolean).slice(0, 10);
+  } catch {
+    return [];
+  }
+}
+
+function bankAccountsFallbackMessage(accounts, paymentLabel = 'Transferencia') {
+  const details = accounts.map((account, index) => {
+    const heading = accounts.length > 1 ? 'Cuenta ' + String(index + 1) : 'Datos de la cuenta';
+    return ['🏦 ' + heading, ...account.fields.map((field) => field.label + ': ' + field.value)].join('\n');
+  });
+  return `Datos para realizar tu pago con ${paymentLabel}:\n\n${details.join('\n\n')}\n\nConserva tu comprobante de pago.`;
+}
+
+const CHAT_SESSION_IDLE_MS = 30 * 60 * 1000;
+
 async function getState(t, sessionId) {
-  const row = await t.get('SELECT state FROM {s}.chat_sessions WHERE id = $1', [sessionId]);
-  return row ? JSON.parse(row.state) : null;
+  const row = await t.get('SELECT state, updated_at FROM {s}.chat_sessions WHERE id = $1', [sessionId]);
+  if (!row) return null;
+  const state = JSON.parse(row.state);
+  Object.defineProperty(state, '__sessionUpdatedAt', { value: row.updated_at, enumerable: false, configurable: true });
+  return state;
 }
 
 async function saveState(t, sessionId, state) {
@@ -372,31 +569,148 @@ async function saveState(t, sessionId, state) {
   );
 }
 
-async function activeProducts(t) {
+async function activeProducts(t, promotions = null, availabilityDate = new Date()) {
+  const taxConfig = await loadProductTaxConfig(t);
   const rows = await t.all(
-    `SELECT p.id, p.name, p.description, p.price::float AS price, p.image, c.name AS category
+    `SELECT p.id, p.category_id, p.name, p.description, p.price::float AS price, p.image, p.sale_days,
+            c.name AS category, c.sort AS category_sort
      FROM {s}.products p LEFT JOIN {s}.categories c ON c.id = p.category_id
      WHERE p.active = 1 ORDER BY c.sort, c.name, p.name`
   );
-  return rows.map((p) => ({
+  const catalog = rows
+    .filter((product) => isProductAvailableToday(product, availabilityDate, t.timezone))
+    .map((p) => applyProductTaxToCatalogProduct({
     ...p,
+    categoryId: Number(p.category_id || 0),
     image: String(p.image || '').trim()
       ? (String(p.image).startsWith('/') ? String(p.image) : `/${String(p.image).replace(/^\/+/, '')}`)
       : '',
-  }));
+  }, taxConfig));
+  const applicablePromotions = Array.isArray(promotions) ? promotions : await getActivePromotions(t, 'chatbot');
+  return decorateCatalogProducts(catalog, applicablePromotions);
+}
+
+function normalizeCatalogSortMode(mode) {
+  const value = String(mode || '').trim();
+  return ['top_sold', 'alphabetical', 'category'].includes(value) ? value : 'top_sold';
+}
+
+function sortCatalogProducts(products, mode, soldQtyByProduct = new Map()) {
+  const sorted = [...(products || [])];
+  const normalizedMode = normalizeCatalogSortMode(mode);
+  const byName = (a, b) => String(a?.name || '').localeCompare(String(b?.name || ''), 'es', { sensitivity: 'base' });
+
+  if (normalizedMode === 'alphabetical') return sorted.sort(byName);
+
+  if (normalizedMode === 'category') {
+    return sorted.sort((a, b) => {
+      const sortA = a?.category_sort !== null && a?.category_sort !== undefined && Number.isFinite(Number(a.category_sort))
+        ? Number(a.category_sort)
+        : Number.MAX_SAFE_INTEGER;
+      const sortB = b?.category_sort !== null && b?.category_sort !== undefined && Number.isFinite(Number(b.category_sort))
+        ? Number(b.category_sort)
+        : Number.MAX_SAFE_INTEGER;
+      const categoryDiff = sortA - sortB;
+      if (categoryDiff !== 0) return categoryDiff;
+      const categoryNameDiff = String(a?.category || '').localeCompare(String(b?.category || ''), 'es', { sensitivity: 'base' });
+      return categoryNameDiff || byName(a, b);
+    });
+  }
+
+  return sorted.sort((a, b) => {
+    const soldDiff = Number(soldQtyByProduct.get(Number(b?.id)) || 0) - Number(soldQtyByProduct.get(Number(a?.id)) || 0);
+    return soldDiff || byName(a, b);
+  });
+}
+
+async function orderFullMenuCatalog(t, products, mode) {
+  const normalizedMode = normalizeCatalogSortMode(mode);
+  let soldQtyByProduct = new Map();
+  if (normalizedMode === 'top_sold') {
+    const rows = await t.all(
+      `SELECT product_id, SUM(qty)::int AS sold_qty
+       FROM (
+         SELECT
+           CASE
+             WHEN (it.item->>'productId') ~ '^[0-9]+$' THEN (it.item->>'productId')::int
+             WHEN (it.item->>'id') ~ '^[0-9]+$' THEN (it.item->>'id')::int
+             ELSE NULL
+           END AS product_id,
+           CASE
+             WHEN (it.item->>'qty') ~ '^[0-9]+$' THEN GREATEST((it.item->>'qty')::int, 1)
+             ELSE 1
+           END AS qty
+         FROM {s}.orders o
+         CROSS JOIN LATERAL jsonb_array_elements(COALESCE(o.items::jsonb, '[]'::jsonb)) AS it(item)
+         WHERE o.status <> 'cancelado' AND o.channel IN ('pos', 'chatbot')
+       ) sold
+       WHERE product_id IS NOT NULL
+       GROUP BY product_id`
+    );
+    soldQtyByProduct = new Map(rows.map((row) => [Number(row.product_id), Number(row.sold_qty || 0)]));
+  }
+  return sortCatalogProducts(products, normalizedMode, soldQtyByProduct);
 }
 
 function cartTotal(cart) {
-  return cart.reduce((s, it) => s + it.price * it.qty, 0);
+  return cart.reduce((sum, item) => sum + cartLineTotal(item), 0);
 }
 
-function cartSummary(cart, currency) {
-  if (!cart.length) return 'Tu carrito está vacío 🛒';
+function cartLineTotal(item) {
+  const qty = Math.max(1, Number(item.qty || 1));
+  const original = Number(item.originalUnitPrice ?? item.listPrice ?? item.price ?? 0);
+  const extras = Math.min(original, Math.max(0, Number(item.modifiersExtraPrice || 0)));
+  const base = Math.max(0, original - extras);
+  const originalTotal = original * qty;
+  const appliedPromotion = item.promotion || null;
+  if (appliedPromotion?.type === 'buy_x_pay_y'
+      && appliedPromotion.buyPayRule && appliedPromotion.buyPayRule !== 'same_product'
+      && Number(appliedPromotion.appliedQty) === qty
+      && Number.isFinite(Number(item.lineTotal))) {
+    return Number(item.lineTotal);
+  }
+  const promotions = Array.isArray(item.activePromotions) && item.activePromotions.length
+    ? item.activePromotions
+    : (item.promotion ? [item.promotion] : []);
+  let bestTotal = originalTotal;
+  let bestPriority = -1;
+  for (const promo of promotions) {
+    let candidate = originalTotal;
+    if (promo.type === 'percentage') candidate = (base * (1 - Number(promo.value || 0) / 100) + extras) * qty;
+    if (promo.type === 'fixed_amount') candidate = (Math.max(0, base - Number(promo.value || 0)) + extras) * qty;
+    if (promo.type === 'fixed_price') candidate = (Math.min(base, Number(promo.value || 0)) + extras) * qty;
+    if (promo.type === 'buy_x_pay_y') {
+      if (promo.buyPayRule && promo.buyPayRule !== 'same_product') continue;
+      const buy = Math.max(2, Number(promo.buyQty || 2));
+      const pay = Math.max(1, Math.min(buy - 1, Number(promo.payQty || buy - 1)));
+      candidate = originalTotal - base * Math.floor(qty / buy) * (buy - pay);
+    }
+    if (candidate < bestTotal || (candidate === bestTotal && Number(promo.priority || 0) > bestPriority)) {
+      bestTotal = candidate;
+      bestPriority = Number(promo.priority || 0);
+    }
+  }
+  return bestTotal;
+}
+
+function promotionLineSnapshot(product) {
+  return {
+    categoryId: Number(product.categoryId ?? product.category_id ?? 0),
+    originalUnitPrice: Number(product.originalPrice ?? product.price ?? 0),
+    ...(product.activePromotion ? { promotion: product.activePromotion } : {}),
+    activePromotions: Array.isArray(product.activePromotions) ? product.activePromotions : [],
+  };
+}
+
+function cartSummary(cart, currency, labels = RESTAURANT_LABELS) {
+  if (!cart.length) return labels.emptyCart || 'Tu carrito está vacío 🛒';
   const lines = cart.map((it) => {
     const modNote = it.modifiersLabel ? `\n  _${it.modifiersLabel}_` : '';
-    return `• ${it.qty}x ${it.name}${it.variantName ? ` (${it.variantName})` : ''}${modNote} — ${money(it.price * it.qty, currency)}`;
+    return `• ${it.qty}x ${it.name}${it.variantName ? ` (${it.variantName})` : ''}${modNote} — ${money(cartLineTotal(it), currency)}`;
   });
-  return `🛒 *Tu pedido:*\n${lines.join('\n')}\n\n*Total: ${money(cartTotal(cart), currency)}*`;
+  const title = labels.cartTitle || '🛒 *Tu pedido:*';
+  const total = cartTotal(cart);
+  return `${title}\n${lines.join('\n')}\n\n*Total: ${money(total, currency)}*${conversionTotalLine(total, cart.currencyConversion)}`;
 }
 
 function parseGeoInput(input) {
@@ -497,7 +811,7 @@ function locationSummary(customer) {
   return lines.join('\n');
 }
 
-function pricingSummary(state, currency) {
+function pricingSummary(state, currency, labels = RESTAURANT_LABELS) {
   const subtotal = cartTotal(state.cart);
   const deliveryFee = Number(state.customer?.deliveryFee || 0);
   const deliveryLabel = deliveryZoneServiceLabel(state.customer);
@@ -508,15 +822,19 @@ function pricingSummary(state, currency) {
       : false;
     const variantLabel = it.variantName && !hasVariantInName ? ` (${it.variantName})` : '';
     const modifiersText = it.modifiersLabel ? `\n  Opciones: ${it.modifiersLabel}` : '';
-    return `• ${it.qty}x ${it.name}${variantLabel}${modifiersText} — ${money(it.price * it.qty, currency)}`;
+    return `• ${it.qty}x ${it.name}${variantLabel}${modifiersText} — ${money(cartLineTotal(it), currency)}`;
   });
   return [
-    '🛒 *Tu pedido:*',
+    labels.cartTitle || '🛒 *Tu pedido:*',
     ...lines,
     '',
     `*Subtotal: ${money(subtotal, currency)}*`,
     ...(deliveryFee > 0 ? [`*Envío${deliveryLabel ? ` (${deliveryLabel})` : ''}: ${money(deliveryFee, currency)}*`] : []),
+    ...(deliveryPendingReview(state.customer)
+      ? ['*Servicio a domicilio: pendiente de validar por el restaurante (costo por confirmar)*']
+      : []),
     `*Total: ${money(subtotal + deliveryFee, currency)}*`,
+    ...conversionSummaryLines(subtotal + deliveryFee, state.currencyConversion),
     ...(orderNote ? [`*🧾 Nota del pedido: ${orderNote}*`] : []),
   ].join('\n');
 }
@@ -542,15 +860,16 @@ function normalizeWhatsappNumber(raw) {
   return digits;
 }
 
-function mainOptions(cart, infoOptions = []) {
-  const opts = [{ label: '📋 Ver menú', value: 'menu' }];
+function mainOptions(cart, infoOptions = [], labels = RESTAURANT_LABELS) {
+  const opts = [{ label: labels.browseButton || '📋 Ver menú', value: 'menu' }];
+  if (labels.promotionsAvailable) opts.push({ label: '🔥 Promociones', value: 'promotions' });
   (infoOptions || []).forEach((item) => {
     if (!item?.label || !item?.id) return;
     opts.push({ label: item.label, value: `info_${item.id}` });
   });
   if (cart.length) {
-    opts.push({ label: '🛒 Ver carrito', value: 'cart' });
-    opts.push({ label: '✅ Sería todo, gracias.', value: 'checkout' });
+    opts.push({ label: labels.cartButton || '🛒 Ver carrito', value: 'cart' });
+    opts.push({ label: labels.checkoutButton || '✅ Sería todo, gracias.', value: 'checkout' });
   }
   return opts;
 }
@@ -558,6 +877,7 @@ function mainOptions(cart, infoOptions = []) {
 function returningAddressText(profile) {
   const lines = [];
   if (profile.address) lines.push(`📍 Dirección: ${profile.address}`);
+  if (profile.neighborhood) lines.push(`🏘️ Urbanización / sector / colonia / barrio: ${profile.neighborhood}`);
   if (Number.isFinite(profile.locationLat) && Number.isFinite(profile.locationLng)) {
     lines.push(`🗺️ Maps: ${mapsUrl(profile.locationLat, profile.locationLng)}`);
   }
@@ -581,7 +901,9 @@ async function findReturningCustomerByPhone(t, phoneRaw) {
        o.customer_location_lng::float AS location_lng,
        o.customer_location_text,
        o.customer_location_resolved,
-       o.notes AS customer_reference,
+      o.delivery_address,
+       o.delivery_neighborhood,
+       COALESCE(NULLIF(o.delivery_reference, ''), o.notes) AS customer_reference,
        o.delivery_fee::float AS delivery_fee,
        o.delivery_zone_name,
       o.service_branch_id,
@@ -590,72 +912,148 @@ async function findReturningCustomerByPhone(t, phoneRaw) {
      FROM {s}.customers c
      JOIN {s}.orders o ON o.customer_id = c.id
      WHERE c.phone_hash = $1
-       AND o.delivery = 'domicilio'
+       AND (o.receiving_mode_behavior = 'delivery' OR o.delivery = 'domicilio')
      ORDER BY o.id DESC
      LIMIT 1`,
     [phoneHash]
   );
-  if (!row) return null;
+  if (!row) {
+    const customer = await t.get(
+      `SELECT c.id, c.name_enc, c.phone_enc
+       FROM {s}.customers c
+       WHERE c.phone_hash = $1
+         AND EXISTS (SELECT 1 FROM {s}.orders o WHERE o.customer_id = c.id)
+       ORDER BY c.id DESC
+       LIMIT 1`,
+      [phoneHash]
+    );
+    if (!customer) return null;
+    return {
+      id: Number(customer.id),
+      name: decrypt(customer.name_enc) || '',
+      phone: decrypt(customer.phone_enc) || digits,
+      hasDeliveryHistory: false,
+    };
+  }
   const name = decrypt(row.name_enc) || '';
   const phone = decrypt(row.phone_enc) || digits;
-  const address = decrypt(row.address_enc) || row.customer_location_text || '';
+  const address = row.delivery_address || decrypt(row.address_enc) || row.customer_location_text || '';
   return {
     id: Number(row.id),
     name,
     phone,
+    hasDeliveryHistory: true,
     address,
     locationLat: Number.isFinite(Number(row.location_lat)) ? Number(row.location_lat) : null,
     locationLng: Number.isFinite(Number(row.location_lng)) ? Number(row.location_lng) : null,
     locationText: row.customer_location_text || '',
     locationResolved: row.customer_location_resolved || '',
+    neighborhood: row.delivery_neighborhood || '',
     reference: String(row.customer_reference || '').trim(),
     deliveryFee: Number(row.delivery_fee || 0),
     deliveryZoneName: row.delivery_zone_name || '',
-    deliveryBranchId: Number.isFinite(Number(row.service_branch_id)) ? Number(row.service_branch_id) : null,
+    deliveryBranchId: normalizeBranchId(row.service_branch_id),
     deliveryBranchName: row.service_branch_name || '',
     lastDeliveryAt: row.last_delivery_at || '',
   };
 }
 
-async function showMenu(t, state) {
+async function showMenu(t, state, labels = RESTAURANT_LABELS, activePromotions = null, showFullMenu = false, catalogSortMode = 'top_sold') {
   const cats = await t.all('SELECT * FROM {s}.categories ORDER BY sort, name');
-  const products = await activeProducts(t);
+  const products = await activeProducts(t, activePromotions);
   if (!products.length) {
-    return { messages: ['Por ahora no tenemos productos en el menú. ¡Vuelve pronto! 🙏'], options: [] };
+    return { messages: [labels.emptyCatalog || 'Por ahora no tenemos productos en el menú. ¡Vuelve pronto! 🙏'], options: [] };
+  }
+  if (showFullMenu) {
+    const normalizedMode = normalizeCatalogSortMode(catalogSortMode);
+    const orderedProducts = await orderFullMenuCatalog(t, products, normalizedMode);
+    return showProducts(t, state, null, labels, { catalogProducts: orderedProducts, catalogSortMode: normalizedMode });
   }
   const catsWithProducts = cats.filter((c) => products.some((p) => p.category === c.name));
   if (catsWithProducts.length > 1) {
     state.step = 'choosing_category';
     return {
-      messages: ['¿Qué categoría te gustaría ver? 😋'],
+      messages: [labels.chooseCategory || '¿Qué categoría te gustaría ver? 😋'],
       options: catsWithProducts.map((c) => ({ label: c.name, value: `cat_${c.id}` })),
     };
   }
-  return showProducts(t, state, null);
+  return showProducts(t, state, null, labels, { catalogProducts: products });
 }
 
-async function showProducts(t, state, categoryId) {
-  let products = await activeProducts(t);
+async function showPromotions(t, state, labels = RESTAURANT_LABELS, activePromotions = null) {
+  const promotedProducts = (await activeProducts(t, activePromotions)).filter((product) => (product.activePromotions || []).length);
+  if (!promotedProducts.length) {
+    state.step = 'start';
+    return {
+      messages: ['Por ahora no hay promociones vigentes. Puedes consultar el menú completo.'],
+      options: mainOptions(state.cart, [], labels),
+    };
+  }
+  const cats = await t.all('SELECT * FROM {s}.categories ORDER BY sort, name');
+  const catsWithPromotions = cats.filter((category) => promotedProducts.some((product) => Number(product.categoryId) === Number(category.id)));
+  if (catsWithPromotions.length > 1) {
+    state.step = 'choosing_promotion_category';
+    state.currentCategoryId = null;
+    return {
+      messages: ['🔥 Estas categorías tienen promociones vigentes. ¿Cuál quieres ver?'],
+      options: [
+        { label: 'Todas las promociones', value: 'promo_cat_all' },
+        ...catsWithPromotions.map((category) => ({ label: category.name, value: `promo_cat_${category.id}` })),
+        { label: '⬅️ Volver', value: 'start' },
+      ],
+    };
+  }
+  return showProducts(t, state, catsWithPromotions[0]?.id || null, labels, { promotionsOnly: true, catalogProducts: promotedProducts });
+}
+
+async function showProducts(t, state, categoryId, labels = RESTAURANT_LABELS, { promotionsOnly = false, activePromotions = null, catalogProducts = null, catalogSortMode = '' } = {}) {
+  let products = Array.isArray(catalogProducts) ? catalogProducts : await activeProducts(t, activePromotions);
+  if (promotionsOnly) products = products.filter((product) => (product.activePromotions || []).length);
   state.currentCategoryId = Number.isFinite(Number(categoryId)) ? Number(categoryId) : null;
+  let categoryName = '';
   if (categoryId) {
     const cat = await t.get('SELECT name FROM {s}.categories WHERE id = $1', [categoryId]);
-    if (cat) products = products.filter((p) => p.category === cat.name);
+    if (cat) {
+      categoryName = cat.name;
+      products = products.filter((p) => p.category === cat.name);
+    }
   }
   state.step = 'choosing_product';
+  state.browseMode = promotionsOnly ? 'promotions' : 'menu';
   const currency = state.currency;
   const qtyById = new Map((state.cart || []).map((it) => [Number(it.id), Number(it.qty || 0)]));
+  const productIds = products.map((product) => Number(product.id)).filter((id) => Number.isInteger(id) && id > 0);
+  const variantRows = productIds.length
+    ? await t.all(
+      'SELECT product_id, name, price::float AS price FROM {s}.product_variants WHERE product_id = ANY($1::int[]) AND active = 1 ORDER BY product_id, sort, id',
+      [productIds]
+    )
+    : [];
+  const variantsByProduct = new Map();
+  for (const variant of variantRows) {
+    const id = Number(variant.product_id);
+    if (!variantsByProduct.has(id)) variantsByProduct.set(id, []);
+    variantsByProduct.get(id).push({ name: variant.name, price: Number(variant.price) });
+  }
   return {
-    messages: ['Elige un producto para agregarlo a tu pedido:'],
+    messages: [promotionsOnly ? '🔥 Elige una promoción para agregarla a tu pedido:' : (labels.browseTitle || 'Elige un producto para agregarlo a tu pedido:')],
     products: products.map((p) => ({
       id: p.id,
       name: p.name,
       description: p.description,
-      price: p.price,
-      priceLabel: money(p.price, currency),
+      price: p.promotionalPrice ?? p.price,
+      originalPrice: p.originalPrice,
+      priceLabel: money(p.promotionalPrice ?? p.price, currency),
+      originalPriceLabel: p.activePromotion && Number(p.promotionalPrice) < Number(p.originalPrice) ? money(p.originalPrice, currency) : '',
+      promotion: p.activePromotion,
       image: p.image,
+      category: p.category || '',
+      variants: variantsByProduct.get(Number(p.id)) || [],
       qty: qtyById.get(Number(p.id)) || 0,
     })),
-    options: [{ label: '⬅️ Volver', value: 'start' }, ...(state.cart.length ? mainOptions(state.cart).slice(1) : [])],
+    catalogSortMode: catalogSortMode ? normalizeCatalogSortMode(catalogSortMode) : '',
+    categoryName: promotionsOnly ? 'Promociones' : categoryName,
+    options: [{ label: '⬅️ Volver', value: promotionsOnly ? (state.currentCategoryId ? 'promotions' : 'start') : (state.currentCategoryId ? 'menu' : 'start') }, ...(state.cart.length ? mainOptions(state.cart, [], labels).slice(1) : [])],
   };
 }
 
@@ -693,12 +1091,15 @@ function addPendingProductToCart(state) {
       name: displayName,
       price: finalPrice,
       qty: qtyToAdd,
+      ...productTaxLineSnapshot(finalPrice, prod),
       _cartKey: cartKey,
       variantId,
       variantName,
       modifiers: modifiersDetail,
       modifiersLabel,
       modifiersExtraPrice: modifiersExtra,
+      ...promotionLineSnapshot(prod),
+      originalUnitPrice: finalPrice,
     });
   }
 
@@ -712,8 +1113,9 @@ function addPendingProductToCart(state) {
 }
 
 async function loadProductConfig(t, productId) {
-  const prod = await t.get('SELECT id, name, price::float AS price FROM {s}.products WHERE id = $1 AND active = 1', [Number(productId)]);
-  if (!prod) return null;
+  const taxConfig = await loadProductTaxConfig(t);
+  const prod = await t.get('SELECT id, category_id, name, price::float AS price, sale_days FROM {s}.products WHERE id = $1 AND active = 1', [Number(productId)]);
+  if (!prod || !isProductAvailableToday(prod, new Date(), t.timezone)) return null;
   const variants = await t.all(
     'SELECT id, name, price::float AS price FROM {s}.product_variants WHERE product_id = $1 AND active = 1 ORDER BY sort, id',
     [prod.id]
@@ -728,16 +1130,218 @@ async function loadProductConfig(t, productId) {
       [g.id]
     );
   }
-  return {
+  const catalogProduct = applyProductTaxToCatalogProduct({
     ...prod,
+    categoryId: Number(prod.category_id || 0),
     variants,
     groups,
     hasVariants: variants.length > 1,
     hasModifiers: groups.length > 0,
+  }, taxConfig);
+  return decorateCatalogProducts([catalogProduct], await getActivePromotions(t, 'chatbot'))[0];
+}
+
+function parseCustomReceivingModes(raw) {
+  const text = String(raw || '').trim();
+  if (!text) return [];
+  try {
+    const parsed = JSON.parse(text);
+    if (!Array.isArray(parsed)) return [];
+    const used = new Set();
+    return parsed.slice(0, 10).map((mode, idx) => {
+      const label = String(mode?.label || '').trim().replace(/\s+/g, ' ').slice(0, 42);
+      const behavior = ['delivery', 'branch', 'simple'].includes(mode?.behavior) ? mode.behavior : 'simple';
+      let id = String(mode?.id || `custom_${idx + 1}`).toLowerCase().replace(/[^a-z0-9_-]/g, '').slice(0, 36);
+      if (!id || ['domicilio', 'recoger', 'comer_sucursal'].includes(id)) id = `custom_${idx + 1}`;
+      while (used.has(id)) id = `${id}_${idx + 1}`.slice(0, 36);
+      used.add(id);
+      return label ? { id, label, behavior, enabled: mode?.enabled !== false, custom: true } : null;
+    }).filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+function receivingModeIcon(behavior) {
+  if (behavior === 'delivery') return '🚚';
+  if (behavior === 'branch') return '🏪';
+  return '🛍️';
+}
+
+function setPendingProductConfiguration(state, cfg, qty = 1) {
+  state.pendingProduct = {
+    id: cfg.id,
+    categoryId: Number(cfg.categoryId ?? cfg.category_id ?? 0),
+    name: cfg.name,
+    price: cfg.price,
+    taxEnabled: cfg.taxEnabled,
+    taxMode: cfg.taxMode,
+    taxRate: cfg.taxRate,
+    originalPrice: cfg.originalPrice,
+    activePromotion: cfg.activePromotion,
+    activePromotions: cfg.activePromotions,
+    variants: cfg.variants,
+    groups: cfg.groups,
+  };
+  state.pendingAddQty = Math.max(1, Number(qty || 1));
+  state.pendingVariantId = null;
+  state.pendingVariantName = null;
+  state.pendingVariantPrice = null;
+  state.pendingModifiers = {};
+  state.pendingModifierGroupIndex = 0;
+}
+
+function pendingConfigurationHeading(state, productName = state.pendingProduct?.name) {
+  const total = Math.max(0, Number(state.pendingConfigurationTotal) || 0);
+  const current = Math.max(0, Number(state.pendingConfigurationCurrent) || 0);
+  if (total <= 1 || current < 1) return '';
+  const qty = Math.max(1, Number(state.pendingAddQty) || 1);
+  const product = state.pendingProduct || {};
+  const hasVariants = Array.isArray(product.variants) && product.variants.length > 1;
+  const hasModifiers = Array.isArray(product.groups) && product.groups.length > 0;
+  const configurationType = hasVariants && hasModifiers
+    ? 'Variante e ingredientes'
+    : hasVariants
+      ? 'Variante'
+      : 'Ingredientes';
+  return (
+    `*Producto ${current} de ${total}*\n` +
+    `🍽️ *Nombre: ${productName || 'Producto'}*\n` +
+    `🔢 Cantidad: *${qty}*\n` +
+    `⚙️ Configuración: *${configurationType}*\n\n`
+  );
+}
+
+function clearPendingConfigurationQueue(state) {
+  state.pendingConfigurationQueue = [];
+  state.pendingConfigurationTotal = 0;
+  state.pendingConfigurationCurrent = 0;
+}
+
+function cancelPendingProductConfiguration(state) {
+  clearPendingConfigurationQueue(state);
+  state.pendingProduct = null;
+  state.pendingVariantId = null;
+  state.pendingVariantName = null;
+  state.pendingVariantPrice = null;
+  state.pendingAddQty = null;
+  state.pendingModifiers = {};
+  state.pendingModifierGroupIndex = 0;
+}
+
+async function presentNextQueuedProductConfiguration(state, reply, currency, t, finish, labels = RESTAURANT_LABELS) {
+  const queue = Array.isArray(state.pendingConfigurationQueue) ? state.pendingConfigurationQueue : [];
+  while (queue.length) {
+    const next = queue.shift();
+    const cfg = await loadProductConfig(t, next.productId);
+    if (!cfg) continue;
+
+    state.pendingConfigurationCurrent = Math.max(1, Number(state.pendingConfigurationTotal) - queue.length);
+    setPendingProductConfiguration(state, cfg, next.qty);
+    const heading = pendingConfigurationHeading(state, cfg.name);
+
+    if (cfg.hasVariants) {
+      state.step = 'choosing_variant';
+      reply.messages = [
+        `${heading}¿Cómo lo quieres? Elige una variante de *${cfg.name}* para ${state.pendingAddQty} unidad(es):`,
+      ];
+      reply.options = cfg.variants.map((variant) => ({
+        label: `${variant.name} — ${money(variant.price, currency)}`,
+        value: `variant_${variant.id}`,
+      }));
+      return finish();
+    }
+
+    if (cfg.hasModifiers) {
+      state.step = 'choosing_modifiers';
+      return replyNextModifierGroup(state, reply, currency, t, finish, false, labels);
+    }
+
+    addPendingProductToCart(state);
+  }
+
+  clearPendingConfigurationQueue(state);
+  state.step = 'start';
+  reply.messages = [
+    `✅ Todos los productos quedaron configurados.\n\n${cartSummary(state.cart, currency, labels)}`,
+    '¿Deseas agregar más productos o finalizar tu pedido?',
+  ];
+  reply.products = null;
+  reply.options = [
+    { label: '➕ Agregar otro', value: 'more_products' },
+    { label: labels.checkoutButton, value: 'checkout' },
+    { label: labels.cartButton, value: 'cart' },
+  ];
+  return finish();
+}
+
+async function finishPendingProductConfiguration(state, reply, currency, t, finish, labels = RESTAURANT_LABELS) {
+  const configuredProductName = state.pendingProduct?.name || 'producto';
+  addPendingProductToCart(state);
+
+  if (Array.isArray(state.pendingConfigurationQueue) && state.pendingConfigurationQueue.length) {
+    reply.messages = [`✅ *${configuredProductName}* configurado. Continuamos con el siguiente producto.`];
+    return presentNextQueuedProductConfiguration(state, reply, currency, t, finish, labels);
+  }
+
+  const completedBatch = Number(state.pendingConfigurationTotal) > 1;
+  clearPendingConfigurationQueue(state);
+  const summary = cartSummary(state.cart, currency, labels);
+  state.step = 'start';
+  reply.messages = [
+    `${completedBatch ? '✅ Todos los productos quedaron configurados.' : '✅ Agregado con tus opciones.'}\n\n${summary}`,
+    '¿Deseas agregar más productos o finalizar tu pedido?',
+  ];
+  reply.products = null;
+  reply.options = [
+    { label: '➕ Agregar otro', value: 'more_products' },
+    { label: labels.checkoutButton, value: 'checkout' },
+    { label: labels.cartButton, value: 'cart' },
+  ];
+  return finish();
+}
+
+function toggleModifierOptionSelection(state, group, optionId) {
+  const validOption = (group.options || []).find((option) => Number(option.id) === Number(optionId));
+  const max = Math.max(1, Number(group.max_selections) || 1);
+  if (!validOption) return { valid: false, reachedMax: false, selected: [] };
+
+  const groupId = group.id;
+  const selected = Array.isArray(state.pendingModifiers[groupId])
+    ? state.pendingModifiers[groupId].filter((id) => (group.options || []).some((option) => Number(option.id) === Number(id)))
+    : [];
+  const selectedIndex = selected.findIndex((id) => Number(id) === Number(validOption.id));
+  let added = false;
+
+  if (selectedIndex >= 0) {
+    selected.splice(selectedIndex, 1);
+  } else if (max === 1) {
+    selected.splice(0, selected.length, validOption.id);
+    added = true;
+  } else if (selected.length < max) {
+    selected.push(validOption.id);
+    added = true;
+  }
+
+  state.pendingModifiers[groupId] = selected;
+  return {
+    valid: true,
+    reachedMax: added && selected.length >= max,
+    selected,
+    max,
   };
 }
 
-async function replyNextModifierGroup(state, reply, currency, t, finish, keepMessages = false) {
+async function replyNextModifierGroup(
+  state,
+  reply,
+  currency,
+  t,
+  finish,
+  keepMessages = false,
+  labels = RESTAURANT_LABELS,
+  silentProgress = false
+) {
   const prod = state.pendingProduct;
   if (!prod) { state.step = 'start'; return finish(); }
   const groups = prod.groups || [];
@@ -745,20 +1349,7 @@ async function replyNextModifierGroup(state, reply, currency, t, finish, keepMes
   const group = groups[gi];
 
   if (!group) {
-    addPendingProductToCart(state);
-    const summary = cartSummary(state.cart, currency);
-    state.step = 'start';
-    reply.messages = (keepMessages ? reply.messages : []).concat([
-      `✅ Agregado con tus opciones.\n\n${summary}`,
-      '¿Deseas agregar más productos o finalizar tu pedido?',
-    ]);
-    reply.products = null;
-    reply.options = [
-      { label: '➕ Agregar más productos', value: 'menu' },
-      { label: '✅ Sería todo, gracias.', value: 'checkout' },
-      { label: '🛒 Ver carrito', value: 'cart' },
-    ];
-    return finish();
+    return finishPendingProductConfiguration(state, reply, currency, t, finish, labels);
   }
 
   const sel = state.pendingModifiers[group.id] || [];
@@ -779,7 +1370,9 @@ async function replyNextModifierGroup(state, reply, currency, t, finish, keepMes
   const selText = sel.length
     ? `\nSeleccionados: ${(group.options || []).filter((o) => sel.includes(o.id)).map((o) => o.name).join(', ')}`
     : '';
-  if (keepMessages) {
+  if (keepMessages && silentProgress) {
+    reply.messages = [];
+  } else if (keepMessages) {
     const progress = `(${sel.length}/${maxSel})`;
     if (sel.length < minSel) {
       reply.messages = [`*${group.name}* ${progress}: falta seleccionar ${minSel - sel.length} para continuar.${selText}`];
@@ -787,46 +1380,389 @@ async function replyNextModifierGroup(state, reply, currency, t, finish, keepMes
       reply.messages = [`*${group.name}* ${progress}: puedes elegir más o tocar *${nextLabel}*.${selText}`];
     }
   } else {
-    reply.messages = [`*${group.name}*${reqLabel} — elige hasta ${maxSel} y después toca *${nextLabel}*.${selText}`];
+    reply.messages = [`${pendingConfigurationHeading(state)}*${group.name}*${reqLabel} — elige hasta ${maxSel} y después toca *${nextLabel}*.${selText}`];
   }
   reply.options = optOptions;
+  reply.modifierGroup = {
+    id: group.id,
+    name: group.name,
+    minSelections: minSel,
+    maxSelections: maxSel,
+    submitLabel: nextLabel,
+    options: (group.options || []).map((option) => ({
+      id: option.id,
+      name: option.name,
+      label: `${option.name}${Number(option.extra_price) > 0 ? ` +${money(option.extra_price, currency)}` : ''}`,
+      selected: sel.some((id) => Number(id) === Number(option.id)),
+    })),
+  };
   return finish();
 }
 
-function buildOrderText(businessName, cart, customer, delivery, currency) {
+function buildOrderText(businessName, cart, customer, delivery, currency, labels = RESTAURANT_LABELS, orderId = null, conversion = null) {
   const subtotal = cartTotal(cart);
   const deliveryFee = Number(customer?.deliveryFee || 0);
+  const total = subtotal + deliveryFee;
   const deliveryLabel = deliveryZoneServiceLabel(customer);
   const orderNote = String(customer?.orderNote || '').trim();
+  const headerTitle = labels.newOrderHeader || 'Nuevo pedido';
+  const normalizedOrderId = Number(orderId);
+  const orderNumber = Number.isInteger(normalizedOrderId) && normalizedOrderId > 0 ? ` #${normalizedOrderId}` : '';
+  const addressLbl = labels.addressLabel || '📍 Entrega a domicilio';
+  const pickupLbl = labels.pickupLabel || '🏪 Recoger en sucursal';
+  const isAddressDelivery = customer?.receivingModeBehavior === 'delivery' || delivery === 'domicilio';
+  const receivingLabel = customer?.receivingModeLabel || (isAddressDelivery ? addressLbl : pickupLbl);
   const lines = [
-    `🧾 *Nuevo pedido — ${businessName}*`,
+    `🧾 *${headerTitle}${orderNumber} — ${businessName}*`,
     '',
     ...cart.map((it) => {
       const varLine = it.variantName ? ` (${it.variantName})` : '';
       const modLine = it.modifiersLabel ? `\n  Opciones: ${it.modifiersLabel}` : '';
-      return `• ${it.qty}x ${it.name}${varLine}${modLine} — ${money(it.price * it.qty, currency)}`;
+      return `• ${it.qty}x ${it.name}${varLine}${modLine} — ${money(cartLineTotal(it), currency)}`;
     }),
     '',
     `*Subtotal: ${money(subtotal, currency)}*`,
     ...(deliveryFee > 0 ? [`*Envío${deliveryLabel ? ` (${deliveryLabel})` : ''}: ${money(deliveryFee, currency)}*`] : []),
-    `*Total: ${money(subtotal + deliveryFee, currency)}*`,
+    ...(deliveryPendingReview(customer)
+      ? ['*Servicio a domicilio: pendiente de validar por el restaurante (costo por confirmar)*']
+      : []),
+    `*Total: ${money(total, currency)}*`,
+    ...conversionSummaryLines(total, conversion),
     ...(orderNote ? [`*🧾 Nota del pedido: ${orderNote}*`] : []),
     '',
     `👤 ${customer.name}`,
     `📞 ${customer.phone}`,
-    `💳 Pago: ${paymentMethodLabel(customer.paymentMethod)}`,
-    delivery === 'domicilio'
-      ? `📍 Entrega a domicilio: ${customer.address}`
-      : `🏪 Recoger en sucursal${customer.branchName ? `: ${customer.branchName}` : ''}`,
-    ...(delivery === 'domicilio' && customer?.deliveryBranchName ? [`🏪 Atiende: Sucursal ${customer.deliveryBranchName}`] : []),
-    ...(delivery === 'domicilio' && customer?.reference ? [`📝 Referencia cliente: ${customer.reference}`] : []),
+    `💳 Pago: ${customer.paymentMethodLabel || paymentMethodLabel(customer.paymentMethod)}`,
+    ...cashChangeSummaryLines(customer, total, currency),
+    ...(customer?.scheduledForLabel ? [`🗓️ Programado para: ${customer.scheduledForLabel}`] : []),
+    isAddressDelivery
+      ? `${addressLbl}: ${customer.address}`
+      : `${receivingLabel}${customer.branchName ? `: ${customer.branchName}` : ''}`,
+    ...(isAddressDelivery && customer?.neighborhood ? [`🏘️ Urbanización / sector / colonia / barrio: ${customer.neighborhood}`] : []),
+    ...(isAddressDelivery && customer?.deliveryBranchName ? [`🏪 Atiende: Sucursal ${customer.deliveryBranchName}`] : []),
+    ...(isAddressDelivery && customer?.reference ? [`📝 Referencia cliente: ${customer.reference}`] : []),
   ];
   const locationDetails = locationSummary(customer);
   if (locationDetails) lines.push(locationDetails);
   return lines.join('\n');
 }
 
-async function aiFallback(t, businessName, userText, state) {
+// Modelos de negocio soportados. `restaurant` es el flujo por defecto y NO se altera.
+// Cada modelo aporta contexto de dominio al system prompt y etiquetas visibles del flujo guiado
+// para que el chatbot atienda al cliente de forma coherente con el giro seleccionado por el tenant.
+const RESTAURANT_LABELS = {
+  browseButton: '📋 Ver menú',
+  cartButton: '🛒 Ver carrito',
+  checkoutButton: '✅ Sería todo, gracias.',
+  browseTitle: 'Elige un producto para agregarlo a tu pedido:',
+  chooseCategory: '¿Qué categoría te gustaría ver? 😋',
+  emptyCatalog: 'Por ahora no tenemos productos en el menú. ¡Vuelve pronto! 🙏',
+  cartTitle: '🛒 *Tu pedido:*',
+  emptyCart: 'Tu carrito está vacío 🛒',
+  askDeliveryMode: '¿Cómo quieres recibir tu pedido?',
+  deliveryButton: '🛵 A domicilio',
+  pickupButton: '🏪 Recoger en sucursal',
+  dineInButton: '🍽️ Comer en sucursal',
+  askAddress: '¿Cuál es tu *dirección* de entrega? 📍',
+  askBranch: '¿En qué sucursal pasarás a recoger tu pedido?',
+  askPayment: '¿Cómo pagarás tu pedido?',
+  addressLabel: '📍 Entrega a domicilio',
+  pickupLabel: '🏪 Recoger en sucursal',
+  newOrderHeader: 'Nuevo pedido',
+  confirmQuestion: '¿Confirmamos tu pedido?',
+  confirmYes: '✅ Sí, confirmar',
+  editNote: '📝 Editar nota',
+  confirmBack: '❌ No, regresar',
+  welcomeDefault: (biz) => `¡Hola! Bienvenido a ${biz} 👋`,
+};
+
+const BUSINESS_MODELS = {
+  restaurant: {
+    label: 'Restaurante / cafetería',
+    catalogWord: 'menú',
+    catalogButton: 'Ver menú',
+    domainInstructions:
+      'Actúas como asistente de pedidos de un restaurante o cafetería. ' +
+      'Ayudas a elegir platillos, bebidas, combos y a tomar el pedido para domicilio o recoger en sucursal.',
+    supportsDineIn: true,
+    labels: {}, // usa restaurant defaults
+  },
+  furniture: {
+    label: 'Mueblería',
+    catalogWord: 'catálogo',
+    catalogButton: 'Ver catálogo',
+    domainInstructions:
+      'Actúas como asesor de una mueblería. Orientas sobre modelos, medidas, materiales, ' +
+      'colores, disponibilidad, tiempos de entrega y opciones de envío o recolección. ' +
+      'Puedes sugerir combinaciones (sala + mesa, recámara completa). ' +
+      'No inventes garantías, promociones ni tiempos que no estén confirmados.',
+    labels: {
+      browseButton: '🛋️ Ver catálogo',
+      cartButton: '🧾 Ver mi selección',
+      checkoutButton: '✅ Finalizar cotización',
+      browseTitle: 'Elige un mueble para agregarlo a tu cotización:',
+      chooseCategory: '¿Qué categoría de muebles te gustaría ver? 🛋️',
+      emptyCatalog: 'Por ahora no tenemos muebles publicados. ¡Vuelve pronto! 🙏',
+      cartTitle: '🧾 *Tu selección:*',
+      emptyCart: 'Aún no has agregado muebles a tu selección 🛋️',
+      askDeliveryMode: '¿Cómo prefieres recibir tus muebles?',
+      deliveryButton: '🚚 Envío a domicilio',
+      pickupButton: '🏪 Recoger en tienda',
+      askAddress: '¿Cuál es la *dirección de entrega*? 📍',
+      askBranch: '¿En qué tienda pasarás a recoger?',
+      askPayment: '¿Cómo pagarás tu compra?',
+      addressLabel: '📍 Envío a domicilio',
+      pickupLabel: '🏪 Recoger en tienda',
+      newOrderHeader: 'Nueva solicitud de cotización',
+      confirmQuestion: '¿Enviamos tu solicitud de cotización?',
+      confirmYes: '✅ Sí, enviar solicitud',
+      welcomeDefault: (biz) => `¡Hola! Bienvenido a ${biz} 🛋️ Estoy aquí para ayudarte a elegir tus muebles.`,
+    },
+  },
+  travel_agency: {
+    label: 'Agencia de viajes',
+    catalogWord: 'catálogo de paquetes',
+    catalogButton: 'Ver paquetes',
+    domainInstructions:
+      'Actúas como asesor de una agencia de viajes. Presentas paquetes, destinos, hoteles, ' +
+      'tours y traslados con sus precios. Recopilas datos del cliente (fechas tentativas, ' +
+      'número de viajeros, presupuesto) para cotizar y confirmar reservas. ' +
+      'No inventes disponibilidad, itinerarios ni vuelos que no estén en el catálogo.',
+    labels: {
+      browseButton: '✈️ Ver paquetes',
+      cartButton: '🧳 Ver mi reservación',
+      checkoutButton: '✅ Continuar con la reserva',
+      browseTitle: 'Elige un paquete o servicio de viaje:',
+      chooseCategory: '¿Qué tipo de viaje te interesa? ✈️',
+      emptyCatalog: 'Aún no tenemos paquetes publicados. ¡Escríbenos para armar uno a la medida! 🙏',
+      cartTitle: '🧳 *Tu reservación:*',
+      emptyCart: 'Aún no has agregado paquetes 🧳',
+      askDeliveryMode: '¿Cómo prefieres recibir tus documentos de viaje?',
+      deliveryButton: '📧 Envío digital / a domicilio',
+      pickupButton: '🏢 Recoger en la agencia',
+      askAddress: '¿A qué *dirección* enviamos tus documentos? 📍',
+      askBranch: '¿En qué sucursal de la agencia pasarás a recoger?',
+      askPayment: '¿Cómo pagarás tu reservación?',
+      addressLabel: '📧 Envío a domicilio',
+      pickupLabel: '🏢 Recoger en la agencia',
+      newOrderHeader: 'Nueva solicitud de reservación',
+      confirmQuestion: '¿Enviamos tu solicitud de reservación?',
+      confirmYes: '✅ Sí, solicitar reservación',
+      welcomeDefault: (biz) => `¡Hola! Bienvenido a ${biz} ✈️ ¿A dónde te gustaría viajar?`,
+    },
+  },
+  office_services: {
+    label: 'Oficina / servicios profesionales',
+    catalogWord: 'catálogo de servicios',
+    catalogButton: 'Ver servicios',
+    domainInstructions:
+      'Actúas como asistente de una oficina de servicios profesionales (consultoría, contabilidad, legal, arquitectura, etc.). ' +
+      'Explicas cada servicio, tarifas o rangos de honorarios, tiempos de respuesta y ' +
+      'ayudas a agendar una cita o reunión. Solicitas datos básicos del cliente y el motivo de consulta. ' +
+      'No brindes asesoría profesional específica ni prometas resultados; siempre canaliza con un especialista.',
+    labels: {
+      browseButton: '💼 Ver servicios',
+      cartButton: '🧾 Ver mi solicitud',
+      checkoutButton: '✅ Enviar solicitud',
+      browseTitle: 'Elige un servicio para agregarlo a tu solicitud:',
+      chooseCategory: '¿Qué área de servicio te interesa? 💼',
+      emptyCatalog: 'Aún no tenemos servicios publicados. ¡Escríbenos para más información! 🙏',
+      cartTitle: '🧾 *Tu solicitud de servicios:*',
+      emptyCart: 'Aún no has agregado servicios 💼',
+      askDeliveryMode: '¿Cómo prefieres recibir el servicio?',
+      deliveryButton: '🏠 Servicio a domicilio',
+      pickupButton: '🏢 En la oficina',
+      askAddress: '¿En qué *dirección* brindaremos el servicio? 📍',
+      askBranch: '¿A qué oficina te presentarás?',
+      askPayment: '¿Cómo pagarás el servicio?',
+      addressLabel: '📍 Servicio a domicilio',
+      pickupLabel: '🏢 En la oficina',
+      newOrderHeader: 'Nueva solicitud de servicio',
+      confirmQuestion: '¿Enviamos tu solicitud de servicio?',
+      confirmYes: '✅ Sí, enviar solicitud',
+      welcomeDefault: (biz) => `¡Hola! Bienvenido a ${biz} 💼 ¿En qué puedo ayudarte?`,
+    },
+  },
+  screen_printing: {
+    label: 'Serigrafía / estampado',
+    catalogWord: 'catálogo de estampados',
+    catalogButton: 'Ver catálogo',
+    domainInstructions:
+      'Actúas como asistente de una serigrafía o taller de estampado. ' +
+      'Orientas sobre técnicas (serigrafía, DTF, vinil, sublimación), prendas disponibles, ' +
+      'tallas, colores, tirajes mínimos, número de tintas y tiempos de entrega. ' +
+      'Recopilas: cantidad de piezas, tipo de prenda, medidas del diseño, número de tintas y fecha requerida. ' +
+      'No cierres cotizaciones que requieran arte gráfico sin confirmar con el equipo.',
+    labels: {
+      browseButton: '👕 Ver catálogo',
+      cartButton: '🧾 Ver mi pedido',
+      checkoutButton: '✅ Enviar pedido',
+      browseTitle: 'Elige la prenda o estampado para agregarlo a tu pedido:',
+      chooseCategory: '¿Qué categoría de estampado te interesa? 👕',
+      emptyCatalog: 'Aún no tenemos productos publicados. ¡Escríbenos para cotizar! 🙏',
+      cartTitle: '🧾 *Tu pedido de estampado:*',
+      emptyCart: 'Aún no has agregado prendas 👕',
+      askDeliveryMode: '¿Cómo prefieres recibir tu pedido?',
+      deliveryButton: '🚚 Envío a domicilio',
+      pickupButton: '🏪 Recoger en el taller',
+      askAddress: '¿Cuál es tu *dirección* de entrega? 📍',
+      askBranch: '¿En qué taller pasarás a recoger?',
+      askPayment: '¿Cómo pagarás tu pedido?',
+      addressLabel: '📍 Envío a domicilio',
+      pickupLabel: '🏪 Recoger en el taller',
+      newOrderHeader: 'Nuevo pedido de estampado',
+      confirmQuestion: '¿Confirmamos tu pedido de estampado?',
+      welcomeDefault: (biz) => `¡Hola! Bienvenido a ${biz} 👕 Cotizamos tu diseño en minutos.`,
+    },
+  },
+  carpentry: {
+    label: 'Carpintería',
+    catalogWord: 'catálogo de muebles',
+    catalogButton: 'Ver catálogo',
+    domainInstructions:
+      'Actúas como asistente de una carpintería. Orientas sobre muebles de línea y a la medida, ' +
+      'maderas (pino, cedro, encino, MDF, aglomerado), acabados (barniz, laca, tinta), ' +
+      'tiempos de fabricación y anticipos requeridos. ' +
+      'Recopilas medidas, uso, estilo y presupuesto para cotizar. ' +
+      'No prometas fechas de entrega en trabajos a medida sin confirmación del taller.',
+    labels: {
+      browseButton: '🪚 Ver catálogo',
+      cartButton: '🧾 Ver mi cotización',
+      checkoutButton: '✅ Enviar cotización',
+      browseTitle: 'Elige un mueble o trabajo para agregarlo a tu cotización:',
+      chooseCategory: '¿Qué tipo de mueble te interesa? 🪚',
+      emptyCatalog: 'Aún no tenemos trabajos publicados. ¡Escríbenos para cotizar a la medida! 🙏',
+      cartTitle: '🧾 *Tu cotización:*',
+      emptyCart: 'Aún no has agregado muebles a tu cotización 🪚',
+      askDeliveryMode: '¿Cómo prefieres recibir tu mueble?',
+      deliveryButton: '🚚 Envío a domicilio',
+      pickupButton: '🏪 Recoger en el taller',
+      askAddress: '¿Cuál es la *dirección* de entrega? 📍',
+      askBranch: '¿En qué taller pasarás a recoger?',
+      askPayment: '¿Cómo pagarás tu compra?',
+      addressLabel: '📍 Envío a domicilio',
+      pickupLabel: '🏪 Recoger en el taller',
+      newOrderHeader: 'Nueva solicitud de cotización',
+      confirmQuestion: '¿Enviamos tu solicitud de cotización?',
+      confirmYes: '✅ Sí, enviar solicitud',
+      welcomeDefault: (biz) => `¡Hola! Bienvenido a ${biz} 🪚 Cotizamos tu mueble a la medida.`,
+    },
+  },
+  health: {
+    label: 'Salud / clínica',
+    catalogWord: 'catálogo de servicios médicos',
+    catalogButton: 'Ver servicios',
+    domainInstructions:
+      'Actúas como asistente de una clínica u organización de salud. ' +
+      'Explicas servicios y especialidades disponibles, requisitos previos (ayuno, estudios), ' +
+      'costos y horarios, y ayudas a agendar citas. ' +
+      'IMPORTANTE: nunca ofrezcas diagnósticos, tratamientos ni recomendaciones médicas específicas; ' +
+      'siempre indica que un profesional debe valorar al paciente. En urgencias, sugiere acudir al servicio de emergencias.',
+    labels: {
+      browseButton: '🏥 Ver servicios',
+      cartButton: '🧾 Ver mi solicitud',
+      checkoutButton: '✅ Agendar / enviar solicitud',
+      browseTitle: 'Elige un servicio o estudio para agregarlo a tu solicitud:',
+      chooseCategory: '¿Qué especialidad te interesa? 🏥',
+      emptyCatalog: 'Aún no tenemos servicios publicados. ¡Escríbenos para más información! 🙏',
+      cartTitle: '🧾 *Tu solicitud de servicios médicos:*',
+      emptyCart: 'Aún no has agregado servicios 🏥',
+      askDeliveryMode: '¿Cómo prefieres tu atención?',
+      deliveryButton: '🏠 Visita a domicilio',
+      pickupButton: '🏥 Acudir a la clínica',
+      askAddress: '¿En qué *dirección* haremos la visita? 📍',
+      askBranch: '¿A qué sucursal / clínica te presentarás?',
+      askPayment: '¿Cómo pagarás la consulta?',
+      addressLabel: '📍 Visita a domicilio',
+      pickupLabel: '🏥 Acudir a la clínica',
+      newOrderHeader: 'Nueva solicitud de cita',
+      confirmQuestion: '¿Enviamos tu solicitud de cita?',
+      confirmYes: '✅ Sí, solicitar cita',
+      welcomeDefault: (biz) => `¡Hola! Bienvenido a ${biz} 🏥 ¿En qué podemos ayudarte hoy?`,
+    },
+  },
+  dentist: {
+    label: 'Consultorio dental',
+    catalogWord: 'catálogo de tratamientos',
+    catalogButton: 'Ver tratamientos',
+    domainInstructions:
+      'Actúas como asistente de un consultorio dental. Explicas tratamientos ' +
+      '(limpieza, resinas, endodoncia, ortodoncia, blanqueamiento, implantes, prótesis), ' +
+      'costos aproximados si están en el catálogo, sesiones estimadas y ayudas a agendar cita. ' +
+      'IMPORTANTE: no ofrezcas diagnósticos ni planes de tratamiento; siempre indica que el odontólogo debe valorar al paciente. ' +
+      'Ante dolor intenso, trauma o sangrado, sugiere acudir cuanto antes al consultorio o urgencias.',
+    labels: {
+      browseButton: '🦷 Ver tratamientos',
+      cartButton: '🧾 Ver mi solicitud',
+      checkoutButton: '✅ Agendar cita',
+      browseTitle: 'Elige un tratamiento para agregarlo a tu solicitud:',
+      chooseCategory: '¿Qué tipo de tratamiento te interesa? 🦷',
+      emptyCatalog: 'Aún no tenemos tratamientos publicados. ¡Escríbenos para más información! 🙏',
+      cartTitle: '🧾 *Tratamientos seleccionados:*',
+      emptyCart: 'Aún no has agregado tratamientos 🦷',
+      askDeliveryMode: '¿Cómo prefieres tu atención?',
+      deliveryButton: '🏠 Visita a domicilio',
+      pickupButton: '🦷 Acudir al consultorio',
+      askAddress: '¿En qué *dirección* haremos la visita? 📍',
+      askBranch: '¿A qué consultorio te presentarás?',
+      askPayment: '¿Cómo pagarás tu tratamiento?',
+      addressLabel: '📍 Visita a domicilio',
+      pickupLabel: '🦷 Acudir al consultorio',
+      newOrderHeader: 'Nueva solicitud de cita dental',
+      confirmQuestion: '¿Enviamos tu solicitud de cita dental?',
+      confirmYes: '✅ Sí, solicitar cita',
+      welcomeDefault: (biz) => `¡Hola! Bienvenido a ${biz} 🦷 Con gusto te ayudamos a agendar tu cita.`,
+    },
+  },
+};
+
+function getBusinessModel(businessType) {
+  const key = String(businessType || 'restaurant').toLowerCase().trim();
+  return BUSINESS_MODELS[key] || BUSINESS_MODELS.restaurant;
+}
+
+function getLabels(businessType) {
+  const model = getBusinessModel(businessType);
+  return { ...RESTAURANT_LABELS, ...(model.labels || {}) };
+}
+
+function defaultReceivingModes(businessType, labels, { deliveryEnabled, pickupEnabled, dineInEnabled }) {
+  const model = getBusinessModel(businessType);
+  return [
+    ...(deliveryEnabled ? [{ id: 'domicilio', label: labels.deliveryButton, behavior: 'delivery' }] : []),
+    ...(pickupEnabled ? [{ id: 'recoger', label: labels.pickupButton, behavior: 'branch' }] : []),
+    ...(dineInEnabled && model.supportsDineIn
+      ? [{ id: 'comer_sucursal', label: labels.dineInButton, behavior: 'branch' }]
+      : []),
+  ];
+}
+
+function buildBusinessSystemPrompt(businessType, businessName, menuText) {
+  const model = getBusinessModel(businessType);
+  if (!businessType || businessType === 'restaurant') {
+    // Prompt original — se preserva TAL CUAL para el flujo de restaurantes.
+    return (
+      `Eres el asistente de pedidos del restaurante "${businessName}".\n` +
+      'Responde SIEMPRE en español claro, breve y coherente con el mensaje del cliente.\n' +
+      'No inventes productos ni precios. Si no estás seguro, dilo y sugiere tocar "Ver menú".\n' +
+      'Si el cliente quiere comprar, guía a acciones concretas con frases cortas.\n' +
+      'No expliques políticas internas ni menciones que eres una IA.\n\n' +
+      `Menú disponible:\n${menuText}`
+    );
+  }
+  return (
+    `Eres el asistente virtual de "${businessName}" (giro: ${model.label}).\n` +
+    `${model.domainInstructions}\n` +
+    'Responde SIEMPRE en español claro, breve y coherente con el mensaje del cliente.\n' +
+    'No inventes productos, precios, servicios ni promociones. Usa SOLO la información del catálogo cargado; ' +
+    `si algo no está listado, dilo y sugiere tocar "${model.catalogButton}" o hablar con una persona.\n` +
+    'Si el cliente quiere comprar, cotizar o agendar, guía a acciones concretas con frases cortas.\n' +
+    'No expliques políticas internas ni menciones que eres una IA.\n\n' +
+    `${model.catalogWord.charAt(0).toUpperCase() + model.catalogWord.slice(1)} disponible:\n${menuText}`
+  );
+}
+
+async function aiFallback(t, businessName, userText, state, businessType) {
   const aiCfg = await getAiRuntimeConfig();
   if (!aiCfg.enabled || !aiCfg.key) return null;
   try {
@@ -841,58 +1777,241 @@ async function aiFallback(t, businessName, userText, state) {
       messages: [
         {
           role: 'system',
-          content: `Eres el asistente de pedidos del restaurante "${businessName}".\n` +
-            'Responde SIEMPRE en español claro, breve y coherente con el mensaje del cliente.\n' +
-            'No inventes productos ni precios. Si no estás seguro, dilo y sugiere tocar "Ver menú".\n' +
-            'Si el cliente quiere comprar, guía a acciones concretas con frases cortas.\n' +
-            'No expliques políticas internas ni menciones que eres una IA.\n\n' +
-            `Menú disponible:\n${menuText}`,
+          content: buildBusinessSystemPrompt(businessType, businessName, menuText) +
+            '\nNunca afirmes que agregaste, quitaste, confirmaste o registraste un pedido mediante una respuesta de texto. ' +
+            'Si el cliente pide cambios concretos en su pedido, usa la herramienta update_cart. ' +
+            'Usa solo IDs del catálogo indicado abajo. Para quitar una variante o línea concreta, indica line_index de la línea del carrito. ' +
+            'Solicita aclaración si un producto no es identificable.\nCatálogo:\n' +
+            products.map((p) => `${p.id}: ${p.name}`).join('\n') +
+            '\nCarrito actual (índice de línea, ID, nombre, cantidad):\n' +
+            (state.cart || []).map((item, index) => `${index}, ${item.id}, ${item.name}, ${item.qty}`).join('\n'),
         },
         ...history,
         { role: 'user', content: userText },
       ],
+      tools: [{ type: 'function', function: {
+        name: 'update_cart',
+        description: 'Agregar o quitar productos concretos del pedido en curso. No confirma ni crea el pedido.',
+        parameters: { type: 'object', properties: {
+          changes: { type: 'array', items: { type: 'object', properties: {
+            product_id: { type: 'integer' }, action: { type: 'string', enum: ['add', 'remove'] }, quantity: { type: 'integer', minimum: 1, maximum: 50 }, line_index: { type: 'integer', minimum: 0 },
+          }, required: ['product_id', 'action', 'quantity'], additionalProperties: false } },
+        }, required: ['changes'], additionalProperties: false },
+      } }],
+      tool_choice: 'auto',
     });
-    return String(completion.choices[0]?.message?.content || '').trim() || null;
+    const message = completion.choices[0]?.message;
+    const call = message?.tool_calls?.find((item) => item.function?.name === 'update_cart');
+    if (call) {
+      try { return { changes: JSON.parse(call.function.arguments || '{}').changes || [] }; }
+      catch { return { changes: [] }; }
+    }
+    return { text: String(message?.content || '').trim() };
   } catch (e) {
     console.error('[openai]', e.message);
     return null;
   }
 }
 
-async function handleMessage(t, slug, sessionId, rawInput) {
-  const input = String(rawInput || '').trim();
-  const businessName = await getSetting(t, 'business_name', slug);
-  const currency = await getSetting(t, 'currency', 'MXN');
-  const deliveryFeeRules = parseDeliveryFeeRules(await getSetting(t, 'delivery_fee_rules', ''));
-  const deliveryZones = parseDeliveryZones(await getSetting(t, 'delivery_zones_geojson', '[]'));
-  let whatsapp = normalizeWhatsappNumber(await getSetting(t, 'whatsapp', ''));
+const NATURAL_FINISH_INTENTS = new Set([
+  'es todo', 'eso es todo', 'es todo gracias', 'eso es todo gracias',
+  'seria todo', 'seria todo gracias', 'eso seria todo', 'eso seria todo gracias',
+  'ya es todo', 'ya seria todo', 'ya no quiero mas', 'no quiero nada mas',
+  'finalizar', 'finalizar pedido', 'finalizar mi pedido', 'terminar pedido',
+]);
+
+function guidedCommandForText(state, rawInput) {
+  const normalized = normalizeSearchText(rawInput);
+  if (!normalized) return '';
+  if (state.step === 'order_complete' && ['otro pedido', 'hacer otro pedido', 'nuevo pedido'].includes(normalized)) return 'start';
+  if (state.step === 'confirm' && rawInput === 'checkout') return 'confirm_yes';
+  if (state.step === 'confirm' && NATURAL_FINISH_INTENTS.has(normalized)) return 'confirm_yes';
+  if (['start', 'choosing_category', 'choosing_promotion_category', 'choosing_product', 'upsell_offer'].includes(state.step)
+      && NATURAL_FINISH_INTENTS.has(normalized)) return 'checkout';
+  if (state.step === 'confirm' && ['si', 'si confirmo', 'si confirmo mi pedido', 'confirmo', 'confirmo mi pedido', 'confirmar', 'confirmar pedido', 'confirmar mi pedido', 'asi esta bien', 'todo correcto', 'lo confirmo', 'si esta bien', 'esta bien', 'adelante'].includes(normalized)) return 'confirm_yes';
+  if (state.step === 'confirm' && ['no', 'regresar', 'quiero cambiarlo'].includes(normalized)) return 'confirm_no';
+  if (state.step === 'ask_order_note_choice' && ['no gracias', 'no quiero nota', 'sin nota por favor'].includes(normalized)) return 'order_note_no';
+  if (state.step === 'ask_order_note_choice' && ['si', 'no', 'sin nota', 'continuar', 'agregar nota'].includes(normalized)) return normalized === 'si' || normalized === 'agregar nota' ? 'order_note_yes' : 'order_note_no';
+  if (state.step === 'checkout_identity_choice' && ['primera vez', 'nuevo cliente', 'soy nuevo'].includes(normalized)) return 'checkout_new_customer';
+  const options = Array.isArray(state.lastOptions) ? state.lastOptions : [];
+  const exactLabel = options.find((option) => normalizeSearchText(option.label) === normalized);
+  if (exactLabel?.value) return exactLabel.value;
+
+  // Some WhatsApp providers return the compact button title instead of the
+  // complete label saved by the engine (for example "Horarios" for
+  // "Horarios de atención"). Only accept a boundary-safe prefix match so a
+  // short title cannot accidentally select a different option.
+  const compactLabel = options.find((option) => {
+    const label = normalizeSearchText(option.label);
+    return label && (label.startsWith(`${normalized} `) || normalized.startsWith(`${label} `));
+  });
+  return compactLabel?.value || '';
+}
+
+async function aiGuidedOption(state, rawInput) {
+  const options = Array.isArray(state.lastOptions) ? state.lastOptions : [];
+  if (!options.length || options.length > 30 || String(rawInput).length > 100) return '';
+  const aiCfg = await getAiRuntimeConfig();
+  if (!aiCfg.enabled || !aiCfg.key) return '';
+  try {
+    const completion = await getOpenAiClient(aiCfg.key, aiCfg.baseUrl).chat.completions.create({
+      model: aiCfg.model || 'gpt-4o-mini', temperature: 0, max_tokens: 80,
+      response_format: { type: 'json_object' },
+      messages: [
+        { role: 'system', content: 'Interpreta el texto del cliente como una de las opciones visibles del asistente. Responde SOLO JSON: {"value":"valor"} si la intención es clara, o {"value":null} si hay dudas, correcciones no representadas por una opción, datos nuevos o una pregunta. Nunca inventes una opción. No confirmes un pedido si el mensaje incluye condiciones o correcciones.' },
+        { role: 'user', content: JSON.stringify({ step: state.step, text: rawInput, options: options.map((option) => ({ label: option.label, value: option.value })) }) },
+      ],
+    });
+    const value = JSON.parse(completion.choices[0]?.message?.content || '{}').value;
+    return options.some((option) => option.value === value) ? value : '';
+  } catch (error) {
+    console.error('[openai][guided-option]', error.message);
+    return '';
+  }
+}
+
+async function handleMessage(t, slug, sessionId, rawInput, runtime = {}) {
+  let input = String(rawInput || '').trim();
+  const currencyConversionPromise = resolveCurrencyConversion(t, { scope: 'chatbot' }).catch((error) => {
+    console.warn('[currency-conversion] No se pudo obtener la tasa automática:', error.message);
+    return null;
+  });
+  const [
+    businessName,
+    businessType,
+    currency,
+    deliveryFeeRulesRaw,
+    deliveryZonesRaw,
+    whatsappRaw,
+    deliveryEnabledRaw,
+    pickupEnabledRaw,
+    dineInEnabledRaw,
+    locationEnabledRaw,
+    showFullMenuRaw,
+    catalogSortModeRaw,
+    timeZone,
+    businessHoursEnabledRaw,
+    preordersEnabledRaw,
+    businessHoursRaw,
+    customReceivingModesRaw,
+    deliveryCashRaw,
+    deliveryTransferRaw,
+    deliveryCardRaw,
+    pickupCashRaw,
+    pickupTransferRaw,
+    pickupCardRaw,
+    pickupPlatformRaw,
+    customPaymentMethodsRaw,
+    bankAccountsRaw,
+    upsellEnabledRaw,
+    legacyUpsellQuestionRaw,
+    legacyUpsellProductIdsRaw,
+    upsellOffersRaw,
+    chatbotInfoOptionsRaw,
+    currencyConversion,
+  ] = await Promise.all([
+    getSetting(t, 'business_name', slug),
+    getSetting(t, 'business_type', 'restaurant'),
+    getSetting(t, 'currency', 'MXN'),
+    getSetting(t, 'delivery_fee_rules', ''),
+    getSetting(t, 'delivery_zones_geojson', '[]'),
+    getSetting(t, 'whatsapp', ''),
+    getSetting(t, 'delivery_enabled', '1'),
+    getSetting(t, 'pickup_enabled', '1'),
+    getSetting(t, 'dine_in_enabled', '1'),
+    getSetting(t, 'location_enabled', '1'),
+    getSetting(t, 'chatbot_full_menu_enabled', '0'),
+    getSetting(t, 'pos_catalog_sort_mode', 'top_sold'),
+    getSetting(t, 'timezone', t.timezone || 'America/Mexico_City'),
+    getSetting(t, 'business_hours_enabled', '0'),
+    getSetting(t, 'chatbot_preorders_enabled', '0'),
+    getSetting(t, 'business_hours_json', '[]'),
+    getSetting(t, 'chatbot_receiving_modes_json', '[]'),
+    getSetting(t, 'chatbot_payment_delivery_cash', '1'),
+    getSetting(t, 'chatbot_payment_delivery_transfer', '0'),
+    getSetting(t, 'chatbot_payment_delivery_card', '0'),
+    getSetting(t, 'chatbot_payment_pickup_cash', '1'),
+    getSetting(t, 'chatbot_payment_pickup_transfer', '0'),
+    getSetting(t, 'chatbot_payment_pickup_card', '0'),
+    getSetting(t, 'chatbot_payment_pickup_platform', '0'),
+    getSetting(t, 'custom_payment_methods_json', '[]'),
+    getSetting(t, 'chatbot_bank_accounts_json', '[]'),
+    getSetting(t, 'chatbot_upsell_enabled', '0'),
+    getSetting(t, 'chatbot_upsell_question', '¿Deseas agregar alguno de estos productos a tu pedido?'),
+    getSetting(t, 'chatbot_upsell_product_ids', '[]'),
+    getSetting(t, 'chatbot_upsell_offers_json', '[]'),
+    getSetting(t, 'chatbot_extra_options_json', '[]'),
+    currencyConversionPromise,
+  ]);
+  const deliveryFeeRules = parseDeliveryFeeRules(deliveryFeeRulesRaw);
+  const deliveryZones = parseDeliveryZones(deliveryZonesRaw);
+  let whatsapp = normalizeWhatsappNumber(whatsappRaw);
   if (!whatsapp) {
     const tenantRow = await q('SELECT phone_enc FROM tenants WHERE slug = $1 LIMIT 1', [slug]);
     const tenantPhone = decrypt(tenantRow.rows[0]?.phone_enc || '');
     whatsapp = normalizeWhatsappNumber(tenantPhone);
   }
-  const deliveryEnabled = (await getSetting(t, 'delivery_enabled', '1')) === '1';
-  const pickupEnabled = (await getSetting(t, 'pickup_enabled', '1')) === '1';
-  const locationEnabled = (await getSetting(t, 'location_enabled', '1')) === '1';
+  const deliveryEnabled = deliveryEnabledRaw === '1';
+  const pickupEnabled = pickupEnabledRaw === '1';
+  const dineInEnabled = dineInEnabledRaw !== '0';
+  const locationEnabled = locationEnabledRaw === '1';
+  const showFullMenu = showFullMenuRaw === '1';
+  const catalogSortMode = showFullMenu
+    ? normalizeCatalogSortMode(catalogSortModeRaw)
+    : 'category';
+  const businessHoursEnabled = businessHoursEnabledRaw === '1';
+  const preordersEnabled = preordersEnabledRaw === '1';
+  const businessHours = normalizeBusinessHours(businessHoursRaw);
+  const scheduledHoursForDate = (dateKey) => {
+    const weekday = new Date(`${dateKey}T00:00:00.000Z`).getUTCDay();
+    return businessHours[weekday];
+  };
+  const timeFormatHelp = 'Puedes escribir la hora como *9*, *9.30 am*, *1 pm* o *13:00*; debe estar dentro del horario indicado.';
+  const customSchedulePrompt = () => {
+    const enabledDays = businessHours.filter((entry) => entry.enabled);
+    const availability = enabledDays
+      .map((entry) => `${DAY_NAMES[entry.day]}: ${entry.open} a ${entry.close}`)
+      .join(' · ');
+    const firstDay = enabledDays[0];
+    const example = firstDay ? `${DAY_NAMES[firstDay.day]} a las ${firstDay.open}` : 'día y hora';
+    return `Días y horarios disponibles: *${availability || 'no hay días abiertos configurados'}*. Escribe el día y la hora, por ejemplo: *${example}*. ${timeFormatHelp}`;
+  };
+  const selectedDatePrompt = (dateKey, dateLabel) => {
+    const hours = scheduledHoursForDate(dateKey);
+    const range = hours?.enabled ? ` Ese día atendemos de *${hours.open} a ${hours.close}*.` : '';
+    return `Elegiste el *${dateLabel}*. ¿A qué hora quieres tu pedido?${range} ${timeFormatHelp}`;
+  };
+  let labels = getLabels(businessType);
+  const customReceivingModes = parseCustomReceivingModes(customReceivingModesRaw);
+  const receivingModes = [
+    ...defaultReceivingModes(businessType, labels, { deliveryEnabled, pickupEnabled, dineInEnabled }),
+    ...customReceivingModes.filter((mode) => mode.enabled).map((mode) => ({
+      ...mode,
+      label: `${receivingModeIcon(mode.behavior)} ${mode.label}`,
+    })),
+  ];
   const chatPaymentDeliverySettings = {
-    cash: (await getSetting(t, 'chatbot_payment_delivery_cash', '1')) === '1',
-    transfer: (await getSetting(t, 'chatbot_payment_delivery_transfer', '0')) === '1',
-    card: (await getSetting(t, 'chatbot_payment_delivery_card', '0')) === '1',
+    cash: deliveryCashRaw === '1',
+    transfer: deliveryTransferRaw === '1',
+    card: deliveryCardRaw === '1',
   };
   const chatPaymentPickupSettings = {
-    cash: (await getSetting(t, 'chatbot_payment_pickup_cash', '1')) === '1',
-    transfer: (await getSetting(t, 'chatbot_payment_pickup_transfer', '0')) === '1',
-    card: (await getSetting(t, 'chatbot_payment_pickup_card', '0')) === '1',
+    cash: pickupCashRaw === '1',
+    transfer: pickupTransferRaw === '1',
+    card: pickupCardRaw === '1',
+    platform: pickupPlatformRaw === '1',
   };
-  const upsellEnabled = (await getSetting(t, 'chatbot_upsell_enabled', '0')) === '1';
+  const customPaymentMethods = parseCustomPaymentMethods(customPaymentMethodsRaw);
+  const bankAccounts = parseBankAccounts(bankAccountsRaw);
+  const upsellEnabled = upsellEnabledRaw === '1';
   const legacyUpsellQuestion = String(
-    await getSetting(t, 'chatbot_upsell_question', '¿Deseas agregar alguno de estos productos a tu pedido?')
+    legacyUpsellQuestionRaw
   ).trim() || '¿Deseas agregar alguno de estos productos a tu pedido?';
-  const legacyUpsellProductIds = parseUpsellProductIds(await getSetting(t, 'chatbot_upsell_product_ids', '[]'));
-  const upsellOffersRaw = parseUpsellOffers(await getSetting(t, 'chatbot_upsell_offers_json', '[]'));
-  const chatbotInfoOptions = parseChatbotInfoOptions(await getSetting(t, 'chatbot_extra_options_json', '[]'));
-  const upsellOffersConfig = upsellOffersRaw.length
-    ? upsellOffersRaw
+  const legacyUpsellProductIds = parseUpsellProductIds(legacyUpsellProductIdsRaw);
+  const upsellOffersRawParsed = parseUpsellOffers(upsellOffersRaw);
+  const chatbotInfoOptions = parseChatbotInfoOptions(chatbotInfoOptionsRaw);
+  const upsellOffersConfig = upsellOffersRawParsed.length
+    ? upsellOffersRawParsed
     : (legacyUpsellProductIds.length
       ? [{ id: 'legacy_offer_1', question: legacyUpsellQuestion, productIds: legacyUpsellProductIds }]
       : []);
@@ -912,16 +2031,108 @@ async function handleMessage(t, slug, sessionId, rawInput) {
     })
     .filter(Boolean);
 
-  let state = (await getState(t, sessionId)) || { step: 'start', cart: [], customer: {}, currency, aiHistory: [] };
+  const activeChatbotPromotions = await getActivePromotions(t, 'chatbot');
+  labels = { ...labels, promotionsAvailable: activeChatbotPromotions.length > 0 };
+  const storedState = await getState(t, sessionId);
+  let state = storedState || { step: 'start', cart: [], customer: {}, currency, aiHistory: [] };
+  const isWhatsappChannel = String(runtime.sourceChannel || '').toLowerCase() === 'whatsapp';
+  const whatsappFirstContact = isWhatsappChannel && !storedState;
+  const sessionUpdatedAt = state.__sessionUpdatedAt ? new Date(state.__sessionUpdatedAt).getTime() : 0;
+  const completedAt = state.lastOrderCompletedAt ? new Date(state.lastOrderCompletedAt).getTime() : sessionUpdatedAt;
+  const orderSessionExpired = state.step === 'order_complete'
+    && Number.isFinite(completedAt)
+    && completedAt > 0
+    && (isWhatsappChannel
+      ? Date.now() - completedAt >= CHAT_SESSION_IDLE_MS
+      : Date.now() - completedAt >= 60 * 60 * 1000);
+  const whatsappIdleExpired = isWhatsappChannel
+    && state.step !== 'start'
+    && state.step !== 'order_complete'
+    && sessionUpdatedAt > 0
+    && Date.now() - sessionUpdatedAt >= CHAT_SESSION_IDLE_MS;
+  if (orderSessionExpired || whatsappIdleExpired || whatsappFirstContact) {
+    // WhatsApp conserva la misma conversación externa indefinidamente. Tras 30
+    // minutos sin actividad (o al terminar un pedido) la siguiente entrada abre
+    // un pedido nuevo con la bienvenida, conservando sólo la identidad básica.
+    state = { step: 'start', cart: [], customer: {}, currency, aiHistory: [] };
+    input = 'start';
+  }
   if (!Array.isArray(state.aiHistory)) state.aiHistory = [];
+  // Los canales externos pueden aportar identidad básica ya verificada por el
+  // proveedor (por ejemplo, el número del remitente de WhatsApp). Se guarda
+  // en la sesión para no volver a preguntarla y se vuelve a validar al crear
+  // el pedido.
+  if (runtime.customerPhone && !state.customer?.phone) state.customer.phone = String(runtime.customerPhone).slice(0, 40);
+  if (runtime.customerName && !state.customer?.name) state.customer.name = String(runtime.customerName).slice(0, 160);
   state.currency = currency;
+  state.currencyConversion = currencyConversion?.enabled ? currencyConversion : null;
+  state.cart.currencyConversion = state.currencyConversion;
+  state.cart = applyPromotions(state.cart, activeChatbotPromotions);
+  state.cart.currencyConversion = state.currencyConversion;
 
-  const reply = { messages: [], options: [], products: null, cart: null, order: null };
+  const guided = guidedCommandForText(state, input);
+  const choiceSteps = new Set(['ask_order_note_choice', 'ask_scheduled_order', 'checkout_identity_choice', 'confirm_returning_address', 'ask_delivery', 'ask_branch', 'ask_payment_method', 'ask_cash_change_choice', 'confirm', 'choosing_variant', 'upsell_offer']);
+  const machineCommand = /^[a-z0-9_|-]+$/.test(input) && (input.includes('_') || input.includes('|') || ['menu', 'cart', 'checkout', 'start', 'promotions'].includes(input));
+  const normalizedChoiceText = normalizeSearchText(input);
+  const handledByStep = (state.step === 'ask_delivery' && /(domicilio|entrega|envio|recoger|recojo|paso por|para llevar|comer|consumir)/.test(normalizedChoiceText))
+    || (state.step === 'ask_payment_method' && /^(efectivo|cash|transferencia|transfer|tarjeta|card)$/.test(normalizedChoiceText))
+    || (state.step === 'ask_cash_change_choice' && /\b(exacto|cambio|vuelto)\b/.test(normalizedChoiceText))
+    || (state.step === 'ask_scheduled_order' && /\b(proxima|apertura|otra fecha|otro horario|programar)\b/.test(normalizedChoiceText))
+    || (state.step === 'ask_branch' && (state.branchOptions || []).some((branch) => normalizeSearchText(branch.name) === normalizedChoiceText))
+    || (state.step === 'checkout_identity_choice' && /\b(ya pedi|ya he pedido|cliente frecuente|cliente nuevo|soy nuevo|es mi primera vez)\b/.test(normalizedChoiceText));
+  const conditionalConfirmation = state.step === 'confirm' && /\b(pero|sin|cambia|cambiar|quita|elimina|agrega|anade|mas|menos|nota)\b/.test(normalizedChoiceText);
+  const courtesyOnly = /^(gracias|muchas gracias|ok gracias)$/.test(normalizedChoiceText);
+  if (guided) input = guided;
+  else if (choiceSteps.has(state.step) && Array.isArray(state.lastOptions) && state.lastOptions.length
+      && !machineCommand && !handledByStep && !conditionalConfirmation && !courtesyOnly && !NATURAL_FINISH_INTENTS.has(normalizedChoiceText)
+      && !state.lastOptions.some((option) => option.value === input)) {
+    const chosen = await (runtime.guidedChoice || aiGuidedOption)(state, input);
+    if (chosen && state.lastOptions.some((option) => option.value === chosen)) input = chosen;
+  }
+
+  const reply = { messages: [], options: [], products: null, cart: null, order: null, bankAccounts: null, bankAccountTitle: null, modifierGroup: null };
   const lower = input.toLowerCase();
+  const checkoutSteps = ['start', 'choosing_category', 'choosing_promotion_category', 'choosing_product', 'choosing_variant', 'choosing_modifiers', 'upsell_offer'];
+  const checkoutRequested = checkoutSteps.includes(state.step) && (lower === 'checkout' || NATURAL_FINISH_INTENTS.has(normalizeSearchText(input)));
+
+  const attachBankAccounts = (accounts = bankAccounts, paymentLabel = 'Transferencia') => {
+    if (!accounts.length) return;
+    reply.bankAccounts = accounts;
+    reply.bankAccountTitle = `Datos para ${paymentLabel}`;
+    reply.messages.push(bankAccountsFallbackMessage(accounts, paymentLabel));
+  };
+
+  const attachAccountsForPayment = (paymentMethod) => {
+    if (paymentMethod === 'transfer') return attachBankAccounts();
+    const customMethod = customPaymentMethods.find((method) => method.id === paymentMethod);
+    if (customMethod?.accountDetailsEnabled) attachBankAccounts(customMethod.accounts, customMethod.label);
+  };
 
   const finish = async () => {
+    state.cart = applyPromotions(state.cart, activeChatbotPromotions);
+    state.cart.currencyConversion = state.currencyConversion;
+    state.lastOptions = reply.options.slice(0, 30).map((option) => ({ label: option.label, value: option.value }));
+    if (reply.messages.length) state.lastPrompt = reply.messages[reply.messages.length - 1];
     await saveState(t, sessionId, state);
-    reply.cart = { items: state.cart, total: cartTotal(state.cart), totalLabel: money(cartTotal(state.cart), currency) };
+    reply.cart = {
+      items: state.cart,
+      total: cartTotal(state.cart),
+      totalLabel: money(cartTotal(state.cart), currency),
+      convertedTotalLabel: convertedMoney(cartTotal(state.cart), state.currencyConversion),
+      exchangeRateLabel: conversionRateLabel(state.currencyConversion),
+    };
+    reply.orderComplete = state.step === 'order_complete';
+    // Notificar al tenant el estado en vivo de esta sesión
+    emitSessionUpdate(slug, {
+      sessionId: sessionId.slice(0, 10),
+      step: state.step,
+      cart: state.cart.map(i => ({ name: i.name, qty: i.qty, price: i.price })),
+      cartTotal: cartTotal(state.cart),
+      cartTotalLabel: money(cartTotal(state.cart), currency),
+      customerName: state.customer?.name || '',
+      delivery: state.delivery || '',
+      ts: Date.now(),
+    });
     return reply;
   };
 
@@ -930,20 +2141,160 @@ async function handleMessage(t, slug, sessionId, rawInput) {
     state.upsellCurrentOfferId = '';
   };
 
+  const isAddressDelivery = () => state.receivingMode?.behavior === 'delivery' || state.delivery === 'domicilio';
+  const activeDeliveryZones = deliveryZones.filter((zone) => zone.active && Array.isArray(zone.points) && zone.points.length >= 3);
+  const deliveryCoordinatesRequired = activeDeliveryZones.length > 0;
+
+  const refreshDeliveryQuote = async () => {
+    if (!isAddressDelivery()) return { valid: true, changed: false, reason: '' };
+    const rawLat = state.customer?.locationLat;
+    const rawLng = state.customer?.locationLng;
+    const lat = Number(rawLat);
+    const lng = Number(rawLng);
+    const hasCoordinates = rawLat !== null && rawLat !== undefined && rawLat !== ''
+      && rawLng !== null && rawLng !== undefined && rawLng !== ''
+      && Number.isFinite(lat) && Number.isFinite(lng);
+    if (!hasCoordinates) {
+      const changed = !state.customer.deliveryPendingReview
+        || Number(state.customer.deliveryFee || 0) !== 0
+        || String(state.customer.deliveryZoneName || '') !== '';
+      state.customer.deliveryPendingReview = deliveryCoordinatesRequired;
+      state.customer.deliveryFee = 0;
+      state.customer.deliveryZoneName = deliveryCoordinatesRequired ? 'Pendiente de validar' : '';
+      state.customer.deliveryBranchId = null;
+      state.customer.deliveryBranchName = '';
+      return { valid: true, changed, pendingReview: deliveryCoordinatesRequired, reason: deliveryCoordinatesRequired ? 'missing_coordinates' : '' };
+    }
+
+    const previous = {
+      fee: Number(state.customer.deliveryFee || 0),
+      zoneName: String(state.customer.deliveryZoneName || ''),
+      branchId: normalizeBranchId(state.customer.deliveryBranchId),
+      branchName: String(state.customer.deliveryBranchName || ''),
+      pendingReview: Boolean(state.customer.deliveryPendingReview),
+    };
+    const feeInfo = await resolveDeliveryFee(
+      { lat, lng, label: state.customer.locationText || '' },
+      state.customer.address || '',
+      deliveryFeeRules,
+      deliveryZones
+    );
+    state.customer.deliveryFee = Number(feeInfo.fee || 0);
+    state.customer.deliveryZoneName = feeInfo.zoneName || '';
+    state.customer.deliveryBranchId = normalizeBranchId(feeInfo.branchId);
+    state.customer.deliveryBranchName = feeInfo.branchName || '';
+    state.customer.locationResolved = feeInfo.resolvedLabel || '';
+
+    // A location outside the configured polygons is still a valid customer
+    // request. Leave the order in a reviewable state instead of forcing the
+    // customer into an endless location loop.
+    state.customer.deliveryPendingReview = deliveryCoordinatesRequired && !feeInfo.zoneName;
+    if (state.customer.deliveryPendingReview) state.customer.deliveryZoneName = 'Pendiente de validar';
+    const valid = true;
+    const changed = previous.fee !== state.customer.deliveryFee
+      || previous.zoneName !== state.customer.deliveryZoneName
+      || previous.branchId !== state.customer.deliveryBranchId
+      || previous.branchName !== state.customer.deliveryBranchName
+      || previous.pendingReview !== Boolean(state.customer.deliveryPendingReview);
+    return { valid, changed, pendingReview: Boolean(state.customer.deliveryPendingReview), reason: state.customer.deliveryPendingReview ? 'outside_delivery_zones' : '' };
+  };
+
+  const requestValidDeliveryLocation = (reason = 'missing_coordinates') => {
+    if (reason === 'outside_delivery_zones') {
+      // Fuera de una zona no significa que el cliente no pueda terminar.
+      // Se registra el envío para revisión manual del restaurante.
+      state.customer.deliveryPendingReview = true;
+      state.customer.deliveryZoneName = 'Pendiente de validar';
+      state.step = 'ask_reference';
+      reply.messages = [
+        'La ubicación está fuera de las zonas configuradas. El restaurante validará el servicio y su costo antes de enviarlo.',
+        '¿Alguna referencia de tu domicilio? (ejemplo: portón negro, casa esquina).',
+      ];
+      reply.options = [{ label: 'Omitir referencia', value: 'skip_reference' }];
+      return;
+    }
+    state.step = 'ask_location_optional';
+    reply.messages = [reason === 'outside_delivery_zones'
+      ? 'La ubicación compartida está fuera de las zonas de entrega configuradas por el negocio. Comparte una ubicación dentro de la cobertura para continuar.'
+      : 'Para calcular el servicio a domicilio, necesitamos tu ubicación exacta porque el negocio cobra el envío según sus zonas de entrega.'];
+    reply.options = [{ label: '📍 Comparte tu ubicación', value: 'share_location' }];
+  };
+
+  const askCashChange = () => {
+    const total = cartTotal(state.cart) + Number(state.customer?.deliveryFee || 0);
+    state.step = 'ask_cash_change_choice';
+    reply.messages.push(`El total de tu pedido es *${moneyWithCurrency(total, currency)}*.\n\n¿Pagarás exacto o ocupas vuelto (cambio)?`);
+    reply.options = [
+      { label: '💵 Sí, ocupo vuelto (cambio)', value: 'cash_change_needed' },
+      { label: '✅ Pagaré exacto', value: 'cash_exact' },
+    ];
+  };
+
   const goToPaymentOrConfirm = () => {
-    const chatPaymentOptions = state.delivery === 'recoger'
-      ? enabledPaymentOptions(chatPaymentPickupSettings)
-      : enabledPaymentOptions(chatPaymentDeliverySettings);
+    const chatPaymentOptions = isAddressDelivery()
+      ? enabledPaymentOptions(chatPaymentDeliverySettings, customPaymentMethods)
+      : enabledPaymentOptions(chatPaymentPickupSettings, customPaymentMethods);
     if (!chatPaymentOptions.length) {
       state.customer.paymentMethod = 'cash';
-      state.step = 'confirm';
-      reply.messages.push(confirmText(state, businessName, currency));
-      reply.options = confirmOptions();
+      state.customer.paymentMethodLabel = paymentMethodLabel('cash');
+      delete state.customer.cashChangePreference;
+      delete state.customer.cashTendered;
+      askCashChange();
       return;
     }
     state.step = 'ask_payment_method';
-    reply.messages.push('¿Cómo pagarás tu pedido?');
+    reply.messages.push(labels.askPayment);
     reply.options = chatPaymentOptions.map((opt) => ({ label: opt.label, value: opt.value }));
+  };
+
+  const receivingModeOptions = () => receivingModes.map((mode) => ({
+    label: mode.label,
+    value: `receiving_mode_${mode.id}`,
+  }));
+
+  const startReceivingMode = async (mode) => {
+    const modeLabel = mode.label.replace(/^[^\p{L}\p{N}]+/u, '').trim() || mode.label;
+    state.delivery = mode.id;
+    state.receivingMode = { id: mode.id, label: modeLabel, behavior: mode.behavior };
+    state.customer.receivingModeLabel = modeLabel;
+    state.customer.receivingModeBehavior = mode.behavior;
+    state.customer.branchId = null;
+    state.customer.branchName = '';
+    state.customer.branchAddress = '';
+    state.customer.branchReference = '';
+    state.customer.deliveryPendingReview = false;
+    if (mode.behavior !== 'delivery') {
+      state.customer.address = '';
+      state.customer.neighborhood = '';
+      state.customer.reference = '';
+      state.customer.deliveryFee = 0;
+      state.customer.deliveryZoneName = '';
+      state.customer.deliveryBranchId = null;
+      state.customer.deliveryBranchName = '';
+      state.customer.locationLat = null;
+      state.customer.locationLng = null;
+      state.customer.locationText = '';
+      state.customer.locationResolved = '';
+    }
+    if (mode.behavior === 'delivery') {
+      state.step = 'ask_address';
+      reply.messages = ['¿Cuál es tu *domicilio* de entrega? Incluye calle/edificio 📍'];
+      if (locationEnabled || deliveryCoordinatesRequired) reply.options = [{ label: '📍 Comparte tu ubicación', value: 'share_location' }];
+      return;
+    }
+    if (mode.behavior === 'branch') {
+      const branches = await t.all('SELECT id, name, address, reference FROM {s}.branches WHERE active = 1 ORDER BY name');
+      if (branches.length) {
+        state.step = 'ask_branch';
+        state.branchOptions = branches;
+        reply.messages = [mode.id === 'comer_sucursal'
+          ? '¿En qué sucursal deseas comer?'
+          : `¿En qué sucursal usarás la modalidad “${modeLabel}”?`];
+        reply.options = branches.map((branch) => ({ label: `🏪 ${branch.name}`, value: `branch_${branch.id}` }));
+        return;
+      }
+    }
+    goToPaymentOrConfirm();
   };
 
   const availableUpsellOffer = () => {
@@ -970,12 +2321,12 @@ async function handleMessage(t, slug, sessionId, rawInput) {
     return opts;
   };
 
-  const continueCheckoutFlowCore = () => {
+  const continueCustomerFlowCore = () => {
     const hasReturningData =
       Boolean(state.customer?.name) &&
       Boolean(state.customer?.phone) &&
-      state.delivery === 'domicilio' &&
-      Boolean(state.customer?.address);
+      Boolean(state.receivingMode?.behavior || state.delivery) &&
+      (!isAddressDelivery() || Boolean(state.customer?.address));
 
     if (hasReturningData) {
       reply.messages = ['Usaré tus datos guardados del último pedido para agilizar ✅'];
@@ -989,6 +2340,33 @@ async function handleMessage(t, slug, sessionId, rawInput) {
       { label: '🔁 Ya he pedido', value: 'returning_customer' },
       { label: '👤 Soy cliente nuevo', value: 'checkout_new_customer' },
     ];
+  };
+
+  const continueCheckoutFlowCore = () => {
+    if (businessHoursEnabled && !state.customer?.scheduledFor) {
+      const status = businessStatusAt(businessHours, new Date(), timeZone);
+      if (!status.open) {
+        if (!preordersEnabled) {
+          state.step = 'start';
+          reply.messages = [status.nextOpening
+            ? `En este momento estamos cerrados. Nuestra próxima apertura es el *${formatBusinessDateTime(status.nextOpening, timeZone)}*.`
+            : 'En este momento estamos cerrados y no hay una próxima apertura configurada.'];
+          reply.options = mainOptions(state.cart, chatbotInfoOptions, labels);
+          return;
+        }
+        state.step = 'ask_scheduled_order';
+        state.nextBusinessOpening = status.nextOpening?.toISOString() || '';
+        reply.messages = [status.nextOpening
+          ? `En este momento estamos cerrados, pero puedes dejar tu pedido anticipado. La próxima apertura es el *${formatBusinessDateTime(status.nextOpening, timeZone)}*.`
+          : 'En este momento estamos cerrados. Puedes indicar otro día y hora dentro del horario de atención.'];
+        reply.options = [
+          ...(status.nextOpening ? [{ label: '🕒 Próxima apertura', value: 'schedule_next_open' }] : []),
+          { label: '📅 Elegir otro día y hora', value: 'schedule_custom' },
+        ];
+        return;
+      }
+    }
+    continueCustomerFlowCore();
   };
 
   const continueCheckoutFlow = () => {
@@ -1014,30 +2392,57 @@ async function handleMessage(t, slug, sessionId, rawInput) {
   };
 
   const showPostSendOptions = () => {
+    state.step = 'start';
+    if (!state.cart.length) {
+      reply.messages.push('Tu carrito está vacío. ¿Deseas elegir productos del menú?');
+      reply.options = [{ label: labels.browseButton || '📋 Ver menú', value: 'menu' }];
+      return;
+    }
+    reply.messages.push('¿Deseas agregar más productos o finalizar tu pedido?');
     reply.options = [
-      { label: '➕ Agregar más', value: 'menu' },
-      { label: '✅ Sería todo, gracias.', value: 'checkout' },
-      { label: '🛒 Ver carrito', value: 'cart' },
-    ];
-  };
-
-  const askOrderNoteAfterSend = () => {
-    state.step = 'ask_order_note_after_send_choice';
-    reply.messages.push('¿Deseas agregar una nota a tu pedido?');
-    reply.options = [
-      { label: '✅ Sí', value: 'order_note_yes' },
-      { label: '❌ No', value: 'order_note_no' },
+      { label: '➕ Agregar otro', value: 'more_products' },
+      { label: labels.cartButton, value: 'cart' },
+      { label: labels.checkoutButton, value: 'checkout' },
     ];
   };
 
   // Comandos globales
+  if (state.step === 'order_complete' && !['start', 'hola', 'inicio'].includes(lower)) {
+    reply.messages = ['¡Gracias! Tu pedido ya quedó registrado. Si deseas pedir otra vez, inicia un pedido nuevo.'];
+    reply.options = [{ label: '🆕 Hacer otro pedido', value: 'start' }];
+    return finish();
+  }
+  const formSteps = new Set(['ask_order_note_choice', 'ask_order_note_text', 'ask_scheduled_order', 'ask_scheduled_time', 'ask_scheduled_datetime', 'checkout_identity_choice', 'ask_returning_phone', 'confirm_returning_address', 'ask_name', 'ask_phone', 'ask_delivery', 'ask_branch', 'ask_address', 'ask_address_after_location', 'ask_neighborhood', 'ask_location_optional', 'ask_reference', 'ask_payment_method', 'ask_cash_change_choice', 'ask_cash_payment_amount', 'confirm_edit_note_text']);
+  if (formSteps.has(state.step) && (lower === 'checkout' || NATURAL_FINISH_INTENTS.has(normalizeSearchText(input)))) {
+    reply.messages = [state.lastPrompt || 'Para terminar, responde primero la pregunta actual.'];
+    reply.options = state.lastOptions || [];
+    return finish();
+  }
   if (!input || lower === 'start' || lower === 'hola' || lower === 'inicio') {
+    cancelPendingProductConfiguration(state);
     state.step = 'start';
     state.returningProfile = null;
+    delete state.customer.scheduledFor;
+    delete state.customer.scheduledForLabel;
+    delete state.nextBusinessOpening;
+    delete state.scheduledDateKey;
+    delete state.scheduledDateLabel;
     state.aiHistory = [];
     resetUpsellProgress();
-    reply.messages = [await getSetting(t, 'welcome_message', `¡Hola! Bienvenido a ${businessName} 👋`)];
-    reply.options = mainOptions(state.cart, chatbotInfoOptions);
+    const defaultWelcome = typeof labels.welcomeDefault === 'function'
+      ? labels.welcomeDefault(businessName)
+      : `¡Hola! Bienvenido a ${businessName} 👋`;
+    reply.messages = [await getSetting(t, 'welcome_message', defaultWelcome)];
+    if (businessHoursEnabled) {
+      const status = businessStatusAt(businessHours, new Date(), timeZone);
+      if (status.open) reply.messages.push('🟢 En este momento estamos abiertos.');
+      else if (status.nextOpening) {
+        reply.messages.push(`🔴 En este momento estamos cerrados. Próxima apertura: *${formatBusinessDateTime(status.nextOpening, timeZone)}*.${preordersEnabled ? ' Puedes armar tu pedido y programarlo.' : ''}`);
+      } else {
+        reply.messages.push('🔴 En este momento estamos cerrados.');
+      }
+    }
+    reply.options = mainOptions(state.cart, chatbotInfoOptions, labels);
     return finish();
   }
   if (lower.startsWith('info_')) {
@@ -1045,18 +2450,18 @@ async function handleMessage(t, slug, sessionId, rawInput) {
     const selected = chatbotInfoOptions.find((item) => String(item.id) === selectedId);
     if (!selected) {
       reply.messages = ['Esa opción ya no está disponible.'];
-      reply.options = mainOptions(state.cart, chatbotInfoOptions);
+      reply.options = mainOptions(state.cart, chatbotInfoOptions, labels);
       return finish();
     }
     if (selected.message) reply.messages.push(selected.message);
     if (selected.url) reply.messages.push(`🔗 ${selected.url}`);
-    reply.options = mainOptions(state.cart, chatbotInfoOptions);
+    reply.options = mainOptions(state.cart, chatbotInfoOptions, labels);
     return finish();
   }
   if (lower === 'returning_customer') {
     if (!deliveryEnabled) {
       reply.messages = ['En este momento el negocio no tiene entregas a domicilio activas, así que no puedo recuperar dirección automática. Puedes pedir normalmente desde el menú.'];
-      reply.options = mainOptions(state.cart, chatbotInfoOptions);
+      reply.options = mainOptions(state.cart, chatbotInfoOptions, labels);
       return finish();
     }
     state.step = 'ask_returning_phone';
@@ -1064,32 +2469,187 @@ async function handleMessage(t, slug, sessionId, rawInput) {
     return finish();
   }
   if (lower === 'menu' || lower === 'menú') {
-    Object.assign(reply, await showMenu(t, state));
+    cancelPendingProductConfiguration(state);
+    Object.assign(reply, await showMenu(t, state, labels, activeChatbotPromotions, showFullMenu, catalogSortMode));
+    return finish();
+  }
+  const productPageMatch = lower.match(/^prods_page_(\d+)$/);
+  if (productPageMatch && ['choosing_product', 'start'].includes(state.step) && state.currentCategoryId !== undefined) {
+    // Paginación de catálogos largos para WhatsApp (las listas nativas admiten 10 filas).
+    Object.assign(reply, await showProducts(t, state, state.currentCategoryId, labels, {
+      promotionsOnly: state.browseMode === 'promotions',
+      activePromotions: activeChatbotPromotions,
+    }));
+    reply.productPage = Math.max(1, Number(productPageMatch[1]));
+    return finish();
+  }
+  if (lower === 'more_products' || lower === 'add_more_products') {
+    cancelPendingProductConfiguration(state);
+    if (state.browseMode === 'promotions') {
+      Object.assign(reply, await showPromotions(t, state, labels, activeChatbotPromotions));
+    } else if (Number.isInteger(Number(state.currentCategoryId)) && Number(state.currentCategoryId) > 0) {
+      Object.assign(reply, await showProducts(t, state, Number(state.currentCategoryId), labels, { activePromotions: activeChatbotPromotions }));
+    } else {
+      Object.assign(reply, await showMenu(t, state, labels, activeChatbotPromotions, showFullMenu, catalogSortMode));
+    }
+    return finish();
+  }
+  if (state.step === 'ask_scheduled_order') {
+    if (lower === 'schedule_next_open' && state.nextBusinessOpening) {
+      const nextOpening = new Date(state.nextBusinessOpening);
+      if (nextOpening.getTime() > Date.now() && validateScheduledDate(businessHours, nextOpening, timeZone).valid) {
+        state.scheduledDateKey = businessDateKey(nextOpening, timeZone);
+        state.scheduledDateLabel = formatBusinessDate(nextOpening, timeZone);
+        state.step = 'ask_scheduled_time';
+        delete state.nextBusinessOpening;
+        reply.messages = [selectedDatePrompt(state.scheduledDateKey, state.scheduledDateLabel)];
+        return finish();
+      }
+    }
+    if (lower === 'schedule_custom') {
+      state.step = 'ask_scheduled_datetime';
+      delete state.scheduledDateKey;
+      delete state.scheduledDateLabel;
+      reply.messages = [customSchedulePrompt()];
+      return finish();
+    }
+    const parsed = parseRequestedDateTime(input, new Date(), timeZone);
+    if (!parsed.error) {
+      const availability = validateScheduledDate(businessHours, parsed.date, timeZone);
+      if (availability.valid) {
+        state.customer.scheduledFor = parsed.date.toISOString();
+        state.customer.scheduledForLabel = formatBusinessDateTime(parsed.date, timeZone);
+        delete state.nextBusinessOpening;
+        delete state.scheduledDateKey;
+        delete state.scheduledDateLabel;
+        reply.messages = [`Perfecto. Prepararemos tu pedido para el *${state.customer.scheduledForLabel}*.`];
+        continueCustomerFlowCore();
+        return finish();
+      }
+      reply.messages = [`${availability.error} ${customSchedulePrompt()}`];
+      return finish();
+    }
+    reply.messages = ['Elige la próxima apertura o indica que deseas otro día y hora.'];
+    reply.options = [
+      ...(state.nextBusinessOpening ? [{ label: '🕒 Próxima apertura', value: 'schedule_next_open' }] : []),
+      { label: '📅 Elegir otro día y hora', value: 'schedule_custom' },
+    ];
+    return finish();
+  }
+  if (state.step === 'ask_scheduled_time' && state.scheduledDateKey) {
+    const parsed = parseRequestedDateTime(input, new Date(), timeZone, { fixedDateKey: state.scheduledDateKey });
+    if (parsed.error) {
+      reply.messages = [parsed.error, selectedDatePrompt(state.scheduledDateKey, state.scheduledDateLabel)];
+      return finish();
+    }
+    const availability = validateScheduledDate(businessHours, parsed.date, timeZone);
+    if (!availability.valid) {
+      reply.messages = [`${availability.error} ${selectedDatePrompt(state.scheduledDateKey, state.scheduledDateLabel)}`];
+      return finish();
+    }
+    state.customer.scheduledFor = parsed.date.toISOString();
+    state.customer.scheduledForLabel = formatBusinessDateTime(parsed.date, timeZone);
+    delete state.scheduledDateKey;
+    delete state.scheduledDateLabel;
+    reply.messages = [`Perfecto. Prepararemos tu pedido para el *${state.customer.scheduledForLabel}*.`];
+    continueCustomerFlowCore();
+    return finish();
+  }
+  if (state.step === 'ask_scheduled_datetime') {
+    const parsed = parseRequestedDateTime(input, new Date(), timeZone);
+    if (parsed.error) {
+      reply.messages = [`${parsed.error} ${customSchedulePrompt()}`];
+      return finish();
+    }
+    const availability = validateScheduledDate(businessHours, parsed.date, timeZone);
+    if (!availability.valid) {
+      reply.messages = [`${availability.error} ${customSchedulePrompt()}`];
+      return finish();
+    }
+    state.customer.scheduledFor = parsed.date.toISOString();
+    state.customer.scheduledForLabel = formatBusinessDateTime(parsed.date, timeZone);
+    delete state.nextBusinessOpening;
+    delete state.scheduledDateKey;
+    delete state.scheduledDateLabel;
+    reply.messages = [`Perfecto. Prepararemos tu pedido para el *${state.customer.scheduledForLabel}*.`];
+    continueCustomerFlowCore();
+    return finish();
+  }
+  if (lower === 'promotions' || lower === 'promociones' || lower === 'promoción' || lower === 'promocion') {
+    cancelPendingProductConfiguration(state);
+    Object.assign(reply, await showPromotions(t, state, labels, activeChatbotPromotions));
     return finish();
   }
   if (lower === 'cart' || lower === 'carrito') {
-    reply.messages = [cartSummary(state.cart, currency)];
+    reply.messages = [cartSummary(state.cart, currency, labels)];
+    reply.editCart = state.cart.length > 0;
     reply.options = state.cart.length
       ? [
-          { label: '✅ Sería todo, gracias.', value: 'checkout' },
+          { label: labels.checkoutButton, value: 'checkout' },
           { label: '➕ Agregar más', value: 'menu' },
           { label: '🗑️ Vaciar carrito', value: 'clear_cart' },
         ]
-      : [{ label: '📋 Ver menú', value: 'menu' }];
+      : [{ label: labels.browseButton, value: 'menu' }];
+    return finish();
+  }
+  if (lower === 'confirm_edit_cart' && state.step === 'confirm') {
+    reply.messages = ['Puedes cambiar la cantidad de cada producto o quitarlo antes de confirmar.'];
+    reply.editCart = true;
+    reply.options = [
+      { label: '➕ Agregar productos', value: 'menu' },
+      { label: '⬅️ Volver a confirmar', value: 'review_order' },
+    ];
+    return finish();
+  }
+  if (lower === 'review_order' && state.cart.length && state.customer?.name && state.customer?.phone) {
+    state.step = 'confirm';
+    reply.messages = [confirmText(state, businessName, currency, labels)];
+    reply.options = confirmOptions(labels);
+    return finish();
+  }
+  if (lower.startsWith('cart_line_')) {
+    const match = /^cart_line_(\d+)_(\d+)$/.exec(lower);
+    const index = match ? Number(match[1]) : -1;
+    const qty = match ? Number(match[2]) : -1;
+    if (index < 0 || index >= state.cart.length || !Number.isInteger(qty) || qty < 0 || qty > 50) {
+      reply.messages = ['No pude aplicar ese cambio. Abre el carrito e inténtalo otra vez.'];
+      reply.options = [{ label: labels.cartButton, value: 'cart' }];
+      return finish();
+    }
+    const name = state.cart[index].name;
+    if (qty === 0) state.cart.splice(index, 1);
+    else state.cart[index].qty = qty;
+    cancelPendingProductConfiguration(state);
+    resetUpsellProgress();
+    if (state.step === 'confirm' && state.cart.length) {
+      reply.messages = [`✅ ${qty ? `Ahora llevas ${qty}x ${name}.` : `Quité ${name} del pedido.`}`, confirmText(state, businessName, currency, labels)];
+      reply.options = confirmOptions(labels);
+    } else {
+      state.step = 'start';
+      reply.messages = [`✅ ${qty ? `Ahora llevas ${qty}x ${name}.` : `Quité ${name} del pedido.`}`, cartSummary(state.cart, currency, labels)];
+      showPostSendOptions();
+    }
+    reply.editCart = state.cart.length > 0;
     return finish();
   }
   if (lower === 'clear_cart') {
+    cancelPendingProductConfiguration(state);
     state.cart = [];
     state.step = 'start';
     resetUpsellProgress();
     reply.messages = ['Listo, vacié tu carrito. ¿Empezamos de nuevo? 😊'];
-    reply.options = mainOptions(state.cart, chatbotInfoOptions);
+    reply.options = mainOptions(state.cart, chatbotInfoOptions, labels);
     return finish();
   }
 
   // Selección de categoría
   if (lower.startsWith('cat_')) {
-    Object.assign(reply, await showProducts(t, state, Number(lower.slice(4))));
+    Object.assign(reply, await showProducts(t, state, Number(lower.slice(4)), labels, { activePromotions: activeChatbotPromotions }));
+    return finish();
+  }
+  if (lower.startsWith('promo_cat_')) {
+    const selectedCategory = lower.slice('promo_cat_'.length);
+    Object.assign(reply, await showProducts(t, state, selectedCategory === 'all' ? null : Number(selectedCategory), labels, { promotionsOnly: true, activePromotions: activeChatbotPromotions }));
     return finish();
   }
 
@@ -1106,75 +2666,49 @@ async function handleMessage(t, slug, sessionId, rawInput) {
       .map((it) => ({ id: it.id, qty: Math.floor(it.qty) }));
 
     if (parsed.length) {
+      const resolvedItems = [];
       const configurableItems = [];
       for (const item of parsed) {
-        if (item.qty <= 0) continue;
         const cfg = await loadProductConfig(t, item.id);
-        if (cfg && (cfg.hasVariants || cfg.hasModifiers)) configurableItems.push({ item, cfg });
-      }
-
-      if (configurableItems.length > 1) {
-        reply.messages = ['Tienes varios productos con configuración (variantes/opciones). Para evitar errores, agrégalos uno por uno tocando el producto en el menú.'];
-        reply.options = [
-          { label: '📋 Ver menú', value: 'menu' },
-          { label: '🛒 Ver carrito', value: 'cart' },
-        ];
-        return finish();
-      }
-
-      if (configurableItems.length === 1 && parsed.length === 1) {
-        const { item, cfg } = configurableItems[0];
-        state.pendingProduct = { id: cfg.id, name: cfg.name, price: cfg.price, variants: cfg.variants, groups: cfg.groups };
-        state.pendingAddQty = Math.max(1, Number(item.qty || 1));
-        state.pendingVariantId = null;
-        state.pendingModifiers = {};
-        state.pendingModifierGroupIndex = 0;
-        if (cfg.hasVariants) {
-          state.step = 'choosing_variant';
-          reply.messages = [`¿Cómo lo quieres? Elige una opción de *${cfg.name}* para ${state.pendingAddQty} unidad(es):`];
-          reply.options = cfg.variants.map((v) => ({ label: `${v.name} — ${money(v.price, currency)}`, value: `variant_${v.id}` }));
-          return finish();
-        }
-        state.step = 'choosing_modifiers';
-        return replyNextModifierGroup(state, reply, currency, t, finish);
-      }
-
-      if (configurableItems.length === 1 && parsed.length > 1) {
-        reply.messages = ['Incluiste un producto con variantes/opciones junto con otros productos. Primero configura ese producto por separado, luego confirma los demás.'];
-        reply.options = [
-          { label: '📋 Ver menú', value: 'menu' },
-          { label: '🛒 Ver carrito', value: 'cart' },
-        ];
-        return finish();
+        if (!cfg) continue;
+        resolvedItems.push({ item, cfg });
+        if (item.qty > 0 && (cfg.hasVariants || cfg.hasModifiers)) configurableItems.push({ item, cfg });
       }
 
       const lines = [];
-      for (const item of parsed) {
-        const prod = await t.get('SELECT id, name, price::float AS price FROM {s}.products WHERE id = $1 AND active = 1', [item.id]);
-        if (!prod) continue;
-
-        const existing = state.cart.find((it) => it.id === prod.id);
+      for (const { item, cfg } of resolvedItems) {
+        const existing = state.cart.find((it) => Number(it.id) === Number(cfg.id) && !it._cartKey);
         if (item.qty <= 0) {
-          state.cart = state.cart.filter((it) => it.id !== prod.id);
-          lines.push(`• Quitado: *${prod.name}*`);
-        } else {
+          state.cart = state.cart.filter((it) => Number(it.id) !== Number(cfg.id));
+          lines.push(`• Quitado: *${cfg.name}*`);
+        } else if (!cfg.hasVariants && !cfg.hasModifiers) {
           if (existing) existing.qty = item.qty;
-          else state.cart.push({ id: prod.id, name: prod.name, price: prod.price, qty: item.qty });
-          lines.push(`• *${item.qty}x ${prod.name}* = *${money(item.qty * Number(prod.price || 0), currency)}*`);
+          else state.cart.push({ id: cfg.id, name: cfg.name, price: cfg.price, qty: item.qty, ...productTaxLineSnapshot(cfg.price, cfg), ...promotionLineSnapshot(cfg) });
+          lines.push(`• *${item.qty}x ${cfg.name}* = *${money(cartLineTotal({ ...cfg, qty: item.qty, ...promotionLineSnapshot(cfg) }), currency)}*`);
         }
       }
 
       resetUpsellProgress();
 
+      if (configurableItems.length) {
+        state.pendingConfigurationQueue = configurableItems.map(({ item }) => ({
+          productId: item.id,
+          qty: item.qty,
+        }));
+        state.pendingConfigurationTotal = configurableItems.length;
+        state.pendingConfigurationCurrent = 0;
+        return presentNextQueuedProductConfiguration(state, reply, currency, t, finish, labels);
+      }
+
       state.step = 'start';
-      const summary = cartSummary(state.cart, currency);
+      const summary = cartSummary(state.cart, currency, labels);
       reply.messages = [
         lines.length
-          ? `✅ Cantidades confirmadas al checkout:\n${lines.join('\n')}`
+          ? `✅ Productos agregados a tu pedido:\n${lines.join('\n')}`
           : 'No se pudo aplicar la selección.',
         summary,
       ];
-      askOrderNoteAfterSend();
+      showPostSendOptions();
       return finish();
     }
   }
@@ -1188,11 +2722,8 @@ async function handleMessage(t, slug, sessionId, rawInput) {
       const prod = cfg;
       if (prod) {
         if ((cfg.hasVariants || cfg.hasModifiers) && Math.floor(qty) > 0) {
-          state.pendingProduct = { id: cfg.id, name: cfg.name, price: cfg.price, variants: cfg.variants, groups: cfg.groups };
-          state.pendingAddQty = Math.floor(qty);
-          state.pendingVariantId = null;
-          state.pendingModifiers = {};
-          state.pendingModifierGroupIndex = 0;
+          clearPendingConfigurationQueue(state);
+          setPendingProductConfiguration(state, cfg, Math.floor(qty));
           if (cfg.hasVariants) {
             state.step = 'choosing_variant';
             reply.messages = [`¿Cómo lo quieres? Elige una opción de *${cfg.name}* para ${state.pendingAddQty} unidad(es):`];
@@ -1210,19 +2741,19 @@ async function handleMessage(t, slug, sessionId, rawInput) {
         } else if (existing) {
           existing.qty = finalQty;
         } else {
-          state.cart.push({ id: prod.id, name: prod.name, price: prod.price, qty: finalQty });
+          state.cart.push({ id: prod.id, name: prod.name, price: prod.price, qty: finalQty, ...productTaxLineSnapshot(prod.price, prod), ...promotionLineSnapshot(prod) });
         }
 
         resetUpsellProgress();
 
         state.step = 'start';
-        const lineTotal = money(finalQty * Number(prod.price || 0), currency);
+        const lineTotal = money(cartLineTotal({ ...prod, qty: Math.max(1, finalQty), ...promotionLineSnapshot(prod) }), currency);
         if (finalQty <= 0) {
-          reply.messages = [`🗑️ Quité *${prod.name}* de tu pedido.`, cartSummary(state.cart, currency)];
+          reply.messages = [`🗑️ Quité *${prod.name}* de tu pedido.`, cartSummary(state.cart, currency, labels)];
           showPostSendOptions();
         } else {
-          reply.messages = [`✅ Agregado al checkout: *${finalQty}x ${prod.name}* = *${lineTotal}*.`, cartSummary(state.cart, currency)];
-          askOrderNoteAfterSend();
+          reply.messages = [`✅ Agregado a tu pedido: *${finalQty}x ${prod.name}* = *${lineTotal}*.`, cartSummary(state.cart, currency, labels)];
+          showPostSendOptions();
         }
         return finish();
       }
@@ -1232,13 +2763,14 @@ async function handleMessage(t, slug, sessionId, rawInput) {
   if (state.step === 'ask_order_note_after_send_choice') {
     if (lower === 'order_note_yes') {
       state.step = 'ask_order_note_after_send_text';
-      reply.messages = ['Perfecto, escribe tus instrucciones para tu pedido (ej: hamburguesa sin cebolla).'];
+      reply.messages = ['Perfecto, escribe tus instrucciones para tu pedido (Ej. salsa de soya, salsa agridulce...).'];
       reply.options = [{ label: 'Omitir nota', value: 'order_note_skip' }];
       return finish();
     }
     if (lower === 'order_note_no') {
       state.customer.orderNote = '';
-      continueCheckoutFlow();
+      reply.messages = ['Listo, continuamos sin nota.'];
+      showPostSendOptions();
       return finish();
     }
     reply.messages = ['Elige una opción para continuar:'];
@@ -1267,7 +2799,7 @@ async function handleMessage(t, slug, sessionId, rawInput) {
 
     state.customer.orderNote = note.slice(0, 220);
     state.step = 'start';
-    reply.messages = [`✅ Nota agregada: ${state.customer.orderNote}`, cartSummary(state.cart, currency)];
+    reply.messages = [`✅ Nota agregada: ${state.customer.orderNote}`, cartSummary(state.cart, currency, labels)];
     showPostSendOptions();
     return finish();
   }
@@ -1284,7 +2816,10 @@ async function handleMessage(t, slug, sessionId, rawInput) {
       }
       resetUpsellProgress();
       state.step = 'choosing_product';
-      Object.assign(reply, await showProducts(t, state, state.currentCategoryId));
+      Object.assign(reply, await showProducts(t, state, state.currentCategoryId, labels, {
+        promotionsOnly: state.browseMode === 'promotions',
+        activePromotions: activeChatbotPromotions,
+      }));
       return finish();
     }
   }
@@ -1296,11 +2831,8 @@ async function handleMessage(t, slug, sessionId, rawInput) {
       const hasModifiers = prod.hasModifiers;
 
       if (hasVariants || hasModifiers) {
-        state.pendingProduct = { id: prod.id, name: prod.name, price: prod.price, variants: prod.variants, groups: prod.groups };
-        state.pendingAddQty = 1;
-        state.pendingVariantId = null;
-        state.pendingModifiers = {}; // { groupId: [optId, ...] }
-        state.pendingModifierGroupIndex = 0;
+        clearPendingConfigurationQueue(state);
+        setPendingProductConfiguration(state, prod, 1);
 
         if (hasVariants) {
           state.step = 'choosing_variant';
@@ -1316,15 +2848,15 @@ async function handleMessage(t, slug, sessionId, rawInput) {
 
       const existing = state.cart.find((it) => it.id === prod.id && !it._cartKey);
       if (existing) existing.qty += 1;
-      else state.cart.push({ id: prod.id, name: prod.name, price: prod.price, qty: 1 });
+      else state.cart.push({ id: prod.id, name: prod.name, price: prod.price, qty: 1, ...productTaxLineSnapshot(prod.price, prod), ...promotionLineSnapshot(prod) });
       resetUpsellProgress();
 
-      state.step = 'choosing_product';
-      const menuReply = await showProducts(t, state, state.currentCategoryId);
       const currentQty = state.cart.find((it) => it.id === prod.id && !it._cartKey)?.qty || 0;
-      reply.messages = [`✅ Llevas *${currentQty}x ${prod.name}* en tu pedido.`, ...menuReply.messages];
-      reply.products = menuReply.products;
-      reply.options = menuReply.options;
+      reply.messages = [
+        `✅ Llevas *${currentQty}x ${prod.name}* en tu pedido.`,
+        cartSummary(state.cart, currency, labels),
+      ];
+      showPostSendOptions();
       return finish();
     }
   }
@@ -1345,20 +2877,7 @@ async function handleMessage(t, slug, sessionId, rawInput) {
           return replyNextModifierGroup(state, reply, currency, t, finish);
         }
         // No modifiers — add to cart
-        addPendingProductToCart(state);
-        const summary = cartSummary(state.cart, currency);
-        state.step = 'start';
-        reply.messages = [
-          `✅ Agregado: *${state.cart[state.cart.length - 1]?.name || prod.name}*.\n\n${summary}`,
-          '¿Deseas agregar más productos o finalizar tu pedido?',
-        ];
-        reply.products = null;
-        reply.options = [
-          { label: '➕ Agregar más productos', value: 'menu' },
-          { label: '✅ Sería todo, gracias.', value: 'checkout' },
-          { label: '🛒 Ver carrito', value: 'cart' },
-        ];
-        return finish();
+        return finishPendingProductConfiguration(state, reply, currency, t, finish, labels);
       }
     }
     reply.messages = ['Por favor elige una de las opciones disponibles.'];
@@ -1376,40 +2895,50 @@ async function handleMessage(t, slug, sessionId, rawInput) {
     const gi = state.pendingModifierGroupIndex || 0;
     const group = groups[gi];
     if (!group) {
-      // All groups done, add to cart
-      addPendingProductToCart(state);
-      const summary = cartSummary(state.cart, currency);
-      state.step = 'start';
-      reply.messages = [
-        `✅ Agregado con tus opciones.\n\n${summary}`,
-        '¿Deseas agregar más productos o finalizar tu pedido?',
-      ];
-      reply.products = null;
-      reply.options = [
-        { label: '➕ Agregar más productos', value: 'menu' },
-        { label: '✅ Sería todo, gracias.', value: 'checkout' },
-        { label: '🛒 Ver carrito', value: 'cart' },
-      ];
-      return finish();
+      return finishPendingProductConfiguration(state, reply, currency, t, finish, labels);
     }
 
     if (lower.startsWith('mod_opt_')) {
       const optId = Number(lower.slice('mod_opt_'.length));
-      if (!state.pendingModifiers[group.id]) state.pendingModifiers[group.id] = [];
-      const sel = state.pendingModifiers[group.id];
-      const idx = sel.indexOf(optId);
-      const max = Number(group.max_selections) || 1;
-      if (idx >= 0) {
-        sel.splice(idx, 1); // toggle off
-      } else if (max === 1) {
-        state.pendingModifiers[group.id] = [optId];
-      } else if (sel.length < max) {
-        sel.push(optId);
-      } else {
-        reply.messages = [`Ya llegaste al máximo (${max}) en *${group.name}*. Desmarca una opción o confirma.`];
+      const result = toggleModifierOptionSelection(state, group, optId);
+      if (!result.valid) {
+        reply.messages = [`Esa opción ya no está disponible en *${group.name}*.`];
         return replyNextModifierGroup(state, reply, currency, t, finish, true);
       }
-      return replyNextModifierGroup(state, reply, currency, t, finish, true);
+      if (result.reachedMax) {
+        state.pendingModifierGroupIndex = gi + 1;
+        return replyNextModifierGroup(state, reply, currency, t, finish);
+      }
+      if (result.selected.length >= result.max) {
+        reply.messages = [`Ya llegaste al máximo (${result.max}) en *${group.name}*. Desmarca una opción o confirma.`];
+        return replyNextModifierGroup(state, reply, currency, t, finish, true);
+      }
+      return replyNextModifierGroup(state, reply, currency, t, finish, true, labels, true);
+    }
+
+    if (lower.startsWith('mod_apply_')) {
+      const rawIds = lower.slice('mod_apply_'.length).trim();
+      const requestedIds = [...new Set(rawIds.split(',').filter(Boolean).map(Number))];
+      const validOptions = new Map((group.options || []).map((option) => [Number(option.id), option]));
+      const min = Math.max(0, Number(group.min_selections) || 0);
+      const max = Math.max(1, Number(group.max_selections) || 1);
+
+      if (requestedIds.some((id) => !Number.isFinite(id) || !validOptions.has(id))) {
+        reply.messages = [`Una de las opciones ya no está disponible en *${group.name}*. Vuelve a elegir.`];
+        return replyNextModifierGroup(state, reply, currency, t, finish, true, labels);
+      }
+      if (requestedIds.length < min) {
+        reply.messages = [`Selecciona al menos ${min} opción${min === 1 ? '' : 'es'} de *${group.name}* para continuar.`];
+        return replyNextModifierGroup(state, reply, currency, t, finish, true, labels);
+      }
+      if (requestedIds.length > max) {
+        reply.messages = [`Puedes seleccionar máximo ${max} opción${max === 1 ? '' : 'es'} de *${group.name}*.`];
+        return replyNextModifierGroup(state, reply, currency, t, finish, true, labels);
+      }
+
+      state.pendingModifiers[group.id] = requestedIds.map((id) => validOptions.get(id).id);
+      state.pendingModifierGroupIndex = gi + 1;
+      return replyNextModifierGroup(state, reply, currency, t, finish, false, labels);
     }
 
     if (lower === 'mod_clear') {
@@ -1444,35 +2973,49 @@ async function handleMessage(t, slug, sessionId, rawInput) {
     if (qty > 0 && qty <= 50 && state.pendingProduct) {
       const existing = state.cart.find((it) => it.id === state.pendingProduct.id);
       if (existing) existing.qty += qty;
-      else state.cart.push({ ...state.pendingProduct, qty });
+      else state.cart.push({ ...state.pendingProduct, qty, ...productTaxLineSnapshot(state.pendingProduct.price, state.pendingProduct), ...promotionLineSnapshot(state.pendingProduct) });
       resetUpsellProgress();
       const name = state.pendingProduct.name;
       state.pendingProduct = null;
-      state.step = 'start';
-      reply.messages = [`¡Agregado! ${qty}x *${name}* 🎉\n\n${cartSummary(state.cart, currency)}`];
-      reply.options = [
-        { label: '➕ Agregar más', value: 'menu' },
-        { label: '✅ Sería todo, gracias.', value: 'checkout' },
-      ];
+      reply.messages = [`¡Agregado! ${qty}x *${name}* 🎉\n\n${cartSummary(state.cart, currency, labels)}`];
+      showPostSendOptions();
       return finish();
     }
     reply.messages = ['Puedes tocar el botón + del producto para agregar más unidades, o elegir "➕ Agregar más".'];
-    reply.options = [
-      { label: '➕ Agregar más', value: 'menu' },
-      { label: '✅ Sería todo, gracias.', value: 'checkout' },
-    ];
+    showPostSendOptions();
     return finish();
   }
 
   if (state.step === 'ask_returning_phone') {
     const profile = await findReturningCustomerByPhone(t, input);
     if (!profile) {
-      reply.messages = ['No encontré un pedido a domicilio previo con ese teléfono. Verifica el número o continúa como pedido nuevo.'];
+      reply.messages = ['No encontré pedidos previos con ese teléfono. Verifica el número o continúa como cliente nuevo.'];
       reply.options = [
         { label: '🔁 Intentar de nuevo', value: 'returning_customer' },
         { label: '📋 Ver menú', value: 'menu' },
       ];
       state.step = 'start';
+      return finish();
+    }
+
+    if (!profile.hasDeliveryHistory) {
+      state.returningProfile = null;
+      state.customer.name = profile.name || state.customer.name || '';
+      state.customer.phone = String(profile.phone || input).replace(/\D/g, '') || state.customer.phone || '';
+      reply.messages = [
+        `Encontré tus pedidos anteriores, *${profile.name || 'cliente'}* 🙌`,
+        'Conservaré tu nombre y teléfono. Como aún no tienes un domicilio guardado, te pediré los datos necesarios para este pedido.',
+      ];
+      if (receivingModes.length > 1) {
+        state.step = 'ask_delivery';
+        reply.messages.push(labels.askDeliveryMode || '¿Cómo quieres recibir tu pedido?');
+        reply.options = receivingModeOptions();
+      } else if (receivingModes.length === 1) {
+        await startReceivingMode(receivingModes[0]);
+      } else {
+        state.step = 'ask_delivery';
+        reply.messages.push('El negocio no tiene modalidades activas para recibir pedidos. Intenta nuevamente más tarde.');
+      }
       return finish();
     }
 
@@ -1483,8 +3026,8 @@ async function handleMessage(t, slug, sessionId, rawInput) {
       `${returningAddressText(profile)}\n\n¿Esta es tu dirección para este nuevo pedido?`,
     ];
     reply.options = [
-      { label: '✅ Sí, usar esta dirección', value: 'returning_address_yes' },
-      { label: '✏️ No, capturar nueva', value: 'returning_address_no' },
+      { label: '✅ Sí, usar este domicilio', value: 'returning_address_yes' },
+      { label: '✏️ Capturar nueva dirección de entrega', value: 'returning_address_no' },
       { label: '🏪 Usar para recoger en sucursal', value: 'returning_address_pickup' },
     ];
     return finish();
@@ -1496,6 +3039,7 @@ async function handleMessage(t, slug, sessionId, rawInput) {
       state.customer.name = p.name || state.customer.name || '';
       state.customer.phone = String(p.phone || '').replace(/\D/g, '') || state.customer.phone || '';
       state.customer.address = p.address || p.locationText || '';
+      state.customer.neighborhood = p.neighborhood || '';
       state.customer.locationLat = p.locationLat;
       state.customer.locationLng = p.locationLng;
       state.customer.locationText = p.locationText || '';
@@ -1506,13 +3050,21 @@ async function handleMessage(t, slug, sessionId, rawInput) {
       state.customer.deliveryBranchName = p.deliveryBranchName || '';
       state.customer.reference = p.reference || '';
       state.delivery = 'domicilio';
+      state.receivingMode = { id: 'domicilio', label: 'A domicilio', behavior: 'delivery' };
+      state.customer.receivingModeLabel = state.receivingMode.label;
+      state.customer.receivingModeBehavior = 'delivery';
+      const deliveryQuote = await refreshDeliveryQuote();
+      if (!deliveryQuote.valid) {
+        requestValidDeliveryLocation(deliveryQuote.reason);
+        return finish();
+      }
       if (state.cart.length) {
         reply.messages = ['¡Perfecto! Ya usaré tus mismos datos de ubicación para este pedido 🚀'];
         goToPaymentOrConfirm();
       } else {
         state.step = 'start';
         const quickMessages = ['¡Perfecto! Ya usaré tus mismos datos de ubicación para este pedido 🚀', 'Ahora solo elige del menú y será más rápido.'];
-        const menuReply = await showMenu(t, state);
+        const menuReply = await showMenu(t, state, labels, null, showFullMenu, catalogSortMode);
         Object.assign(reply, menuReply);
         reply.messages = [...quickMessages, ...(menuReply.messages || [])];
       }
@@ -1520,9 +3072,31 @@ async function handleMessage(t, slug, sessionId, rawInput) {
     }
 
     if (lower === 'returning_address_no') {
+      const p = state.returningProfile || {};
+      // El cliente ya fue identificado por su teléfono y por su pedido previo.
+      // Al capturar otra dirección no debemos volver a pedir nombre ni teléfono.
+      state.customer.name = p.name || state.customer.name || '';
+      state.customer.phone = String(p.phone || '').replace(/\D/g, '') || state.customer.phone || '';
+      state.delivery = 'domicilio';
+      state.receivingMode = { id: 'domicilio', label: 'A domicilio', behavior: 'delivery' };
+      state.customer.receivingModeLabel = state.receivingMode.label;
+      state.customer.receivingModeBehavior = 'delivery';
+      state.customer.address = '';
+      state.customer.neighborhood = '';
+      state.customer.reference = '';
+      state.customer.locationLat = null;
+      state.customer.locationLng = null;
+      state.customer.locationText = '';
+      state.customer.locationResolved = '';
+      state.customer.deliveryFee = 0;
+      state.customer.deliveryZoneName = '';
+      state.customer.deliveryPendingReview = false;
+      state.customer.deliveryBranchId = null;
+      state.customer.deliveryBranchName = '';
       state.returningProfile = null;
-      state.step = 'ask_name';
-      reply.messages = ['Sin problema. Vamos a registrar tus datos para este pedido. ¿Cuál es tu *nombre*?'];
+      state.step = 'ask_address';
+      reply.messages = ['Perfecto. Conservamos tu nombre y teléfono. Comparte tu nueva ubicación y después indícame el domicilio de entrega. 📍'];
+      if (locationEnabled || deliveryCoordinatesRequired) reply.options = [{ label: '📍 Comparte tu ubicación', value: 'share_location' }];
       return finish();
     }
 
@@ -1530,8 +3104,8 @@ async function handleMessage(t, slug, sessionId, rawInput) {
       if (!pickupEnabled) {
         reply.messages = ['En este momento solo está activa la entrega a domicilio. ¿Deseas usar la dirección guardada?'];
         reply.options = [
-          { label: '✅ Sí, usar esta dirección', value: 'returning_address_yes' },
-          { label: '✏️ No, capturar nueva', value: 'returning_address_no' },
+          { label: '✅ Sí, usar este domicilio', value: 'returning_address_yes' },
+          { label: '✏️ Capturar nueva dirección de entrega', value: 'returning_address_no' },
         ];
         return finish();
       }
@@ -1540,13 +3114,18 @@ async function handleMessage(t, slug, sessionId, rawInput) {
       state.customer.name = p.name || state.customer.name || '';
       state.customer.phone = String(p.phone || '').replace(/\D/g, '') || state.customer.phone || '';
       state.delivery = 'recoger';
+      state.receivingMode = { id: 'recoger', label: 'Recoger en sucursal', behavior: 'branch' };
+      state.customer.receivingModeLabel = state.receivingMode.label;
+      state.customer.receivingModeBehavior = 'branch';
       state.customer.address = '';
+      state.customer.neighborhood = '';
       state.customer.locationLat = null;
       state.customer.locationLng = null;
       state.customer.locationText = '';
       state.customer.locationResolved = '';
       state.customer.deliveryFee = 0;
       state.customer.deliveryZoneName = '';
+      state.customer.deliveryPendingReview = false;
       state.customer.deliveryBranchId = null;
       state.customer.deliveryBranchName = '';
       state.customer.reference = '';
@@ -1564,7 +3143,7 @@ async function handleMessage(t, slug, sessionId, rawInput) {
       if (locationEnabled) {
         reply.messages = ['Perfecto, no hay sucursales configuradas. ¿Quieres compartir tu ubicación para ubicarte más fácil? (Opcional)'];
         reply.options = [
-          { label: '📍 Compartir ubicación', value: 'share_location' },
+          { label: '📍 Comparte tu ubicación', value: 'share_location' },
           { label: 'Omitir', value: 'skip_location' },
         ];
       } else {
@@ -1575,18 +3154,41 @@ async function handleMessage(t, slug, sessionId, rawInput) {
 
     reply.messages = ['Confírmame si usarás la misma dirección del último pedido:'];
     reply.options = [
-      { label: '✅ Sí, usar esta dirección', value: 'returning_address_yes' },
-      { label: '✏️ No, capturar nueva', value: 'returning_address_no' },
+      { label: '✅ Sí, usar este domicilio', value: 'returning_address_yes' },
+      { label: '✏️ Capturar nueva dirección de entrega', value: 'returning_address_no' },
       { label: '🏪 Usar para recoger en sucursal', value: 'returning_address_pickup' },
     ];
     return finish();
   }
 
   // Checkout
-  if (lower === 'checkout') {
+  if (checkoutRequested) {
+    if (state.pendingProduct && state.step === 'choosing_variant') {
+      const heading = pendingConfigurationHeading(state);
+      reply.messages = [`${heading}Antes de finalizar, elige una variante de *${state.pendingProduct.name}*:`];
+      reply.options = (state.pendingProduct.variants || []).map((variant) => ({
+        label: `${variant.name} — ${money(variant.price, currency)}`,
+        value: `variant_${variant.id}`,
+      }));
+      return finish();
+    }
+    if (state.pendingProduct && state.step === 'choosing_modifiers') {
+      reply.messages = ['Antes de finalizar, completa las opciones del producto actual.'];
+      return replyNextModifierGroup(state, reply, currency, t, finish, true, labels);
+    }
+
     if (!state.cart.length) {
       reply.messages = ['Tu carrito está vacío. ¡Mira nuestro menú! 😊'];
       reply.options = [{ label: '📋 Ver menú', value: 'menu' }];
+      return finish();
+    }
+
+    // La barra fija del carrito envía "checkout" incluso dentro del upsell.
+    // En ese estado equivale a "Sería todo" y debe cerrar los ofrecimientos.
+    if (state.step === 'upsell_offer') {
+      state.upsellDoneOfferIds = upsellOffers.map((offer) => String(offer.id));
+      state.upsellCurrentOfferId = '';
+      continueCheckoutFlowCore();
       return finish();
     }
 
@@ -1596,7 +3198,7 @@ async function handleMessage(t, slug, sessionId, rawInput) {
     }
 
     state.step = 'ask_order_note_choice';
-    reply.messages = ['¿Deseas agregar una nota a tu pedido? (Ej: hamburguesa sin cebolla)'];
+    reply.messages = ['¿Deseas agregar una nota a tu pedido? (Ej. salsa de soya, salsa agridulce...)'];
     reply.options = [
       { label: '✅ Sí, agregar nota', value: 'order_note_yes' },
       { label: '❌ No, continuar', value: 'order_note_no' },
@@ -1605,13 +3207,13 @@ async function handleMessage(t, slug, sessionId, rawInput) {
   }
 
   if (state.step === 'ask_order_note_choice') {
-    if (lower === 'order_note_yes') {
+    if (lower === 'order_note_yes' || ['si', 'si quiero', 'agregar nota'].includes(normalizeSearchText(input))) {
       state.step = 'ask_order_note_text';
       reply.messages = ['Perfecto. Escribe tus instrucciones para el pedido 📝'];
       reply.options = [{ label: 'Omitir nota', value: 'order_note_skip' }];
       return finish();
     }
-    if (lower === 'order_note_no') {
+    if (lower === 'order_note_no' || ['no', 'sin nota', 'continuar'].includes(normalizeSearchText(input))) {
       state.customer.orderNote = '';
       continueCheckoutFlow();
       return finish();
@@ -1654,7 +3256,17 @@ async function handleMessage(t, slug, sessionId, rawInput) {
     if (lower.startsWith('upsell_next|')) {
       const offerId = String(lower.split('|')[1] || '').trim();
       markUpsellOfferDone(offerId);
-      continueCheckoutFlow();
+      const nextOffer = availableUpsellOffer();
+      if (nextOffer) {
+        state.step = 'upsell_offer';
+        state.upsellCurrentOfferId = nextOffer.id;
+        reply.messages = [nextOffer.question];
+        reply.options = upsellOptions(nextOffer);
+      } else {
+        state.step = 'upsell_offer';
+        reply.messages = ['Ya revisaste todos los ofrecimientos. Cuando estés listo, finaliza el upsell.'];
+        reply.options = [{ label: '✅ Sería todo, gracias.', value: 'upsell_continue' }];
+      }
       return finish();
     }
 
@@ -1674,21 +3286,36 @@ async function handleMessage(t, slug, sessionId, rawInput) {
 
       const existing = state.cart.find((item) => Number(item.id) === Number(product.id));
       if (existing) existing.qty += 1;
-      else state.cart.push({ id: product.id, name: product.name, price: product.price, qty: 1 });
+      else state.cart.push({ id: product.id, name: product.name, price: product.price, qty: 1, ...productTaxLineSnapshot(product.price, product), ...promotionLineSnapshot(product) });
 
-      markUpsellOfferDone(offerId);
       reply.messages = [
         `✅ Excelente elección: agregué *${product.name}* a tu pedido.`,
-        cartSummary(state.cart, currency),
+        cartSummary(state.cart, currency, labels),
       ];
-      const nextOffer = availableUpsellOffer();
-      if (nextOffer) {
+
+      const cartIds = new Set((state.cart || []).map((item) => Number(item.id)));
+      const remainingProducts = (offer.products || [])
+        .filter((item) => !cartIds.has(Number(item.id)))
+        .slice(0, 6);
+
+      if (remainingProducts.length) {
         state.step = 'upsell_offer';
-        state.upsellCurrentOfferId = nextOffer.id;
-        reply.messages.push(nextOffer.question);
-        reply.options = upsellOptions(nextOffer);
+        state.upsellCurrentOfferId = offer.id;
+        reply.messages.push('Puedes elegir otro producto de este ofrecimiento o continuar cuando quieras.');
+        reply.options = upsellOptions({ ...offer, products: remainingProducts });
       } else {
-        continueCheckoutFlowCore();
+        markUpsellOfferDone(offerId);
+        const nextOffer = availableUpsellOffer();
+        if (nextOffer) {
+          state.step = 'upsell_offer';
+          state.upsellCurrentOfferId = nextOffer.id;
+          reply.messages.push(nextOffer.question);
+          reply.options = upsellOptions(nextOffer);
+        } else {
+          state.step = 'upsell_offer';
+          reply.messages.push('Ya agregaste los productos disponibles del upsell.');
+          reply.options = [{ label: '✅ Sería todo, gracias.', value: 'upsell_continue' }];
+        }
       }
       return finish();
     }
@@ -1700,7 +3327,7 @@ async function handleMessage(t, slug, sessionId, rawInput) {
   }
 
   if (state.step === 'checkout_identity_choice') {
-    if (lower === 'returning_customer') {
+    if (lower === 'returning_customer' || /\b(ya pedi|ya he pedido|cliente frecuente)\b/.test(normalizeSearchText(input))) {
       if (!deliveryEnabled) {
         state.step = 'ask_name';
         reply.messages = ['En este momento solo está activo el flujo normal. ¿Cuál es tu *nombre*?'];
@@ -1710,7 +3337,7 @@ async function handleMessage(t, slug, sessionId, rawInput) {
       reply.messages = ['¡Claro! Si ya has pedido, escribe tu *número de teléfono* para recuperar tus datos 📱'];
       return finish();
     }
-    if (lower === 'checkout_new_customer') {
+    if (lower === 'checkout_new_customer' || /\b(cliente nuevo|soy nuevo|es mi primera vez)\b/.test(normalizeSearchText(input))) {
       state.step = 'ask_name';
       reply.messages = ['¡Perfecto! Para completar tu pedido, ¿cuál es tu *nombre*?'];
       return finish();
@@ -1741,84 +3368,42 @@ async function handleMessage(t, slug, sessionId, rawInput) {
       return finish();
     }
     state.customer.phone = digits;
-    if (deliveryEnabled && pickupEnabled) {
+    if (receivingModes.length > 1) {
       state.step = 'ask_delivery';
-      reply.messages = ['¿Cómo quieres recibir tu pedido?'];
-      reply.options = [
-        { label: '🛵 A domicilio', value: 'delivery_domicilio' },
-        { label: '🏪 Recoger en sucursal', value: 'delivery_recoger' },
-      ];
-    } else if (deliveryEnabled) {
-      state.delivery = 'domicilio';
-      state.step = 'ask_address';
-      reply.messages = ['¿Cuál es tu *dirección* de entrega? 📍'];
-      if (locationEnabled) reply.options = [{ label: '📍 Compartir ubicación', value: 'share_location' }];
+      reply.messages = [labels.askDeliveryMode || '¿Cómo quieres recibir tu pedido?'];
+      reply.options = receivingModeOptions();
+    } else if (receivingModes.length === 1) {
+      await startReceivingMode(receivingModes[0]);
     } else {
-      state.delivery = 'recoger';
-      const branches = await t.all('SELECT id, name, address, reference FROM {s}.branches WHERE active = 1 ORDER BY name');
-      if (branches.length) {
-        state.step = 'ask_branch';
-        state.branchOptions = branches;
-        reply.messages = ['¿En qué sucursal pasarás a recoger tu pedido?'];
-        reply.options = branches.map((b) => ({ label: `🏪 ${b.name}`, value: `branch_${b.id}` }));
-      } else {
-        state.step = locationEnabled ? 'ask_location_optional' : 'confirm';
-        if (locationEnabled) {
-          reply.messages = ['¿Quieres compartir tu ubicación para ubicarte más fácil? (Opcional)'];
-          reply.options = [
-            { label: '📍 Compartir ubicación', value: 'share_location' },
-            { label: 'Omitir', value: 'skip_location' },
-          ];
-        } else {
-          goToPaymentOrConfirm();
-        }
-      }
+      state.step = 'ask_delivery';
+      reply.messages = ['El negocio no tiene modalidades activas para recibir pedidos. Intenta nuevamente más tarde.'];
     }
     return finish();
   }
 
   if (state.step === 'ask_delivery') {
-    if (lower === 'delivery_domicilio') {
-      state.delivery = 'domicilio';
-      state.step = 'ask_address';
-      reply.messages = ['¿Cuál es tu *dirección* de entrega? 📍'];
-      if (locationEnabled) reply.options = [{ label: '📍 Compartir ubicación', value: 'share_location' }];
-      return finish();
-    }
-    if (lower === 'delivery_recoger') {
-      state.delivery = 'recoger';
-      const branches = await t.all('SELECT id, name, address, reference FROM {s}.branches WHERE active = 1 ORDER BY name');
-      if (branches.length) {
-        state.step = 'ask_branch';
-        state.branchOptions = branches;
-        reply.messages = ['¿En qué sucursal pasarás a recoger tu pedido?'];
-        reply.options = branches.map((b) => ({ label: `🏪 ${b.name}`, value: `branch_${b.id}` }));
-      } else {
-        state.step = locationEnabled ? 'ask_location_optional' : 'confirm';
-        if (locationEnabled) {
-          reply.messages = ['¿Quieres compartir tu ubicación para ubicarte más fácil? (Opcional)'];
-          reply.options = [
-            { label: '📍 Compartir ubicación', value: 'share_location' },
-            { label: 'Omitir', value: 'skip_location' },
-          ];
-        } else {
-          goToPaymentOrConfirm();
-        }
-      }
+    const legacyModeId = lower === 'delivery_domicilio' ? 'domicilio' : (lower === 'delivery_recoger' ? 'recoger' : '');
+    const selectedModeId = legacyModeId || (lower.startsWith('receiving_mode_') ? lower.slice(15) : '');
+    const modeText = normalizeSearchText(input);
+    const selectedMode = receivingModes.find((mode) => mode.id === selectedModeId)
+      || receivingModes.find((mode) => normalizeSearchText(mode.label) === modeText)
+      || (/(domicilio|entrega|envio)/.test(modeText) ? receivingModes.find((mode) => mode.behavior === 'delivery') : null)
+      || (/(recoger|recojo|paso por|para llevar)/.test(modeText) ? receivingModes.find((mode) => mode.id === 'recoger') : null)
+      || (/(comer|consumir)/.test(modeText) ? receivingModes.find((mode) => mode.id === 'comer_sucursal') : null);
+    if (selectedMode) {
+      await startReceivingMode(selectedMode);
       return finish();
     }
     reply.messages = ['Elige una opción, por favor:'];
-    reply.options = [
-      { label: '🛵 A domicilio', value: 'delivery_domicilio' },
-      { label: '🏪 Recoger en sucursal', value: 'delivery_recoger' },
-    ];
+    reply.options = receivingModeOptions();
     return finish();
   }
 
   if (state.step === 'ask_branch') {
-    if (lower.startsWith('branch_')) {
-      const branchId = Number(lower.slice(7));
-      const chosen = (state.branchOptions || []).find((b) => Number(b.id) === branchId);
+    const branchId = lower.startsWith('branch_') ? Number(lower.slice(7)) : null;
+    const chosenByName = (state.branchOptions || []).filter((b) => normalizeSearchText(b.name) === normalizeSearchText(input));
+    if (lower.startsWith('branch_') || chosenByName.length === 1) {
+      const chosen = chosenByName.length === 1 ? chosenByName[0] : (state.branchOptions || []).find((b) => Number(b.id) === branchId);
       if (!chosen) {
         reply.messages = ['Selecciona una sucursal válida, por favor.'];
         reply.options = (state.branchOptions || []).map((b) => ({ label: `🏪 ${b.name}`, value: `branch_${b.id}` }));
@@ -1828,8 +3413,9 @@ async function handleMessage(t, slug, sessionId, rawInput) {
       state.customer.branchName = chosen.name;
       state.customer.branchAddress = chosen.address;
       state.customer.branchReference = chosen.reference;
+      const isDineIn = state.receivingMode?.id === 'comer_sucursal';
       reply.messages = [
-        `Perfecto, recogerás en *${chosen.name}* ✅\n${chosen.address}${chosen.reference ? `\nReferencia: ${chosen.reference}` : ''}`,
+        `Perfecto, ${isDineIn ? 'comerás' : 'te atenderemos'} en *${chosen.name}* ✅\n${chosen.address}${chosen.reference ? `\nReferencia: ${chosen.reference}` : ''}`,
       ];
       goToPaymentOrConfirm();
       return finish();
@@ -1842,17 +3428,20 @@ async function handleMessage(t, slug, sessionId, rawInput) {
   if (state.step === 'ask_address') {
     if (lower === 'share_location') {
       reply.messages = ['Activa la ubicación en tu celular para compartirla 📍'];
-      reply.options = [{ label: '📍 Compartir ubicación', value: 'share_location' }];
+      reply.options = [
+        { label: '📍 Comparte tu ubicación', value: 'share_location' },
+        { label: 'Omitir por ahora', value: 'skip_location' },
+      ];
       return finish();
     }
     if (lower === 'location_error') {
       reply.messages = [
         'No pude obtener tu ubicación automáticamente. Activa el permiso del navegador o escribe tu dirección/coordenadas para continuar.',
       ];
-      reply.options = locationEnabled
+      reply.options = (locationEnabled || deliveryCoordinatesRequired)
         ? [
-            { label: '📍 Compartir ubicación', value: 'share_location' },
-            { label: 'Omitir', value: 'skip_location' },
+            { label: '📍 Comparte tu ubicación', value: 'share_location' },
+            { label: 'Omitir por ahora', value: 'skip_location' },
           ]
         : [];
       return finish();
@@ -1863,36 +3452,67 @@ async function handleMessage(t, slug, sessionId, rawInput) {
       state.customer.locationLat = geo.lat;
       state.customer.locationLng = geo.lng;
       state.customer.locationText = geo.label || `${geo.lat.toFixed(5)}, ${geo.lng.toFixed(5)}`;
-      if (!state.customer.address) state.customer.address = state.customer.locationText;
-      if (state.delivery === 'domicilio') {
-        const feeInfo = await resolveDeliveryFee(geo, state.customer.address, deliveryFeeRules, deliveryZones);
-        state.customer.deliveryFee = feeInfo.fee;
-        state.customer.deliveryZoneName = feeInfo.zoneName;
-        state.customer.deliveryBranchId = Number.isFinite(Number(feeInfo.branchId)) ? Number(feeInfo.branchId) : null;
-        state.customer.deliveryBranchName = feeInfo.branchName || '';
-        state.customer.locationResolved = feeInfo.resolvedLabel;
+      let deliveryQuote = null;
+      if (isAddressDelivery()) {
+        deliveryQuote = await refreshDeliveryQuote();
+        if (!deliveryQuote.valid) {
+          requestValidDeliveryLocation(deliveryQuote.reason);
+          state.step = 'ask_address';
+          return finish();
+        }
       }
-      state.step = 'ask_reference';
+      state.step = 'ask_address_after_location';
       reply.messages = [
         `🗺️ Ubicación recibida. Abrir en Maps: ${mapsUrl(geo.lat, geo.lng)}${Number(state.customer.deliveryFee || 0) > 0 ? `\n🛵 Envío detectado: ${money(state.customer.deliveryFee, currency)}${state.customer.deliveryZoneName ? ` (${state.customer.deliveryZoneName})` : ''}` : ''}`,
-        '¿Alguna referencia de tu domicilio? (ejemplo: portón negro, casa esquina).',
-      ];
-      reply.options = [{ label: 'Omitir referencia', value: 'skip_reference' }];
+        deliveryQuote?.pendingReview ? '🚚 El servicio a domicilio y su costo quedan pendientes de validar por el restaurante.' : '',
+        'Ahora escribe el *domicilio*: calle/edificio.',
+      ].filter(Boolean);
       return finish();
     }
 
     if (input.length < 5) {
       reply.messages = ['Necesito una dirección un poco más completa 🙏'];
-      if (locationEnabled) reply.options = [{ label: '📍 Compartir ubicación', value: 'share_location' }];
+      if (locationEnabled || deliveryCoordinatesRequired) reply.options = [{ label: '📍 Comparte tu ubicación', value: 'share_location' }];
       return finish();
     }
     state.customer.address = input.slice(0, 200);
-    if (locationEnabled) {
+    state.step = 'ask_neighborhood';
+    reply.messages = ['¿En qué urbanización, sector, colonia o barrio está el domicilio?'];
+    return finish();
+  }
+
+  if (state.step === 'ask_address_after_location') {
+    const address = String(input || '').trim();
+    if (address.length < 5) {
+      reply.messages = ['Escribe un domicilio más completo: calle/edificio.'];
+      return finish();
+    }
+    state.customer.address = address.slice(0, 200);
+    state.step = 'ask_neighborhood';
+    reply.messages = ['¿En qué urbanización, sector, colonia o barrio está el domicilio?'];
+    return finish();
+  }
+
+  if (state.step === 'ask_neighborhood') {
+    const neighborhood = String(input || '').trim();
+    if (neighborhood.length < 2) {
+      reply.messages = ['Escribe la urbanización, sector, colonia o barrio para identificar correctamente el domicilio.'];
+      return finish();
+    }
+    state.customer.neighborhood = neighborhood.slice(0, 160);
+    const rawLocationLat = state.customer.locationLat;
+    const rawLocationLng = state.customer.locationLng;
+    const alreadyHasLocation = rawLocationLat !== null && rawLocationLat !== undefined && rawLocationLat !== ''
+      && rawLocationLng !== null && rawLocationLng !== undefined && rawLocationLng !== ''
+      && Number.isFinite(Number(rawLocationLat)) && Number.isFinite(Number(rawLocationLng));
+    if ((locationEnabled || deliveryCoordinatesRequired) && !alreadyHasLocation) {
       state.step = 'ask_location_optional';
-      reply.messages = ['¿Quieres compartir también tu ubicación exacta? (Opcional)'];
+      reply.messages = [deliveryCoordinatesRequired
+        ? 'Puedes compartir tu ubicación exacta para calcular el costo del servicio. Si no está dentro de una zona configurada, el restaurante validará el envío manualmente.'
+        : '¿Quieres compartir también tu ubicación exacta? (Opcional)'];
       reply.options = [
-        { label: '📍 Compartir ubicación', value: 'share_location' },
-        { label: 'Omitir', value: 'skip_location' },
+        { label: '📍 Comparte tu ubicación', value: 'share_location' },
+        { label: 'Omitir por ahora', value: 'skip_location' },
       ];
     } else {
       state.step = 'ask_reference';
@@ -1904,7 +3524,11 @@ async function handleMessage(t, slug, sessionId, rawInput) {
 
   if (state.step === 'ask_location_optional') {
     if (lower === 'skip_location') {
-      if (state.delivery === 'domicilio') {
+      if (isAddressDelivery()) {
+        if (deliveryCoordinatesRequired) {
+          state.customer.deliveryPendingReview = true;
+          state.customer.deliveryZoneName = 'Pendiente de validar';
+        }
         state.step = 'ask_reference';
         reply.messages = ['¿Alguna referencia de tu domicilio? (ejemplo: portón negro, casa esquina).'];
         reply.options = [{ label: 'Omitir referencia', value: 'skip_reference' }];
@@ -1918,16 +3542,16 @@ async function handleMessage(t, slug, sessionId, rawInput) {
         'No pude obtener tu ubicación automáticamente. Activa el permiso del navegador o escribe tu dirección/coordenadas para continuar.',
       ];
       reply.options = [
-        { label: '📍 Compartir ubicación', value: 'share_location' },
-        { label: 'Omitir', value: 'skip_location' },
+        { label: '📍 Comparte tu ubicación', value: 'share_location' },
+        { label: 'Omitir por ahora', value: 'skip_location' },
       ];
       return finish();
     }
     if (lower === 'share_location') {
       reply.messages = ['Activa la ubicación en tu celular para compartirla 📍'];
       reply.options = [
-        { label: '📍 Compartir ubicación', value: 'share_location' },
-        { label: 'Omitir', value: 'skip_location' },
+        { label: '📍 Comparte tu ubicación', value: 'share_location' },
+        { label: 'Omitir por ahora', value: 'skip_location' },
       ];
       return finish();
     }
@@ -1936,20 +3560,21 @@ async function handleMessage(t, slug, sessionId, rawInput) {
       state.customer.locationLat = geo.lat;
       state.customer.locationLng = geo.lng;
       state.customer.locationText = geo.label || `${geo.lat.toFixed(5)}, ${geo.lng.toFixed(5)}`;
-      if (state.delivery === 'domicilio') {
-        const feeInfo = await resolveDeliveryFee(geo, state.customer.address, deliveryFeeRules, deliveryZones);
-        state.customer.deliveryFee = feeInfo.fee;
-        state.customer.deliveryZoneName = feeInfo.zoneName;
-        state.customer.deliveryBranchId = Number.isFinite(Number(feeInfo.branchId)) ? Number(feeInfo.branchId) : null;
-        state.customer.deliveryBranchName = feeInfo.branchName || '';
-        state.customer.locationResolved = feeInfo.resolvedLabel;
+      let deliveryQuote = null;
+      if (isAddressDelivery()) {
+        deliveryQuote = await refreshDeliveryQuote();
+        if (!deliveryQuote.valid) {
+          requestValidDeliveryLocation(deliveryQuote.reason);
+          return finish();
+        }
       }
-      if (state.delivery === 'domicilio') {
+      if (isAddressDelivery()) {
         state.step = 'ask_reference';
         reply.messages = [
           `🗺️ Ubicación recibida. Abrir en Maps: ${mapsUrl(geo.lat, geo.lng)}${Number(state.customer.deliveryFee || 0) > 0 ? `\n🛵 Envío detectado: ${money(state.customer.deliveryFee, currency)}${state.customer.deliveryZoneName ? ` (${state.customer.deliveryZoneName})` : ''}` : ''}`,
+          deliveryQuote?.pendingReview ? '🚚 El servicio a domicilio y su costo quedan pendientes de validar por el restaurante.' : '',
           '¿Alguna referencia de tu domicilio? (ejemplo: portón negro, casa esquina).',
-        ];
+        ].filter(Boolean);
         reply.options = [{ label: 'Omitir referencia', value: 'skip_reference' }];
       } else {
         reply.messages = [
@@ -1961,8 +3586,8 @@ async function handleMessage(t, slug, sessionId, rawInput) {
     }
     reply.messages = ['Elige una opción para continuar:'];
     reply.options = [
-      { label: '📍 Compartir ubicación', value: 'share_location' },
-      { label: 'Omitir', value: 'skip_location' },
+      { label: '📍 Comparte tu ubicación', value: 'share_location' },
+      { label: 'Omitir por ahora', value: 'skip_location' },
     ];
     return finish();
   }
@@ -1987,28 +3612,206 @@ async function handleMessage(t, slug, sessionId, rawInput) {
   }
 
   if (state.step === 'ask_payment_method') {
-    const chatPaymentOptions = state.delivery === 'recoger'
-      ? enabledPaymentOptions(chatPaymentPickupSettings)
-      : enabledPaymentOptions(chatPaymentDeliverySettings);
+    const chatPaymentOptions = isAddressDelivery()
+      ? enabledPaymentOptions(chatPaymentDeliverySettings, customPaymentMethods)
+      : enabledPaymentOptions(chatPaymentPickupSettings, customPaymentMethods);
     const selected = {
       pay_cash: 'cash',
       pay_transfer: 'transfer',
       pay_card: 'card',
-    }[lower];
+      pay_platform: 'platform',
+    }[lower] || (lower.startsWith('pay_custom_') ? lower.slice(4) : '')
+      || ({ efectivo: 'cash', cash: 'cash', transferencia: 'transfer', transfer: 'transfer', tarjeta: 'card', card: 'card', plataforma: 'platform', platform: 'platform' }[normalizeSearchText(input)] || '')
+      || chatPaymentOptions.find((option) => normalizeSearchText(option.plainLabel || option.label) === normalizeSearchText(input))?.method;
     if (!selected || !chatPaymentOptions.some((opt) => opt.method === selected)) {
       reply.messages = ['Elige una opción de pago válida para continuar:'];
       reply.options = chatPaymentOptions.map((opt) => ({ label: opt.label, value: opt.value }));
       return finish();
     }
     state.customer.paymentMethod = selected;
+    state.customer.paymentMethodLabel = chatPaymentOptions.find((opt) => opt.method === selected)?.plainLabel || paymentMethodLabel(selected);
+    delete state.customer.cashChangePreference;
+    delete state.customer.cashTendered;
+    if (selected === 'cash') {
+      askCashChange();
+      return finish();
+    }
     state.step = 'confirm';
-    reply.messages = [confirmText(state, businessName, currency)];
-    reply.options = confirmOptions();
+    const selectedCustomMethod = customPaymentMethods.find((method) => method.id === selected);
+    const hasAccountDetails = selected === 'transfer'
+      ? bankAccounts.length > 0
+      : Boolean(selectedCustomMethod?.accountDetailsEnabled && selectedCustomMethod.accounts.length);
+    if (hasAccountDetails) {
+      attachAccountsForPayment(selected);
+      reply.messages.push(confirmText(state, businessName, currency, labels));
+    } else {
+      reply.messages = [confirmText(state, businessName, currency, labels)];
+    }
+    reply.options = confirmOptions(labels);
+    return finish();
+  }
+
+  if (state.step === 'ask_cash_change_choice') {
+    const normalized = normalizeSearchText(input);
+    const exact = lower === 'cash_exact'
+      || /\b(pagare|pago|pagar|sera) exacto\b/.test(normalized)
+      || /\b(no|sin) (necesito |ocupo |quiero )?(cambio|vuelto)\b/.test(normalized);
+    const needsChange = lower === 'cash_change_needed'
+      || (!exact && /\b(cambio|vuelto)\b/.test(normalized));
+
+    if (exact) {
+      state.customer.cashChangePreference = 'exact';
+      delete state.customer.cashTendered;
+      state.step = 'confirm';
+      reply.messages = [confirmText(state, businessName, currency, labels)];
+      reply.options = confirmOptions(labels);
+      return finish();
+    }
+    if (needsChange) {
+      state.customer.cashChangePreference = 'change';
+      delete state.customer.cashTendered;
+      state.step = 'ask_cash_payment_amount';
+      reply.messages = [`¿Con cuánto pagarás? Escríbeme el monto con números o letras.\n\nEjemplo: *50* o *cincuenta*.`];
+      reply.options = [{ label: '✅ Pagaré exacto', value: 'cash_exact' }];
+      return finish();
+    }
+
+    askCashChange();
+    return finish();
+  }
+
+  if (state.step === 'ask_cash_payment_amount') {
+    if (lower === 'cash_exact' || /\b(pagare|pago|pagar|sera) exacto\b/.test(normalizeSearchText(input))) {
+      state.customer.cashChangePreference = 'exact';
+      delete state.customer.cashTendered;
+      state.step = 'confirm';
+      reply.messages = [confirmText(state, businessName, currency, labels)];
+      reply.options = confirmOptions(labels);
+      return finish();
+    }
+
+    const total = roundMoney(cartTotal(state.cart) + Number(state.customer?.deliveryFee || 0));
+    const tendered = parseCashAmount(input);
+    if (tendered === null || tendered <= 0) {
+      reply.messages = [`No pude identificar el monto. Escríbelo con números o letras; por ejemplo: *50* o *cincuenta*.`];
+      reply.options = [{ label: '✅ Pagaré exacto', value: 'cash_exact' }];
+      return finish();
+    }
+    if (tendered <= total) {
+      reply.messages = [tendered === total
+        ? `Ese monto es exacto: *${moneyWithCurrency(total, currency)}*. Puedes elegir “Pagaré exacto” o escribir un monto mayor.`
+        : `El monto debe ser mayor al total de *${moneyWithCurrency(total, currency)}* para poder calcular el cambio.`];
+      reply.options = [{ label: '✅ Pagaré exacto', value: 'cash_exact' }];
+      return finish();
+    }
+
+    state.customer.cashChangePreference = 'change';
+    state.customer.cashTendered = tendered;
+    state.step = 'confirm';
+    reply.messages = [
+      `Tu cambio (vuelto) será de *${moneyWithCurrency(roundMoney(tendered - total), currency)}*.`,
+      confirmText(state, businessName, currency, labels),
+    ];
+    reply.options = confirmOptions(labels);
     return finish();
   }
 
   if (state.step === 'confirm') {
     if (lower === 'confirm_yes') {
+      const deliveryQuote = await refreshDeliveryQuote();
+      if (!deliveryQuote.valid) {
+        requestValidDeliveryLocation(deliveryQuote.reason);
+        return finish();
+      }
+      if (deliveryQuote.changed) {
+        state.step = 'confirm';
+        reply.messages = [
+          `Actualizamos el costo de envío según tu ubicación${state.customer.deliveryZoneName ? ` en *${state.customer.deliveryZoneName}*` : ''}.`,
+          confirmText(state, businessName, currency, labels),
+        ];
+        reply.options = confirmOptions(labels);
+        return finish();
+      }
+      const currentTotal = roundMoney(cartTotal(state.cart) + Number(state.customer?.deliveryFee || 0));
+      if (state.customer?.paymentMethod === 'cash'
+          && state.customer.cashChangePreference === 'change'
+          && Number(state.customer.cashTendered) < currentTotal) {
+        delete state.customer.cashTendered;
+        state.step = 'ask_cash_payment_amount';
+        reply.messages = [`El total cambió a *${moneyWithCurrency(currentTotal, currency)}*. Indica nuevamente con cuánto pagarás para calcular el cambio.`];
+        reply.options = [{ label: '✅ Pagaré exacto', value: 'cash_exact' }];
+        return finish();
+      }
+      if (state.customer?.scheduledFor) {
+        const scheduledDate = new Date(state.customer.scheduledFor);
+        const scheduleValidation = validateScheduledDate(businessHours, scheduledDate, timeZone);
+        if (!Number.isFinite(scheduledDate.getTime()) || scheduledDate.getTime() <= Date.now() || !scheduleValidation.valid) {
+          delete state.customer.scheduledFor;
+          delete state.customer.scheduledForLabel;
+          state.step = 'ask_scheduled_datetime';
+          reply.messages = ['Ese horario ya no está disponible. Indica una nueva fecha y hora dentro del horario de atención.'];
+          return finish();
+        }
+      }
+      if (t?.schema) {
+        const availabilityDate = state.customer?.scheduledFor ? new Date(state.customer.scheduledFor) : new Date();
+        const productsAvailableNow = await activeProducts(t, activeChatbotPromotions, availabilityDate);
+        const availableProductIds = new Set(productsAvailableNow.map((product) => Number(product.id)));
+        const unavailableLines = state.cart.filter((item) => !availableProductIds.has(Number(item.id)));
+        if (unavailableLines.length) {
+          state.cart = state.cart.filter((item) => availableProductIds.has(Number(item.id)));
+          state.step = 'start';
+          reply.messages = [
+            `Al cambiar el día, ${unavailableLines.map((item) => `*${item.name}*`).join(', ')} dejó de estar disponible. Lo retiré del carrito para evitar cobrarte un producto fuera de su día de venta.`,
+          ];
+          reply.options = mainOptions(state.cart, chatbotInfoOptions, labels);
+          return finish();
+        }
+      }
+      if (runtime.previewOrder) {
+        state.cart = applyPromotions(state.cart, activeChatbotPromotions);
+        const subtotal = cartTotal(state.cart);
+        const deliveryFee = Number(state.customer.deliveryFee || 0);
+        const total = subtotal + deliveryFee;
+        const previewCode = `PRUEBA-${String(sessionId || '').replace(/[^a-z0-9]/gi, '').slice(0, 8).toUpperCase() || crypto.randomBytes(4).toString('hex').toUpperCase()}`;
+        const orderSummary = buildOrderText(
+          businessName,
+          state.cart,
+          state.customer,
+          state.delivery,
+          currency,
+          labels,
+          null,
+          state.currencyConversion
+        );
+        const orderText = `🧪 *PEDIDO DE PRUEBA ${previewCode}*\n_Este pedido proviene de la demostración pública de ChatBotPro._\n\n${orderSummary}`;
+        const waLink = whatsapp ? `https://wa.me/${whatsapp}?text=${encodeURIComponent(orderText)}` : null;
+        reply.messages = [
+          '🎉 *¡Tu pedido de prueba está listo!*',
+          waLink
+            ? 'Envíalo por WhatsApp para completar la experiencia real. Así podremos recibirlo, identificarlo como prueba y atenderte personalmente.'
+            : 'Así de fácil tus clientes podrán pedir desde el asistente virtual de tu negocio. Crea tu cuenta gratis para configurarlo con tus productos, colores y WhatsApp.',
+        ];
+        reply.order = {
+          id: null,
+          total,
+          totalLabel: money(total, currency),
+          convertedTotalLabel: convertedMoney(total, state.currencyConversion),
+          exchangeRateLabel: conversionRateLabel(state.currencyConversion),
+          whatsappLink: waLink,
+          summary: orderText,
+          preview: true,
+          previewCode,
+        };
+        reply.previewComplete = true;
+        reply.registrationUrl = runtime.registrationUrl || '/register?source=chatbot-demo';
+        state = { step: 'order_complete', cart: [], customer: {}, currency, previewComplete: true, lastOrderCompletedAt: new Date().toISOString() };
+        reply.options = [{ label: '🔄 Hacer otro pedido de prueba', value: 'start' }];
+        return finish();
+      }
+      await ensurePurchasingSchema(t);
+      await ensureBranchStockSchema(t);
+      await initializeBranchStock(t, 'chatbot');
       // Guarda cliente CIFRADO y crea el pedido en el schema aislado del tenant
       const phoneHash = lookupHash(state.customer.phone);
       let customer = await t.get('SELECT id FROM {s}.customers WHERE phone_hash = $1', [phoneHash]);
@@ -2024,28 +3827,41 @@ async function handleMessage(t, slug, sessionId, rawInput) {
           [encrypt(state.customer.name), encrypt(state.customer.phone), encrypt(state.customer.address || ''), customer.id]
         );
       }
+      state.cart = applyPromotions(state.cart, activeChatbotPromotions);
       const subtotal = cartTotal(state.cart);
       const deliveryFee = Number(state.customer.deliveryFee || 0);
       const total = subtotal + deliveryFee;
-      const serviceBranchId = state.delivery === 'domicilio'
-        ? (Number.isFinite(Number(state.customer.deliveryBranchId)) ? Number(state.customer.deliveryBranchId) : null)
-        : (Number.isFinite(Number(state.customer.branchId)) ? Number(state.customer.branchId) : null);
-      const serviceBranchName = state.delivery === 'domicilio'
+      let serviceBranchId = isAddressDelivery()
+        ? normalizeBranchId(state.customer.deliveryBranchId)
+        : normalizeBranchId(state.customer.branchId);
+      let serviceBranchName = isAddressDelivery()
         ? (state.customer.deliveryBranchName || null)
         : (state.customer.branchName || null);
+      if (!serviceBranchId) {
+        const activeBranches = await t.all('SELECT id, name FROM {s}.branches WHERE active = 1 ORDER BY id LIMIT 2');
+        if (activeBranches.length === 1) {
+          serviceBranchId = Number(activeBranches[0].id);
+          serviceBranchName = activeBranches[0].name || serviceBranchName;
+        }
+      }
       const orderRow = await t.get(
         `INSERT INTO {s}.orders
-         (customer_id, items, subtotal, total, status, channel, delivery, notes, pickup_branch_id, pickup_branch_name, customer_location_lat, customer_location_lng, customer_location_text, customer_location_resolved, delivery_fee, delivery_zone_name, service_branch_id, service_branch_name)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18) RETURNING id`,
+         (customer_id, items, subtotal, total, status, channel, source_channel, delivery, receiving_mode_label, receiving_mode_behavior, notes, order_notes, pickup_branch_id, pickup_branch_name, customer_location_lat, customer_location_lng, customer_location_text, customer_location_resolved, delivery_fee, delivery_zone_name, service_branch_id, service_branch_name, delivery_address, delivery_neighborhood, delivery_reference, scheduled_for)
+         VALUES ($1,$2,$3,$4,$5,$6,'chatbot',$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25) RETURNING id`,
         [
           customer.id,
           JSON.stringify(state.cart),
           subtotal,
           total,
           'pendiente',
-          'chatbot',
+          ['chatbot', 'whatsapp'].includes(String(runtime.sourceChannel || '').toLowerCase())
+            ? String(runtime.sourceChannel).toLowerCase()
+            : 'chatbot',
           state.delivery || 'recoger',
-          state.delivery === 'domicilio' ? (state.customer.reference || null) : null,
+          state.receivingMode?.label || state.customer.receivingModeLabel || '',
+          state.receivingMode?.behavior || state.customer.receivingModeBehavior || (state.delivery === 'domicilio' ? 'delivery' : 'branch'),
+          isAddressDelivery() ? (state.customer.reference || null) : null,
+          String(state.customer.orderNote || '').trim().slice(0, 220),
           state.customer.branchId || null,
           state.customer.branchName || null,
           Number.isFinite(state.customer.locationLat) ? state.customer.locationLat : null,
@@ -2056,40 +3872,75 @@ async function handleMessage(t, slug, sessionId, rawInput) {
           state.customer.deliveryZoneName || null,
           serviceBranchId,
           serviceBranchName,
+          isAddressDelivery() ? (state.customer.address || '') : '',
+          isAddressDelivery() ? (state.customer.neighborhood || '') : '',
+          isAddressDelivery() ? (state.customer.reference || '') : '',
+          state.customer.scheduledFor || null,
         ]
       );
-      await t.run('UPDATE {s}.orders SET payment_method = $1 WHERE id = $2', [state.customer.paymentMethod || '', orderRow.id]);
+      const paymentBreakdown = String(state.customer.paymentMethod || '').startsWith('custom_')
+        ? { customLabel: state.customer.paymentMethodLabel || 'Medio personalizado' }
+        : {};
+      await t.run('UPDATE {s}.orders SET payment_method = $1, payment_breakdown = $2 WHERE id = $3', [
+        state.customer.paymentMethod || '',
+        JSON.stringify(paymentBreakdown),
+        orderRow.id,
+      ]);
+      if (await applyBranchSaleStock(t, serviceBranchId, state.cart)) {
+        await t.run('UPDATE {s}.orders SET branch_stock_applied=1 WHERE id=$1', [orderRow.id]);
+      }
 
-      const orderText = buildOrderText(businessName, state.cart, state.customer, state.delivery, currency);
+      const orderText = buildOrderText(businessName, state.cart, state.customer, state.delivery, currency, labels, orderRow.id, state.currencyConversion);
       const waLink = whatsapp ? `https://wa.me/${whatsapp}?text=${encodeURIComponent(orderText)}` : null;
 
+      // Notificar al tenant (Socket.io + Web Push)
+      emitNewOrder(slug, {
+        id: orderRow.id,
+        total,
+        totalLabel: money(total, currency),
+        delivery: state.delivery || 'recoger',
+        receivingModeLabel: state.receivingMode?.label || state.customer.receivingModeLabel || '',
+        receivingModeBehavior: state.receivingMode?.behavior || state.customer.receivingModeBehavior || '',
+        customerName: state.customer.name || '',
+        items: state.cart.map(i => `${i.qty}x ${i.name}`).join(', '),
+        summary: orderText,
+        businessName,
+        scheduledFor: state.customer.scheduledFor || null,
+        scheduledForLabel: state.customer.scheduledForLabel || '',
+      }).catch(() => {});
+
       reply.messages = [
-        `🎉 *¡Pedido #${orderRow.id} recibido!*\n\nEn breve lo confirmamos. ¡Gracias por tu preferencia! 🙏`,
+        state.customer.scheduledForLabel
+          ? `🎉 *¡Pedido #${orderRow.id} programado!*\n\nLo prepararemos para el *${state.customer.scheduledForLabel}*. ¡Gracias por tu preferencia! 🙏`
+          : `🎉 *¡Pedido #${orderRow.id} recibido!*\n\nEn breve lo confirmamos. ¡Gracias por tu preferencia! 🙏`,
       ];
-      reply.order = { id: orderRow.id, total, totalLabel: money(total, currency), whatsappLink: waLink, summary: orderText };
-      if (waLink) reply.messages.push('👇 Toca el botón para enviar el resumen de tu pedido por WhatsApp y agilizar la atención.');
+      attachAccountsForPayment(state.customer.paymentMethod);
+      reply.order = { id: orderRow.id, total, totalLabel: money(total, currency), convertedTotalLabel: convertedMoney(total, state.currencyConversion), exchangeRateLabel: conversionRateLabel(state.currencyConversion), scheduledFor: state.customer.scheduledFor || null, scheduledForLabel: state.customer.scheduledForLabel || '', whatsappLink: waLink, summary: orderText };
+      if (waLink && String(runtime.sourceChannel || '').toLowerCase() !== 'whatsapp') {
+        reply.messages.push('👇 Toca el botón para enviar el resumen de tu pedido por WhatsApp y agilizar la atención.');
+      }
       if (!waLink) reply.messages.push('⚠️ El negocio aún no tiene un WhatsApp válido para envío automático. Tu pedido ya quedó registrado.');
-      state = { step: 'start', cart: [], customer: {}, currency };
+      state = { step: 'order_complete', cart: [], customer: {}, currency, lastOrderId: orderRow.id, lastOrderCompletedAt: new Date().toISOString() };
       reply.options = [{ label: '🆕 Hacer otro pedido', value: 'start' }];
       return finish();
     }
     if (lower === 'confirm_edit_note') {
       state.step = 'confirm_edit_note_text';
-      reply.messages = ['Escribe la nota de tu pedido. Ejemplo: hamburguesa sin cebolla.'];
+      reply.messages = ['Escribe la nota de tu pedido. Ej. salsa de soya, salsa agridulce...'];
       reply.options = [{ label: '🗑️ Quitar nota', value: 'confirm_remove_note' }];
       return finish();
     }
     if (lower === 'confirm_remove_note') {
       state.customer.orderNote = '';
       state.step = 'confirm';
-      reply.messages = ['✅ Nota eliminada.', confirmText(state, businessName, currency)];
-      reply.options = confirmOptions();
+      reply.messages = ['✅ Nota eliminada.', confirmText(state, businessName, currency, labels)];
+      reply.options = confirmOptions(labels);
       return finish();
     }
     if (lower === 'confirm_no') {
       state.step = 'start';
       reply.messages = ['Sin problema, tu carrito sigue guardado. ¿Qué deseas hacer?'];
-      reply.options = mainOptions(state.cart, chatbotInfoOptions);
+      reply.options = mainOptions(state.cart, chatbotInfoOptions, labels);
       return finish();
     }
   }
@@ -2098,8 +3949,8 @@ async function handleMessage(t, slug, sessionId, rawInput) {
     if (lower === 'confirm_remove_note') {
       state.customer.orderNote = '';
       state.step = 'confirm';
-      reply.messages = ['✅ Nota eliminada.', confirmText(state, businessName, currency)];
-      reply.options = confirmOptions();
+      reply.messages = ['✅ Nota eliminada.', confirmText(state, businessName, currency, labels)];
+      reply.options = confirmOptions(labels);
       return finish();
     }
 
@@ -2112,58 +3963,138 @@ async function handleMessage(t, slug, sessionId, rawInput) {
 
     state.customer.orderNote = note.slice(0, 220);
     state.step = 'confirm';
-    reply.messages = ['✅ Nota actualizada.', confirmText(state, businessName, currency)];
-    reply.options = confirmOptions();
+    reply.messages = ['✅ Nota actualizada.', confirmText(state, businessName, currency, labels)];
+    reply.options = confirmOptions(labels);
     return finish();
   }
 
-  // Texto libre: busca producto por nombre
-  const products = await activeProducts(t);
-  const match = findProductByNaturalInput(products, input);
-  if (match) {
-    const existing = state.cart.find((it) => it.id === match.id);
-    if (existing) existing.qty += 1;
-    else state.cart.push({ id: match.id, name: match.name, price: match.price, qty: 1 });
-    resetUpsellProgress();
-    reply.messages = [`¡Agregado! 1x *${match.name}* 🎉\n\n${cartSummary(state.cart, currency)}`];
-    reply.options = [
-      { label: '➕ Agregar más', value: 'menu' },
-      { label: '✅ Sería todo, gracias.', value: 'checkout' },
-    ];
+  if (choiceSteps.has(state.step) && !/\b(quiero|quisiera|necesito|agrega|agregar|quita|quitar|elimina|eliminar)\b/.test(normalizeSearchText(input))) {
+    reply.messages = [state.step === 'confirm' ? confirmText(state, businessName, currency, labels) : 'Elige una de estas opciones para continuar:'];
+    reply.options = state.step === 'confirm' ? confirmOptions(labels) : (state.lastOptions || []);
     return finish();
+  }
+
+  // El texto libre de compra debe modificar el carrito real, nunca solo responder que se tomó el pedido.
+  const normalizedInput = normalizeSearchText(input);
+  const orderIntent = /\b(quiero|quisiera|necesito|gustaria|dame|das|ponme|agrega|agregar|anade|quita|quitar|elimina|eliminar|pido|pedir|llevo|ordenar|compro|pedido)\b/.test(normalizedInput)
+    || /^(\d+|un|una|dos|tres|cuatro|cinco|seis|siete|ocho|nueve|diez)\s/.test(normalizedInput);
+  const ai = await (runtime.aiFallback || aiFallback)(t, businessName, input, state, businessType);
+  if (orderIntent && Array.isArray(ai?.changes)) {
+    const lines = [];
+    const configurable = [];
+    const warnings = [];
+    const originalCartLines = [...state.cart];
+    for (const change of ai.changes.slice(0, 20)) {
+      const id = Number(change.product_id);
+      const qty = Number(change.quantity);
+      if (!Number.isInteger(id) || !Number.isInteger(qty) || qty < 1 || qty > 50) continue;
+      const cfg = await loadProductConfig(t, id);
+      if (!cfg) continue;
+      if (change.action === 'remove') {
+        const lineIndex = Number(change.line_index);
+        const selectedLine = originalCartLines[lineIndex];
+        if (change.line_index != null && Number.isInteger(lineIndex) && Number(selectedLine?.id) === id && state.cart.includes(selectedLine)) {
+          const line = selectedLine;
+          line.qty -= qty;
+          if (line.qty <= 0) state.cart.splice(state.cart.indexOf(line), 1);
+          lines.push(`• Reducido o quitado: *${line.name}*`);
+        } else {
+          const matchingLines = state.cart.filter((item) => Number(item.id) === id);
+          if (matchingLines.length === 1) {
+            matchingLines[0].qty -= qty;
+            if (matchingLines[0].qty <= 0) state.cart = state.cart.filter((item) => item !== matchingLines[0]);
+            lines.push(`• Reducido o quitado: *${matchingLines[0].name}*`);
+          } else if (matchingLines.length > 1) {
+            warnings.push(`Hay varias presentaciones de *${cfg.name}* en tu pedido. Abre el carrito y elige cuál quieres quitar.`);
+          }
+        }
+      } else if (change.action === 'add') {
+        if (cfg.hasVariants || cfg.hasModifiers) configurable.push({ productId: id, qty });
+        else {
+          const existing = state.cart.find((item) => Number(item.id) === id && !item._cartKey);
+          if (existing) existing.qty = Math.min(50, existing.qty + qty);
+          else state.cart.push({ id, name: cfg.name, price: cfg.price, qty, ...productTaxLineSnapshot(cfg.price, cfg), ...promotionLineSnapshot(cfg) });
+          lines.push(`• Agregado: *${qty}x ${cfg.name}*`);
+        }
+      }
+    }
+    if (lines.length || configurable.length) {
+      resetUpsellProgress();
+      if (configurable.length) {
+        state.pendingConfigurationQueue = configurable;
+        state.pendingConfigurationTotal = configurable.length;
+        state.pendingConfigurationCurrent = 0;
+        reply.messages = lines.length ? [`✅ Cambios en tu pedido:\n${lines.join('\n')}`, ...warnings] : warnings;
+        return presentNextQueuedProductConfiguration(state, reply, currency, t, finish, labels);
+      }
+      state.step = 'start';
+      reply.messages = [`✅ Cambios en tu pedido:\n${lines.join('\n')}`, ...warnings, cartSummary(state.cart, currency, labels)];
+      showPostSendOptions();
+      return finish();
+    }
+    if (warnings.length) {
+      reply.messages = [...warnings, cartSummary(state.cart, currency, labels)];
+      reply.options = [{ label: labels.cartButton, value: 'cart' }, { label: '➕ Agregar productos', value: 'menu' }];
+      return finish();
+    }
+  }
+  // Respaldo sin IA para un producto sencillo mencionado de forma explícita.
+  if (orderIntent && !ai?.changes && !/\b(quita|quitar|elimina|eliminar)\b/.test(normalizeSearchText(input)) && !/\b([2-9]|[1-9]\d+)\b/.test(normalizeSearchText(input))) {
+    const products = await activeProducts(t);
+    const mentioned = products.filter((product) => normalizeSearchText(input).includes(normalizeSearchText(product.name)));
+    const match = mentioned.length === 1 ? mentioned[0] : null;
+    if (match) {
+      const cfg = await loadProductConfig(t, match.id);
+      if (cfg && !cfg.hasVariants && !cfg.hasModifiers) {
+        const existing = state.cart.find((it) => it.id === match.id && !it._cartKey);
+        if (existing) existing.qty += 1;
+        else state.cart.push({ id: match.id, name: match.name, price: match.price, qty: 1, ...productTaxLineSnapshot(match.price, match), ...promotionLineSnapshot(match) });
+        resetUpsellProgress();
+        reply.messages = [`¡Agregado! 1x *${match.name}* 🎉\n\n${cartSummary(state.cart, currency, labels)}`];
+        showPostSendOptions();
+        return finish();
+      }
+    }
   }
 
   // IA opcional para preguntas libres
-  const ai = await aiFallback(t, businessName, input, state);
   pushAiHistory(state, 'user', input);
-  if (ai) pushAiHistory(state, 'assistant', ai);
-  reply.messages = [ai || 'No estoy seguro de haber entendido 🤔 ¿Te ayudo con alguna de estas opciones?'];
-  reply.options = mainOptions(state.cart, chatbotInfoOptions);
+  if (ai?.text) pushAiHistory(state, 'assistant', ai.text);
+  reply.messages = [orderIntent ? 'Para tomar tu pedido, elige los productos del menú o dime sus nombres y cantidades. Aún no he agregado nada nuevo.' : (ai?.text || 'No estoy seguro de haber entendido 🤔 ¿Te ayudo con alguna de estas opciones?')];
+  reply.options = mainOptions(state.cart, chatbotInfoOptions, labels);
   return finish();
 }
 
-function confirmText(state, businessName, currency) {
+function confirmText(state, businessName, currency, labels = RESTAURANT_LABELS) {
   const c = state.customer;
+  const total = cartTotal(state.cart) + Number(c?.deliveryFee || 0);
+  const cashLines = cashChangeSummaryLines(c, total, currency);
   const locationDetails = locationSummary(c);
+  const pickupLbl = labels.pickupLabel || '🏪 Recoger en sucursal';
+  const isAddressDelivery = state.receivingMode?.behavior === 'delivery' || state.delivery === 'domicilio';
+  const receivingLabel = state.receivingMode?.label || c.receivingModeLabel || pickupLbl;
   return (
-    `${pricingSummary(state, currency)}\n\n` +
+    `${pricingSummary(state, currency, labels)}\n\n` +
     `👤 ${c.name}\n📞 ${c.phone}\n` +
-    `💳 Pago: ${paymentMethodLabel(c.paymentMethod)}\n` +
-    (state.delivery === 'domicilio'
+    `💳 Pago: ${c.paymentMethodLabel || paymentMethodLabel(c.paymentMethod)}\n` +
+    (cashLines.length ? `${cashLines.join('\n')}\n` : '') +
+    (c.scheduledForLabel ? `🗓️ Programado para: ${c.scheduledForLabel}\n` : '') +
+    (isAddressDelivery
       ? `📍 ${c.address}`
-      : `🏪 Recoger en sucursal${c.branchName ? `: ${c.branchName}` : ''}`) +
-    (state.delivery === 'domicilio' && c.deliveryBranchName ? `\n🏪 Atiende: Sucursal ${c.deliveryBranchName}` : '') +
-    (state.delivery === 'domicilio' && c.reference ? `\n📝 Referencia: ${c.reference}` : '') +
+      : `${receivingLabel}${c.branchName ? `: ${c.branchName}` : ''}`) +
+    (isAddressDelivery && c.deliveryBranchName ? `\n🏪 Atiende: Sucursal ${c.deliveryBranchName}` : '') +
+    (isAddressDelivery && c.reference ? `\n📝 Referencia: ${c.reference}` : '') +
     (locationDetails ? `\n${locationDetails}` : '') +
-    '\n\n¿Confirmamos tu pedido?'
+    `\n\n${labels.confirmQuestion || RESTAURANT_LABELS.confirmQuestion}`
   );
 }
 
-function confirmOptions() {
+function confirmOptions(labels = RESTAURANT_LABELS) {
   return [
-    { label: '✅ Sí, confirmar', value: 'confirm_yes' },
-    { label: '📝 Editar nota', value: 'confirm_edit_note' },
-    { label: '❌ No, regresar', value: 'confirm_no' },
+    { label: labels.confirmYes || RESTAURANT_LABELS.confirmYes, value: 'confirm_yes' },
+    { label: '✏️ Editar productos', value: 'confirm_edit_cart' },
+    { label: labels.editNote || RESTAURANT_LABELS.editNote, value: 'confirm_edit_note' },
+    { label: labels.confirmBack || RESTAURANT_LABELS.confirmBack, value: 'confirm_no' },
   ];
 }
 
@@ -2171,4 +4102,19 @@ function newSessionId() {
   return crypto.randomUUID();
 }
 
-module.exports = { handleMessage, newSessionId };
+module.exports = {
+  buildBusinessSystemPrompt,
+  buildOrderText,
+  defaultReceivingModes,
+  getLabels,
+  handleMessage,
+  newSessionId,
+  normalizeCatalogSortMode,
+  normalizeBranchId,
+  parseCashAmount,
+  parseDeliveryZones,
+  pointInPolygon,
+  resolveDeliveryFee,
+  sortCatalogProducts,
+  toggleModifierOptionSelection,
+};
