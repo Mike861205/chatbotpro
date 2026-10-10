@@ -653,7 +653,7 @@ const WHATSAPP_GENERIC_BODY = '*Selecciona una opción:*';
 function whatsappProductListMessage(reply, productRows) {
   const category = whatsappDisplayText(reply.categoryName, 60);
   const intro = category ? `*${category}*` : '*Productos*';
-  const hint = 'Toca *Ver productos* y elige uno: se agrega a tu pedido. Puedes pedir *varios productos* de esta categoría; después de cada uno toca *Agregar otro* para volver aquí.';
+  const hint = 'Toca *Ver productos* y elige uno: se agrega a tu pedido. Puedes pedir *varios productos*; después de cada uno toca *Agregar otro* para volver al menú y elegir de cualquier categoría.';
   let rows = productRows;
   let range = '';
   let page = 1;

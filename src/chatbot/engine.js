@@ -887,10 +887,16 @@ function returningAddressText(profile) {
   return lines.join('\n');
 }
 
+function phoneHashCandidates(digits) {
+  const last10 = digits.slice(-10);
+  const variants = new Set([digits, last10, `52${last10}`, `521${last10}`, `1${last10}`]);
+  return [...variants].map((value) => lookupHash(value));
+}
+
 async function findReturningCustomerByPhone(t, phoneRaw) {
   const digits = String(phoneRaw || '').replace(/\D/g, '');
   if (digits.length < 10) return null;
-  const phoneHash = lookupHash(digits);
+  const phoneHashes = phoneHashCandidates(digits);
   const row = await t.get(
     `SELECT
        c.id,
@@ -911,21 +917,40 @@ async function findReturningCustomerByPhone(t, phoneRaw) {
        to_char(o.created_at AT TIME ZONE 'America/Mexico_City', 'DD Mon YYYY, HH24:MI') AS last_delivery_at
      FROM {s}.customers c
      JOIN {s}.orders o ON o.customer_id = c.id
-     WHERE c.phone_hash = $1
+     WHERE c.phone_hash = ANY($1::text[])
        AND (o.receiving_mode_behavior = 'delivery' OR o.delivery = 'domicilio')
      ORDER BY o.id DESC
      LIMIT 1`,
-    [phoneHash]
+    [phoneHashes]
   );
+  const lastOrder = await t.get(
+    `SELECT o.id, o.delivery, o.receiving_mode_label, o.receiving_mode_behavior, o.pickup_branch_id, o.pickup_branch_name
+     FROM {s}.orders o
+     JOIN {s}.customers c ON c.id = o.customer_id
+     WHERE c.phone_hash = ANY($1::text[])
+       AND o.channel IN ('chatbot', 'whatsapp', 'pos')
+     ORDER BY o.id DESC
+     LIMIT 1`,
+    [phoneHashes]
+  );
+  const lastPickup = lastOrder && lastOrder.receiving_mode_behavior === 'branch' && normalizeBranchId(lastOrder.pickup_branch_id)
+    ? {
+      lastMode: 'branch',
+      lastModeId: String(lastOrder.delivery || ''),
+      lastModeLabel: String(lastOrder.receiving_mode_label || ''),
+      lastBranchId: normalizeBranchId(lastOrder.pickup_branch_id),
+      lastBranchName: String(lastOrder.pickup_branch_name || ''),
+    }
+    : { lastMode: 'delivery' };
   if (!row) {
     const customer = await t.get(
       `SELECT c.id, c.name_enc, c.phone_enc
        FROM {s}.customers c
-       WHERE c.phone_hash = $1
+       WHERE c.phone_hash = ANY($1::text[])
          AND EXISTS (SELECT 1 FROM {s}.orders o WHERE o.customer_id = c.id)
        ORDER BY c.id DESC
        LIMIT 1`,
-      [phoneHash]
+      [phoneHashes]
     );
     if (!customer) return null;
     return {
@@ -933,6 +958,7 @@ async function findReturningCustomerByPhone(t, phoneRaw) {
       name: decrypt(customer.name_enc) || '',
       phone: decrypt(customer.phone_enc) || digits,
       hasDeliveryHistory: false,
+      ...lastPickup,
     };
   }
   const name = decrypt(row.name_enc) || '';
@@ -943,6 +969,7 @@ async function findReturningCustomerByPhone(t, phoneRaw) {
     name,
     phone,
     hasDeliveryHistory: true,
+    ...lastPickup,
     address,
     locationLat: Number.isFinite(Number(row.location_lat)) ? Number(row.location_lat) : null,
     locationLng: Number.isFinite(Number(row.location_lng)) ? Number(row.location_lng) : null,
@@ -2064,6 +2091,12 @@ async function handleMessage(t, slug, sessionId, rawInput, runtime = {}) {
   // el pedido.
   if (runtime.customerPhone && !state.customer?.phone) state.customer.phone = String(runtime.customerPhone).slice(0, 40);
   if (runtime.customerName && !state.customer?.name) state.customer.name = String(runtime.customerName).slice(0, 160);
+  if (isWhatsappChannel && runtime.customerPhone && !state.knownProfileChecked) {
+    // El número verificado de WhatsApp identifica al cliente que ya pidió antes.
+    state.knownProfileChecked = true;
+    state.knownProfile = await findReturningCustomerByPhone(t, runtime.customerPhone).catch(() => null);
+    if (state.knownProfile?.name) state.customer.name = state.knownProfile.name;
+  }
   state.currency = currency;
   state.currencyConversion = currencyConversion?.enabled ? currencyConversion : null;
   state.cart.currencyConversion = state.currencyConversion;
@@ -2334,6 +2367,43 @@ async function handleMessage(t, slug, sessionId, rawInput, runtime = {}) {
       return;
     }
 
+    const known = isWhatsappChannel ? state.knownProfile : null;
+    if (known) {
+      const greeting = `¡Qué gusto verte de nuevo${known.name ? `, *${known.name}*` : ''}! 🙌`;
+      const pickupMode = receivingModes.find((mode) => mode.behavior === 'branch');
+      if (known.lastMode === 'branch' && pickupMode && known.lastBranchId) {
+        state.returningProfile = known;
+        state.step = 'confirm_returning_address';
+        reply.messages = [`${greeting}
+La última vez recogiste en *${known.lastBranchName || 'nuestra sucursal'}*.
+
+¿Quieres lo mismo en este pedido?`];
+        reply.options = [
+          { label: `✅ Sí, recoger en ${known.lastBranchName || 'la sucursal'}`.slice(0, 60), value: 'returning_pickup_same' },
+          ...(known.hasDeliveryHistory && deliveryEnabled ? [{ label: '🚚 A mi último domicilio', value: 'returning_address_yes' }] : []),
+          { label: '🔄 Cambiar sucursal o modalidad', value: 'returning_other_mode' },
+        ];
+        return;
+      }
+      if (known.hasDeliveryHistory && deliveryEnabled) {
+        state.returningProfile = known;
+        state.step = 'confirm_returning_address';
+        reply.messages = [
+          `${greeting}
+Encontré tu último pedido a domicilio.`,
+          `${returningAddressText(known)}
+
+¿Lo enviamos a esta misma dirección?`,
+        ];
+        reply.options = [
+          { label: '✅ Sí, usar este domicilio', value: 'returning_address_yes' },
+          { label: '✏️ Capturar nueva dirección de entrega', value: 'returning_address_no' },
+          { label: '🏪 Usar para recoger en sucursal', value: 'returning_address_pickup' },
+        ];
+        return;
+      }
+    }
+
     state.step = 'checkout_identity_choice';
     reply.messages = ['Antes de finalizar, ¿ya habías pedido con nosotros por este chatbot?'];
     reply.options = [
@@ -2484,14 +2554,10 @@ async function handleMessage(t, slug, sessionId, rawInput, runtime = {}) {
     return finish();
   }
   if (lower === 'more_products' || lower === 'add_more_products') {
+    // "Agregar otro" vuelve a todas las categorías para elegir de la misma u otra.
     cancelPendingProductConfiguration(state);
-    if (state.browseMode === 'promotions') {
-      Object.assign(reply, await showPromotions(t, state, labels, activeChatbotPromotions));
-    } else if (Number.isInteger(Number(state.currentCategoryId)) && Number(state.currentCategoryId) > 0) {
-      Object.assign(reply, await showProducts(t, state, Number(state.currentCategoryId), labels, { activePromotions: activeChatbotPromotions }));
-    } else {
-      Object.assign(reply, await showMenu(t, state, labels, activeChatbotPromotions, showFullMenu, catalogSortMode));
-    }
+    state.browseMode = 'menu';
+    Object.assign(reply, await showMenu(t, state, labels, activeChatbotPromotions, showFullMenu, catalogSortMode));
     return finish();
   }
   if (state.step === 'ask_scheduled_order') {
@@ -3068,6 +3134,44 @@ async function handleMessage(t, slug, sessionId, rawInput, runtime = {}) {
         Object.assign(reply, menuReply);
         reply.messages = [...quickMessages, ...(menuReply.messages || [])];
       }
+      return finish();
+    }
+
+    if (lower === 'returning_pickup_same') {
+      const p = state.returningProfile || {};
+      const branches = await t.all('SELECT id, name, address, reference FROM {s}.branches WHERE active = 1 ORDER BY name');
+      const branch = branches.find((b) => Number(b.id) === Number(p.lastBranchId));
+      const mode = receivingModes.find((m) => m.id === p.lastModeId && m.behavior === 'branch') || receivingModes.find((m) => m.behavior === 'branch');
+      if (!branch || !mode) {
+        reply.messages = ['Esa sucursal ya no está disponible. Elige cómo quieres recibir tu pedido:'];
+        state.step = 'ask_delivery';
+        reply.options = receivingModeOptions();
+        return finish();
+      }
+      state.customer.name = p.name || state.customer.name || '';
+      state.customer.phone = String(p.phone || '').replace(/\D/g, '') || state.customer.phone || '';
+      await startReceivingMode(mode);
+      state.returningProfile = null;
+      state.customer.branchId = branch.id;
+      state.customer.branchName = branch.name;
+      state.customer.branchAddress = branch.address;
+      state.customer.branchReference = branch.reference;
+      reply.messages = [`Perfecto, ${mode.id === 'comer_sucursal' ? 'comerás' : 'te atenderemos'} en *${branch.name}* ✅
+${branch.address || ''}${branch.reference ? `
+Referencia: ${branch.reference}` : ''}`.trim()];
+      reply.options = [];
+      goToPaymentOrConfirm();
+      return finish();
+    }
+
+    if (lower === 'returning_other_mode') {
+      const p = state.returningProfile || {};
+      state.customer.name = p.name || state.customer.name || '';
+      state.customer.phone = String(p.phone || '').replace(/\D/g, '') || state.customer.phone || '';
+      state.returningProfile = null;
+      state.step = 'ask_delivery';
+      reply.messages = [labels.askDeliveryMode || '¿Cómo quieres recibir tu pedido?'];
+      reply.options = receivingModeOptions();
       return finish();
     }
 
@@ -4106,6 +4210,7 @@ module.exports = {
   buildBusinessSystemPrompt,
   buildOrderText,
   defaultReceivingModes,
+  findReturningCustomerByPhone,
   getLabels,
   handleMessage,
   newSessionId,
@@ -4113,6 +4218,7 @@ module.exports = {
   normalizeBranchId,
   parseCashAmount,
   parseDeliveryZones,
+  phoneHashCandidates,
   pointInPolygon,
   resolveDeliveryFee,
   sortCatalogProducts,

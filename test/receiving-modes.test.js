@@ -60,7 +60,7 @@ test('los pedidos conservan nombre y comportamiento de la modalidad elegida', ()
 test('la recuperación de clientes reconoce modalidades personalizadas a domicilio', () => {
   assert.match(
     chatbot,
-    /WHERE c\.phone_hash = \$1\s+AND \(o\.receiving_mode_behavior = 'delivery' OR o\.delivery = 'domicilio'\)/
+    /WHERE c\.phone_hash = ANY\(\$1::text\[\]\)\s+AND \(o\.receiving_mode_behavior = 'delivery' OR o\.delivery = 'domicilio'\)/
   );
   assert.match(chatbot, /const address = row\.delivery_address \|\| decrypt\(row\.address_enc\)/);
 });
