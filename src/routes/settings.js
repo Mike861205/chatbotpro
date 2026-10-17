@@ -91,6 +91,7 @@ const SETTING_KEYS = [
   'pos_cancel_require_pin',
   'pos_cashier_cards_json',
   'pos_close_require_approval',
+  'pos_movement_delete_require_pin',
 ];
 
 function normalizeReceivingModes(raw) {
@@ -242,6 +243,12 @@ router.put('/', upload.single('logo'), async (req, res, next) => {
       if (!['0', '1'].includes(String(body.pos_close_require_approval))) return res.status(400).json({ error: 'Configuración de cierre no válida' });
       const pinConfigured = body.pos_authorization_pin || await req.tdb.get("SELECT value FROM {s}.settings WHERE key = 'pos_authorization_pin_hash' AND COALESCE(value, '') <> ''");
       if (body.pos_close_require_approval === '1' && !pinConfigured) return res.status(409).json({ error: 'Configura primero el NIP de autorización' });
+    }
+    if (body.pos_movement_delete_require_pin !== undefined) {
+      if (req.user.role !== 'owner') return res.status(403).json({ error: 'Solo el dueño puede configurar el borrado de movimientos' });
+      if (!['0', '1'].includes(String(body.pos_movement_delete_require_pin))) return res.status(400).json({ error: 'Configuración de borrado no válida' });
+      const pinConfigured = body.pos_authorization_pin || await req.tdb.get("SELECT value FROM {s}.settings WHERE key = 'pos_authorization_pin_hash' AND COALESCE(value, '') <> ''");
+      if (body.pos_movement_delete_require_pin === '1' && !pinConfigured) return res.status(409).json({ error: 'Configura primero el NIP de autorización' });
     }
     if (body.pos_cashier_cards_json !== undefined) {
       if (req.user.role !== 'owner') return res.status(403).json({ error: 'Solo el dueño puede configurar las tarjetas del cajero' });

@@ -26,9 +26,12 @@ let COSTING_SEARCH = '';
 let COSTING_VIEW = 'table';
 let COSTING_EXPORT_FORMAT = 'pdf';
 let COSTING_EXPENSE_BRANCH = 'all';
+let COSTING_EXPENSE_CATEGORY = 'all';
+let EXPENSE_CATEGORIES = [];
 let COSTING_EXPENSE_YEAR = new Date().getFullYear();
 let COSTING_EXPENSE_MONTH = new Date().getMonth() + 1;
 let COSTING_EXPENSE_RANGE = 'month';
+let COSTING_EXPENSE_QUICK_PERIOD = 'month';
 let COSTING_EXPENSE_FROM = '';
 let COSTING_EXPENSE_TO = '';
 let COSTING_EXPENSE_DATA = null;
@@ -87,6 +90,7 @@ let INTERNAL_USERS = [];
 let MODULE_CATALOG = [];
 let LAST_ORDERS = [];
 let POS_OVERVIEW = null;
+let POS_PAYMENT_REPORT_REQUEST = 0;
 let POS_CLOSE_APPROVAL = null;
 const POS_CARD_OPTIONS = [
   ['opening', 'Fondo inicial'], ['sales', 'Ventas del turno'], ['cash', 'Efectivo en ventas'],
@@ -2726,7 +2730,28 @@ async function loadCosting() {
   if (restored) saveCostingProducts({ silent: true });
 }
 
+async function loadExpenseCategories() {
+  const data = await api('/api/costs/expense-categories');
+  EXPENSE_CATEGORIES = data.categories || [];
+  const active = EXPENSE_CATEGORIES.filter((row) => row.active);
+  for (const id of ['costingExpenseCategory', 'posMovementCategoryModal']) {
+    const select = $(`#${id}`);
+    if (!select) continue;
+    const previous = select.value;
+    select.innerHTML = '<option value="">Selecciona una categoría</option>' + active.map((row) => `<option value="${row.id}">${esc(row.name)}</option>`).join('');
+    select.value = active.some((row) => String(row.id) === previous) ? previous : '';
+  }
+  const list = $('#expenseCategoriesList');
+  if (list) {
+    list.innerHTML = EXPENSE_CATEGORIES.length ? `<table><thead><tr><th>Categoría</th><th>Estado</th><th>Acciones</th></tr></thead><tbody>${EXPENSE_CATEGORIES.map((row) => `<tr data-expense-category-id="${row.id}"><td>${ME?.role === 'owner' ? `<input value="${esc(row.name)}" maxlength="80" aria-label="Nombre de ${esc(row.name)}" />` : esc(row.name)}</td><td>${row.active ? 'Activa' : 'Inactiva'}</td><td>${ME?.role === 'owner' ? `<button class="btn btn-ghost btn-sm" type="button" data-category-save="${row.id}">Guardar nombre</button> <button class="btn btn-ghost btn-sm" type="button" data-category-toggle="${row.id}">${row.active ? 'Desactivar' : 'Activar'}</button>` : ''}</td></tr>`).join('')}</tbody></table>` : emptyHTML('ph-tag', 'Sin categorías', 'Agrega una categoría para habilitar gastos nuevos.');
+  }
+  $('#expenseCategoryForm').hidden = ME?.role !== 'owner';
+}
+
 async function loadCostingExpenses() {
+  const request = ++COSTING_EXPENSE_REQUEST;
+  await loadExpenseCategories();
+  if (request !== COSTING_EXPENSE_REQUEST) return;
   $('#costingExpenseDate').value ||= getLocalIsoDate();
   if (COSTING_EXPENSE_RANGE === 'month') {
     const month = `${COSTING_EXPENSE_YEAR}-${String(COSTING_EXPENSE_MONTH).padStart(2, '0')}`;
@@ -2739,11 +2764,11 @@ async function loadCostingExpenses() {
   $('#costingExpenseFrom').value = COSTING_EXPENSE_FROM;
   $('#costingExpenseTo').value = COSTING_EXPENSE_TO;
   $('#costingExpenseAllDates').classList.toggle('on', COSTING_EXPENSE_RANGE === 'all');
-  const query = new URLSearchParams({ branch: COSTING_EXPENSE_BRANCH });
+  document.querySelectorAll('[data-expense-period]').forEach((button) => button.classList.toggle('on', button.dataset.expensePeriod === COSTING_EXPENSE_QUICK_PERIOD));
+  const query = new URLSearchParams({ branch: COSTING_EXPENSE_BRANCH, category: COSTING_EXPENSE_CATEGORY });
   if (COSTING_EXPENSE_SEARCH.trim()) query.set('q', COSTING_EXPENSE_SEARCH.trim());
   if (COSTING_EXPENSE_RANGE === 'all') query.set('period', 'all');
   else { query.set('from', COSTING_EXPENSE_FROM); query.set('to', COSTING_EXPENSE_TO); }
-  const request = ++COSTING_EXPENSE_REQUEST;
   COSTING_EXPENSE_DATA = null;
   $('#costingExpensePdf').disabled = true;
   $('#costingExpenseExcel').disabled = true;
@@ -2778,11 +2803,16 @@ async function loadCostingExpenses() {
   filterBranch.innerHTML = `${branchRestricted ? '' : '<option value="all">Todas las sucursales</option><option value="general">Sin sucursal</option>'}${branchOptions}`;
   filterBranch.value = COSTING_EXPENSE_BRANCH;
   filterBranch.disabled = branchRestricted;
+  const filterCategory = $('#costingExpenseFilterCategory');
+  filterCategory.innerHTML = '<option value="all">Todas las categorías y retiros</option><option value="withdrawals">Retiros de caja</option>' + EXPENSE_CATEGORIES.map((row) => `<option value="${row.id}">${esc(row.name)}</option>`).join('') + '<option value="legacy">Sin categoría (histórico)</option>';
+  filterCategory.value = COSTING_EXPENSE_CATEGORY;
   $('#costingExpenseTotal').textContent = `Total: ${fmtMoney(data.total)}`;
   renderExpenseCards(data);
+  $('#expenseCategorySummary').innerHTML = (data.categoryTotals || []).map((row) => `<div class="expense-summary-card"><i class="ph-bold ph-tag"></i><span>${esc(row.name)}</span><strong>${fmtMoney(row.total)}</strong><small>${row.count} movimiento${row.count === 1 ? '' : 's'}</small></div>`).join('');
   renderDeletedExpenses(data.deletedExpenses || []);
-  $('#costingExpensePdf').disabled = !data.expenses.length;
-  $('#costingExpenseExcel').disabled = !data.expenses.length;
+  $('#costingDeletedExpenseTotal').textContent = `${data.deletedCount || 0} reversos · ${fmtMoney(data.deletedTotal || 0)}`;
+  $('#costingExpensePdf').disabled = !data.expenses.length && !data.deletedExpenses?.length;
+  $('#costingExpenseExcel').disabled = !data.expenses.length && !data.deletedExpenses?.length;
   renderExpenseTable(data.expenses);
 }
 
@@ -2802,14 +2832,14 @@ function renderExpenseTable(expenses) {
   renderExpensePageControls(rows.length, COSTING_EXPENSE_PAGE, '#costingExpensePageInfo', '#costingExpensePrev', '#costingExpenseNext');
   const host = $('#costingExpensesTable');
   if (!rows.length) {
-    host.innerHTML = emptyHTML('ph-receipt', 'Sin gastos para este filtro', 'Prueba otra fecha, sucursal o texto de búsqueda.');
+    host.innerHTML = emptyHTML('ph-receipt', 'Sin gastos ni retiros para este filtro', 'Prueba otra fecha, sucursal o texto de búsqueda.');
     return;
   }
   const pageRows = rows.slice((COSTING_EXPENSE_PAGE - 1) * COSTING_EXPENSE_PAGE_SIZE, COSTING_EXPENSE_PAGE * COSTING_EXPENSE_PAGE_SIZE);
-  host.innerHTML = `<table><thead><tr><th>Fecha</th><th>Sucursal</th><th>Concepto</th><th>Origen</th><th>Monto</th><th>Usuario</th><th>Acciones</th></tr></thead><tbody>${pageRows.map((expense) => `<tr>
-    <td>${esc(String(expense.expense_date || '').slice(0, 10))}</td><td>${esc(expense.branch_name)}</td><td><b>${esc(expense.concept)}</b>${expense.notes ? `<small class="costing-expense-note">${esc(expense.notes)}</small>` : ''}</td>
+  host.innerHTML = `<table><thead><tr><th>Fecha</th><th>Sucursal</th><th>Tipo</th><th>Categoría</th><th>Concepto</th><th>Origen</th><th>Monto</th><th>Usuario</th><th>Acciones</th></tr></thead><tbody>${pageRows.map((expense) => `<tr>
+    <td>${esc(String(expense.expense_date || '').slice(0, 10))}</td><td>${esc(expense.branch_name)}</td><td>${expense.movement_kind === 'withdrawal' ? 'Retiro' : 'Gasto'}</td><td>${esc(expense.movement_kind === 'withdrawal' ? '—' : expense.category_name || 'Sin categoría (histórico)')}</td><td><b>${esc(expense.concept)}</b>${expense.notes ? `<small class="costing-expense-note">${esc(expense.notes)}</small>` : ''}</td>
     <td><span class="costing-source ${expense.source}">${expense.source === 'pos' ? 'Punto de venta' : 'Manual'}</span></td><td><b>${fmtMoney(expense.amount)}</b></td><td>${esc(expense.created_by || '—')}</td>
-    <td>${ME?.role === 'owner' || isCashierUser() ? `<button type="button" class="btn btn-ghost btn-sm costing-delete-expense" data-expense-id="${expense.id}" title="Borrar gasto" aria-label="Borrar gasto ${esc(expense.concept)}"><i class="ph-bold ph-trash"></i> Borrar</button>` : ''}</td></tr>`).join('')}</tbody></table>`;
+    <td>${ME?.role === 'owner' || isCashierUser() ? `<button type="button" class="btn btn-ghost btn-sm costing-delete-expense" data-expense-id="${expense.id}" title="Borrar operación" aria-label="Borrar operación ${esc(expense.concept)}"><i class="ph-bold ph-trash"></i> Borrar</button>` : ''}</td></tr>`).join('')}</tbody></table>`;
   host.querySelectorAll('.costing-delete-expense').forEach((button) => button.addEventListener('click', () => {
     const expense = rows.find((row) => Number(row.id) === Number(button.dataset.expenseId));
     if (expense) openDeleteExpenseModal(expense);
@@ -2822,13 +2852,13 @@ function renderDeletedExpenses(rows) {
   COSTING_DELETED_EXPENSE_PAGE = Math.min(COSTING_DELETED_EXPENSE_PAGE, Math.max(1, Math.ceil(rows.length / COSTING_EXPENSE_PAGE_SIZE)));
   renderExpensePageControls(rows.length, COSTING_DELETED_EXPENSE_PAGE, '#costingDeletedExpensePageInfo', '#costingDeletedExpensePrev', '#costingDeletedExpenseNext');
   if (!rows.length) {
-    host.innerHTML = emptyHTML('ph-archive', 'Sin gastos borrados', 'Las eliminaciones del periodo y sucursal seleccionados aparecerán aquí.');
+    host.innerHTML = emptyHTML('ph-archive', 'Sin gastos ni retiros borrados', 'Las eliminaciones del periodo y sucursal seleccionados aparecerán aquí.');
     return;
   }
   const pageRows = rows.slice((COSTING_DELETED_EXPENSE_PAGE - 1) * COSTING_EXPENSE_PAGE_SIZE, COSTING_DELETED_EXPENSE_PAGE * COSTING_EXPENSE_PAGE_SIZE);
-  host.innerHTML = `<table><thead><tr><th>Fecha del gasto</th><th>Sucursal</th><th>Concepto</th><th>Origen</th><th>Monto</th><th>Registró</th><th>Borró</th><th>Autorización</th><th>Fecha de borrado</th></tr></thead><tbody>${pageRows.map((row) => `<tr>
+  host.innerHTML = `<table><thead><tr><th>Fecha original</th><th>Sucursal</th><th>Reverso</th><th>Categoría</th><th>Concepto</th><th>Origen</th><th>Monto</th><th>Registró</th><th>Borró</th><th>Autorización</th><th>Fecha de borrado</th></tr></thead><tbody>${pageRows.map((row) => `<tr>
     <td>${esc(String(row.expense_date || '').slice(0, 10))}</td><td>${esc(row.branch_name || 'Sin sucursal')}</td>
-    <td><b>${esc(row.concept)}</b>${row.notes ? `<small class="costing-expense-note">${esc(row.notes)}</small>` : ''}${row.session_id ? `<small class="costing-expense-note">Caja #${Number(row.session_id)}</small>` : ''}</td>
+    <td>${row.movement_kind === 'withdrawal' ? 'Reverso de retiro' : 'Reverso de gasto'}</td><td>${esc(row.movement_kind === 'withdrawal' ? '—' : row.category_name || 'Sin categoría (histórico)')}</td><td><b>${esc(row.concept)}</b>${row.notes ? `<small class="costing-expense-note">${esc(row.notes)}</small>` : ''}${row.session_id ? `<small class="costing-expense-note">Caja #${Number(row.session_id)}</small>` : ''}</td>
     <td><span class="costing-source ${row.source}">${row.source === 'pos' ? 'Punto de venta' : 'Manual'}</span></td><td><b>${fmtMoney(row.amount)}</b></td>
     <td>${esc(row.created_by || '—')}</td><td>${esc(row.deleted_by || '—')}</td><td>${esc(row.authorized_by || '—')}</td><td>${esc(row.deleted_at || '—')}</td>
   </tr>`).join('')}</tbody></table>`;
@@ -2862,7 +2892,7 @@ async function submitDeleteExpense(event) {
     await loadCostingExpenses();
     if (SALES_REPORT_DATA) refreshSalesReportSafely();
     if (expense.source === 'pos' && POS_OVERVIEW) loadPos().catch((error) => toast(error.message, true));
-    toast('Gasto borrado y registrado en el historial');
+    toast(`${expense.movement_kind === 'withdrawal' ? 'Retiro' : 'Gasto'} borrado y registrado en el historial`);
   } catch (error) {
     toast(error.message || 'No se pudo borrar el gasto', true);
   } finally {
@@ -2874,8 +2904,8 @@ async function submitDeleteExpense(event) {
 function renderExpenseCards(data) {
   const host = $('#costingExpenseCards');
   const cards = [];
-  const card = (branch, label, amount, count, icon) => `<button type="button" class="expense-summary-card${COSTING_EXPENSE_BRANCH === branch ? ' active' : ''}" data-expense-branch="${branch}" aria-pressed="${COSTING_EXPENSE_BRANCH === branch}"><i class="ph-bold ${icon}"></i><span>${esc(label)}</span><strong>${fmtMoney(amount)}</strong><small>${count} gasto${count === 1 ? '' : 's'}</small></button>`;
-  if (!data.branchRestricted) cards.push(card('all', 'Gasto global', data.globalTotal, data.globalCount, 'ph-globe-hemisphere-west'));
+  const card = (branch, label, amount, count, icon) => `<button type="button" class="expense-summary-card${COSTING_EXPENSE_BRANCH === branch ? ' active' : ''}" data-expense-branch="${branch}" aria-pressed="${COSTING_EXPENSE_BRANCH === branch}"><i class="ph-bold ${icon}"></i><span>${esc(label)}</span><strong>${fmtMoney(amount)}</strong><small>${count} movimiento${count === 1 ? '' : 's'}</small></button>`;
+  if (!data.branchRestricted) cards.push(card('all', 'Gastos y retiros', data.globalTotal, data.globalCount, 'ph-globe-hemisphere-west'));
   for (const branch of data.branchTotals || []) cards.push(card(String(branch.id), branch.name, branch.total, branch.count, 'ph-storefront'));
   if (!data.branchRestricted) cards.push(card('general', 'Sin sucursal', data.generalTotal, data.generalCount, 'ph-buildings'));
   host.innerHTML = cards.join('');
@@ -2891,28 +2921,33 @@ function renderExpenseCards(data) {
 
 function expenseExportDetails() {
   const data = COSTING_EXPENSE_DATA;
-  if (!data?.expenses?.length) return null;
+  if (!data?.expenses?.length && !data?.deletedExpenses?.length) return null;
   const branch = $('#costingExpenseFilterBranch').selectedOptions[0]?.textContent?.trim() || 'Todas las sucursales';
+  const category = $('#costingExpenseFilterCategory').selectedOptions[0]?.textContent?.trim() || 'Todas las categorías';
   const period = data.allDates ? 'Todo el historial' : `${data.from} al ${data.to}`;
   const fileBranch = branch.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+  const fileCategory = category.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
   const filePeriod = data.allDates ? 'historial' : `${data.from}_${data.to}`;
-  return { data, branch, period, filename: `gastos_${fileBranch || 'global'}_${filePeriod}` };
+  return { data, branch, category, period, filename: `gastos_${fileBranch || 'global'}_${fileCategory || 'categorias'}_${filePeriod}` };
 }
 
 function exportExpensesExcel() {
   const report = expenseExportDetails();
   if (!report) return toast('No hay gastos en el filtro actual', true);
   if (!globalThis.XLSX) return toast('No se pudo preparar el archivo Excel', true);
-  const { data, branch, period, filename } = report;
+  const { data, branch, category, period, filename } = report;
   const workbook = XLSX.utils.book_new();
   const summary = XLSX.utils.aoa_to_sheet([
     ['Reporte', 'Gastos'], ['Negocio', ME?.tenant?.businessName || SETTINGS?.business_name || 'Negocio'],
-    ['Periodo', period], ['Sucursal', branch], ['Gastos', data.expenses.length], ['Total', data.total],
+    ['Periodo', period], ['Sucursal', branch], ['Categoría', category], ['Gastos y retiros vigentes', data.expenses.length], ['Total vigente', data.total],
+    ['Reversos', data.deletedCount || data.deletedExpenses?.length || 0], ['Total reversado', data.deletedTotal || 0],
     ['Generado', fmtBusinessDateTime()],
   ]);
   const rows = data.expenses.map((expense) => ({
     Fecha: String(expense.expense_date || '').slice(0, 10),
     Sucursal: expense.branch_name,
+    Tipo: expense.movement_kind === 'withdrawal' ? 'Retiro' : 'Gasto',
+    Categoría: expense.movement_kind === 'withdrawal' ? '' : expense.category_name || 'Sin categoría (histórico)',
     Concepto: expense.concept,
     Notas: expense.notes || '',
     Origen: expense.source === 'pos' ? 'Punto de venta' : 'Manual',
@@ -2921,9 +2956,19 @@ function exportExpensesExcel() {
     Registro: expense.created_at || '',
   }));
   const sheet = XLSX.utils.json_to_sheet(rows);
-  sheet['!cols'] = [14, 25, 34, 34, 19, 14, 18, 20].map((wch) => ({ wch }));
+  sheet['!cols'] = [14, 25, 12, 25, 34, 34, 19, 14, 18, 20].map((wch) => ({ wch }));
+  const categorySheet = XLSX.utils.json_to_sheet((data.categoryTotals || []).map((row) => ({ Categoría: row.name, Gastos: row.count, Total: Number(row.total) })));
+  categorySheet['!cols'] = [{ wch: 30 }, { wch: 12 }, { wch: 16 }];
   XLSX.utils.book_append_sheet(workbook, summary, 'Resumen');
+  XLSX.utils.book_append_sheet(workbook, categorySheet, 'Por categoría');
   XLSX.utils.book_append_sheet(workbook, sheet, 'Gastos');
+  const reversed = XLSX.utils.json_to_sheet((data.deletedExpenses || []).map((row) => ({
+    'Fecha original': String(row.expense_date || '').slice(0, 10), Sucursal: row.branch_name,
+    Reverso: row.movement_kind === 'withdrawal' ? 'Retiro' : 'Gasto', Categoría: row.category_name || '',
+    Concepto: row.concept, Monto: Number(row.amount), Registró: row.created_by || '',
+    Borró: row.deleted_by || '', Autorización: row.authorized_by || '', 'Fecha de borrado': row.deleted_at || '',
+  })));
+  XLSX.utils.book_append_sheet(workbook, reversed, 'Reversos');
   XLSX.writeFile(workbook, `${filename}.xlsx`);
 }
 
@@ -2931,25 +2976,37 @@ function exportExpensesPdf() {
   const report = expenseExportDetails();
   if (!report) return toast('No hay gastos en el filtro actual', true);
   if (!globalThis.jspdf?.jsPDF) return toast('No se pudo preparar el archivo PDF', true);
-  const { data, branch, period, filename } = report;
+  const { data, branch, category, period, filename } = report;
   const doc = new globalThis.jspdf.jsPDF({ orientation: 'landscape', unit: 'mm', format: 'letter' });
   doc.setFontSize(17);
   doc.text('Reporte de gastos', 14, 17);
   doc.setFontSize(10);
   doc.text(String(ME?.tenant?.businessName || SETTINGS?.business_name || 'Negocio'), 14, 24);
-  doc.text(`Periodo: ${period}  |  Sucursal: ${branch}`, 14, 31);
-  doc.text(`Total: ${fmtMoney(data.total)}  |  ${data.expenses.length} gastos`, 14, 38);
+  doc.text(`Periodo: ${period}  |  Sucursal: ${branch}  |  Categoría: ${category}`, 14, 31);
+  doc.text(`Vigente: ${fmtMoney(data.total)}  |  Reversos: ${fmtMoney(data.deletedTotal || 0)}`, 14, 38);
   doc.autoTable({
     startY: 44,
     theme: 'striped',
-    head: [['Fecha', 'Sucursal', 'Concepto y notas', 'Origen', 'Monto', 'Usuario']],
+    head: [['Fecha', 'Sucursal', 'Tipo', 'Categoría', 'Concepto y notas', 'Origen', 'Monto', 'Usuario']],
     body: data.expenses.map((expense) => [
-      String(expense.expense_date || '').slice(0, 10), expense.branch_name,
+      String(expense.expense_date || '').slice(0, 10), expense.branch_name, expense.movement_kind === 'withdrawal' ? 'Retiro' : 'Gasto', expense.movement_kind === 'withdrawal' ? '' : expense.category_name || 'Sin categoría (histórico)',
       `${expense.concept}${expense.notes ? `\n${expense.notes}` : ''}`,
       expense.source === 'pos' ? 'Punto de venta' : 'Manual', fmtMoney(expense.amount), expense.created_by || '—',
     ]),
     styles: { fontSize: 8, cellPadding: 2.5, overflow: 'linebreak' },
     headStyles: { fillColor: [31, 134, 79] },
+    margin: { left: 14, right: 14, bottom: 14 },
+  });
+  doc.autoTable({
+    startY: (doc.lastAutoTable?.finalY || 44) + 10,
+    theme: 'striped',
+    head: [['Fecha borrado', 'Sucursal', 'Reverso', 'Concepto', 'Monto', 'Registró', 'Borró', 'Autorización']],
+    body: (data.deletedExpenses || []).map((row) => [
+      row.deleted_at || '', row.branch_name || '', row.movement_kind === 'withdrawal' ? 'Retiro' : 'Gasto',
+      row.concept || '', fmtMoney(row.amount), row.created_by || '', row.deleted_by || '', row.authorized_by || '',
+    ]),
+    styles: { fontSize: 8, cellPadding: 2.5, overflow: 'linebreak' },
+    headStyles: { fillColor: [185, 28, 28] },
     margin: { left: 14, right: 14, bottom: 14 },
   });
   const pages = doc.internal.getNumberOfPages();
@@ -2998,6 +3055,7 @@ $('#costingExpenseForm')?.addEventListener('submit', async (event) => {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({
         branchId: $('#costingExpenseBranch').value === 'general' ? null : Number($('#costingExpenseBranch').value),
         expenseDate: $('#costingExpenseDate').value,
+        categoryId: Number($('#costingExpenseCategory').value),
         concept: $('#costingExpenseConcept').value,
         amount: Number($('#costingExpenseAmount').value),
         notes: $('#costingExpenseNotes').value,
@@ -3006,6 +3064,7 @@ $('#costingExpenseForm')?.addEventListener('submit', async (event) => {
     $('#costingExpenseConcept').value = '';
     $('#costingExpenseAmount').value = '';
     $('#costingExpenseNotes').value = '';
+    $('#costingExpenseCategory').value = '';
     await loadCostingExpenses();
     if (SALES_REPORT_DATA) refreshSalesReportSafely();
     toast('Gasto registrado');
@@ -3016,6 +3075,7 @@ $('#costingExpenseMonth')?.addEventListener('change', (event) => {
   if (!match) return;
   COSTING_EXPENSE_YEAR = Number(match[1]); COSTING_EXPENSE_MONTH = Number(match[2]);
   COSTING_EXPENSE_RANGE = 'month';
+  COSTING_EXPENSE_QUICK_PERIOD = 'month';
   COSTING_EXPENSE_PAGE = 1;
   COSTING_DELETED_EXPENSE_PAGE = 1;
   loadCostingExpenses().catch((error) => toast(error.message, true));
@@ -3036,6 +3096,7 @@ function applyExpenseDateRange() {
   COSTING_EXPENSE_FROM = from;
   COSTING_EXPENSE_TO = to;
   COSTING_EXPENSE_RANGE = 'custom';
+  COSTING_EXPENSE_QUICK_PERIOD = 'custom';
   COSTING_EXPENSE_PAGE = 1;
   COSTING_DELETED_EXPENSE_PAGE = 1;
   loadCostingExpenses().catch((error) => toast(error.message, true));
@@ -3044,6 +3105,7 @@ $('#costingExpenseFrom')?.addEventListener('change', applyExpenseDateRange);
 $('#costingExpenseTo')?.addEventListener('change', applyExpenseDateRange);
 $('#costingExpenseAllDates')?.addEventListener('click', () => {
   COSTING_EXPENSE_RANGE = 'all';
+  COSTING_EXPENSE_QUICK_PERIOD = '';
   COSTING_EXPENSE_PAGE = 1;
   COSTING_DELETED_EXPENSE_PAGE = 1;
   COSTING_EXPENSE_FROM = '';
@@ -3052,6 +3114,56 @@ $('#costingExpenseAllDates')?.addEventListener('click', () => {
 });
 $('#costingExpensePdf')?.addEventListener('click', exportExpensesPdf);
 $('#costingExpenseExcel')?.addEventListener('click', exportExpensesExcel);
+document.querySelectorAll('[data-expense-tab]').forEach((button) => button.addEventListener('click', () => {
+  const tab = button.dataset.expenseTab;
+  document.querySelectorAll('[data-expense-tab]').forEach((item) => { const selected = item === button; item.classList.toggle('on', selected); item.setAttribute('aria-selected', String(selected)); });
+  document.querySelectorAll('[data-expense-panel]').forEach((panel) => { panel.hidden = panel.dataset.expensePanel !== tab; });
+}));
+document.querySelectorAll('[data-expense-period]').forEach((button) => button.addEventListener('click', () => {
+  const period = button.dataset.expensePeriod;
+  if (period === 'custom') { COSTING_EXPENSE_QUICK_PERIOD = 'custom'; document.querySelectorAll('[data-expense-period]').forEach((item) => item.classList.toggle('on', item === button)); $('#costingExpenseFrom').focus(); return; }
+  const today = getLocalIsoDate();
+  if (period === 'month') {
+    COSTING_EXPENSE_YEAR = Number(today.slice(0, 4)); COSTING_EXPENSE_MONTH = Number(today.slice(5, 7));
+    COSTING_EXPENSE_RANGE = 'month';
+  } else {
+    const date = new Date(`${today}T12:00:00Z`);
+    if (period === 'week') date.setUTCDate(date.getUTCDate() - ((date.getUTCDay() + 6) % 7));
+    COSTING_EXPENSE_FROM = date.toISOString().slice(0, 10);
+    COSTING_EXPENSE_TO = today;
+    COSTING_EXPENSE_RANGE = 'custom';
+  }
+  COSTING_EXPENSE_PAGE = 1;
+  COSTING_EXPENSE_QUICK_PERIOD = period;
+  loadCostingExpenses().catch((error) => toast(error.message, true));
+}));
+$('#costingExpenseFilterCategory')?.addEventListener('change', (event) => {
+  COSTING_EXPENSE_CATEGORY = event.target.value;
+  COSTING_EXPENSE_PAGE = 1;
+  loadCostingExpenses().catch((error) => toast(error.message, true));
+});
+$('#expenseCategoryForm')?.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  try {
+    await api('/api/costs/expense-categories', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: $('#expenseCategoryName').value }) });
+    $('#expenseCategoryName').value = '';
+    await loadCostingExpenses();
+    toast('Categoría agregada');
+  } catch (error) { toast(error.message, true); }
+});
+$('#expenseCategoriesList')?.addEventListener('click', async (event) => {
+  const button = event.target.closest('[data-category-save], [data-category-toggle]');
+  if (!button) return;
+  const id = Number(button.dataset.categorySave || button.dataset.categoryToggle);
+  const row = EXPENSE_CATEGORIES.find((item) => item.id === id);
+  if (!row) return;
+  const name = button.closest('tr').querySelector('input')?.value?.trim() || row.name;
+  try {
+    await api(`/api/costs/expense-categories/${id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, active: button.dataset.categoryToggle ? !row.active : row.active }) });
+    await loadCostingExpenses();
+    toast('Categoría actualizada');
+  } catch (error) { toast(error.message, true); }
+});
 $('#costingExpenseFilterBranch')?.addEventListener('change', (event) => {
   COSTING_EXPENSE_BRANCH = event.target.value;
   COSTING_EXPENSE_PAGE = 1;
@@ -4857,6 +4969,16 @@ function renderPosMovementKindHint(kind) {
   const meta = posMovementKindMeta(kind);
   hint.className = `pos-movement-kind-hint tone-${meta.tone}`;
   hint.innerHTML = `<i class="ph-bold ${meta.icon}"></i><div><b>${meta.title}</b><span>${meta.desc}</span></div>`;
+  const wrap = $('#posMovementCategoryWrap');
+  if (wrap) {
+    wrap.hidden = kind !== 'expense';
+    $('#posMovementCategoryModal').required = kind === 'expense';
+    if (kind === 'expense') api('/api/pos/expense-categories').then((data) => {
+      const select = $('#posMovementCategoryModal');
+      select.innerHTML = '<option value="">Selecciona una categoría</option>' + data.categories.map((row) => `<option value="${row.id}">${esc(row.name)}</option>`).join('');
+      $('#posMovementCategoryHint').textContent = data.categories.length ? '' : 'No hay categorías activas. Pide al administrador que habilite una en Gastos.';
+    }).catch((error) => toast(error.message, true));
+  }
 }
 
 function posSaleStatusBadge(status) {
@@ -6563,36 +6685,72 @@ function renderPosFinanceStrip() {
   const expectedCash = session?.expectedCash || 0;
   const movementNet = moneyNum(totals.movements.income - totals.movements.withdrawal - totals.movements.expense);
   const cards = [
-    { key: 'opening', icon: 'ph-wallet', title: 'Fondo inicial', value: session?.opening_amount || 0, tone: 'primary' },
-    { key: 'sales', icon: 'ph-chart-line-up', title: 'Ventas del turno', value: totals.totalSales, tone: 'blue' },
-    { key: 'cash', icon: 'ph-money', title: 'Efectivo en ventas', value: totals.collected.cash, tone: 'green' },
-    { key: 'card', icon: 'ph-credit-card', title: 'Tarjeta', value: totals.collected.card, tone: 'violet' },
-    { key: 'transfer', icon: 'ph-bank', title: 'Transferencia', value: totals.collected.transfer, tone: 'cyan' },
+    { key: 'opening', icon: 'ph-wallet', title: 'Fondo inicial', value: session?.opening_amount || 0, tone: 'primary', detail: session ? 'Aperturas: 1' : 'Aperturas: 0' },
+    { key: 'sales', icon: 'ph-chart-line-up', title: 'Ventas del turno', value: totals.totalSales, tone: 'blue', detail: `Tickets: ${totals.tickets}` },
+    { key: 'cash', icon: 'ph-money', title: 'Efectivo en ventas', value: totals.collected.cash, tone: 'green', detail: `Cobros: ${totals.paymentCounts?.cash || 0}` },
+    { key: 'card', icon: 'ph-credit-card', title: 'Tarjeta', value: totals.collected.card, tone: 'violet', detail: `Cobros: ${totals.paymentCounts?.card || 0}`, reportMethod: 'card' },
+    { key: 'transfer', icon: 'ph-bank', title: 'Transferencia', value: totals.collected.transfer, tone: 'cyan', detail: `Cobros: ${totals.paymentCounts?.transfer || 0}`, reportMethod: 'transfer' },
     ...((SETTINGS?.chatbot_payment_pickup_platform === '1' || Number(totals.collected.platform || 0) > 0)
-      ? [{ key: 'platform', icon: 'ph-device-mobile', title: 'Plataforma', value: totals.collected.platform || 0, tone: 'cyan' }] : []),
+      ? [{ key: 'platform', icon: 'ph-device-mobile', title: 'Plataforma', value: totals.collected.platform || 0, tone: 'cyan', detail: `Cobros: ${totals.paymentCounts?.platform || 0}`, reportMethod: 'platform' }] : []),
     ...(totals.customPayments || []).map((method) => ({
-      key: 'custom', icon: 'ph-device-mobile', title: method.label, value: method.total, tone: 'cyan', tickets: method.tickets,
+      key: 'custom', icon: 'ph-device-mobile', title: method.label, value: method.total, tone: 'cyan', detail: `Cobros: ${method.tickets}`, reportMethod: method.id,
     })),
-    { key: 'movements', icon: 'ph-arrows-down-up', title: 'Movimientos netos', value: movementNet, tone: movementNet < 0 ? 'red' : 'amber' },
-    { key: 'cancellations', icon: 'ph-x-circle', title: 'Cancelaciones', value: totals.cancellations.total, tone: 'red' },
-    { key: 'expected', icon: 'ph-calculator', title: 'Efectivo esperado', value: expectedCash, tone: 'ink' },
+    { key: 'movements', icon: 'ph-arrows-down-up', title: 'Movimientos netos', value: movementNet, tone: movementNet < 0 ? 'red' : 'amber', detail: `Operaciones: ${totals.movements.count || 0}` },
+    { key: 'cancellations', icon: 'ph-x-circle', title: 'Cancelaciones', value: totals.cancellations.total, tone: 'red', detail: `Cancelaciones: ${totals.cancellations.tickets || 0}` },
+    { key: 'expected', icon: 'ph-calculator', title: 'Efectivo esperado', value: expectedCash, tone: 'ink', detail: session ? 'Cajas abiertas: 1' : 'Cajas abiertas: 0' },
   ];
   const visible = ME?.role === 'cashier' && Array.isArray(POS_OVERVIEW?.policy?.cashierCards)
     ? new Set(POS_OVERVIEW.policy.cashierCards) : null;
   el.innerHTML = cards
     .filter((card) => !visible || visible.has(card.key))
-    .map(
-      (card) => `<div class="pos-fin-card tone-${card.tone}">
+    .map((card) => {
+      const tag = card.reportMethod ? 'button' : 'div';
+      return `<${tag} ${card.reportMethod ? `type="button" data-pos-payment-report="${esc(card.reportMethod)}" aria-label="Ver transacciones de ${esc(card.title)}"` : ''} class="pos-fin-card tone-${card.tone}">
         <div class="pos-fin-ic"><i class="ph-fill ${card.icon}"></i></div>
         <div class="pos-fin-copy">
           <span>${card.title}</span>
           <b>${fmtMoney(card.value)}</b>
-          <small>${session ? `Tickets: ${card.tickets ?? totals.tickets}` : 'Caja cerrada'}</small>
+          <small>${card.detail}</small>
         </div>
-      </div>`
-    )
+      </${tag}>`;
+    })
     .join('');
 }
+
+function renderPosPaymentReport(report) {
+  const cardLabels = { debit: 'Tarjeta de débito', credit: 'Tarjeta de crédito', unknown: 'Tarjeta sin tipo registrado' };
+  const groups = (report.groups || []).filter((group) => group.type !== 'unknown' || group.count > 0);
+  $('#posPaymentReportSubtitle').textContent = `${report.label} · ${report.branchName} · Caja #${report.sessionId}`;
+  $('#posPaymentReportBody').innerHTML = `
+    <div class="pos-payment-report-total"><div><small>Total de ${esc(report.label)}</small><b>${fmtMoney(report.total)}</b></div><div><small>Transacciones</small><b>${Number(report.count)}</b></div></div>
+    ${report.method === 'card' ? `<div class="pos-payment-method-summary">${groups.map((group) => `<span><b>${esc(cardLabels[group.type] || group.type)}</b> · ${Number(group.count)} · ${fmtMoney(group.total)}</span>`).join('')}</div>` : ''}
+    <h4>Detalle de transacciones</h4>
+    ${report.transactions?.length ? `<div class="table-wrap"><table><thead><tr><th>Ticket</th><th>Fecha y hora</th><th>Tipo</th><th>Importe por este medio</th></tr></thead><tbody>${report.transactions.map((row) => `<tr><td>${esc(row.ticket)}</td><td>${esc(row.paidAt || '')}</td><td>${esc(report.method === 'card' ? cardLabels[row.cardType] || 'Tarjeta' : report.label)}${row.mixed ? ' · pago mixto' : ''}</td><td><b>${fmtMoney(row.amount)}</b></td></tr>`).join('')}</tbody></table></div>` : emptyHTML('ph-receipt', 'Sin cobros de este medio', 'No hay transacciones en la caja seleccionada.')}`;
+}
+
+async function openPosPaymentReport(method) {
+  if (!POS_OVERVIEW?.activeSession) return toast('Abre una caja para consultar las transacciones', true);
+  const request = ++POS_PAYMENT_REPORT_REQUEST;
+  const modal = $('#posPaymentReportModal');
+  modal.dataset.method = method;
+  $('#posPaymentReportSubtitle').textContent = 'Cargando transacciones del turno…';
+  $('#posPaymentReportBody').innerHTML = '';
+  modal.classList.add('show');
+  try {
+    const report = await api(`/api/pos/payment-reconciliation/${encodeURIComponent(method)}`);
+    if (request !== POS_PAYMENT_REPORT_REQUEST || !modal.classList.contains('show')) return;
+    renderPosPaymentReport(report);
+  } catch (error) {
+    if (request === POS_PAYMENT_REPORT_REQUEST) $('#posPaymentReportBody').innerHTML = `<p class="hint">${esc(error.message || 'No se pudo cargar el reporte')}</p>`;
+  }
+}
+
+$('#posFinanceStrip')?.addEventListener('click', (event) => {
+  const button = event.target.closest('[data-pos-payment-report]');
+  if (button) openPosPaymentReport(button.dataset.posPaymentReport);
+});
+$('#posPaymentReportClose')?.addEventListener('click', () => { POS_PAYMENT_REPORT_REQUEST += 1; $('#posPaymentReportModal').classList.remove('show'); });
+$('#posPaymentReportRefresh')?.addEventListener('click', () => openPosPaymentReport($('#posPaymentReportModal').dataset.method));
 
 function renderPosSession() {
   const el = $('#posSessionCard');
@@ -8113,7 +8271,7 @@ function updatePosCloseDifference() {
   }
 }
 
-function openPosMovementModal() {
+function renderPosMovementHistory() {
   const session = POS_OVERVIEW?.activeSession;
   if (!session) return toast('Abre una caja para registrar operaciones', true);
   const rows = POS_OVERVIEW?.recentMovements || [];
@@ -8131,6 +8289,7 @@ function openPosMovementModal() {
                 <th>Monto</th>
                 <th>Nota</th>
                 <th>Hora</th>
+                <th>Acción</th>
               </tr>
             </thead>
             <tbody>
@@ -8138,8 +8297,9 @@ function openPosMovementModal() {
                 <tr>
                   <td><span class="pos-mov-badge ${esc(row.kind)}">${esc(posMovementLabel(row.kind))}</span></td>
                   <td><b class="pos-mov-amount">${fmtMoney(row.amount)}</b></td>
-                  <td class="pos-mov-note" title="${esc(row.note || '')}">${esc(row.note || '—')}</td>
+                  <td class="pos-mov-note" title="${esc(row.note || '')}">${row.category_name ? `<b>${esc(row.category_name)}</b><br>` : ''}${esc(row.note || '—')}</td>
                   <td class="pos-mov-time">${esc(row.created_at || '')}</td>
+                  <td><button type="button" class="btn btn-ghost btn-sm" data-delete-pos-movement="${Number(row.id)}" aria-label="Borrar ${esc(posMovementLabel(row.kind))}"><i class="ph-bold ph-trash"></i> Borrar</button></td>
                 </tr>`).join('')}
             </tbody>
           </table>
@@ -8165,6 +8325,22 @@ function openPosMovementModal() {
         </div>
       </div>`
     : emptyHTML('ph-receipt', 'Sin operaciones', 'Todavía no registras ingresos, retiros ni gastos en esta caja.');
+  const deleted = POS_OVERVIEW?.deletedMovements || [];
+  $('#posDeletedMovementHistory').innerHTML = `<h4><i class="ph-bold ph-clock-counter-clockwise"></i> Operaciones borradas</h4>${deleted.length
+    ? `<div class="pos-movement-table-container"><table class="pos-movement-table"><thead><tr><th>Tipo</th><th>Monto</th><th>Motivo</th><th>Borró</th><th>Fecha</th></tr></thead><tbody>${deleted.map((row) => `<tr><td>${esc(posMovementLabel(row.kind))}</td><td>${fmtMoney(row.amount)}</td><td>${esc(row.note || '—')}</td><td>${esc(row.deleted_by || '—')}</td><td>${esc(row.deleted_at || '')}</td></tr>`).join('')}</tbody></table></div>`
+    : '<p class="hint">No se ha borrado ninguna operación de esta caja.</p>'}`;
+}
+
+function openPosMovementModal() {
+  if (!POS_OVERVIEW?.activeSession) return toast('Abre una caja para registrar operaciones', true);
+  renderPosMovementHistory();
+  const security = $('#posMovementSecurityForm');
+  security.hidden = ME?.role !== 'owner';
+  if (!security.hidden) {
+    $('#posMovementRequirePin').checked = Boolean(POS_OVERVIEW?.policy?.movementDeleteRequirePin);
+    $('#posMovementNewPin').value = '';
+    $('#posMovementPinStatus').textContent = SETTINGS?.authorization_pin_configured ? 'NIP configurado' : 'NIP no configurado';
+  }
   $('#posMovementAmountModal').value = '';
   $('#posMovementNoteModal').value = '';
   $('#posMovementKindModal').value = 'income';
@@ -8373,6 +8549,57 @@ $('#posMovementKinds')?.addEventListener('click', (e) => {
 });
 
 $('#posMovementCancel')?.addEventListener('click', () => $('#posMovementModal').classList.remove('show'));
+$('#posMovementHistory')?.addEventListener('click', (event) => {
+  const button = event.target.closest('[data-delete-pos-movement]');
+  if (!button) return;
+  const row = (POS_OVERVIEW?.recentMovements || []).find((item) => Number(item.id) === Number(button.dataset.deletePosMovement));
+  if (!row) return toast('Actualiza la caja para encontrar esta operación', true);
+  $('#posMovementDeleteDetail').textContent = `${posMovementLabel(row.kind)} · ${fmtMoney(row.amount)} · ${row.note || 'Sin motivo'}. El borrado quedará registrado.`;
+  $('#posMovementDeleteModal').dataset.movementId = String(row.id);
+  const requirePin = Boolean(POS_OVERVIEW?.policy?.movementDeleteRequirePin);
+  $('#posMovementDeletePinWrap').hidden = !requirePin;
+  $('#posMovementDeletePin').required = requirePin;
+  $('#posMovementDeletePin').value = '';
+  $('#posMovementDeleteModal').classList.add('show');
+  if (requirePin) $('#posMovementDeletePin').focus();
+});
+$('#posMovementDeleteCancel')?.addEventListener('click', () => $('#posMovementDeleteModal').classList.remove('show'));
+$('#posMovementSecurityForm')?.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  if (ME?.role !== 'owner') return;
+  const pin = $('#posMovementNewPin').value.trim();
+  const requirePin = $('#posMovementRequirePin').checked;
+  if (requirePin && !pin && !SETTINGS?.authorization_pin_configured) return toast('Configura un NIP para activar esta protección', true);
+  const fd = new FormData();
+  fd.append('pos_movement_delete_require_pin', requirePin ? '1' : '0');
+  if (pin) fd.append('pos_authorization_pin', pin);
+  try {
+    await api('/api/settings', { method: 'PUT', body: fd });
+    SETTINGS = await api('/api/settings');
+    if (POS_OVERVIEW?.policy) POS_OVERVIEW.policy.movementDeleteRequirePin = requirePin;
+    $('#posMovementNewPin').value = '';
+    $('#posMovementPinStatus').textContent = SETTINGS.authorization_pin_configured ? 'NIP configurado' : 'NIP no configurado';
+    toast('Seguridad de borrado guardada');
+  } catch (error) { toast(error.message || 'No se pudo guardar la seguridad', true); }
+});
+$('#posMovementDeleteForm')?.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const id = Number($('#posMovementDeleteModal').dataset.movementId);
+  const button = $('#posMovementDeleteConfirm');
+  button.disabled = true;
+  try {
+    const result = await api(`/api/pos/movements/${id}`, {
+      method: 'DELETE', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pin: $('#posMovementDeletePin').value }),
+    });
+    $('#posMovementDeleteModal').classList.remove('show');
+    $('#posMovementDeletePin').value = '';
+    await loadPos();
+    renderPosMovementHistory();
+    toast(`${posMovementLabel(result.deletedKind)} borrado y registrado en el historial`);
+  } catch (error) { toast(error.message || 'No se pudo borrar la operación', true); }
+  finally { button.disabled = false; }
+});
 $('#posCloseCancel')?.addEventListener('click', () => $('#posCloseModal').classList.remove('show'));
 $('#posTablesClose')?.addEventListener('click', () => {
   $('#posTablesModal').classList.remove('show');
@@ -8591,6 +8818,7 @@ $('#posMovementFormModal')?.addEventListener('submit', async (e) => {
         kind: $('#posMovementKindModal').value,
         amount: Number($('#posMovementAmountModal').value || 0),
         note: $('#posMovementNoteModal').value,
+        categoryId: $('#posMovementKindModal').value === 'expense' ? Number($('#posMovementCategoryModal').value) : null,
       }),
     });
     toast('Movimiento registrado');
@@ -10832,7 +11060,7 @@ $('#aiProductImport')?.addEventListener('click', async () => {
   }
 });
 
-[$('#prodModal'), $('#aiProductModal'), $('#catModal'), $('#confirmModal'), $('#branchModal'), $('#cashierModal'), $('#posTablesModal'), $('#posTableOpenModal'), $('#posMovementModal'), $('#posCloseModal'), $('#posSalesHistoryModal'), $('#posPaymentEditModal'), $('#orderCancelReasonModal'), $('#posProductConfigModal')].forEach((m) =>
+[$('#prodModal'), $('#aiProductModal'), $('#catModal'), $('#confirmModal'), $('#branchModal'), $('#cashierModal'), $('#posTablesModal'), $('#posTableOpenModal'), $('#posMovementModal'), $('#posMovementDeleteModal'), $('#posPaymentReportModal'), $('#posCloseModal'), $('#posSalesHistoryModal'), $('#posPaymentEditModal'), $('#orderCancelReasonModal'), $('#posProductConfigModal')].forEach((m) =>
   m && m.addEventListener('click', (e) => {
     if (e.target !== m) return;
     if (m.id === 'aiProductModal') closeAiImportModal();
@@ -13235,6 +13463,7 @@ async function fillConfigForm() {
   $('#cfgSameDayCancelEnabled').checked = (SETTINGS.pos_same_day_cancel_enabled || '1') === '1';
   $('#cfgCancelRequirePin').checked = (SETTINGS.pos_cancel_require_pin || '0') === '1';
   $('#cfgCloseRequireApproval').checked = (SETTINGS.pos_close_require_approval || '0') === '1';
+  $('#cfgMovementDeleteRequirePin').checked = (SETTINGS.pos_movement_delete_require_pin || '0') === '1';
   $('#cfgAuthorizationPin').value = '';
   $('#posAuthorizationPinStatus').textContent = SETTINGS.authorization_pin_configured ? 'NIP configurado' : 'NIP no configurado';
   $('#cfgTicketWidth').value = String(Number(SETTINGS.ticket_width_mm || 80));
@@ -13365,7 +13594,7 @@ $('#configForm').addEventListener('submit', async (e) => {
 $('#operationPolicyForm')?.addEventListener('submit', async (event) => {
   event.preventDefault();
   const pin = String($('#cfgAuthorizationPin').value || '').trim();
-  if (($('#cfgRoundEditRequirePin').checked || $('#cfgCancelRequirePin').checked || $('#cfgCloseRequireApproval').checked) && !pin && !SETTINGS.authorization_pin_configured) {
+  if (($('#cfgRoundEditRequirePin').checked || $('#cfgCancelRequirePin').checked || $('#cfgCloseRequireApproval').checked || $('#cfgMovementDeleteRequirePin').checked) && !pin && !SETTINGS.authorization_pin_configured) {
     return toast('Configura un NIP antes de activar la autorización', true);
   }
   const fd = new FormData();
@@ -13374,6 +13603,7 @@ $('#operationPolicyForm')?.addEventListener('submit', async (event) => {
   fd.append('pos_same_day_cancel_enabled', $('#cfgSameDayCancelEnabled').checked ? '1' : '0');
   fd.append('pos_cancel_require_pin', $('#cfgCancelRequirePin').checked ? '1' : '0');
   if (ME?.role === 'owner') fd.append('pos_close_require_approval', $('#cfgCloseRequireApproval').checked ? '1' : '0');
+  if (ME?.role === 'owner') fd.append('pos_movement_delete_require_pin', $('#cfgMovementDeleteRequirePin').checked ? '1' : '0');
   if (pin) fd.append('pos_authorization_pin', pin);
   await api('/api/settings', { method: 'PUT', body: fd });
   SETTINGS = await api('/api/settings');

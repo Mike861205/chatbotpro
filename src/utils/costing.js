@@ -20,6 +20,17 @@ async function ensureCostingSchema(t) {
     );
     CREATE INDEX IF NOT EXISTS idx_business_expenses_date ON {s}.business_expenses(expense_date);
     CREATE INDEX IF NOT EXISTS idx_business_expenses_branch ON {s}.business_expenses(branch_id);
+    CREATE TABLE IF NOT EXISTS {s}.expense_categories (
+      id SERIAL PRIMARY KEY,
+      name TEXT NOT NULL,
+      active BOOLEAN NOT NULL DEFAULT TRUE,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_expense_categories_name ON {s}.expense_categories (lower(name));
+    ALTER TABLE {s}.business_expenses ADD COLUMN IF NOT EXISTS category_id INTEGER;
+    ALTER TABLE {s}.business_expenses ADD COLUMN IF NOT EXISTS category_name TEXT NOT NULL DEFAULT '';
+    ALTER TABLE {s}.pos_cash_movements ADD COLUMN IF NOT EXISTS category_id INTEGER;
+    ALTER TABLE {s}.pos_cash_movements ADD COLUMN IF NOT EXISTS category_name TEXT NOT NULL DEFAULT '';
     CREATE TABLE IF NOT EXISTS {s}.deleted_expenses (
       id BIGSERIAL PRIMARY KEY,
       source TEXT NOT NULL,
@@ -41,6 +52,27 @@ async function ensureCostingSchema(t) {
     );
     CREATE INDEX IF NOT EXISTS idx_deleted_expenses_date ON {s}.deleted_expenses(expense_date DESC, id DESC);
     CREATE INDEX IF NOT EXISTS idx_deleted_expenses_branch ON {s}.deleted_expenses(branch_id);
+    ALTER TABLE {s}.deleted_expenses ADD COLUMN IF NOT EXISTS category_id INTEGER;
+    ALTER TABLE {s}.deleted_expenses ADD COLUMN IF NOT EXISTS category_name TEXT NOT NULL DEFAULT '';
+    ALTER TABLE {s}.deleted_expenses ADD COLUMN IF NOT EXISTS movement_kind TEXT NOT NULL DEFAULT 'expense';
+    CREATE TABLE IF NOT EXISTS {s}.deleted_pos_cash_movements (
+      id BIGSERIAL PRIMARY KEY,
+      movement_id INTEGER NOT NULL UNIQUE,
+      session_id INTEGER NOT NULL,
+      branch_id INTEGER,
+      kind TEXT NOT NULL,
+      amount NUMERIC(12,2) NOT NULL,
+      note TEXT NOT NULL DEFAULT '',
+      created_by TEXT NOT NULL DEFAULT '',
+      original_created_at TIMESTAMPTZ,
+      deleted_by TEXT NOT NULL,
+      authorized_by TEXT NOT NULL DEFAULT '',
+      deleted_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+    ALTER TABLE {s}.deleted_pos_cash_movements ADD COLUMN IF NOT EXISTS category_id INTEGER;
+    ALTER TABLE {s}.deleted_pos_cash_movements ADD COLUMN IF NOT EXISTS category_name TEXT NOT NULL DEFAULT '';
+    ALTER TABLE {s}.deleted_pos_cash_movements ADD COLUMN IF NOT EXISTS deleted_role TEXT NOT NULL DEFAULT '';
+    CREATE INDEX IF NOT EXISTS idx_deleted_pos_cash_movements_session ON {s}.deleted_pos_cash_movements(session_id, deleted_at DESC);
   `);
   ensuredSchemas.add(t.schema);
 }

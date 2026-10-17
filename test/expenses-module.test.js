@@ -175,6 +175,57 @@ test('el historial completo del cajero sigue limitado a su sucursal', async () =
   assert.match(queries[1], /d\.branch_id = \$1/);
 });
 
+test('Gastos incluye retiros de caja y permite filtrarlos por separado', async () => {
+  const query = async (category) => {
+    const res = response();
+    await handle('GET', '/expenses', {
+      user: { role: 'owner', username: 'dueno' }, timezone: 'America/Mexico_City',
+      query: { period: 'all', category },
+      tdb: { async all(sql) {
+        if (sql.includes('SELECT id, name, active')) return [{ id: 7, name: 'Auroras', active: 1 }];
+        if (sql.includes('FROM {s}.deleted_expenses')) return [];
+        assert.match(sql, /m\.kind IN \('expense', 'withdrawal'\)/);
+        return [
+          { id: -2, source: 'pos', movement_kind: 'withdrawal', branch_id: 7, branch_name: 'Auroras', concept: 'Retiro gerente', amount: 60 },
+          { id: -3, source: 'pos', movement_kind: 'expense', branch_id: 7, branch_name: 'Auroras', concept: 'Luz', category_id: 1, category_name: 'Servicios', amount: 40 },
+        ];
+      } },
+    }, res);
+    return res.body;
+  };
+  const all = await query('all');
+  assert.equal(all.total, 100);
+  assert.deepEqual(Array.from(all.categoryTotals, (row) => row.name), ['Retiros de caja', 'Servicios']);
+  const withdrawals = await query('withdrawals');
+  assert.equal(withdrawals.total, 60);
+  assert.deepEqual(Array.from(withdrawals.expenses, (row) => row.movement_kind), ['withdrawal']);
+});
+
+test('los borrados desde POS aparecen como reversos en el reporte de la sucursal', async () => {
+  const res = response();
+  await handle('GET', '/expenses', {
+    user: { role: 'owner', username: 'dueno' }, timezone: 'America/Mexico_City',
+    query: { from: '2026-10-17', to: '2026-10-17', branch: '7' },
+    tdb: { async all(sql) {
+      if (sql.includes('SELECT id, name, active')) return [{ id: 7, name: 'Auroras', active: 1 }];
+      if (sql.includes('FROM {s}.deleted_expenses')) {
+        assert.match(sql, /FROM \{s\}\.deleted_pos_cash_movements x/);
+        assert.match(sql, /NOT EXISTS \(SELECT 1 FROM \{s\}\.deleted_expenses/);
+        assert.match(sql, /x\.deleted_at AT TIME ZONE/);
+        return [
+          { id: -9, source: 'pos', source_id: 15, branch_id: 7, movement_kind: 'expense', concept: 'Luz', amount: 100, deleted_by: 'caja7' },
+          { id: -10, source: 'pos', source_id: 16, branch_id: 8, movement_kind: 'withdrawal', concept: 'Retiro', amount: 50, deleted_by: 'caja8' },
+        ];
+      }
+      return [];
+    } },
+  }, res);
+  assert.equal(res.body.total, 0);
+  assert.equal(res.body.deletedTotal, 100);
+  assert.equal(res.body.deletedCount, 1);
+  assert.deepEqual(Array.from(res.body.deletedExpenses, (row) => row.concept), ['Luz']);
+});
+
 test('el cajero no puede crear ni eliminar gastos de otra sucursal', async () => {
   const postRes = response();
   await handle('POST', '/expenses', {
@@ -220,7 +271,7 @@ test('borrar un gasto POS conserva auditoría y ajusta la caja cerrada vinculada
       async get(sql, params) {
         if (sql.includes('FROM {s}.pos_cash_movements')) {
           assert.deepEqual(Array.from(params), [15, 'America/Mexico_City']);
-          return { id: 15, branch_id: 7, branch_name: 'Auroras', session_id: 3, expense_date: '2026-10-07', concept: 'Luz', amount: 100, notes: '', created_by: 'caja7', created_at: '2026-10-07' };
+          return { id: 15, branch_id: 7, branch_name: 'Auroras', session_id: 3, expense_date: '2026-10-07', concept: 'Luz', amount: 100, notes: '', created_by: 'caja7', created_at: '2026-10-07', movement_kind: 'expense' };
         }
         assert.match(sql, /pos_sessions WHERE id=\$1 FOR UPDATE/);
         return { id: 3 };
@@ -232,24 +283,29 @@ test('borrar un gasto POS conserva auditoría y ajusta la caja cerrada vinculada
   assert.equal(res.body.ok, true);
   assert.match(statements[0].sql, /INSERT INTO \{s\}\.deleted_expenses/);
   assert.deepEqual(Array.from(statements[0].params).slice(0, 5), ['pos', 15, 7, 'Auroras', 3]);
-  assert.match(statements[1].sql, /DELETE FROM \{s\}\.pos_cash_movements/);
+  assert.match(statements[1].sql, /INSERT INTO \{s\}\.deleted_pos_cash_movements/);
+  assert.match(statements[2].sql, /DELETE FROM \{s\}\.pos_cash_movements/);
   assert.match(statements.at(-1).sql, /expected_amount = expected_amount \+ \$2/);
   assert.deepEqual(Array.from(statements.at(-1).params), [3, 100]);
 });
 
-test('el cajero registra gastos en su sucursal con el flujo existente', async () => {
+test('el cajero registra gastos en su sucursal con categoría activa', async () => {
   let inserted = false;
   const req = {
     user: cashier,
-    body: { branchId: 7, expenseDate: '2026-10-07', concept: 'Renta', amount: 100, notes: 'Caja' },
+    body: { branchId: 7, expenseDate: '2026-10-07', categoryId: 3, concept: 'Renta', amount: 100, notes: 'Caja' },
     tdb: { async get(sql, params) {
+      if (sql.includes('FROM {s}.expense_categories')) {
+        assert.deepEqual(Array.from(params), [3]);
+        return { id: 3, name: 'Renta fija' };
+      }
       if (sql.includes('FROM {s}.branches')) {
         assert.deepEqual(Array.from(params), [7]);
         return { id: 7, name: 'Auroras' };
       }
       inserted = true;
       assert.match(sql, /INSERT INTO \{s\}\.business_expenses/);
-      assert.deepEqual(Array.from(params), [7, 'Auroras', '2026-10-07', 'Renta', 100, 'Caja', 'caja7']);
+      assert.deepEqual(Array.from(params), [7, 'Auroras', '2026-10-07', 'Renta', 100, 'Caja', 'caja7', 3, 'Renta fija']);
       return { id: 21 };
     } },
   };
@@ -257,4 +313,29 @@ test('el cajero registra gastos en su sucursal con el flujo existente', async ()
   await handle('POST', '/expenses', req, res);
   assert.equal(inserted, true);
   assert.equal(res.body.id, 21);
+});
+
+test('no se puede registrar un gasto sin categoría activa', async () => {
+  const base = { user: cashier, body: { branchId: 7, expenseDate: '2026-10-07', concept: 'Gas', amount: 10 } };
+  const missing = response();
+  await handle('POST', '/expenses', { ...base, tdb: { get() { throw new Error('No debe consultar la base'); } } }, missing);
+  assert.equal(missing.code, 400);
+  const inactive = response();
+  await handle('POST', '/expenses', { ...base, body: { ...base.body, categoryId: 4 }, tdb: { async get() { return undefined; } } }, inactive);
+  assert.equal(inactive.code, 400);
+});
+
+test('el reporte filtra por categoría y conserva totales del filtro', async () => {
+  const res = response();
+  await handle('GET', '/expenses', {
+    user: { role: 'owner', username: 'dueno' }, timezone: 'America/Mexico_City', query: { period: 'all', category: '3' },
+    tdb: { async all(sql) {
+      if (sql.includes('SELECT id, name, active')) return [{ id: 7, name: 'Auroras', active: 1 }];
+      if (sql.includes('FROM {s}.deleted_expenses')) return [];
+      return [{ id: 1, branch_id: 7, category_id: 3, category_name: 'Renta', amount: 100 }, { id: 2, branch_id: 7, category_id: 4, category_name: 'Gas', amount: 50 }];
+    } },
+  }, res);
+  assert.equal(res.body.total, 100);
+  assert.deepEqual(Array.from(res.body.expenses, (row) => row.id), [1]);
+  assert.deepEqual(Array.from(res.body.categoryTotals, (row) => row.name), ['Renta']);
 });

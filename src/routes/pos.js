@@ -21,6 +21,7 @@ const { isProductAvailableToday } = require('../utils/productAvailability');
 
 const router = express.Router();
 const closeApprovalLimiter = createRateLimiter({ windowMs: 15 * 60 * 1000, max: 12, message: 'Demasiados intentos. Espera unos minutos.' });
+const movementDeleteLimiter = createRateLimiter({ windowMs: 15 * 60 * 1000, max: 12, message: 'Demasiados intentos. Espera unos minutos.' });
 const closeTokenHash = (token) => crypto.createHash('sha256').update(String(token)).digest('hex');
 const validCloseLink = (req) => /^[a-z0-9-]{3,40}$/.test(req.params.slug) && /^[a-f0-9]{64}$/.test(req.params.token);
 
@@ -99,7 +100,7 @@ const SALES_HISTORY_FILTERS = new Set(['today', 'week', 'month', 'custom']);
 const CHATBOT_IMPORTABLE_STATUSES = new Set(['pendiente', 'confirmado', 'preparando', 'enviado']);
 
 async function getPosPolicy(t) {
-  const keys = ['pos_round_edit_enabled', 'pos_round_edit_require_pin', 'pos_same_day_cancel_enabled', 'pos_cancel_require_pin', 'pos_authorization_pin_hash', 'pos_cashier_cards_json', 'pos_close_require_approval'];
+  const keys = ['pos_round_edit_enabled', 'pos_round_edit_require_pin', 'pos_same_day_cancel_enabled', 'pos_cancel_require_pin', 'pos_authorization_pin_hash', 'pos_cashier_cards_json', 'pos_close_require_approval', 'pos_movement_delete_require_pin'];
   const rows = await t.all('SELECT key, value FROM {s}.settings WHERE key = ANY($1::text[])', [keys]);
   const values = Object.fromEntries(rows.map((row) => [row.key, row.value]));
   return {
@@ -110,6 +111,7 @@ async function getPosPolicy(t) {
     pinHash: values.pos_authorization_pin_hash || '',
     cashierCards: (() => { try { const cards = JSON.parse(values.pos_cashier_cards_json || 'null'); return Array.isArray(cards) ? cards : null; } catch { return null; } })(),
     closeRequireApproval: values.pos_close_require_approval === '1',
+    movementDeleteRequirePin: values.pos_movement_delete_require_pin === '1',
   };
 }
 
@@ -333,6 +335,10 @@ async function getSessionTotals(t, sessionId) {
     AND ((pos_session_id = $1 AND credit_paid_session_id IS NULL) OR credit_paid_session_id = $1)`;
   const sales = await t.get(
     `SELECT COUNT(*)::int AS tickets,
+            COUNT(*) FILTER (WHERE payment_method = 'cash' OR (payment_method = 'mixed' AND COALESCE((payment_breakdown::jsonb ->> 'cash')::numeric, 0) > 0))::int AS cash_count,
+            COUNT(*) FILTER (WHERE payment_method = 'card' OR (payment_method = 'mixed' AND COALESCE((payment_breakdown::jsonb ->> 'card')::numeric, 0) > 0))::int AS card_count,
+            COUNT(*) FILTER (WHERE payment_method = 'transfer' OR (payment_method = 'mixed' AND COALESCE((payment_breakdown::jsonb ->> 'transfer')::numeric, 0) > 0))::int AS transfer_count,
+            COUNT(*) FILTER (WHERE payment_method = 'platform' OR (payment_method = 'mixed' AND COALESCE((payment_breakdown::jsonb ->> 'platform')::numeric, 0) > 0))::int AS platform_count,
             COALESCE(SUM(${effectiveTotal}), 0)::float AS total_sales,
             COALESCE(SUM(CASE WHEN payment_method = 'cash' THEN ${effectiveTotal} ELSE 0 END), 0)::float AS sales_cash_only,
             COALESCE(SUM(CASE WHEN payment_method = 'card' THEN ${effectiveTotal} ELSE 0 END), 0)::float AS sales_card_only,
@@ -373,7 +379,11 @@ async function getSessionTotals(t, sessionId) {
     return summary;
   }, { base: 0, tax: 0, gross: 0, lines: 0, rates: new Set() });
   const moves = await t.get(
-    `SELECT COALESCE(SUM(CASE WHEN kind = 'income' THEN amount ELSE 0 END), 0)::float AS incomes,
+    `SELECT COUNT(*)::int AS movement_count,
+            COUNT(*) FILTER (WHERE kind = 'income')::int AS income_count,
+            COUNT(*) FILTER (WHERE kind = 'withdrawal')::int AS withdrawal_count,
+            COUNT(*) FILTER (WHERE kind = 'expense')::int AS expense_count,
+            COALESCE(SUM(CASE WHEN kind = 'income' THEN amount ELSE 0 END), 0)::float AS incomes,
             COALESCE(SUM(CASE WHEN kind = 'withdrawal' THEN amount ELSE 0 END), 0)::float AS withdrawals,
             COALESCE(SUM(CASE WHEN kind = 'expense' THEN amount ELSE 0 END), 0)::float AS expenses
      FROM {s}.pos_cash_movements WHERE session_id = $1`,
@@ -381,7 +391,7 @@ async function getSessionTotals(t, sessionId) {
   );
   const configuredCustomMethods = parseCustomPaymentMethods(await getSetting(t, 'custom_payment_methods_json', '[]'));
   const customRows = await t.all(
-    `SELECT payment_method AS id, COUNT(*)::int AS tickets, COALESCE(SUM(total), 0)::float AS total,
+    `SELECT payment_method AS id, COUNT(*)::int AS tickets, COALESCE(SUM(total-COALESCE(sar_credit_adjustment_total,0)), 0)::float AS total,
             MAX(CASE WHEN payment_breakdown ~ '^\\s*\\{.*\\}\\s*$'
               THEN NULLIF(payment_breakdown::jsonb ->> 'customLabel', '') ELSE NULL END) AS stored_label
      FROM {s}.orders WHERE ${paidInSession}
@@ -451,10 +461,18 @@ async function getSessionTotals(t, sessionId) {
       transfer: n(sales?.collected_transfer),
       platform: n(sales?.collected_platform),
     },
+    paymentCounts: {
+      cash: Number(sales?.cash_count || 0), card: Number(sales?.card_count || 0),
+      transfer: Number(sales?.transfer_count || 0), platform: Number(sales?.platform_count || 0),
+    },
     movements: {
       income: n(moves?.incomes),
       withdrawal: n(moves?.withdrawals),
       expense: n(moves?.expenses),
+      count: Number(moves?.movement_count || 0),
+      incomeCount: Number(moves?.income_count || 0),
+      withdrawalCount: Number(moves?.withdrawal_count || 0),
+      expenseCount: Number(moves?.expense_count || 0),
     },
     cancellations: {
       tickets: Number(canceled?.canceled_tickets || 0),
@@ -777,11 +795,21 @@ async function listSalesHistoryPage(t, options = {}) {
 async function listRecentMovements(t, sessionId) {
   if (!sessionId) return [];
   return t.all(
-    `SELECT id, kind, amount::float AS amount, note, created_by,
+    `SELECT id, kind, amount::float AS amount, note, created_by, category_name,
             to_char(created_at AT TIME ZONE '${tenantTimeZone(t)}', 'DD Mon YYYY, HH24:MI') AS created_at
      FROM {s}.pos_cash_movements
      WHERE session_id = $1
-     ORDER BY id DESC LIMIT 20`,
+     ORDER BY id DESC`,
+    [sessionId]
+  );
+}
+
+async function listDeletedMovements(t, sessionId) {
+  if (!sessionId) return [];
+  return t.all(
+    `SELECT movement_id AS id, kind, amount::float AS amount, note, created_by, deleted_by, authorized_by,
+            to_char(deleted_at AT TIME ZONE '${tenantTimeZone(t)}', 'DD Mon YYYY, HH24:MI') AS deleted_at
+     FROM {s}.deleted_pos_cash_movements WHERE session_id=$1 ORDER BY deleted_at DESC, id DESC`,
     [sessionId]
   );
 }
@@ -1451,6 +1479,7 @@ router.get('/overview', async (req, res, next) => {
         cancelRequirePin: policy.cancelRequirePin,
         cashierCards: policy.cashierCards,
         closeRequireApproval: policy.closeRequireApproval,
+        movementDeleteRequirePin: policy.movementDeleteRequirePin,
       },
       openSessions: allOpenSessions,
       tables: await listRestaurantTables(req.tdb, activeSession, false),
@@ -1459,6 +1488,7 @@ router.get('/overview', async (req, res, next) => {
       creditSales: await listOpenCreditSales(req.tdb, activeSession?.branch_id),
       recentSales: await listRecentSales(req.tdb, activeSession?.id || null),
       recentMovements: await listRecentMovements(req.tdb, activeSession?.id || null),
+      deletedMovements: await listDeletedMovements(req.tdb, activeSession?.id || null),
     });
   } catch (e) {
     next(e);
@@ -1932,6 +1962,59 @@ router.post('/session/close', async (req, res, next) => {
   }
 });
 
+router.get('/expense-categories', async (req, res, next) => {
+  try {
+    res.set('Cache-Control', 'no-store');
+    const rows = await req.tdb.all('SELECT id, name FROM {s}.expense_categories WHERE active=TRUE ORDER BY name');
+    res.json({ categories: rows.map((row) => ({ id: Number(row.id), name: row.name, active: true })) });
+  } catch (error) { next(error); }
+});
+
+router.get('/payment-reconciliation/:method', async (req, res, next) => {
+  try {
+    const method = String(req.params.method || '').trim();
+    if (!['card', 'transfer', 'platform'].includes(method) && !isCustomPaymentMethod(method)) {
+      return res.status(400).json({ error: 'Medio de pago inválido' });
+    }
+    const session = await getOpenSession(req.tdb, userSessionContext(req.user, req));
+    if (!session) return res.status(400).json({ error: 'Abre una caja para consultar la conciliación' });
+    const rows = await req.tdb.all(
+      `SELECT id, invoice_code, payment_method, payment_breakdown,
+              (total-COALESCE(sar_credit_adjustment_total,0))::float AS effective_total,
+              to_char((CASE WHEN credit_paid_session_id=$1 THEN COALESCE(credit_paid_at,created_at) ELSE created_at END)
+                AT TIME ZONE '${tenantTimeZone(req.tdb)}', 'DD Mon YYYY, HH24:MI') AS paid_at
+       FROM {s}.orders
+       WHERE channel='pos' AND status!='cancelado' AND COALESCE(payment_status,'paid')='paid'
+         AND ((pos_session_id=$1 AND credit_paid_session_id IS NULL) OR credit_paid_session_id=$1)
+       ORDER BY COALESCE(credit_paid_at,created_at) DESC, id DESC`,
+      [session.id]
+    );
+    const customMethods = isCustomPaymentMethod(method)
+      ? parseCustomPaymentMethods(await getSetting(req.tdb, 'custom_payment_methods_json', '[]')) : [];
+    const transactions = rows.flatMap((row) => {
+      const breakdown = parseJsonObject(row.payment_breakdown);
+      const amount = row.payment_method === method ? n(row.effective_total)
+        : row.payment_method === 'mixed' && !isCustomPaymentMethod(method) ? n(breakdown[method]) : 0;
+      if (amount <= 0) return [];
+      return [{ orderId: Number(row.id), ticket: row.invoice_code || `#${row.id}`,
+        paidAt: row.paid_at, amount, mixed: row.payment_method === 'mixed',
+        cardType: method === 'card' ? (['debit', 'credit'].includes(breakdown.cardType) ? breakdown.cardType : 'unknown') : null }];
+    });
+    const total = n(transactions.reduce((sum, row) => sum + row.amount, 0));
+    const groups = method === 'card' ? ['debit', 'credit', 'unknown'].map((type) => {
+      const matching = transactions.filter((row) => row.cardType === type);
+      return { type, count: matching.length, total: n(matching.reduce((sum, row) => sum + row.amount, 0)) };
+    }) : [];
+    const storedLabel = rows.find((row) => row.payment_method === method && parseJsonObject(row.payment_breakdown).customLabel);
+    const label = method === 'card' ? 'Tarjeta' : method === 'transfer' ? 'Transferencia'
+      : method === 'platform' ? 'Plataforma'
+        : customMethods.find((item) => item.id === method)?.label || parseJsonObject(storedLabel?.payment_breakdown).customLabel || 'Medio local';
+    res.set('Cache-Control', 'no-store');
+    res.json({ method, label, sessionId: Number(session.id), branchName: session.branch_name || 'Sin sucursal',
+      count: transactions.length, total, groups, transactions });
+  } catch (error) { next(error); }
+});
+
 router.post('/movements', async (req, res, next) => {
   try {
     const session = await getOpenSession(req.tdb, userSessionContext(req.user, req));
@@ -1941,14 +2024,57 @@ router.post('/movements', async (req, res, next) => {
     const note = String(req.body?.note || '').trim().slice(0, 240);
     if (!MOVEMENT_KINDS.has(kind)) return res.status(400).json({ error: 'Tipo de movimiento inválido' });
     if (amount <= 0) return res.status(400).json({ error: 'El monto debe ser mayor a cero' });
+    let category = null;
+    if (kind === 'expense') {
+      const categoryId = Number(req.body?.categoryId);
+      if (!Number.isSafeInteger(categoryId) || categoryId <= 0) return res.status(400).json({ error: 'Selecciona una categoría de gasto' });
+      category = await req.tdb.get('SELECT id, name FROM {s}.expense_categories WHERE id=$1 AND active=TRUE', [categoryId]);
+      if (!category) return res.status(400).json({ error: 'La categoría de gasto no está habilitada' });
+    }
     await req.tdb.run(
-      'INSERT INTO {s}.pos_cash_movements (session_id, kind, amount, note, created_by) VALUES ($1, $2, $3, $4, $5)',
-      [session.id, kind, amount, note, req.user.username]
+      'INSERT INTO {s}.pos_cash_movements (session_id, kind, amount, note, created_by, category_id, category_name) VALUES ($1, $2, $3, $4, $5, $6, $7)',
+      [session.id, kind, amount, note, req.user.username, category?.id || null, category?.name || '']
     );
     const totals = await getSessionTotals(req.tdb, session.id);
     res.json({ ok: true, totals, expectedCash: expectedCashForSession(session, totals), recentMovements: await listRecentMovements(req.tdb, session.id) });
   } catch (e) {
     next(e);
+  }
+});
+
+router.delete('/movements/:id', movementDeleteLimiter, async (req, res, next) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isSafeInteger(id) || id <= 0) return res.status(400).json({ error: 'Movimiento inválido' });
+    if (!['owner', 'cashier'].includes(req.user.role)) return res.status(403).json({ error: 'No tienes permiso para borrar movimientos' });
+    const policy = await getPosPolicy(req.tdb);
+    const authorizedBy = await authorizePosAction(req.tdb, req.body?.pin, policy.movementDeleteRequirePin);
+    const result = await req.tdb.tx(async (tx) => {
+      const session = await getOpenSession(tx, userSessionContext(req.user, req));
+      if (!session) throw Object.assign(new Error('Abre la caja correspondiente antes de borrar el movimiento'), { statusCode: 400 });
+      await tx.get('SELECT id FROM {s}.pos_sessions WHERE id=$1 AND status=$2 FOR UPDATE', [session.id, 'open']);
+      const movement = await tx.get(
+        'SELECT id, session_id, kind, amount, note, created_by, created_at, category_id, category_name FROM {s}.pos_cash_movements WHERE id=$1 AND session_id=$2 FOR UPDATE',
+        [id, session.id]
+      );
+      if (!movement) throw Object.assign(new Error('Movimiento no encontrado en esta caja'), { statusCode: 404 });
+      await tx.run(
+        `INSERT INTO {s}.deleted_pos_cash_movements
+         (movement_id, session_id, branch_id, kind, amount, note, created_by, original_created_at, deleted_by, authorized_by, category_id, category_name, deleted_role)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
+        [movement.id, session.id, session.branch_id || null, movement.kind, movement.amount, movement.note || '', movement.created_by || '', movement.created_at, req.user.username, authorizedBy, movement.category_id || null, movement.category_name || '', req.user.role]
+      );
+      await tx.run('DELETE FROM {s}.pos_cash_movements WHERE id=$1', [id]);
+      await tx.run("UPDATE {s}.pos_close_approvals SET status='stale' WHERE session_id=$1 AND status='approved'", [session.id]);
+      return { kind: movement.kind, totals: await getSessionTotals(tx, session.id), session };
+    });
+    res.json({ ok: true, deletedKind: result.kind, totals: result.totals,
+      expectedCash: expectedCashForSession(result.session, result.totals),
+      recentMovements: await listRecentMovements(req.tdb, result.session.id),
+      deletedMovements: await listDeletedMovements(req.tdb, result.session.id) });
+  } catch (error) {
+    if (error.statusCode) return res.status(error.statusCode).json({ error: error.message });
+    next(error);
   }
 });
 

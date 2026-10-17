@@ -11,7 +11,7 @@
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/fill/style.css" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/duotone/style.css" />
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-  <link rel="stylesheet" href="/static/css/styles.css?v=20261009-whatsapp-inbox-app" />
+  <link rel="stylesheet" href="/static/css/styles.css?v=20261017-pos-transactions" />
   <link rel="stylesheet" href="/static/css/sar.css?v=20260929-tabs-1" />
   <link rel="icon" type="image/svg+xml" href="/static/favicon.svg" />
   <link rel="icon" type="image/png" href="/static/chatbotpro100.png" />
@@ -565,18 +565,35 @@
             <p>Registra y consulta los gastos manuales y los capturados desde el punto de venta. Se reflejan en la utilidad del reporte de Ventas.</p>
           </div>
         </div>
+        <div class="segmented expense-tabs" role="tablist" aria-label="Secciones de gastos">
+          <button type="button" class="on" data-expense-tab="register" role="tab" aria-selected="true">Registrar gasto</button>
+          <button type="button" data-expense-tab="categories" role="tab" aria-selected="false">Categorías</button>
+          <button type="button" data-expense-tab="reports" role="tab" aria-selected="false">Reportes</button>
+        </div>
+        <div data-expense-panel="register">
           <div class="card costing-expense-form-card">
             <div class="sales-panel-heading"><div><h3><i class="ph-bold ph-plus-circle"></i> Registrar gasto</h3><p>Los gastos se descuentan de la utilidad de la sucursal en el reporte de Ventas.</p></div></div>
             <form id="costingExpenseForm" class="costing-expense-form">
               <div class="field"><label>Sucursal</label><select id="costingExpenseBranch"><option value="general">Sin sucursal</option></select></div>
               <div class="field"><label>Fecha</label><input type="date" id="costingExpenseDate" required /></div>
+              <div class="field"><label for="costingExpenseCategory">Categoría de gasto</label><select id="costingExpenseCategory" required><option value="">Selecciona una categoría</option></select></div>
               <div class="field"><label>Concepto</label><input type="text" id="costingExpenseConcept" maxlength="120" placeholder="Ej. Gas, renta, insumos" required /></div>
               <div class="field"><label>Monto</label><input type="number" id="costingExpenseAmount" min="0.01" step="0.01" placeholder="0.00" required /></div>
               <div class="field costing-expense-notes"><label>Notas</label><input type="text" id="costingExpenseNotes" maxlength="240" placeholder="Opcional" /></div>
               <button class="btn btn-primary" type="submit"><i class="ph-bold ph-plus-circle"></i> Agregar gasto</button>
             </form>
           </div>
+        </div>
+        <div data-expense-panel="categories" hidden>
+          <div class="card expense-category-panel">
+            <div class="sales-panel-heading"><div><h3>Categorías de gastos</h3><p>Las categorías activas se pueden usar en sucursales y en el punto de venta.</p></div></div>
+            <form id="expenseCategoryForm" class="expense-category-form"><div class="field"><label for="expenseCategoryName">Nueva categoría</label><input id="expenseCategoryName" maxlength="80" placeholder="Ej. Renta, servicios, insumos" required /></div><button class="btn btn-primary" type="submit">Agregar categoría</button></form>
+            <div id="expenseCategoriesList" class="table-wrap"></div>
+          </div>
+        </div>
+        <div data-expense-panel="reports" hidden>
           <div class="card expense-report-toolbar">
+            <div class="expense-quick-period"><button class="btn btn-ghost" type="button" data-expense-period="day">Día</button><button class="btn btn-ghost" type="button" data-expense-period="week">Semana</button><button class="btn btn-ghost" type="button" data-expense-period="month">Mes</button><button class="btn btn-ghost" type="button" data-expense-period="custom">Personalizado</button></div>
             <div class="expense-report-period">
               <div class="field"><label for="costingExpenseMonth">Mes</label><input type="month" id="costingExpenseMonth" /></div>
               <div class="field"><label for="costingExpenseFrom">Desde</label><input type="date" id="costingExpenseFrom" /></div>
@@ -588,20 +605,22 @@
               <button class="btn btn-ghost" id="costingExpenseExcel" type="button" disabled><i class="ph-bold ph-file-xls"></i> Excel</button>
             </div>
           </div>
-          <div class="expense-summary-cards" id="costingExpenseCards" aria-label="Gastos por sucursal"></div>
+          <div class="expense-summary-cards" id="costingExpenseCards" aria-label="Gastos y retiros por sucursal"></div>
           <div class="card costing-expense-history">
             <div class="costing-expense-history-head">
-              <div><h3><i class="ph-bold ph-clock-counter-clockwise"></i> Gastos del periodo</h3><p id="costingExpenseTotal">Total: $0.00</p></div>
-              <div class="costing-expense-filters"><input type="search" id="costingExpenseSearch" placeholder="Buscar concepto o texto" aria-label="Buscar gastos por concepto o texto" /><select id="costingExpenseFilterBranch" aria-label="Filtrar gastos por sucursal"><option value="all">Todas las sucursales</option><option value="general">Sin sucursal</option></select><button class="btn btn-ghost" id="costingExpenseRefresh" type="button" aria-label="Actualizar gastos"><i class="ph-bold ph-arrows-clockwise"></i></button></div>
+              <div><h3><i class="ph-bold ph-clock-counter-clockwise"></i> Gastos y retiros del periodo</h3><p id="costingExpenseTotal">Total: $0.00</p></div>
+              <div class="costing-expense-filters"><input type="search" id="costingExpenseSearch" placeholder="Buscar concepto o texto" aria-label="Buscar gastos por concepto o texto" /><select id="costingExpenseFilterCategory" aria-label="Filtrar gastos por categoría"><option value="all">Todas las categorías</option></select><select id="costingExpenseFilterBranch" aria-label="Filtrar gastos por sucursal"><option value="all">Todas las sucursales</option><option value="general">Sin sucursal</option></select><button class="btn btn-ghost" id="costingExpenseRefresh" type="button" aria-label="Actualizar gastos"><i class="ph-bold ph-arrows-clockwise"></i></button></div>
             </div>
+            <div id="expenseCategorySummary" class="expense-summary-cards"></div>
             <div class="table-wrap" id="costingExpensesTable"></div>
-            <div class="costing-expense-pagination"><label for="costingExpensePageSize">Mostrar <select id="costingExpensePageSize"><option value="10">10</option><option value="20">20</option><option value="50">50</option><option value="100">100</option></select> gastos</label><span id="costingExpensePageInfo" aria-live="polite"></span><div><button type="button" class="btn btn-ghost" id="costingExpensePrev">Anterior</button><button type="button" class="btn btn-ghost" id="costingExpenseNext">Siguiente</button></div></div>
+            <div class="costing-expense-pagination"><label for="costingExpensePageSize">Mostrar <select id="costingExpensePageSize"><option value="10">10</option><option value="20">20</option><option value="50">50</option><option value="100">100</option></select> movimientos</label><span id="costingExpensePageInfo" aria-live="polite"></span><div><button type="button" class="btn btn-ghost" id="costingExpensePrev">Anterior</button><button type="button" class="btn btn-ghost" id="costingExpenseNext">Siguiente</button></div></div>
           </div>
           <div class="card costing-expense-history" id="costingDeletedExpensesSection">
-            <div class="costing-expense-history-head"><div><h3><i class="ph-bold ph-archive"></i> Gastos borrados</h3><p class="hint">Registro de eliminaciones según el periodo y la sucursal seleccionados.</p></div></div>
+            <div class="costing-expense-history-head"><div><h3><i class="ph-bold ph-archive"></i> Reversos de gastos y retiros</h3><p class="hint">Según fecha de borrado y sucursal. Los reversos no suman al gasto vigente.</p><p id="costingDeletedExpenseTotal">0 reversos · $0.00</p></div></div>
             <div class="table-wrap" id="costingDeletedExpensesTable"></div>
             <div class="costing-expense-pagination"><span id="costingDeletedExpensePageInfo" aria-live="polite"></span><div><button type="button" class="btn btn-ghost" id="costingDeletedExpensePrev">Anterior</button><button type="button" class="btn btn-ghost" id="costingDeletedExpenseNext">Siguiente</button></div></div>
           </div>
+        </div>
       </section>
 
       <!-- ──────── Inventarios ──────── -->
@@ -1765,6 +1784,7 @@
                 <div class="toggle-row"><div class="t-info"><i class="ph-bold ph-x-circle"></i><div><b>Cancelar ventas del mismo día</b><span>Las ventas de días anteriores siempre quedan protegidas.</span></div></div><label class="switch"><input type="checkbox" id="cfgSameDayCancelEnabled" /><span class="track"></span></label></div>
                 <div class="toggle-row"><div class="t-info"><i class="ph-bold ph-password"></i><div><b>Solicitar NIP al cancelar ventas</b><span>Exige autorización antes de devolver inventario y cancelar.</span></div></div><label class="switch"><input type="checkbox" id="cfgCancelRequirePin" /><span class="track"></span></label></div>
                 <div class="toggle-row" data-owner-only><div class="t-info"><i class="ph-bold ph-lock-key"></i><div><b>Autorizar cierre de caja con enlace</b><span>El cajero comparte el corte con el dueño. El dueño lo revisa y aprueba con el NIP antes de que el cajero cierre.</span></div></div><label class="switch"><input type="checkbox" id="cfgCloseRequireApproval" /><span class="track"></span></label></div>
+                <div class="toggle-row" data-owner-only><div class="t-info"><i class="ph-bold ph-trash"></i><div><b>Solicitar NIP al borrar operaciones de caja</b><span>Protege ingresos, retiros y gastos borrados desde Punto de venta.</span></div></div><label class="switch"><input type="checkbox" id="cfgMovementDeleteRequirePin" /><span class="track"></span></label></div>
               </div>
             </div>
             <div class="row-2" style="align-items:end;margin-top:14px">
@@ -3036,6 +3056,7 @@
         </div>
         <div class="pos-movement-kind-hint" id="posMovementKindHint"></div>
         <input type="hidden" id="posMovementKindModal" value="income" />
+        <div class="field" id="posMovementCategoryWrap" hidden><label for="posMovementCategoryModal">Categoría de gasto</label><select id="posMovementCategoryModal"><option value="">Selecciona una categoría</option></select><small id="posMovementCategoryHint" class="hint"></small></div>
         <div class="row-2">
           <div class="field">
             <label><i class="ph-bold ph-currency-circle-dollar"></i> Monto</label>
@@ -3052,6 +3073,30 @@
         </div>
       </form>
       <div class="pos-movement-history-wrap" id="posMovementHistory"></div>
+      <div class="pos-movement-history-wrap" id="posDeletedMovementHistory"></div>
+      <form id="posMovementSecurityForm" class="pos-movement-security" hidden>
+        <h4><i class="ph-bold ph-shield-check"></i> Seguridad de borrado</h4>
+        <label><input type="checkbox" id="posMovementRequirePin" /> Solicitar NIP para borrar ingresos, retiros y gastos</label>
+        <div class="row-2"><div class="field"><label for="posMovementNewPin">Nuevo NIP (opcional)</label><input type="password" id="posMovementNewPin" inputmode="numeric" autocomplete="off" pattern="[0-9]{4,8}" maxlength="8" placeholder="4 a 8 dígitos" /><small id="posMovementPinStatus" class="hint"></small></div><button class="btn btn-ghost" type="submit">Guardar seguridad</button></div>
+      </form>
+    </div>
+  </div>
+
+  <div class="modal-bg" id="posMovementDeleteModal">
+    <div class="modal" style="max-width:430px">
+      <h3><i class="ph-bold ph-trash"></i> Borrar operación de caja</h3>
+      <p id="posMovementDeleteDetail"></p>
+      <form id="posMovementDeleteForm">
+        <div class="field" id="posMovementDeletePinWrap" hidden><label for="posMovementDeletePin">NIP de autorización</label><input id="posMovementDeletePin" type="password" inputmode="numeric" autocomplete="off" pattern="[0-9]{4,8}" maxlength="8" /></div>
+        <div class="modal-actions"><button type="button" class="btn btn-ghost" id="posMovementDeleteCancel">Cancelar</button><button type="submit" class="btn btn-danger" id="posMovementDeleteConfirm">Borrar operación</button></div>
+      </form>
+    </div>
+  </div>
+
+  <div class="modal-bg" id="posPaymentReportModal">
+    <div class="modal pos-payment-report-modal">
+      <div class="pos-payment-report-head"><div><h3><i class="ph-bold ph-receipt"></i> Detalle de transacciones</h3><p id="posPaymentReportSubtitle"></p></div><div><button type="button" class="btn btn-ghost" id="posPaymentReportRefresh"><i class="ph-bold ph-arrows-clockwise"></i> Actualizar</button> <button type="button" class="btn btn-ghost" id="posPaymentReportClose">Cerrar</button></div></div>
+      <div id="posPaymentReportBody"></div>
     </div>
   </div>
 
@@ -3765,7 +3810,7 @@
   <script src="/socket.io/socket.io.js"></script>
   <script src="/static/vendor/qz-tray.js?v=2.3.0"></script>
   <script src="/static/js/whatsapp.js?v=20261009-whatsapp-inbox-app"></script>
-  <script src="/static/js/app.js?v=20261008-gastos-search-pages"></script>
+  <script src="/static/js/app.js?v=20261017-pos-transactions"></script>
   <script src="/static/js/sar.js?v=20260929-tabs-1"></script>
 </body>
 </html>
