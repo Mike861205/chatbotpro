@@ -13,6 +13,7 @@ const { sendLeadNotification, sendRegistrationNotification } = require('../utils
 const { createConfiguredFacturamaClients } = require('../services/facturama');
 const { MODULES, normalizeModules } = require('../utils/modules');
 const { TRIAL_DAYS, trialState } = require('../utils/trialAccess');
+const { isBusinessModel } = require('../utils/businessModels');
 
 const router = express.Router();
 const facturamaClients = createConfiguredFacturamaClients();
@@ -233,7 +234,7 @@ async function availableRegistrationSlug(requestedSlug) {
 
 router.post('/register', authAttemptLimiter, async (req, res, next) => {
   try {
-    const { ownerName, phone, phoneCountry, businessName, slug, username, password, timezone, reseller, productCode } = req.body || {};
+    const { ownerName, phone, phoneCountry, businessName, businessType, slug, username, password, timezone, reseller, productCode } = req.body || {};
     if (!ownerName || !phone || !phoneCountry || !businessName || !slug || !username || !password) {
       return res.status(400).json({ error: 'Todos los campos marcados son obligatorios' });
     }
@@ -248,6 +249,10 @@ router.post('/register', authAttemptLimiter, async (req, res, next) => {
     const cleanUser = String(username).trim().toLowerCase();
     const cleanOwnerName = normalizeLeadText(ownerName, 120);
     const cleanBusinessName = normalizeLeadText(businessName, 160);
+    const cleanBusinessType = String(businessType || 'restaurant').trim().toLowerCase();
+    if (!isBusinessModel(cleanBusinessType)) {
+      return res.status(400).json({ error: 'Selecciona un modelo de negocio válido' });
+    }
     const cleanPassword = String(password || '');
     if (!cleanOwnerName || !cleanBusinessName || !USERNAME_RE.test(cleanUser)) {
       return res.status(400).json({ error: 'Revisa nombre, negocio y usuario (3 a 60 caracteres)' });
@@ -293,7 +298,7 @@ router.post('/register', authAttemptLimiter, async (req, res, next) => {
         if (previousTenant.account_status !== 'active' || previousTenant.billing_status === 'suspended') {
           return res.status(403).json({ error: 'La cuenta del negocio no está activa. Contacta al administrador.' });
         }
-        await initTenantDefaults(previousTenant.slug, previousTenant.business_name, regional, previousTenant.id);
+        await initTenantDefaults(previousTenant.slug, previousTenant.business_name, { ...regional, businessType: previousTenant.business_type }, previousTenant.id);
         setAuthCookie(res, signToken(previousOwner, previousTenant), 'owner');
         return res.json({ ok: true, slug: previousTenant.slug, resumed: true });
       }
@@ -303,12 +308,12 @@ router.post('/register', authAttemptLimiter, async (req, res, next) => {
     // Tenant y propietario se crean de forma atómica y en un solo viaje a Neon.
     const created = await q(
       `WITH new_tenant AS (
-         INSERT INTO tenants (slug, business_name, owner_name, phone_enc, phone_country, phone_calling_code, timezone, reseller_id, invoicing_environment, trial_started_on, trial_ends_on, trial_status, sales_stage, product_code, invoicing_enabled, invoicing_activated_at, invoicing_activated_by)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $10, $11, (now() AT TIME ZONE $7)::date, (now() AT TIME ZONE $7)::date + $12::int, 'active', 'potential', $13, $14, CASE WHEN $14=1 THEN now() END, CASE WHEN $14=1 THEN 'system:invoicing-registration' ELSE '' END)
+         INSERT INTO tenants (slug, business_name, owner_name, phone_enc, phone_country, phone_calling_code, timezone, reseller_id, invoicing_environment, trial_started_on, trial_ends_on, trial_status, sales_stage, product_code, invoicing_enabled, invoicing_activated_at, invoicing_activated_by, business_type)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $10, $11, (now() AT TIME ZONE $7)::date, (now() AT TIME ZONE $7)::date + $12::int, 'active', 'potential', $13, $14, CASE WHEN $14=1 THEN now() END, CASE WHEN $14=1 THEN 'system:invoicing-registration' ELSE '' END, $15)
          RETURNING *
        ), new_user AS (
          INSERT INTO users (tenant_id, username, password_hash, onboarding_completed, identity_completed)
-         SELECT id, $8, $9, 0, 0 FROM new_tenant
+         SELECT id, $8, $9, CASE WHEN $13 = 'invoicing' THEN 0 ELSE 1 END, 0 FROM new_tenant
          RETURNING *
        )
        SELECT row_to_json(new_tenant) AS tenant, row_to_json(new_user) AS owner
@@ -328,13 +333,14 @@ router.post('/register', authAttemptLimiter, async (req, res, next) => {
         TRIAL_DAYS,
         cleanProductCode,
         cleanProductCode === 'invoicing' ? 1 : 0,
+        cleanBusinessType,
       ]
     );
     const tenant = created.rows[0].tenant;
     const owner = created.rows[0].owner;
 
     // Crea el SCHEMA AISLADO del tenant en Neon con valores por defecto
-    await initTenantDefaults(availableSlug, cleanBusinessName, regional, tenant.id);
+    await initTenantDefaults(availableSlug, cleanBusinessName, { ...regional, businessType: cleanBusinessType }, tenant.id);
 
     // El seguimiento comercial es secundario: si falla, no invalida un alta
     // cuyo negocio, propietario y catálogo inicial ya fueron creados.
@@ -660,6 +666,10 @@ router.post('/demo-convert', authAttemptLimiter, requireAuth, async (req, res, n
 
     const username = String(req.body?.username || '').trim().toLowerCase();
     const password = String(req.body?.password || '');
+    const businessType = String(req.body?.businessType || 'restaurant').trim().toLowerCase();
+    if (!isBusinessModel(businessType)) {
+      return res.status(400).json({ error: 'Selecciona un modelo de negocio válido' });
+    }
     if (!USERNAME_RE.test(username)) {
       return res.status(400).json({ error: 'El usuario debe tener de 3 a 60 caracteres: letras, números, punto, guion o guion bajo' });
     }
@@ -691,12 +701,12 @@ router.post('/demo-convert', authAttemptLimiter, requireAuth, async (req, res, n
 
     const created = await q(
       `WITH new_tenant AS (
-         INSERT INTO tenants (slug, business_name, owner_name, phone_enc, phone_country, phone_calling_code, timezone, reseller_id, invoicing_environment, trial_started_on, trial_ends_on, trial_status, sales_stage)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $10, $11, (now() AT TIME ZONE $7)::date, (now() AT TIME ZONE $7)::date + $12::int, 'active', 'potential')
+         INSERT INTO tenants (slug, business_name, owner_name, phone_enc, phone_country, phone_calling_code, timezone, reseller_id, invoicing_environment, trial_started_on, trial_ends_on, trial_status, sales_stage, business_type)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $10, $11, (now() AT TIME ZONE $7)::date, (now() AT TIME ZONE $7)::date + $12::int, 'active', 'potential', $13)
          RETURNING *
        ), new_user AS (
          INSERT INTO users (tenant_id, username, password_hash, onboarding_completed, identity_completed)
-         SELECT id, $8, $9, 0, 0 FROM new_tenant
+         SELECT id, $8, $9, 1, 0 FROM new_tenant
          RETURNING *
        )
        SELECT row_to_json(new_tenant) AS tenant, row_to_json(new_user) AS owner
@@ -714,6 +724,7 @@ router.post('/demo-convert', authAttemptLimiter, requireAuth, async (req, res, n
         lead.reseller_id || null,
         normalizedPhone.country === 'MX' || String(normalizedPhone.callingCode || '').replace(/\D/g, '') === '52' ? 'production' : 'sandbox',
         TRIAL_DAYS,
+        businessType,
       ]
     );
     const tenant = created.rows[0]?.tenant;
@@ -732,7 +743,7 @@ router.post('/demo-convert', authAttemptLimiter, requireAuth, async (req, res, n
       [demoLeadId, lead.sales_stage || 'new']
     );
 
-    await initTenantDefaults(slug, businessName, regional, tenant.id);
+    await initTenantDefaults(slug, businessName, { ...regional, businessType }, tenant.id);
     sendRegistrationNotification({
       ownerName,
       phone: normalizedPhone.e164,

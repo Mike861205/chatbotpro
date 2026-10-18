@@ -384,11 +384,27 @@ function getFilteredTenants() {
     if (reseller === 'direct' && t.reseller_id) return false;
     if (!['all', 'direct'].includes(reseller) && String(t.reseller_id || '') !== reseller) return false;
     if (!search) return true;
-    return [t.id, t.slug, t.business_name, t.owner_name, t.owner_username, t.phone, t.phone_digits,
+    return [t.id, t.slug, t.business_name, businessModelLabel(t.business_type), t.owner_name, t.owner_username, t.phone, t.phone_digits,
       t.phone_country, t.phone_country_name, t.phone_calling_code, t.reseller_name, t.reseller_slug,
       t.plan_name, t.sales_stage, t.module_count, t.module_views]
       .join(' ').toLowerCase().includes(search);
   }).sort((a, b) => compareBySortKey(a, b, SA_TENANT_SORT.key, SA_TENANT_SORT.dir));
+}
+
+const SA_BUSINESS_MODEL_LABELS = {
+  restaurant: 'Restaurante / cafetería',
+  grocery: 'Tienda / abarrotes',
+  furniture: 'Mueblería',
+  travel_agency: 'Agencia de viajes',
+  office_services: 'Oficina / servicios profesionales',
+  screen_printing: 'Serigrafía / estampado',
+  carpentry: 'Carpintería',
+  health: 'Salud / clínica',
+  dentist: 'Consultorio dental',
+};
+
+function businessModelLabel(value) {
+  return SA_BUSINESS_MODEL_LABELS[value] || SA_BUSINESS_MODEL_LABELS.restaurant;
 }
 
 function syncFilterControls() {
@@ -469,7 +485,7 @@ function renderTenantTable() {
 
   const allChecked = pageItems.length > 0 && pageItems.every((item) => SA_SELECTED.has(salesSubjectKey('tenant', item.id)));
   table.innerHTML = `<div class="table-wrap"><table><thead><tr>
-    <th class="sa-select-col"><input type="checkbox" data-sa-select-all="tenant" ${allChecked ? 'checked' : ''} aria-label="Seleccionar prospectos visibles" /></th><th>Prospecto</th><th>Dueño</th><th>Reseller</th><th>Etapa</th>${sortableHeader('Registro', 'created_at', SA_TENANT_SORT)}${sortableHeader('Última actividad', 'module_last_seen', SA_TENANT_SORT)}<th>Acceso</th><th>Plan de interés</th>${sortableHeader('Módulos', 'module_count', SA_TENANT_SORT)}<th>Acciones</th>
+    <th class="sa-select-col"><input type="checkbox" data-sa-select-all="tenant" ${allChecked ? 'checked' : ''} aria-label="Seleccionar prospectos visibles" /></th><th>Prospecto</th><th>Modelo de negocio</th><th>Dueño</th><th>Reseller</th><th>Etapa</th>${sortableHeader('Registro', 'created_at', SA_TENANT_SORT)}${sortableHeader('Última actividad', 'module_last_seen', SA_TENANT_SORT)}<th>Acceso</th><th>Plan de interés</th>${sortableHeader('Módulos', 'module_count', SA_TENANT_SORT)}<th>Acciones</th>
   </tr></thead><tbody>${pageItems
     .map((t) => {
       const waUrl = t.phone_valid && t.phone_digits ? `https://wa.me/${t.phone_digits}` : '';
@@ -478,6 +494,7 @@ function renderTenantTable() {
       return `<tr class="${SA_SELECTED.has(key) ? 'sa-row-selected' : ''}">
       <td class="sa-select-col"><input type="checkbox" data-sa-sales-select="${key}" ${SA_SELECTED.has(key) ? 'checked' : ''} aria-label="Seleccionar ${esc(t.business_name)}" /></td>
       <td><b>${esc(t.business_name)}</b><div class="meta">/${esc(t.slug)}</div></td>
+      <td>${esc(businessModelLabel(t.business_type))}</td>
       <td>${esc(t.owner_name)}
         <div class="meta">${countryFlag(t.phone_country)} ${esc(country)} · Lada ${t.phone_calling_code ? `+${esc(t.phone_calling_code)}` : '—'}</div>
         <div class="meta">${esc(t.phone || '—')}${t.phone && !t.phone_valid ? ' · Revisar número histórico' : ''}</div>
@@ -1037,7 +1054,7 @@ function getFilteredClients() {
   return SA_CLIENTS.filter((client) => {
     if (!matchesClientFilter(client, SA_CLIENT_FILTER)) return false;
     if (!search) return true;
-    return [client.slug, client.business_name, client.owner_name, client.phone, client.phone_country_name, client.phone_calling_code]
+    return [client.slug, client.business_name, businessModelLabel(client.business_type), client.owner_name, client.phone, client.phone_country_name, client.phone_calling_code]
       .join(' ').toLowerCase().includes(search);
   });
 }
@@ -1092,11 +1109,12 @@ function renderClientsTable() {
   }
 
   table.innerHTML = `<div class="table-wrap"><table><thead><tr>
-    <th>Cliente</th><th>Contacto</th><th>Cliente desde</th><th>Estado</th><th>Plan / cupos</th><th>Timbres</th><th>Último pago</th><th>Vencimiento</th><th>Ingresos</th><th>Acciones</th>
+    <th>Cliente</th><th>Modelo de negocio</th><th>Contacto</th><th>Cliente desde</th><th>Estado</th><th>Plan / cupos</th><th>Timbres</th><th>Último pago</th><th>Vencimiento</th><th>Ingresos</th><th>Acciones</th>
   </tr></thead><tbody>${filtered.map((client) => {
     const waUrl = client.phone_valid && client.phone_digits ? `https://wa.me/${client.phone_digits}` : '';
     return `<tr>
       <td><b>${esc(client.business_name)}</b><div class="meta">/${esc(client.slug)}</div></td>
+      <td>${esc(businessModelLabel(client.business_type))}</td>
       <td>${esc(client.owner_name)}<div class="meta">${countryFlag(client.phone_country)} ${esc(client.phone || '—')}</div></td>
       <td>${fmtDate(client.customer_since)}</td>
       <td>${statusChip('billing', client.billing_status)}<div class="meta">${Number(client.mora_days || 0) > 0 ? `${Number(client.mora_days)} días de mora` : 'Cuenta ' + (client.account_status === 'active' ? 'activa' : 'inactiva')}</div></td>
@@ -1526,14 +1544,14 @@ function renderInvoicingTable() {
     if (SA_INVOICING_FILTER === 'customer' && !item.customer_since) return false;
     if (SA_INVOICING_FILTER === 'pending' && ready) return false;
     if (SA_INVOICING_FILTER === 'ready' && !ready) return false;
-    return !query || [item.business_name, item.owner_name, item.owner_username, item.issuer_rfc, item.slug].some((value) => String(value || '').toLowerCase().includes(query));
+    return !query || [item.business_name, businessModelLabel(item.business_type), item.owner_name, item.owner_username, item.issuer_rfc, item.slug].some((value) => String(value || '').toLowerCase().includes(query));
   });
   const target = $('#saInvoicingTable');
   if (!rows.length) { target.innerHTML = '<div class="empty"><i class="ph ph-file-text"></i><b>Sin cuentas de facturación</b><p>No hay resultados con este filtro.</p></div>'; return; }
-  target.innerHTML = `<div class="table-wrap"><table><thead><tr><th>Negocio</th><th>Contacto</th><th>Tipo</th><th>Avance fiscal</th><th>Timbres</th><th>Actividad</th><th>Acciones</th></tr></thead><tbody>${rows.map((item) => {
+  target.innerHTML = `<div class="table-wrap"><table><thead><tr><th>Negocio</th><th>Modelo de negocio</th><th>Contacto</th><th>Tipo</th><th>Avance fiscal</th><th>Timbres</th><th>Actividad</th><th>Acciones</th></tr></thead><tbody>${rows.map((item) => {
     const [stage, tone] = invoicingStage(item);
     const waUrl = item.phone_valid && item.phone_digits ? `https://wa.me/${item.phone_digits}` : '';
-    return `<tr><td><b>${esc(item.business_name)}</b><div class="meta">/${esc(item.slug)} · ${esc(item.issuer_rfc || 'RFC pendiente')}</div></td><td>${esc(item.owner_name)}<div class="meta">${esc(item.phone || '—')} · @${esc(item.owner_username || '—')}</div></td><td>${item.customer_since ? '<span class="tag ok">Cliente</span>' : '<span class="tag warn">Prospecto</span>'}<div class="meta">${fmtDate(item.created_at)}</div></td><td><span class="tag ${tone}">${esc(stage)}</span><div class="meta">${Number(item.invoicing_enabled) ? 'Servicio activado' : 'Sin activar'}</div></td><td><b>${item.stamp_unlimited ? 'Ilimitados' : Number(item.stamp_available || 0)}</b><div class="meta">disponibles</div></td><td><b>${Number(item.invoice_count || 0)} CFDI</b><div class="meta">${item.last_invoice_at ? `Último: ${fmtDate(item.last_invoice_at)}` : 'Sin emisiones'}</div></td><td><div class="sa-actions-grid"><button type="button" class="btn btn-ghost" data-iv-access="${item.id}"><i class="ph-bold ph-sign-in"></i> Entrar</button><button type="button" class="btn btn-sa-manage" data-iv-follow="${item.id}"><i class="ph-bold ph-note-pencil"></i> Seguimiento</button><button type="button" class="btn btn-ghost" data-iv-stamps="${item.id}"><i class="ph-bold ph-stamp"></i> Timbres</button>${waUrl ? `<a class="btn btn-ghost" href="${waUrl}" target="_blank" rel="noopener"><i class="ph-bold ph-whatsapp-logo"></i> WhatsApp</a>` : ''}</div></td></tr>`;
+    return `<tr><td><b>${esc(item.business_name)}</b><div class="meta">/${esc(item.slug)} · ${esc(item.issuer_rfc || 'RFC pendiente')}</div></td><td>${esc(businessModelLabel(item.business_type))}</td><td>${esc(item.owner_name)}<div class="meta">${esc(item.phone || '—')} · @${esc(item.owner_username || '—')}</div></td><td>${item.customer_since ? '<span class="tag ok">Cliente</span>' : '<span class="tag warn">Prospecto</span>'}<div class="meta">${fmtDate(item.created_at)}</div></td><td><span class="tag ${tone}">${esc(stage)}</span><div class="meta">${Number(item.invoicing_enabled) ? 'Servicio activado' : 'Sin activar'}</div></td><td><b>${item.stamp_unlimited ? 'Ilimitados' : Number(item.stamp_available || 0)}</b><div class="meta">disponibles</div></td><td><b>${Number(item.invoice_count || 0)} CFDI</b><div class="meta">${item.last_invoice_at ? `Último: ${fmtDate(item.last_invoice_at)}` : 'Sin emisiones'}</div></td><td><div class="sa-actions-grid"><button type="button" class="btn btn-ghost" data-iv-access="${item.id}"><i class="ph-bold ph-sign-in"></i> Entrar</button><button type="button" class="btn btn-sa-manage" data-iv-follow="${item.id}"><i class="ph-bold ph-note-pencil"></i> Seguimiento</button><button type="button" class="btn btn-ghost" data-iv-stamps="${item.id}"><i class="ph-bold ph-stamp"></i> Timbres</button>${waUrl ? `<a class="btn btn-ghost" href="${waUrl}" target="_blank" rel="noopener"><i class="ph-bold ph-whatsapp-logo"></i> WhatsApp</a>` : ''}</div></td></tr>`;
   }).join('')}</tbody></table></div>`;
   target.querySelectorAll('[data-iv-access]').forEach((button) => button.onclick = async () => { const item = SA_INVOICING.find((row) => Number(row.id) === Number(button.dataset.ivAccess)); await api(`/api/superadmin/tenants/${item.id}/access`, { method: 'POST' }); window.open('/facturacion/panel', '_blank'); toast(`Sesión fiscal iniciada para ${item.business_name}`); });
   target.querySelectorAll('[data-iv-stamps]').forEach((button) => button.onclick = () => manageTenantStamps(Number(button.dataset.ivStamps)).catch((error) => toast(error.message, true)));

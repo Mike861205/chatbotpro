@@ -365,7 +365,7 @@ async function getSessionTotals(t, sessionId) {
   const productTax = taxRows.reduce((summary, row) => {
     for (const line of parseJsonArray(row.items)) {
       if (line?.taxEnabled !== true || !Number.isFinite(Number(line.taxRate))) continue;
-      const qty = Math.max(1, Number(line.qty || 1));
+      const qty = Math.max(0, Number(line.qty || 1));
       const gross = n(Number(line.price || 0) * qty);
       const base = n((Number.isFinite(Number(line.taxBasePrice))
         ? Number(line.taxBasePrice)
@@ -816,7 +816,7 @@ async function listDeletedMovements(t, sessionId) {
 
 async function listSoldQtyByProduct(t) {
   const rows = await t.all(
-    `SELECT product_id, SUM(qty)::int AS sold_qty
+    `SELECT product_id, SUM(qty)::float AS sold_qty
      FROM (
        SELECT
          CASE
@@ -825,7 +825,7 @@ async function listSoldQtyByProduct(t) {
            ELSE NULL
          END AS product_id,
          CASE
-           WHEN (it.item->>'qty') ~ '^[0-9]+$' THEN GREATEST((it.item->>'qty')::int, 1)
+           WHEN (it.item->>'qty') ~ '^[0-9]+([.][0-9]{1,3})?$' THEN GREATEST((it.item->>'qty')::numeric, 0)
            ELSE 1
          END AS qty
        FROM {s}.orders o
@@ -929,12 +929,13 @@ async function normalizePosItems(t, inputItems) {
   const ids = [...new Set(items.map((item) => Number(item.productId ?? item.id)).filter((id) => Number.isInteger(id) && id > 0))];
   if (!ids.length) throw badRequest('Los productos del ticket no son válidos');
   const rows = await t.all(
-    `SELECT id, name, price::float AS price, COALESCE(unit_cost, 0)::float AS unit_cost, active, pos_active, category_id, sale_days, sar_tax_category
+    `SELECT id, name, price::float AS price, COALESCE(unit_cost, 0)::float AS unit_cost, active, pos_active, category_id, sale_days, sar_tax_category, grocery_unit, grocery_presentation
      FROM {s}.products
      WHERE id = ANY($1::int[])`,
     [ids]
   );
   const taxConfig = await loadProductTaxConfig(t);
+  const isGrocery = (await getSetting(t, 'business_type', 'restaurant')) === 'grocery';
   const byId = new Map(rows.map((row) => [Number(row.id), row]));
   const normalized = items.map((item) => {
     const product = byId.get(Number(item.productId ?? item.id));
@@ -942,11 +943,18 @@ async function normalizePosItems(t, inputItems) {
     if (!product || !Number(product.pos_active) || !isProductAvailableToday(product, new Date(), tenantTimeZone(t))) {
       throw badRequest('Uno de los productos no está disponible para venta hoy');
     }
-    if (!Number.isInteger(qty) || qty <= 0) throw badRequest('La cantidad de un producto es inválida');
+    const bulk = isGrocery && ['kg', 'liter'].includes(product.grocery_unit);
+    if (!Number.isFinite(qty) || qty <= 0 || qty > 9999 || (!bulk && !Number.isInteger(qty))
+        || (bulk && Math.abs(qty * 1000 - Math.round(qty * 1000)) > 1e-7)) {
+      throw badRequest('La cantidad de un producto es inválida');
+    }
 
     const requestedName = String(item.name || '').trim();
     const requestedPrice = Number(item.originalUnitPrice ?? item.listPrice ?? item.price);
     const hasCustomLine = Boolean(item.cartKey || item._cartKey || item.variantId || item.modifiersLabel || Array.isArray(item.modifiers));
+    const presentation = isGrocery ? String(product.grocery_presentation || '').trim() : '';
+    const productName = presentation && !String(product.name).toLocaleLowerCase('es').includes(presentation.toLocaleLowerCase('es'))
+      ? `${product.name} · ${presentation}` : product.name;
     const unitCost = preciseCost(product.unit_cost);
     const effectivePrice = hasCustomLine && Number.isFinite(requestedPrice) && requestedPrice >= 0
       ? n(requestedPrice)
@@ -954,7 +962,7 @@ async function normalizePosItems(t, inputItems) {
     return {
       id: product.id,
       categoryId: Number(product.category_id || 0),
-      name: hasCustomLine ? (requestedName || product.name) : product.name,
+      name: hasCustomLine ? (requestedName || productName) : productName,
       price: effectivePrice,
       qty,
       sarTaxCategory: product.sar_tax_category || '',
@@ -1419,7 +1427,8 @@ router.get('/overview', async (req, res, next) => {
        ORDER BY ps.opened_at DESC`
     );
     const products = await req.tdb.all(
-      `SELECT p.id, p.category_id, p.name, p.description, p.price::float AS price, p.image, p.sale_days, p.barcode, p.sat_product_code, c.name AS category_name
+      `SELECT p.id, p.category_id, p.name, p.description, p.price::float AS price, p.image, p.sale_days, p.barcode, p.sat_product_code,
+              p.grocery_brand, p.grocery_presentation, p.grocery_unit, c.name AS category_name
        FROM {s}.products p
        LEFT JOIN {s}.categories c ON c.id = p.category_id
        WHERE p.pos_active = 1

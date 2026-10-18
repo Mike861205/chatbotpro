@@ -1,6 +1,12 @@
 const { normalizeProductBarcode, isValidProductBarcode } = require('./barcode');
 
 const CATALOG_PROFILES = {
+  grocery: {
+    document: 'catálogo o lista de precios de tienda, abarrotes, licores o frutas y verduras',
+    item: 'artículo vendible con marca, presentación y precio propios',
+    categoryExamples: 'Abarrotes, Bebidas, Licores, Frutas y verduras, Limpieza',
+    descriptionRule: 'Conserva marca, contenido neto y presentación visibles. Separa los artículos con distinto código de barras o tamaño; indica si el precio es por pieza, kilogramo o litro.',
+  },
   restaurant: {
     document: 'menú de restaurante o cafetería',
     item: 'producto vendible',
@@ -79,6 +85,17 @@ function moneyValue(value) {
   else raw = raw.replace(/,/g, '');
   const parsed = Number(raw);
   return Number.isFinite(parsed) && parsed >= 0 ? Number(parsed.toFixed(2)) : 0;
+}
+
+function groceryUnitFromCatalog(raw) {
+  const explicit = cleanText(raw?.groceryUnit ?? raw?.grocery_unit ?? raw?.saleUnit ?? raw?.unit, 30).toLowerCase();
+  if (['kg', 'kilogramo', 'kilo'].includes(explicit)) return 'kg';
+  if (['liter', 'litro', 'l'].includes(explicit)) return 'liter';
+  if (['piece', 'pieza', 'pza', 'unidad', 'envase'].includes(explicit)) return 'piece';
+  const text = `${raw?.name || ''} ${raw?.description || ''}`.toLowerCase();
+  if (/(?:\/\s*kg\b|por\s+(?:kg|kilo(?:gramo)?s?)\b)/i.test(text)) return 'kg';
+  if (/(?:\/\s*(?:l|litro)\b|por\s+(?:l|litro)s?\b)/i.test(text)) return 'liter';
+  return 'piece';
 }
 
 function normalizeVariant(raw) {
@@ -234,10 +251,26 @@ function mergeUniqueByName(target, incoming, merge) {
 }
 
 function normalizeAiCatalogProducts(inputProducts = [], options = {}) {
-  const rows = (Array.isArray(inputProducts) ? inputProducts : []).slice(0, 200);
+  const sourceRows = (Array.isArray(inputProducts) ? inputProducts : []).slice(0, 200);
+  const grocery = options.businessType === 'grocery';
+  const rows = grocery ? sourceRows.flatMap((raw) => {
+    const variants = Array.isArray(raw?.variants) ? raw.variants
+      : Array.isArray(raw?.presentations) ? raw.presentations
+        : Array.isArray(raw?.sizes) ? raw.sizes : [];
+    if (!variants.length) return [raw];
+    return variants.map((variant) => ({
+      ...raw,
+      name: `${cleanText(raw?.name, 160)} ${cleanText(typeof variant === 'string' ? variant : variant?.name ?? variant?.label, 100)}`.trim(),
+      price: typeof variant === 'string' ? raw?.price : variant?.price ?? raw?.price,
+      barcode: variant?.barcode ?? variant?.barCode ?? '',
+      groceryPresentation: cleanText(typeof variant === 'string' ? variant : variant?.name ?? variant?.label, 100),
+      variants: [], presentations: [], sizes: [], variantGroup: '', variantName: '',
+    }));
+  }).slice(0, 200) : sourceRows;
   const products = [];
   const inferredVariantCounts = new Map();
   for (const raw of rows) {
+    if (grocery) continue;
     if (normalizeProductBarcode(raw?.barcode ?? raw?.barCode ?? raw?.ean ?? raw?.upc)) continue;
     if (cleanText(raw?.variantGroup, 160) || cleanText(raw?.variantName, 120)
         || (Array.isArray(raw?.variants) && raw.variants.length)
@@ -255,15 +288,15 @@ function normalizeAiCatalogProducts(inputProducts = [], options = {}) {
     if (!validBarcode && options.strictBarcodes) {
       throw Object.assign(new Error(`El código de barras de ${rowName} no es válido. Usa de 3 a 64 letras, números o . _ - /.`), { statusCode: 400 });
     }
-    const explicitBase = cleanText(raw?.variantGroup, 160);
-    const legacyVariantName = cleanText(raw?.variantName, 120);
-    const rawVariants = Array.isArray(raw?.variants) ? raw.variants
+    const explicitBase = grocery ? '' : cleanText(raw?.variantGroup, 160);
+    const legacyVariantName = grocery ? '' : cleanText(raw?.variantName, 120);
+    const rawVariants = grocery ? [] : Array.isArray(raw?.variants) ? raw.variants
       : (Array.isArray(raw?.presentations) ? raw.presentations : (Array.isArray(raw?.sizes) ? raw.sizes : []));
     const hasNestedVariants = rawVariants.length > 0;
     const inferredCandidate = inferVariantFromProductName(rowName);
     const categoryName = resolveAiCategory(raw, options);
     const inferredKey = `${normalizedKey(categoryName)}::${normalizedKey(inferredCandidate.baseName)}`;
-    const inferred = !barcode && !explicitBase && !legacyVariantName && !hasNestedVariants
+    const inferred = !grocery && !barcode && !explicitBase && !legacyVariantName && !hasNestedVariants
       && (inferredVariantCounts.get(inferredKey) || 0) > 1
       ? inferredCandidate
       : { baseName: rowName, variantName: '' };
@@ -277,7 +310,7 @@ function normalizeAiCatalogProducts(inputProducts = [], options = {}) {
     if (legacyVariantName) variants.push({ name: legacyVariantName, price: moneyValue(raw?.price) });
     else if (inferred.variantName) variants.push({ name: inferred.variantName, price: moneyValue(raw?.price) });
 
-    const rawModifierGroups = Array.isArray(raw?.modifierGroups) ? raw.modifierGroups
+    const rawModifierGroups = grocery ? [] : Array.isArray(raw?.modifierGroups) ? raw.modifierGroups
       : (Array.isArray(raw?.optionGroups) ? raw.optionGroups
         : (Array.isArray(raw?.ingredientGroups) ? raw.ingredientGroups
           : (Array.isArray(raw?.modifiers) ? raw.modifiers : [])));
@@ -295,6 +328,9 @@ function normalizeAiCatalogProducts(inputProducts = [], options = {}) {
     const product = {
       name,
       description: cleanText(raw?.description, 1000),
+      groceryBrand: cleanText(raw?.groceryBrand ?? raw?.grocery_brand ?? raw?.brand, 100),
+      groceryPresentation: cleanText(raw?.groceryPresentation ?? raw?.grocery_presentation ?? raw?.presentation, 100),
+      groceryUnit: groceryUnitFromCatalog(raw),
       price: moneyValue(raw?.price),
       categoryName,
       barcode: validBarcode ? barcode || '' : '',
@@ -326,6 +362,9 @@ function normalizeAiCatalogProducts(inputProducts = [], options = {}) {
       && candidate.barcode === product.barcode);
     if (existing) {
       if (product.description.length > existing.description.length) existing.description = product.description;
+      if (!existing.groceryBrand) existing.groceryBrand = product.groceryBrand;
+      if (!existing.groceryPresentation) existing.groceryPresentation = product.groceryPresentation;
+      if (existing.groceryUnit === 'piece') existing.groceryUnit = product.groceryUnit;
       if (!existing.barcode && product.barcode) existing.barcode = product.barcode;
       if (!existing.price || (product.price && product.price < existing.price)) existing.price = product.price;
       mergeUniqueByName(existing.variants, product.variants);
@@ -353,6 +392,7 @@ function buildAiCatalogPrompt(businessType, categoryNames = []) {
     '- El giro configurado es una referencia, no una restricción: si el contenido visible pertenece claramente a otro giro (por ejemplo, un menú de comida), prioriza siempre el documento real y adapta productos, categorías y opciones a lo que muestra.',
     `Genera cada ${profile.item} listo para cargar en el sistema POS/chatbot, siguiendo exactamente la estructura del alta manual.`,
     'Formato JSON requerido:',
+    ...(businessType === 'grocery' ? ['Para cada artículo agrega groceryBrand, groceryPresentation y groceryUnit (piece, kg o liter). kg y liter sólo para venta a granel por peso o volumen; una bolsa de 1 kg o una botella de 1 L se vende por pieza.'] : []),
     'Cada producto debe incluir barcode como CADENA con el código de barras visible o la columna Código de barras/Barcode/EAN/UPC/GTIN asociada a ese producto. Conserva todos los dígitos y ceros iniciales, nunca uses notación científica. No confundas SKU, precio o teléfono con barcode. No inventes códigos: usa una cadena vacía y warnings si no es legible. Si cada presentación tiene su propio código, crea productos separados con su presentación en el nombre; no los consolides en variantes.',
     '{"products":[{"name":"string","description":"string","price":123.45,"categoryName":"string","barcode":"string","sourceSection":"encabezado visible del bloque","imageIndex":0,"imageRegion":{"imageIndex":0,"x":10,"y":20,"width":30,"height":25,"confidence":0.9},"variants":[{"name":"string","price":123.45}],"modifierGroups":[{"name":"string","minSelections":0,"maxSelections":1,"options":[{"name":"string","extraPrice":0}]}],"confidence":0.95,"warnings":["string"]}],"notes":["string"]}',
     'Reglas de lectura:',
@@ -364,22 +404,24 @@ function buildAiCatalogPrompt(businessType, categoryNames = []) {
     `- categoryName debe ser breve (ej. ${profile.categoryExamples}) y representar la familia real del producto. Usa sourceSection para copiar el encabezado visible del bloque y normalízalo como categoría.`,
     '- No uses una sola categoría genérica para todo el documento. “General”, “Menú”, “Productos”, “Platillos” o “Comida rápida” no sustituyen las secciones específicas visibles.',
     '- Puedes proponer categorías nuevas aunque no existan todavía; reutiliza una categoría existente sólo cuando sea semánticamente equivalente, nunca sólo porque ya existe.',
-    '- En un menú como este, clasifica Alitas/Boneless en “Alitas”; Hamburguesa y papas en “Hamburguesas”; Papas y pollo, Orden de pollo, Pollo jumbo o Chicken Bake en “Pollo y papas”; Combo/Mix en “Combos”; Extras en “Extras”; y conserva secciones claras como Ensaladas o Costillas.',
+    ...(businessType === 'grocery' ? ['- Usa secciones de tienda como Abarrotes, Bebidas, Licores, Frutas y verduras, Limpieza y Hogar según lo que aparezca en el catálogo.'] : ['- En un menú como este, clasifica Alitas/Boneless en “Alitas”; Hamburguesa y papas en “Hamburguesas”; Papas y pollo, Orden de pollo, Pollo jumbo o Chicken Bake en “Pollo y papas”; Combo/Mix en “Combos”; Extras en “Extras”; y conserva secciones claras como Ensaladas o Costillas.']),
     `- ${profile.descriptionRule}`,
     '- No inventes ingredientes, tamaños, precios, opciones ni descripciones que no sean visibles.',
-    '- Crea UN solo producto base y coloca dentro de variants sus tamaños, cantidades, presentaciones o planes con precio diferente, excepto cuando tengan distintos códigos de barras: en ese caso son productos separados.',
-    '- Usa modifierGroups para elecciones que el cliente puede personalizar: ingredientes, sabores, salsas, términos o guarniciones. Una lista de alternativas sin precio colocada inmediatamente debajo o junto al producto también es un grupo seleccionable aunque no diga “elige”.',
-    '- Ejemplo obligatorio: si “Alitas” muestra 8 pza $169, 12 pza $199 y 17 pza $229, crea esas tres variantes; si debajo aparecen “Piña habanero, BBQ, Picositas, Ajo parmesano, Pimienta limón, Mango habanero, Tamarindo”, crea además en Alitas un grupo “Elige tu salsa” con esas siete opciones y extraPrice 0.',
-    '- Distingue opciones de descripción: una frase narrativa con “incluye”, “con” o componentes unidos por “+” suele ser contenido fijo y va en description; una lista vertical de sabores/salsas/tipos alternativos es modifierGroups. No conviertas la lista descriptiva de ingredientes incluidos en opciones.',
-    '- Una sección independiente “Extras” o “Adicionales” con precio propio por renglón son productos adicionales, salvo que el menú los vincule claramente a un producto. No la conviertas en un grupo global ni mezcles su precio con las salsas gratuitas.',
-    '- Para cada grupo define minSelections/maxSelections respetando las reglas explícitas de cantidad. Si una lista de sabores o salsas implica escoger una para poder pedir el producto y no muestra otra cantidad, usa minSelections=1 y maxSelections=1. Para opciones realmente opcionales usa 0 y 1.',
-    '- En combos, conserva en description los componentes fijos. Sólo crea opciones para componentes que realmente se puedan elegir.',
-    '- Si el precio base no aparece pero sí hay variantes, usa como price el menor precio de sus variantes.',
+    ...(businessType === 'grocery' ? ['- Cada tamaño, envase, marca, contenido neto o presentación con precio propio es un artículo separado, aunque no tenga código de barras. Deja variants y modifierGroups vacíos para artículos de tienda.'] : ['- Crea UN solo producto base y coloca dentro de variants sus tamaños, cantidades, presentaciones o planes con precio diferente, excepto cuando tengan distintos códigos de barras: en ese caso son productos separados.']),
+    ...(businessType !== 'grocery' ? [
+      '- Usa modifierGroups para elecciones que el cliente puede personalizar: ingredientes, sabores, salsas, términos o guarniciones. Una lista de alternativas sin precio colocada inmediatamente debajo o junto al producto también es un grupo seleccionable aunque no diga “elige”.',
+      '- Ejemplo obligatorio: si “Alitas” muestra 8 pza $169, 12 pza $199 y 17 pza $229, crea esas tres variantes; si debajo aparecen “Piña habanero, BBQ, Picositas, Ajo parmesano, Pimienta limón, Mango habanero, Tamarindo”, crea además en Alitas un grupo “Elige tu salsa” con esas siete opciones y extraPrice 0.',
+      '- Distingue opciones de descripción: una frase narrativa con “incluye”, “con” o componentes unidos por “+” suele ser contenido fijo y va en description; una lista vertical de sabores/salsas/tipos alternativos es modifierGroups. No conviertas la lista descriptiva de ingredientes incluidos en opciones.',
+      '- Una sección independiente “Extras” o “Adicionales” con precio propio por renglón son productos adicionales, salvo que el menú los vincule claramente a un producto. No la conviertas en un grupo global ni mezcles su precio con las salsas gratuitas.',
+      '- Para cada grupo define minSelections/maxSelections respetando las reglas explícitas de cantidad. Si una lista de sabores o salsas implica escoger una para poder pedir el producto y no muestra otra cantidad, usa minSelections=1 y maxSelections=1. Para opciones realmente opcionales usa 0 y 1.',
+      '- En combos, conserva en description los componentes fijos. Sólo crea opciones para componentes que realmente se puedan elegir.',
+      '- Si el precio base no aparece pero sí hay variantes, usa como price el menor precio de sus variantes.',
+    ] : []),
     '- confidence va de 0 a 1; agrega warnings cuando el texto, relación o precio sea dudoso.',
-    '- Antes de responder, verifica para cada producto que ninguna lista cercana de sabores, salsas, tamaños o presentaciones haya quedado sin asignar. Usa imageIndex basado en cero para indicar la página de origen.',
+    ...(businessType === 'grocery' ? ['- Antes de responder, verifica que cada marca, presentación, código de barras, unidad de venta y precio se hayan asociado al artículo correcto. Usa imageIndex basado en cero para indicar la página de origen.'] : ['- Antes de responder, verifica para cada producto que ninguna lista cercana de sabores, salsas, tamaños o presentaciones haya quedado sin asignar. Usa imageIndex basado en cero para indicar la página de origen.']),
     '- Si un texto pequeño es legible pero no puedes asociarlo con seguridad, no lo descartes: cópialo en notes con la página y el bloque visual para que el tenant pueda revisarlo.',
     '- Para imageRegion usa coordenadas porcentuales 0-100 sobre la vista completa original: x/y esquina superior izquierda y width/height del recorte. Devuélvelo sólo cuando exista una fotografía claramente asociada a ese producto, con confidence >= 0.65.',
-    '- El recorte imageRegion debe rodear únicamente la comida o producto: evita precios, textos, logotipos, teléfonos y adornos. Si una foto representa varios productos o no hay relación clara, usa imageRegion:null; nunca asignes por cercanía dudosa.',
+    ...(businessType === 'grocery' ? ['- El recorte imageRegion debe rodear únicamente el artículo: evita precios, textos, logotipos, teléfonos y adornos. Si una foto representa varios artículos o no hay relación clara, usa imageRegion:null; nunca asignes por cercanía dudosa.'] : ['- El recorte imageRegion debe rodear únicamente la comida o producto: evita precios, textos, logotipos, teléfonos y adornos. Si una foto representa varios productos o no hay relación clara, usa imageRegion:null; nunca asignes por cercanía dudosa.']),
     '- Máximo 60 productos, 30 variantes por producto, 15 grupos y 30 opciones por grupo.',
     `Categorías existentes del tenant: ${categoryNames.join(', ') || 'Ninguna'}`,
   ].join('\n');

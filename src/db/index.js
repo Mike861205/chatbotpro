@@ -89,6 +89,7 @@ async function initMaster(options = {}) {
       id SERIAL PRIMARY KEY,
       slug TEXT UNIQUE NOT NULL,
       business_name TEXT NOT NULL,
+      business_type TEXT NOT NULL DEFAULT 'restaurant',
       owner_name TEXT NOT NULL,
       phone_enc TEXT,
       phone_country TEXT DEFAULT '',
@@ -309,6 +310,7 @@ async function initMaster(options = {}) {
   await q(`ALTER TABLE tenants ADD COLUMN IF NOT EXISTS hidden_modules_json TEXT NOT NULL DEFAULT '[]'`);
   await q(`ALTER TABLE tenants ADD COLUMN IF NOT EXISTS reseller_id INTEGER REFERENCES resellers(id) ON DELETE SET NULL`);
   await q(`ALTER TABLE tenants ADD COLUMN IF NOT EXISTS phone_country TEXT DEFAULT ''`);
+  await q(`ALTER TABLE tenants ADD COLUMN IF NOT EXISTS business_type TEXT NOT NULL DEFAULT 'restaurant'`);
   await q(`ALTER TABLE tenants ADD COLUMN IF NOT EXISTS phone_calling_code TEXT DEFAULT ''`);
   await q(`ALTER TABLE tenants ADD COLUMN IF NOT EXISTS timezone TEXT`);
   await q(`ALTER TABLE users ADD COLUMN IF NOT EXISTS job_title TEXT DEFAULT ''`);
@@ -432,10 +434,14 @@ async function initMaster(options = {}) {
   );
 
   // Migra/asegura el esquema aislado de tenants existentes.
-  const existing = await q('SELECT id, slug, business_name, product_code FROM tenants');
+  const existing = await q('SELECT id, slug, business_name, business_type, product_code FROM tenants');
   for (const t of existing.rows) {
     await createTenantSchema(t.slug);
-    await ensureTenantDefaults(t.slug, t.business_name);
+    await ensureTenantDefaults(t.slug, t.business_name, { businessType: t.business_type });
+    const savedModel = await getSetting(tdb(t.slug), 'business_type', t.business_type || 'restaurant');
+    if (savedModel !== t.business_type) {
+      await q('UPDATE tenants SET business_type = $1 WHERE id = $2', [savedModel, t.id]);
+    }
     await ensureTenantCourtesyStamps(t.slug, t.id, 'system:migration');
     if (t.product_code === 'invoicing' && t.slug !== config.DEMO_TENANT_SLUG) {
       const tenantDb = tdb(t.slug);
@@ -650,6 +656,9 @@ async function createTenantSchema(slug) {
     ALTER TABLE "${s}".products ADD COLUMN IF NOT EXISTS unit_cost NUMERIC(12,4) DEFAULT 0;
     ALTER TABLE "${s}".products ADD COLUMN IF NOT EXISTS sale_days TEXT NOT NULL DEFAULT '[]';
     ALTER TABLE "${s}".products ADD COLUMN IF NOT EXISTS barcode TEXT;
+    ALTER TABLE "${s}".products ADD COLUMN IF NOT EXISTS grocery_brand TEXT NOT NULL DEFAULT '';
+    ALTER TABLE "${s}".products ADD COLUMN IF NOT EXISTS grocery_presentation TEXT NOT NULL DEFAULT '';
+    ALTER TABLE "${s}".products ADD COLUMN IF NOT EXISTS grocery_unit TEXT NOT NULL DEFAULT 'piece';
     ALTER TABLE "${s}".products ADD COLUMN IF NOT EXISTS sar_tax_category TEXT NOT NULL DEFAULT '';
     ALTER TABLE "${s}".products ADD COLUMN IF NOT EXISTS pos_active INTEGER;
     UPDATE "${s}".products SET pos_active = COALESCE(active, 1) WHERE pos_active IS NULL;
@@ -1756,9 +1765,15 @@ async function createTenantSchema(slug) {
 
 async function ensureTenantDefaults(slug, businessName = slug, regional = {}) {
   const t = tdb(slug);
+  const businessType = regional.businessType || 'restaurant';
   const defaults = {
     business_name: businessName,
-    welcome_message: `¡Hola! 👋 Bienvenido a ${businessName}. Soy tu asistente virtual y estoy aquí para tomar tu pedido.`,
+    business_type: businessType,
+    welcome_message: businessType === 'restaurant'
+      ? `¡Hola! 👋 Bienvenido a ${businessName}. Soy tu asistente virtual y estoy aquí para tomar tu pedido.`
+      : businessType === 'grocery'
+        ? `¡Hola! 👋 Bienvenido a ${businessName}. Puedo ayudarte a encontrar productos y hacer tu compra.`
+        : `¡Hola! 👋 Bienvenido a ${businessName}. Puedo ayudarte a conocer nuestros productos y servicios.`,
     whatsapp: '',
     currency: regional.currency || 'MXN',
     currency_conversion_enabled: '0',

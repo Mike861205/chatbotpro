@@ -199,7 +199,7 @@ function paymentFormFromSales(sales = [], defaultCard = '04') {
 }
 
 function fiscalItem({ description, quantity, grossTotal, productCode, unitCode, unitName, taxObject, ivaRate, isrRate }) {
-  const qty = Math.max(1, Number(quantity || 1));
+  const qty = Math.max(0.001, Number(quantity || 1));
   const gross = roundMoney(grossTotal);
   const rate = taxObject === '02' ? Number(ivaRate || 0) : 0;
   const retentionRate = taxObject === '02' ? Number(isrRate || 0) : 0;
@@ -241,7 +241,7 @@ function buildFacturamaItems(sale, productsById, profile, options = {}) {
   const commonOperationalRate = operationalRates.length && operationalRates.every((rate) => rate === operationalRates[0])
     ? operationalRates[0]
     : null;
-  const rawItemsTotal = roundMoney(rawItems.reduce((sum, line) => sum + Number(line.price || 0) * Math.max(1, Number(line.qty || 1)), 0));
+  const rawItemsTotal = roundMoney(rawItems.reduce((sum, line) => sum + Number(line.price || 0) * Math.max(0, Number(line.qty || 1)), 0));
   const canUseOperationalTotal = commonOperationalRate !== null
     && operationalRates.length === rawItems.length
     && Math.abs(rawItemsTotal - roundMoney(sale.total)) <= 0.01;
@@ -260,7 +260,7 @@ function buildFacturamaItems(sale, productsById, profile, options = {}) {
     isrRate: canUseOperationalTotal ? 0 : Number(profile.default_isr_rate || 0),
   })] : rawItems.map((line) => {
     const product = productsById.get(Number(line.id || line.productId || 0)) || {};
-    const qty = Math.max(1, Number(line.qty || 1));
+    const qty = Math.max(0, Number(line.qty || 1));
     const gross = roundMoney(Number(line.price || 0) * qty);
     const hasOperationalTax = line?.taxEnabled === true && Number.isFinite(Number(line.taxRate));
     return fiscalItem({
@@ -305,7 +305,7 @@ function buildGlobalFacturamaItems(sales, productsById, profile, options = {}) {
   if (conceptMode === 'total') {
     if (!(sales || []).length) throw Object.assign(new Error('No hay ventas elegibles para la factura global'), { status: 400 });
     const items = (sales || []).flatMap((sale) => typeof sale.items === 'string' ? JSON.parse(sale.items || '[]') : (sale.items || []));
-    const itemsTotal = roundMoney(items.reduce((sum, line) => sum + Number(line.price || 0) * Math.max(1, Number(line.qty || 1)), 0));
+    const itemsTotal = roundMoney(items.reduce((sum, line) => sum + Number(line.price || 0) * Math.max(0, Number(line.qty || 1)), 0));
     if (Math.abs(itemsTotal - expected) > 0.01) {
       return buildGlobalFacturamaItems(sales, productsById, profile, { conceptMode: 'detailed' });
     }

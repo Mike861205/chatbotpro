@@ -150,7 +150,7 @@ function winsPromotionTie(candidate, current) {
 }
 
 function candidateFor(item, promotion, allocatedFreeUnits = null) {
-  const qty = Math.max(1, Number(item.qty || item.quantity || 1));
+  const qty = Math.max(0.001, Number(item.qty || item.quantity || 1));
   const originalUnitPrice = money(item.originalUnitPrice ?? item.listPrice ?? item.originalPrice ?? item.price);
   const extras = Math.min(originalUnitPrice, money(item.modifiersExtraPrice || 0));
   const baseUnit = money(originalUnitPrice - extras);
@@ -290,7 +290,7 @@ function applyPromotions(items = [], promotions = []) {
   return prepared.map(({ item }, index) => {
     const best = selected[index];
     const originalUnitPrice = money(item.originalUnitPrice ?? item.listPrice ?? item.originalPrice ?? item.price);
-    const qty = Math.max(1, Number(item.qty || item.quantity || 1));
+    const qty = Math.max(0.001, Number(item.qty || item.quantity || 1));
     delete item.promotion;
     item.originalUnitPrice = originalUnitPrice;
     item.listPrice = originalUnitPrice;

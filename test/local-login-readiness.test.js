@@ -15,7 +15,7 @@ test('localhost abre el puerto antes de las migraciones y espera el esquema maes
   assert.match(server, /app\.use\('\/api',[\s\S]*?await databaseReadyPromise/);
   assert.match(server, /onMasterReady:\s*config\.NODE_ENV === 'development'\s*\?\s*markDatabaseReady/);
   assert.match(database, /async function initMaster\(options = \{}\)/);
-  assert.ok(database.indexOf("options.onMasterReady") < database.indexOf("const existing = await q('SELECT id, slug, business_name, product_code FROM tenants')"));
+  assert.ok(database.indexOf("options.onMasterReady") < database.indexOf("const existing = await q('SELECT id, slug, business_name, business_type, product_code FROM tenants')"));
 });
 
 test('los logins de tenant y SuperAdmin reintentan sólo fallos transitorios de arranque', async () => {

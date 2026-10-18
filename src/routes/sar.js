@@ -26,7 +26,10 @@ const ownerOnly = (req, res, next) => isOwner(req) ? next() : res.status(403).js
 const wrapped = (handler) => async (req, res, next) => { try { await handler(req, res); } catch (error) { if (error.statusCode) return res.status(error.statusCode).json({ error: error.message }); next(error); } };
 
 router.use(requireAuth, (req, res, next) => {
-  if (req.tenant.phone_country !== 'HN') return res.status(404).json({ error: 'Módulo exclusivo para negocios registrados en Honduras' });
+  const callingCode = String(req.tenant.phone_calling_code || '').replace(/\D/g, '');
+  if (req.user.demoLeadId || req.tenant.phone_country !== 'HN' || (callingCode && callingCode !== '504')) {
+    return res.status(404).json({ error: 'Módulo exclusivo para negocios registrados en Honduras' });
+  }
   next();
 });
 

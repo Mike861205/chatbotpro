@@ -21,7 +21,7 @@ test('consulta el catálogo real por tenant y no invita a cajeros, equipo, demos
 
 test('tras completar identidad el catálogo vacío dirige a Productos y abre primero la invitación IA', () => {
   assert.match(script, /function presentStartupJourney\(\)[\s\S]*ME\?\.identityRequired[\s\S]*shouldOfferEmptyCatalogAi\(\)[\s\S]*ME\?\.trial\?\.isActive/);
-  assert.match(script, /function openNextInitialSetup\(\)[\s\S]*openEmptyCatalogAiWelcome\(\)[\s\S]*openOnboardingIntro\(\)/);
+  assert.match(script, /function openNextInitialSetup\(\)[\s\S]*openEmptyCatalogAiWelcome\(\)/);
   assert.match(script, /const view = shouldOfferEmptyCatalogAi\(\) \? 'productos' : normalizeView/);
   assert.match(script, /setTimeout\(presentStartupJourney, 140\)/);
   assert.match(html, /id="emptyCatalogAiModal"[\s\S]*id="emptyCatalogMenuImage"[\s\S]*id="emptyCatalogAiExplore"/);

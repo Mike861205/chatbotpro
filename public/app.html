@@ -11,7 +11,7 @@
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/fill/style.css" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/duotone/style.css" />
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-  <link rel="stylesheet" href="/static/css/styles.css?v=20261017-pos-transactions" />
+  <link rel="stylesheet" href="/static/css/styles.css?v=20261018-costs-explained" />
   <link rel="stylesheet" href="/static/css/sar.css?v=20260929-tabs-1" />
   <link rel="icon" type="image/svg+xml" href="/static/favicon.svg" />
   <link rel="icon" type="image/png" href="/static/chatbotpro100.png" />
@@ -50,7 +50,7 @@
         <a href="#pos" data-view="pos" data-color="emerald"><span class="nav-ic"><i class="ph-duotone ph-cash-register"></i></span><span>Punto de venta</span></a>
         <a href="#gastos" data-view="gastos" data-color="amber"><span class="nav-ic"><i class="ph-duotone ph-receipt"></i></span><span>Gastos</span></a>
         <a href="#ventas" data-view="ventas" data-color="blue"><span class="nav-ic"><i class="ph-duotone ph-chart-line-up"></i></span><span>Ventas</span></a>
-        <a href="#sar" data-view="sar" data-honduras-only="true" data-owner-only data-color="emerald"><span class="nav-ic"><i class="ph-duotone ph-receipt"></i></span><span>Facturación Honduras</span></a>
+        <a href="#sar" data-view="sar" data-honduras-only="true" data-owner-only data-color="emerald" hidden><span class="nav-ic"><i class="ph-duotone ph-receipt"></i></span><span>Facturación Honduras</span></a>
         <a href="#facturacion" data-view="facturacion" data-mexico-only="true" data-color="emerald"><span class="nav-ic"><i class="ph-duotone ph-file-text"></i></span><span>Facturación MX</span></a>
         <a href="#cfdi" data-view="cfdi" data-mexico-only="true" data-color="cyan"><span class="nav-ic"><i class="ph-duotone ph-files"></i></span><span>CFDI emitidos</span></a>
         <a href="#cancelaciones" data-view="cancelaciones" data-color="rose"><span class="nav-ic"><i class="ph-duotone ph-file-magnifying-glass"></i></span><span>Cancelaciones</span></a>
@@ -534,6 +534,7 @@
         </div>
 
           <div class="costing-stats" id="costingStats"></div>
+          <div class="card costing-explanation" id="costingExplanation" role="status" aria-live="polite"></div>
           <div class="card costing-toolbar">
             <div class="inv-search-wrap costing-search"><i class="ph-bold ph-magnifying-glass"></i><input id="costingSearch" type="text" placeholder="Buscar producto…" autocomplete="off" /></div>
             <div class="field"><label for="costingCategory">Categoría</label><select id="costingCategory"><option value="all">Todas las categorías</option></select></div>
@@ -1136,7 +1137,7 @@
         </div>
       </section>
 
-      <section class="section" id="view-sar" data-honduras-only="true">
+      <section class="section" id="view-sar" data-honduras-only="true" hidden>
         <div class="sar-hero">
           <span class="sar-eyebrow"><i class="ph-bold ph-shield-check"></i> Honduras · régimen de autoimpresor</span>
           <h2>Facturación SAR · Honduras</h2>
@@ -2092,6 +2093,20 @@
             <i class="ph-fill ph-storefront"></i>
             <div><span>Tu espacio se creará para</span><strong id="demoConversionBusiness">Tu negocio</strong><small>Podrás cambiar el nombre desde Mi negocio.</small></div>
           </div>
+          <div class="field">
+            <label for="demoConversionBusinessType"><i class="ph-bold ph-squares-four"></i> Modelo de negocio *</label>
+            <select id="demoConversionBusinessType" required>
+              <option value="restaurant" selected>Restaurante / cafetería</option>
+              <option value="grocery">Tienda / abarrotes</option>
+              <option value="furniture">Mueblería</option>
+              <option value="travel_agency">Agencia de viajes</option>
+              <option value="office_services">Oficina / servicios profesionales</option>
+              <option value="screen_printing">Serigrafía / estampado</option>
+              <option value="carpentry">Carpintería</option>
+              <option value="health">Salud / clínica</option>
+              <option value="dentist">Consultorio dental</option>
+            </select>
+          </div>
           <div class="demo-conversion-fields">
             <div class="field">
               <label for="demoConversionUsername"><i class="ph-bold ph-at"></i> Usuario *</label>
@@ -2596,11 +2611,18 @@
             <div class="hint" id="pBarcodeStatus" role="status" aria-live="polite"></div>
           </div>
           <div class="field"><label><i class="ph-bold ph-text-align-left"></i> Descripción</label><textarea id="pDesc" rows="2" placeholder="Carne 150g, queso, lechuga y tomate"></textarea></div>
+          <div id="prodGroceryFields" class="product-grocery-fields" hidden>
+            <div class="row-2">
+              <div class="field"><label for="pGroceryBrand">Marca</label><input id="pGroceryBrand" maxlength="100" placeholder="Ej. Lala o sin marca" /></div>
+              <div class="field"><label for="pGroceryPresentation">Presentación</label><input id="pGroceryPresentation" maxlength="100" placeholder="Ej. botella 750 ml, bolsa 1 kg" /></div>
+            </div>
+            <div class="field"><label for="pGroceryUnit">Unidad de venta *</label><select id="pGroceryUnit"><option value="piece">Pieza / envase</option><option value="kg">Kilogramo (a granel)</option><option value="liter">Litro (a granel)</option></select><div class="hint">El precio corresponde a una pieza, un kilogramo o un litro. Los productos a granel admiten cantidades decimales en caja; cada presentación con código de barras propio se da de alta por separado.</div></div>
+          </div>
           <div class="row-2">
             <div class="field"><label id="pPriceLabel"><i class="ph-bold ph-currency-dollar"></i> Precio base *</label><input type="number" id="pPrice" step="0.01" min="0" required placeholder="99.00" /><div class="hint" id="pPriceTaxHint">Si usas variantes, este precio es el de referencia.</div></div>
             <div class="field"><label><i class="ph-bold ph-folder"></i> Categoría</label><select id="pCat"><option value="">Sin categoría</option></select></div>
           </div>
-          <div class="field" data-honduras-only="true"><label>Tratamiento ISV Honduras</label><select id="pSarTaxCategory"><option value="">Pendiente de clasificar</option><option value="exempt">Exento</option><option value="tax15">Gravado 15%</option><option value="tax18">Gravado 18%</option></select><div class="hint">Se usa al emitir facturas SAR. Consulta con tu contador la categoría que corresponde al producto.</div></div>
+          <div class="field" data-honduras-only="true" hidden><label>Tratamiento ISV Honduras</label><select id="pSarTaxCategory"><option value="">Pendiente de clasificar</option><option value="exempt">Exento</option><option value="tax15">Gravado 15%</option><option value="tax18">Gravado 18%</option></select><div class="hint">Se usa al emitir facturas SAR. Consulta con tu contador la categoría que corresponde al producto.</div></div>
           <div class="toggle-row" style="margin-bottom:0">
             <div class="t-info"><i class="ph-bold ph-eye"></i><div><b>Visible en el chatbot</b><span id="prodVisibleHint">Los clientes podrán pedirlo</span></div></div>
             <label class="switch"><input type="checkbox" id="pActive" checked /><span class="track"></span></label>
@@ -3810,7 +3832,7 @@
   <script src="/socket.io/socket.io.js"></script>
   <script src="/static/vendor/qz-tray.js?v=2.3.0"></script>
   <script src="/static/js/whatsapp.js?v=20261009-whatsapp-inbox-app"></script>
-  <script src="/static/js/app.js?v=20261017-pos-transactions"></script>
+  <script src="/static/js/app.js?v=20261018-costs-explained"></script>
   <script src="/static/js/sar.js?v=20260929-tabs-1"></script>
 </body>
 </html>

@@ -1184,10 +1184,10 @@ body.signup-promo-open { overflow: hidden; }
   font-weight: 700;
 }
 .auth-card form label i { -webkit-text-fill-color: #ff7a3c; }
-.auth-card .field input {
+.auth-card .field input, .auth-card .field select {
   transition: box-shadow .2s var(--ease), border-color .2s var(--ease), transform .2s var(--ease);
 }
-.auth-card .field input:focus {
+.auth-card .field input:focus, .auth-card .field select:focus {
   box-shadow: 0 0 0 4px rgba(255,90,120,.14), 0 8px 18px rgba(255,90,120,.16);
   border-color: #ff7a3c;
 }
@@ -10315,6 +10315,16 @@ kbd {
 .costing-stat.danger > i { background:#fef2f2; color:#dc2626; }
 .costing-stat small { display:block; margin-bottom:3px; color:var(--muted); font-size:10px; font-weight:800; text-transform:uppercase; }
 .costing-stat strong { color:var(--ink); font-size:19px; }
+.costing-explanation { margin-bottom:16px; padding:20px 24px; border:1px solid #bbf7d0; background:linear-gradient(135deg,#f0fdf4,#fff); }
+.costing-explanation-heading { display:flex; align-items:center; gap:12px; margin-bottom:10px; }
+.costing-explanation-heading > i { display:grid; place-items:center; flex:0 0 42px; width:42px; height:42px; border-radius:12px; background:#dcfce7; color:#15803d; font-size:21px; }
+.costing-explanation-heading span { color:#15803d; font-size:10px; font-weight:900; letter-spacing:.07em; text-transform:uppercase; }
+.costing-explanation-heading h3 { margin:3px 0 0; color:var(--ink); font-size:18px; }
+.costing-explanation p { margin:0 0 12px; color:#334155; font-size:15px; line-height:1.55; }
+.costing-explanation p strong { color:#047857; }
+.costing-explanation-example { padding:12px 14px; border-radius:11px; background:#fff; color:#334155; font-size:12px; line-height:1.65; }
+.costing-explanation-example strong { color:var(--ink); }
+.costing-explanation > small { display:block; margin-top:10px; color:#64748b; font-size:11px; line-height:1.5; }
 .costing-toolbar { display:flex; align-items:flex-end; gap:12px; margin-bottom:16px; padding:16px; }
 .costing-toolbar .field { min-width:210px; margin:0; }
 .costing-search { min-width:240px; flex:1; }
@@ -11307,3 +11317,7 @@ body.onboarding-open { overflow: hidden; }
 .whatsapp-mobile-app-card b{display:flex;align-items:center;gap:6px;font-size:14px;color:#0f766e}
 .whatsapp-mobile-app-card span{display:block;font-size:12.5px;color:#475569;line-height:1.5;margin-top:3px;max-width:62ch}
 .whatsapp-mobile-app-actions{display:flex;gap:8px;flex-wrap:wrap}
+.pos-bulk-qty { display: inline-flex; align-items: center; gap: 4px; }
+.pos-bulk-qty input { width: 72px; padding: 5px 6px; text-align: right; }
+.pos-bulk-qty small { font-size: 11px; color: var(--muted, #667085); }
+body[data-business-type="grocery"] .ai-draft-config section:not(.ai-grocery-config) { display: none; }

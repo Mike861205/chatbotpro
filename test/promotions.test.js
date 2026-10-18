@@ -177,6 +177,23 @@ test('el precio promocional guardado cuadra con los conceptos de facturación', 
   assert.equal(Math.round(items.reduce((sum, item) => sum + item.Total, 0) * 100) / 100, 150);
 });
 
+test('una venta a granel de 0.5 kg conserva cantidad, descuento y total facturable', () => {
+  const [line] = applyPromotions(
+    [{ id: 7, name: 'Manzana a granel', price: 80, qty: 0.5 }],
+    [promo({ value: 10 })]
+  );
+  assert.equal(line.lineSubtotal, 40);
+  assert.equal(line.discountAmount, 4);
+  assert.equal(line.lineTotal, 36);
+  const profile = {
+    default_product_code: '50201700', default_unit_code: 'KGM', default_unit_name: 'Kilogramo',
+    default_tax_object: '01', default_iva_rate: 0, default_isr_rate: 0,
+  };
+  const items = buildFacturamaItems({ items: [line], total: 36, delivery_fee: 0 }, new Map(), profile);
+  assert.equal(items[0].Quantity, 0.5);
+  assert.equal(items[0].Total, 36);
+});
+
 test('el módulo está montado, es responsivo y aparece en permisos y navegación', () => {
   const root = path.join(__dirname, '..');
   const server = fs.readFileSync(path.join(root, 'server.js'), 'utf8');

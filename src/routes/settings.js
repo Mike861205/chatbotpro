@@ -12,6 +12,7 @@ const { validateFloatingIcons } = require('../utils/chatbotAppearance');
 const { resolveCurrencyConversion, fetchAutomaticRate, positiveRate, PROVIDER_NAME, PROVIDER_URL } = require('../utils/currencyConversion');
 const { normalizePrinterConfig } = require('../utils/printerConfig');
 const { normalizeBusinessHours } = require('../utils/businessHours');
+const { isBusinessModel } = require('../utils/businessModels');
 
 const router = express.Router();
 router.use(requireAuth);
@@ -164,8 +165,7 @@ router.put('/', upload.single('logo'), async (req, res, next) => {
     }
     if (body.business_type !== undefined) {
       body.business_type = String(body.business_type || '').trim().toLowerCase();
-      const businessTypes = new Set(['restaurant', 'furniture', 'travel_agency', 'office_services', 'screen_printing', 'carpentry', 'health', 'dentist']);
-      if (!businessTypes.has(body.business_type)) return res.status(400).json({ error: 'Selecciona un modelo de negocio válido' });
+      if (!isBusinessModel(body.business_type)) return res.status(400).json({ error: 'Selecciona un modelo de negocio válido' });
     }
     if (body.currency !== undefined) {
       body.currency = String(body.currency || '').trim().toUpperCase();
@@ -313,6 +313,9 @@ router.put('/', upload.single('logo'), async (req, res, next) => {
     }
     if (body.business_name) {
       await q('UPDATE tenants SET business_name = $1 WHERE id = $2', [body.business_name, req.tenant.id]);
+    }
+    if (body.business_type) {
+      await q('UPDATE tenants SET business_type = $1 WHERE id = $2', [body.business_type, req.tenant.id]);
     }
     if (body.primary_color && /^#[0-9a-fA-F]{6}$/.test(body.primary_color)) {
       await q('UPDATE tenants SET primary_color = $1 WHERE id = $2', [body.primary_color, req.tenant.id]);

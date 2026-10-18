@@ -73,8 +73,9 @@ router.get('/:slug/info', findTenant, async (req, res, next) => {
 // Menú público para los QR de Productos
 router.get('/:slug/menu', findTenant, async (req, res, next) => {
   try {
+    const businessType = await getSetting(req.tdb, 'business_type', 'restaurant');
     if ((await getSetting(req.tdb, 'product_qr_enabled', '0')) !== '1') {
-      return res.status(404).json({ error: 'El menú QR no está activado para este negocio' });
+      return res.status(404).json({ error: businessType === 'grocery' ? 'El catálogo QR no está activado para esta tienda' : 'El menú QR no está activado para este negocio' });
     }
     const requestedId = req.query.producto === undefined ? null : Number(req.query.producto);
     if (requestedId !== null && (!Number.isSafeInteger(requestedId) || requestedId <= 0)) {
@@ -82,6 +83,7 @@ router.get('/:slug/menu', findTenant, async (req, res, next) => {
     }
     const rows = await req.tdb.all(
       `SELECT p.id, p.category_id, p.name, p.description, p.price::float AS price, p.image, p.sale_days,
+              p.grocery_brand, p.grocery_presentation, p.grocery_unit,
               c.name AS category_name
        FROM {s}.products p
        LEFT JOIN {s}.categories c ON c.id = p.category_id
@@ -98,14 +100,18 @@ router.get('/:slug/menu', findTenant, async (req, res, next) => {
     const selected = requestedId === null ? products : products.filter((product) => Number(product.id) === requestedId);
     if (requestedId !== null && !selected.length) return res.status(404).json({ error: 'Producto no encontrado' });
     res.json({
+      businessType,
       businessName: await getSetting(req.tdb, 'business_name', req.tenant.business_name),
       logo: req.tenant.logo,
       primaryColor: req.tenant.primary_color,
       currency: await getSetting(req.tdb, 'currency', 'MXN'),
       slug: req.tenant.slug,
       products: selected.map(({ id, name, description, category_id, category_name, image, availableToday,
-        price, promotionalPrice, activePromotion }) => ({
+        grocery_brand, grocery_presentation, grocery_unit, price, promotionalPrice, activePromotion }) => ({
         id, name, description, category_id, category_name, image, availableToday,
+        groceryBrand: businessType === 'grocery' ? grocery_brand : '',
+        groceryPresentation: businessType === 'grocery' ? grocery_presentation : '',
+        groceryUnit: businessType === 'grocery' ? grocery_unit : 'piece',
         price, promotionalPrice, promotion: activePromotion?.label || activePromotion?.name || '',
       })),
     });

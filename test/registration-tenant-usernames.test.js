@@ -19,7 +19,7 @@ test('el usuario es único dentro de cada negocio y la migración protege los da
 test('el registro reserva una liga disponible y no rechaza usuarios de otros negocios', () => {
   const auth = read('src/routes/auth.js');
   assert.match(auth, /availableRegistrationSlug\(cleanSlug\)/);
-  assert.match(auth, /initTenantDefaults\(availableSlug, cleanBusinessName, regional, tenant\.id\)/);
+  assert.match(auth, /initTenantDefaults\(availableSlug, cleanBusinessName, \{ \.\.\.regional, businessType: cleanBusinessType \}, tenant\.id\)/);
   assert.doesNotMatch(auth, /user_exists/);
   assert.match(read('public/register.html'), /CBPAuthRequest\.fetch\('\/api\/auth\/register-ready'/);
   assert.match(read('public/register.html'), /const res = await CBPAuthRequest\.fetch\('\/api\/auth\/register'/);

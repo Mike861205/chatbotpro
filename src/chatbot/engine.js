@@ -107,7 +107,9 @@ function buildAiMenuText(products, maxChars = 4200) {
   for (const p of products) {
     const price = p.promotionalPrice ?? p.price;
     const promo = p.activePromotion ? ` Promoción: ${p.activePromotion.label || p.activePromotion.name}.` : '';
-    const line = `- ${p.name} (${p.category || 'General'}): ${money(price, 'MXN')}.${promo} ${String(p.description || '').trim()}`;
+    const unit = p.grocery_unit === 'kg' ? ' / kg' : p.grocery_unit === 'liter' ? ' / litro' : '';
+    const groceryDetails = [p.grocery_brand, p.grocery_presentation].filter(Boolean).join(' · ');
+    const line = `- ${p.name} (${p.category || 'General'}): ${money(price, 'MXN')}${unit}.${promo} ${groceryDetails} ${String(p.description || '').trim()}`;
     if (used + line.length > maxChars) break;
     lines.push(line);
     used += line.length + 1;
@@ -573,6 +575,7 @@ async function activeProducts(t, promotions = null, availabilityDate = new Date(
   const taxConfig = await loadProductTaxConfig(t);
   const rows = await t.all(
     `SELECT p.id, p.category_id, p.name, p.description, p.price::float AS price, p.image, p.sale_days,
+            p.grocery_brand, p.grocery_presentation, p.grocery_unit,
             c.name AS category, c.sort AS category_sort
      FROM {s}.products p LEFT JOIN {s}.categories c ON c.id = p.category_id
      WHERE p.active = 1 ORDER BY c.sort, c.name, p.name`
@@ -581,6 +584,8 @@ async function activeProducts(t, promotions = null, availabilityDate = new Date(
     .filter((product) => isProductAvailableToday(product, availabilityDate, t.timezone))
     .map((p) => applyProductTaxToCatalogProduct({
     ...p,
+    name: p.grocery_presentation && !String(p.name).toLocaleLowerCase('es').includes(String(p.grocery_presentation).toLocaleLowerCase('es'))
+      ? `${p.name} · ${p.grocery_presentation}` : p.name,
     categoryId: Number(p.category_id || 0),
     image: String(p.image || '').trim()
       ? (String(p.image).startsWith('/') ? String(p.image) : `/${String(p.image).replace(/^\/+/, '')}`)
@@ -628,7 +633,7 @@ async function orderFullMenuCatalog(t, products, mode) {
   let soldQtyByProduct = new Map();
   if (normalizedMode === 'top_sold') {
     const rows = await t.all(
-      `SELECT product_id, SUM(qty)::int AS sold_qty
+      `SELECT product_id, SUM(qty)::float AS sold_qty
        FROM (
          SELECT
            CASE
@@ -637,7 +642,7 @@ async function orderFullMenuCatalog(t, products, mode) {
              ELSE NULL
            END AS product_id,
            CASE
-             WHEN (it.item->>'qty') ~ '^[0-9]+$' THEN GREATEST((it.item->>'qty')::int, 1)
+             WHEN (it.item->>'qty') ~ '^[0-9]+([.][0-9]{1,3})?$' THEN GREATEST((it.item->>'qty')::numeric, 0)
              ELSE 1
            END AS qty
          FROM {s}.orders o
@@ -1067,10 +1072,10 @@ async function showProducts(t, state, categoryId, labels = RESTAURANT_LABELS, { 
     products: products.map((p) => ({
       id: p.id,
       name: p.name,
-      description: p.description,
+      description: [p.grocery_brand, p.grocery_presentation, p.description].filter(Boolean).join(' · '),
       price: p.promotionalPrice ?? p.price,
       originalPrice: p.originalPrice,
-      priceLabel: money(p.promotionalPrice ?? p.price, currency),
+      priceLabel: `${money(p.promotionalPrice ?? p.price, currency)}${p.grocery_unit === 'kg' ? ' / kg' : p.grocery_unit === 'liter' ? ' / litro' : ''}`,
       originalPriceLabel: p.activePromotion && Number(p.promotionalPrice) < Number(p.originalPrice) ? money(p.originalPrice, currency) : '',
       promotion: p.activePromotion,
       image: p.image,
@@ -1504,6 +1509,23 @@ const RESTAURANT_LABELS = {
 };
 
 const BUSINESS_MODELS = {
+  grocery: {
+    label: 'Tienda / abarrotes',
+    catalogWord: 'catálogo de tienda',
+    catalogButton: 'Ver artículos',
+    domainInstructions: 'Actúas como asistente de una tienda de abarrotes, licores, frutas y verduras. Ayudas a encontrar artículos por categoría, marca, presentación y precio. Distingue piezas, kilogramos y litros; no inventes existencias ni promociones. Ofrece entrega o recolección en sucursal.',
+    labels: {
+      browseButton: '🛒 Ver artículos', cartButton: '🛒 Ver compra', checkoutButton: '✅ Finalizar compra',
+      browseTitle: 'Elige un artículo para agregar a tu compra:', chooseCategory: '¿Qué sección de la tienda te interesa?',
+      emptyCatalog: 'Por ahora no tenemos artículos publicados.', cartTitle: '🛒 *Tu compra:*',
+      emptyCart: 'Tu carrito está vacío.', askDeliveryMode: '¿Cómo prefieres recibir tu compra?',
+      deliveryButton: '🚚 Entrega a domicilio', pickupButton: '🏪 Recoger en tienda',
+      askAddress: '¿Cuál es tu *dirección* de entrega?', askBranch: '¿En qué sucursal pasarás a recoger?',
+      askPayment: '¿Cómo pagarás tu compra?', addressLabel: 'Entrega a domicilio', pickupLabel: 'Recoger en tienda',
+      newOrderHeader: 'Nueva compra', confirmQuestion: '¿Confirmamos tu compra?', confirmYes: '✅ Sí, confirmar compra',
+      welcomeDefault: (biz) => `¡Hola! Bienvenido a ${biz}. ¿Qué artículos necesitas?`,
+    },
+  },
   restaurant: {
     label: 'Restaurante / cafetería',
     catalogWord: 'menú',
@@ -2240,7 +2262,7 @@ async function handleMessage(t, slug, sessionId, rawInput, runtime = {}) {
       state.customer.deliveryZoneName = 'Pendiente de validar';
       state.step = 'ask_reference';
       reply.messages = [
-        'La ubicación está fuera de las zonas configuradas. El restaurante validará el servicio y su costo antes de enviarlo.',
+        businessType === 'grocery' ? 'La ubicación está fuera de las zonas configuradas. La tienda validará el servicio y su costo antes de enviarlo.' : 'La ubicación está fuera de las zonas configuradas. El restaurante validará el servicio y su costo antes de enviarlo.',
         '¿Alguna referencia de tu domicilio? (ejemplo: portón negro, casa esquina).',
       ];
       reply.options = [{ label: 'Omitir referencia', value: 'skip_reference' }];
@@ -2464,7 +2486,7 @@ Encontré tu último pedido a domicilio.`,
   const showPostSendOptions = () => {
     state.step = 'start';
     if (!state.cart.length) {
-      reply.messages.push('Tu carrito está vacío. ¿Deseas elegir productos del menú?');
+      reply.messages.push(businessType === 'grocery' ? 'Tu carrito está vacío. ¿Deseas elegir artículos del catálogo?' : 'Tu carrito está vacío. ¿Deseas elegir productos del menú?');
       reply.options = [{ label: labels.browseButton || '📋 Ver menú', value: 'menu' }];
       return;
     }
@@ -2530,7 +2552,7 @@ Encontré tu último pedido a domicilio.`,
   }
   if (lower === 'returning_customer') {
     if (!deliveryEnabled) {
-      reply.messages = ['En este momento el negocio no tiene entregas a domicilio activas, así que no puedo recuperar dirección automática. Puedes pedir normalmente desde el menú.'];
+      reply.messages = [businessType === 'grocery' ? 'En este momento la tienda no tiene entregas a domicilio activas. Puedes comprar normalmente desde el catálogo.' : 'En este momento el negocio no tiene entregas a domicilio activas, así que no puedo recuperar dirección automática. Puedes pedir normalmente desde el menú.'];
       reply.options = mainOptions(state.cart, chatbotInfoOptions, labels);
       return finish();
     }
@@ -3058,7 +3080,7 @@ Encontré tu último pedido a domicilio.`,
       reply.messages = ['No encontré pedidos previos con ese teléfono. Verifica el número o continúa como cliente nuevo.'];
       reply.options = [
         { label: '🔁 Intentar de nuevo', value: 'returning_customer' },
-        { label: '📋 Ver menú', value: 'menu' },
+        { label: labels.browseButton || '📋 Ver menú', value: 'menu' },
       ];
       state.step = 'start';
       return finish();
@@ -3129,7 +3151,7 @@ Encontré tu último pedido a domicilio.`,
         goToPaymentOrConfirm();
       } else {
         state.step = 'start';
-        const quickMessages = ['¡Perfecto! Ya usaré tus mismos datos de ubicación para este pedido 🚀', 'Ahora solo elige del menú y será más rápido.'];
+        const quickMessages = ['¡Perfecto! Ya usaré tus mismos datos de ubicación para este pedido 🚀', businessType === 'grocery' ? 'Ahora elige artículos del catálogo y será más rápido.' : 'Ahora solo elige del menú y será más rápido.'];
         const menuReply = await showMenu(t, state, labels, null, showFullMenu, catalogSortMode);
         Object.assign(reply, menuReply);
         reply.messages = [...quickMessages, ...(menuReply.messages || [])];
@@ -3282,8 +3304,8 @@ Referencia: ${branch.reference}` : ''}`.trim()];
     }
 
     if (!state.cart.length) {
-      reply.messages = ['Tu carrito está vacío. ¡Mira nuestro menú! 😊'];
-      reply.options = [{ label: '📋 Ver menú', value: 'menu' }];
+      reply.messages = [businessType === 'grocery' ? 'Tu carrito está vacío. ¡Mira nuestro catálogo! 😊' : 'Tu carrito está vacío. ¡Mira nuestro menú! 😊'];
+      reply.options = [{ label: labels.browseButton || '📋 Ver menú', value: 'menu' }];
       return finish();
     }
 
@@ -3568,7 +3590,7 @@ Referencia: ${branch.reference}` : ''}`.trim()];
       state.step = 'ask_address_after_location';
       reply.messages = [
         `🗺️ Ubicación recibida. Abrir en Maps: ${mapsUrl(geo.lat, geo.lng)}${Number(state.customer.deliveryFee || 0) > 0 ? `\n🛵 Envío detectado: ${money(state.customer.deliveryFee, currency)}${state.customer.deliveryZoneName ? ` (${state.customer.deliveryZoneName})` : ''}` : ''}`,
-        deliveryQuote?.pendingReview ? '🚚 El servicio a domicilio y su costo quedan pendientes de validar por el restaurante.' : '',
+        deliveryQuote?.pendingReview ? (businessType === 'grocery' ? '🚚 El servicio a domicilio y su costo quedan pendientes de validar por la tienda.' : '🚚 El servicio a domicilio y su costo quedan pendientes de validar por el restaurante.') : '',
         'Ahora escribe el *domicilio*: calle/edificio.',
       ].filter(Boolean);
       return finish();
@@ -3612,7 +3634,7 @@ Referencia: ${branch.reference}` : ''}`.trim()];
     if ((locationEnabled || deliveryCoordinatesRequired) && !alreadyHasLocation) {
       state.step = 'ask_location_optional';
       reply.messages = [deliveryCoordinatesRequired
-        ? 'Puedes compartir tu ubicación exacta para calcular el costo del servicio. Si no está dentro de una zona configurada, el restaurante validará el envío manualmente.'
+        ? (businessType === 'grocery' ? 'Puedes compartir tu ubicación exacta para calcular el costo del servicio. Si no está dentro de una zona configurada, la tienda validará el envío manualmente.' : 'Puedes compartir tu ubicación exacta para calcular el costo del servicio. Si no está dentro de una zona configurada, el restaurante validará el envío manualmente.')
         : '¿Quieres compartir también tu ubicación exacta? (Opcional)'];
       reply.options = [
         { label: '📍 Comparte tu ubicación', value: 'share_location' },
@@ -3676,7 +3698,7 @@ Referencia: ${branch.reference}` : ''}`.trim()];
         state.step = 'ask_reference';
         reply.messages = [
           `🗺️ Ubicación recibida. Abrir en Maps: ${mapsUrl(geo.lat, geo.lng)}${Number(state.customer.deliveryFee || 0) > 0 ? `\n🛵 Envío detectado: ${money(state.customer.deliveryFee, currency)}${state.customer.deliveryZoneName ? ` (${state.customer.deliveryZoneName})` : ''}` : ''}`,
-          deliveryQuote?.pendingReview ? '🚚 El servicio a domicilio y su costo quedan pendientes de validar por el restaurante.' : '',
+          deliveryQuote?.pendingReview ? (businessType === 'grocery' ? '🚚 El servicio a domicilio y su costo quedan pendientes de validar por la tienda.' : '🚚 El servicio a domicilio y su costo quedan pendientes de validar por el restaurante.') : '',
           '¿Alguna referencia de tu domicilio? (ejemplo: portón negro, casa esquina).',
         ].filter(Boolean);
         reply.options = [{ label: 'Omitir referencia', value: 'skip_reference' }];
@@ -4164,7 +4186,7 @@ Referencia: ${branch.reference}` : ''}`.trim()];
   // IA opcional para preguntas libres
   pushAiHistory(state, 'user', input);
   if (ai?.text) pushAiHistory(state, 'assistant', ai.text);
-  reply.messages = [orderIntent ? 'Para tomar tu pedido, elige los productos del menú o dime sus nombres y cantidades. Aún no he agregado nada nuevo.' : (ai?.text || 'No estoy seguro de haber entendido 🤔 ¿Te ayudo con alguna de estas opciones?')];
+  reply.messages = [orderIntent ? (businessType === 'grocery' ? 'Para preparar tu compra, elige artículos del catálogo o dime sus nombres y cantidades. Aún no he agregado nada nuevo.' : 'Para tomar tu pedido, elige los productos del menú o dime sus nombres y cantidades. Aún no he agregado nada nuevo.') : (ai?.text || 'No estoy seguro de haber entendido 🤔 ¿Te ayudo con alguna de estas opciones?')];
   reply.options = mainOptions(state.cart, chatbotInfoOptions, labels);
   return finish();
 }

@@ -1001,7 +1001,6 @@ function openNextInitialSetup() {
     return;
   }
   if (openEmptyCatalogAiWelcome()) return;
-  if (ME?.onboardingRequired) openOnboardingIntro();
 }
 
 function presentStartupJourney() {
@@ -1061,7 +1060,6 @@ function presentStartupJourney() {
       return;
     }
   }
-  if (ME?.onboardingRequired) setTimeout(openOnboardingIntro, 180);
 }
 
 async function closeOnboardingIntro() {
@@ -1144,6 +1142,12 @@ let CURRENT_VIEW = 'dashboard';
 
 const CASHIER_ALLOWED_VIEWS = new Set(['pos', 'gastos', 'pedidos', 'cancelaciones', 'cortes']);
 
+function isHondurasTenant() {
+  const tenant = ME?.tenant;
+  const callingCode = String(tenant?.phoneCallingCode || '').replace(/\D/g, '');
+  return !ME?.demoSession && tenant?.phoneCountry === 'HN' && (!callingCode || callingCode === '504');
+}
+
 function normalizeView(view) {
   if (isCashierUser()) {
     return CASHIER_ALLOWED_VIEWS.has(view) ? view : 'pos';
@@ -1155,7 +1159,7 @@ function normalizeView(view) {
   const hidden = new Set(Array.isArray(ME?.tenant?.hiddenModules) ? ME.tenant.hiddenModules : []);
   if (ME?.role === 'owner' && hidden.has(view)) return permissions.has('dashboard') && !hidden.has('dashboard') ? 'dashboard' : 'config';
   if (['facturacion', 'cfdi'].includes(view) && !ME?.tenant?.invoicingEligible) return 'dashboard';
-  if (view === 'sar' && (ME?.tenant?.phoneCountry !== 'HN' || ME?.role !== 'owner')) return 'dashboard';
+  if (view === 'sar' && (!isHondurasTenant() || ME?.role !== 'owner')) return 'dashboard';
   if (view === 'kds' && !businessUi().supportsRestaurantOperations) return 'dashboard';
   return VIEW_META[view] ? view : 'dashboard';
 }
@@ -1198,7 +1202,7 @@ function applyUserScopeUI() {
     const roleAllowed = cashierMode ? CASHIER_ALLOWED_VIEWS.has(a.dataset.view) : (!staffMode || permissions.has(a.dataset.view));
     const ownerVisible = ME?.role !== 'owner' || !hiddenModules.has(a.dataset.view);
     const businessAllowed = a.dataset.businessFeature !== 'restaurant' || businessUi().supportsRestaurantOperations;
-    const hondurasAllowed = a.dataset.hondurasOnly !== 'true' || (ME?.tenant?.phoneCountry === 'HN' && ME?.role === 'owner');
+    const hondurasAllowed = a.dataset.hondurasOnly !== 'true' || (isHondurasTenant() && ME?.role === 'owner');
     const allowed = mexicoAllowed && hondurasAllowed && roleAllowed && ownerVisible && businessAllowed;
     a.hidden = !allowed;
   });
@@ -1206,7 +1210,7 @@ function applyUserScopeUI() {
     if (!mexicoEligible) element.hidden = true;
   });
   document.querySelectorAll('[data-honduras-only="true"]:not(.sidebar nav a)').forEach((element) => {
-    element.hidden = ME?.tenant?.phoneCountry !== 'HN';
+    element.hidden = !isHondurasTenant();
   });
   document.querySelectorAll('.sidebar nav .nav-label').forEach((lbl) => {
     if (cashierMode) {
@@ -1221,7 +1225,7 @@ function applyUserScopeUI() {
       lbl.hidden = !hasVisibleModule;
     }
   });
-  document.querySelectorAll('[data-owner-only]').forEach((element) => { element.hidden = ME?.role !== 'owner'; });
+  document.querySelectorAll('[data-owner-only]:not(.sidebar nav a)').forEach((element) => { element.hidden = ME?.role !== 'owner'; });
   const chatLink = $('#openChatLink');
   if (chatLink) chatLink.hidden = cashierMode;
   const banner = $('#cashierBranchBanner');
@@ -1370,6 +1374,7 @@ $('#demoConversionForm')?.addEventListener('submit', async (event) => {
       body: JSON.stringify({
         username: $('#demoConversionUsername').value,
         password: $('#demoConversionPassword').value,
+        businessType: $('#demoConversionBusinessType').value,
       }),
     });
     try { sessionStorage.setItem('cbp_auth_scope', 'owner'); } catch {}
@@ -2323,20 +2328,59 @@ function costingMarginTone(margin) {
   return 'profit';
 }
 
+function costingCatalogAnalysis(rows) {
+  const active = rows.filter((row) => Number(row.active) === 1);
+  const priced = active.filter((row) => Number(row.salePrice) > 0);
+  const configured = priced.filter((row) => Number(row.unitCost) > 0
+    && Number.isFinite(Number(row.salePrice)) && Number.isFinite(Number(row.unitCost)));
+  const saleTotal = configured.reduce((sum, row) => sum + Number(row.salePrice), 0);
+  const costTotal = configured.reduce((sum, row) => sum + Number(row.unitCost), 0);
+  const costPerHundred = saleTotal > 0 ? (costTotal / saleTotal) * 100 : null;
+  return {
+    activeCount: active.length,
+    configuredCount: configured.length,
+    missingCostCount: priced.length - configured.length,
+    lossCount: configured.filter((row) => Number(row.unitCost) > Number(row.salePrice)).length,
+    saleTotal,
+    costTotal,
+    profitTotal: saleTotal - costTotal,
+    costPerHundred,
+    profitPerHundred: costPerHundred === null ? null : 100 - costPerHundred,
+  };
+}
+
 function renderCostingStats() {
   const host = $('#costingStats');
   if (!host) return;
   const rows = costingFilteredProducts().map((product) => COSTING_DRAFT.get(Number(product.id)) || product);
-  const configured = rows.filter((row) => Number(row.unitCost) > 0).length;
-  const losses = rows.filter((row) => costingMetrics(row).margin < 0).length;
-  const positive = rows.map(costingMetrics).filter((row) => row.salePrice > 0);
-  const averageMargin = positive.length ? positive.reduce((sum, row) => sum + row.marginPercent, 0) / positive.length : 0;
-  const unitProfit = rows.reduce((sum, row) => sum + costingMetrics(row).margin, 0);
+  const analysis = costingCatalogAnalysis(rows);
+  const hasVisibleDrafts = rows.some((row) => COSTING_DIRTY.has(Number(row.id)));
+  const marginPercent = analysis.profitPerHundred ?? 0;
   host.innerHTML = `
-    <div class="card costing-stat"><i class="ph-bold ph-check-circle"></i><div><small>Costos configurados</small><strong>${configured} / ${rows.length}</strong></div></div>
-    <div class="card costing-stat"><i class="ph-bold ph-percent"></i><div><small>Margen promedio</small><strong>${averageMargin.toFixed(1)}%</strong></div></div>
-    <div class="card costing-stat ${losses ? 'danger' : ''}"><i class="ph-bold ph-warning-circle"></i><div><small>Productos con pérdida</small><strong>${losses}</strong></div></div>
-    <div class="card costing-stat"><i class="ph-bold ph-trend-up"></i><div><small>Utilidad unitaria combinada</small><strong>${fmtMoney(unitProfit)}</strong></div></div>`;
+    <div class="card costing-stat"><i class="ph-bold ph-check-circle"></i><div><small>Costos configurados</small><strong>${analysis.configuredCount} / ${analysis.activeCount}</strong></div></div>
+    <div class="card costing-stat ${marginPercent < 0 ? 'danger' : ''}"><i class="ph-bold ph-percent"></i><div><small>Margen del catálogo</small><strong>${marginPercent.toFixed(1)}%</strong></div></div>
+    <div class="card costing-stat ${analysis.lossCount ? 'danger' : ''}"><i class="ph-bold ph-warning-circle"></i><div><small>Productos con pérdida</small><strong>${analysis.lossCount}</strong></div></div>
+    <div class="card costing-stat ${analysis.profitTotal < 0 ? 'danger' : ''}"><i class="ph-bold ph-trend-up"></i><div><small>Utilidad de 1 unidad por artículo</small><strong>${fmtMoney(analysis.profitTotal)}</strong></div></div>`;
+
+  const explanation = $('#costingExplanation');
+  if (!explanation) return;
+  if (!analysis.configuredCount) {
+    explanation.innerHTML = `<div class="costing-explanation-heading"><i class="ph-bold ph-info"></i><div><span>Así se entiende tu costo de ventas</span><h3>Captura precio y costo para ver tu cálculo por cada ${fmtMoney(100)}</h3></div></div><p>Necesitas al menos un producto activo con precio de venta y costo unitario mayor a cero.</p>`;
+    return;
+  }
+  const costPerHundred = Math.round(analysis.costPerHundred * 100) / 100;
+  const profitPerHundred = Math.round((100 - costPerHundred) * 100) / 100;
+  const outcome = profitPerHundred < 0
+    ? `pierdes <strong>${fmtMoney(Math.abs(profitPerHundred))}</strong>`
+    : `te quedan <strong>${fmtMoney(profitPerHundred)}</strong> de utilidad bruta`;
+  const totalOutcome = analysis.profitTotal < 0
+    ? `pérdida bruta de <strong>${fmtMoney(Math.abs(analysis.profitTotal))}</strong>`
+    : `utilidad bruta de <strong>${fmtMoney(analysis.profitTotal)}</strong>`;
+  explanation.innerHTML = `
+    <div class="costing-explanation-heading"><i class="ph-bold ph-calculator"></i><div><span>Tu cálculo explicado</span><h3>Por cada ${fmtMoney(100)} que cobras</h3></div></div>
+    <p><strong>${fmtMoney(costPerHundred)}</strong> cubren el costo de tus productos o insumos y ${outcome}.</p>
+    <div class="costing-explanation-example">Con tus cifras: si vendes <strong>una unidad de cada uno de los ${analysis.configuredCount} artículos activos</strong> con costo registrado, cobras <strong>${fmtMoney(analysis.saleTotal)}</strong>, pagas <strong>${fmtMoney(analysis.costTotal)}</strong> en costos y obtienes una ${totalOutcome}.</div>
+    <small>Se calculó con los artículos del filtro actual. Es utilidad bruta antes de renta, nómina, comisiones e impuestos.${analysis.missingCostCount ? ` Faltan costos en ${analysis.missingCostCount} artículo${analysis.missingCostCount === 1 ? '' : 's'} con precio; el cálculo es parcial.` : ''}${hasVisibleDrafts ? ' Incluye cambios pendientes de guardar.' : ''}</small>`;
 }
 
 function populateCostingFilters() {
@@ -4757,7 +4801,7 @@ function posCartTotal() {
 }
 
 function clientPromotionCandidate(item, candidate, allocatedFreeUnits = null) {
-  const qty = Math.max(1, Number(item.qty || 1));
+  const qty = Math.max(0.001, Number(item.qty || 1));
   const original = moneyNum(item.originalUnitPrice ?? item.listPrice ?? item.price);
   const originalTotal = moneyNum(original * qty);
   const extras = Math.min(original, moneyNum(item.modifiersExtraPrice || 0));
@@ -4860,7 +4904,7 @@ function applyClientPromotions(items) {
     });
   });
   items.forEach((item, index) => {
-    const qty = Math.max(1, Number(item.qty || 1));
+    const qty = Math.max(0.001, Number(item.qty || 1));
     const original = moneyNum(item.originalUnitPrice ?? item.listPrice ?? item.price);
     const best = selected[index];
     item.originalUnitPrice = original;
@@ -5112,7 +5156,7 @@ function getVisiblePosProducts() {
   const terms = query.split(/\s+/).filter(Boolean);
   const matches = filteredByCategory.filter((product) => {
     const categoryName = product.category_name || categories.find((category) => String(category.id) === String(product.category_id))?.name || '';
-    const searchText = [product.name, categoryName, product.description, product.barcode, product.sat_product_code, product.reference, product.sku, product.code, product.id]
+    const searchText = [product.name, product.grocery_brand, product.grocery_presentation, categoryName, product.description, product.barcode, product.sat_product_code, product.reference, product.sku, product.code, product.id]
       .filter((value) => value !== null && value !== undefined)
       .join(' ').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
     return (numericId !== null && Number(product.id) === numericId)
@@ -5135,13 +5179,15 @@ function syncPosCartFromCatalog() {
       return {
         ...item,
         image: product.image,
+        groceryUnit: product.grocery_unit || 'piece',
         activePromotion: product.activePromotion || null,
         activePromotions: product.activePromotions || [],
       };
     }
     return {
       ...item,
-      name: product.name,
+      name: groceryProductDisplayName(product),
+      groceryUnit: product.grocery_unit || 'piece',
       price: Number(product.price),
       originalUnitPrice: Number(product.price),
       activePromotion: product.activePromotion || null,
@@ -5998,7 +6044,7 @@ function addPosProduct(productId) {
   if (existing) {
     existing.qty += 1;
   } else {
-    POS_CART.push({ id: Number(product.id), name: product.name, price: Number(product.price), originalUnitPrice: Number(product.price), activePromotion: product.activePromotion || null, activePromotions: product.activePromotions || [], image: product.image, qty: 1, taxEnabled: product.taxEnabled, taxMode: product.taxMode, taxRate: product.taxRate });
+    POS_CART.push({ id: Number(product.id), name: groceryProductDisplayName(product), price: Number(product.price), originalUnitPrice: Number(product.price), activePromotion: product.activePromotion || null, activePromotions: product.activePromotions || [], image: product.image, qty: 1, groceryUnit: product.grocery_unit || 'piece', taxEnabled: product.taxEnabled, taxMode: product.taxMode, taxRate: product.taxRate });
   }
   setPosPaymentDefaults();
   renderPosCart();
@@ -6049,7 +6095,7 @@ document.addEventListener('keydown', (event) => {
   if (event.key === 'Escape' && document.body.classList.contains('pos-cart-open')) closePosCartDrawer();
 });
 function updatePosCartToggle() {
-  const count = POS_CART.reduce((sum, item) => sum + Number(item.qty || 1), 0);
+  const count = currentBusinessType() === 'grocery' ? POS_CART.length : POS_CART.reduce((sum, item) => sum + Number(item.qty || 1), 0);
   const label = POS_TABLE_ACCOUNT ? 'Cuenta de mesa' : 'Ticket';
   if ($('#posCartToggleLabel')) $('#posCartToggleLabel').textContent = `${label} (${count})`;
   if ($('#posCartToggleTotal')) $('#posCartToggleTotal').textContent = fmtMoney(posGrandTotal());
@@ -6175,7 +6221,7 @@ $('#posProductConfigAdd')?.addEventListener('click', () => {
   finalPrice += modifiersExtra;
 
   const modifiersLabel = modifiersLabelParts.join(' · ');
-  const displayName = [product.name, variantName, modifiersLabel].filter(Boolean).join(' · ');
+  const displayName = [groceryProductDisplayName(product), variantName, modifiersLabel].filter(Boolean).join(' · ');
   const cartKey = `${product.id}_${POS_CONFIG_VARIANT_ID || 'base'}_${modifiersLabel}`;
 
   const existing = POS_CART.find((item) => item._cartKey === cartKey);
@@ -6191,6 +6237,7 @@ $('#posProductConfigAdd')?.addEventListener('click', () => {
       activePromotions: product.activePromotions || [],
       image: product.image,
       qty: 1,
+      groceryUnit: product.grocery_unit || 'piece',
       _cartKey: cartKey,
       variantId: POS_CONFIG_VARIANT_ID,
       variantName,
@@ -6213,12 +6260,29 @@ function updatePosQty(productId, delta, cartKey) {
     ? POS_CART.find((entry) => entry._cartKey === cartKey)
     : POS_CART.find((entry) => Number(entry.id) === Number(productId) && !entry._cartKey);
   if (!item) return;
-  item.qty += delta;
+  const bulk = currentBusinessType() === 'grocery' && ['kg', 'liter'].includes(item.groceryUnit);
+  item.qty = bulk ? Number((Number(item.qty) + delta * 0.1).toFixed(3)) : Number(item.qty) + delta;
   if (item.qty <= 0) {
     POS_CART = cartKey
       ? POS_CART.filter((entry) => entry._cartKey !== cartKey)
       : POS_CART.filter((entry) => !(Number(entry.id) === Number(productId) && !entry._cartKey));
   }
+  setPosPaymentDefaults();
+  renderPosCart();
+}
+
+function setPosQty(productId, raw, cartKey) {
+  const item = cartKey
+    ? POS_CART.find((entry) => entry._cartKey === cartKey)
+    : POS_CART.find((entry) => Number(entry.id) === Number(productId) && !entry._cartKey);
+  if (!item) return;
+  const qty = Number(String(raw).replace(',', '.'));
+  if (!Number.isFinite(qty) || qty <= 0 || qty > 9999 || Math.abs(qty * 1000 - Math.round(qty * 1000)) > 1e-7) {
+    toast('Captura una cantidad válida de hasta 3 decimales', true);
+    renderPosCart();
+    return;
+  }
+  item.qty = qty;
   setPosPaymentDefaults();
   renderPosCart();
 }
@@ -6405,7 +6469,8 @@ async function editPosCreditSale(sale) {
       ...item,
       id,
       name: String(item.name || product?.name || 'Producto'),
-      qty: Math.max(1, Number(item.qty || item.quantity || 1)),
+      qty: Math.max(0.001, Number(item.qty || item.quantity || 1)),
+      groceryUnit: product?.grocery_unit || 'piece',
       price: Number(item.price || 0),
       originalUnitPrice: Number(item.originalUnitPrice ?? item.listPrice ?? item.price ?? 0),
       image: product?.image || item.image || '',
@@ -6904,15 +6969,16 @@ function renderPosCatalog() {
     ? products
         .map(
           (product) => `<button class="pos-prod ${product.activePromotion ? 'has-promotion' : ''}" type="button" data-pos-product="${product.id}">
-            <div class="pos-prod-media">${product.image ? `<img src="${esc(product.image)}" alt="" />` : '<i class="ph ph-fork-knife"></i>'}</div>
+            <div class="pos-prod-media">${product.image ? `<img src="${esc(product.image)}" alt="" />` : `<i class="ph ${currentBusinessType() === 'grocery' ? 'ph-basket' : 'ph-fork-knife'}"></i>`}</div>
             <div class="pos-prod-body">
               <span class="pos-prod-cat">${esc(product.category_name || 'Sin categoría')}</span>
               <b>${esc(product.name)}</b>
+              ${currentBusinessType() === 'grocery' && (product.grocery_brand || product.grocery_presentation) ? `<small>${esc([product.grocery_brand, product.grocery_presentation].filter(Boolean).join(' · '))}</small>` : ''}
               ${product.barcode ? `<small class="pos-prod-barcode">Código: ${esc(product.barcode)}</small>` : ''}
               ${product.activePromotion ? `<span class="pos-promo-subtitle"><span class="pos-promo-kicker"><i class="ph-fill ph-lightning"></i> PROMOCIÓN</span><span class="pos-promo-kind">${esc(product.activePromotion.label || product.activePromotion.name)}</span></span>` : ''}
               <small>${esc(product.description || 'Producto listo para venta mostrador')}</small>
             </div>
-            <span class="pos-prod-price">${product.activePromotion && Number(product.promotionalPrice) < Number(product.originalPrice) ? `<del>${fmtMoney(product.originalPrice)}</del>` : ''}<strong>${fmtMoney(product.promotionalPrice ?? product.price)}</strong></span>
+            <span class="pos-prod-price">${product.activePromotion && Number(product.promotionalPrice) < Number(product.originalPrice) ? `<del>${fmtMoney(product.originalPrice)}</del>` : ''}<strong>${fmtMoney(product.promotionalPrice ?? product.price)}</strong>${currentBusinessType() === 'grocery' ? `<small>${product.grocery_unit === 'kg' ? '/ kg' : product.grocery_unit === 'liter' ? '/ L' : '/ pieza'}</small>` : ''}</span>
           </button>`
         )
         .join('')
@@ -6924,6 +6990,13 @@ function renderPosCatalog() {
   document.querySelectorAll('[data-pos-product]').forEach((button) =>
     button.addEventListener('click', () => addPosProduct(button.dataset.posProduct))
   );
+}
+
+function groceryProductDisplayName(product) {
+  const name = String(product?.name || '').trim();
+  const presentation = currentBusinessType() === 'grocery' ? String(product?.grocery_presentation || '').trim() : '';
+  return presentation && !name.toLocaleLowerCase('es').includes(presentation.toLocaleLowerCase('es'))
+    ? `${name} · ${presentation}` : name;
 }
 
 $('#posProductSearch')?.addEventListener('input', (event) => {
@@ -7039,11 +7112,11 @@ function renderPosCart() {
           <div class="pos-cart-item">
             <div>
               <b>${esc(item.name)}</b>
-              <small>${item.discountAmount > 0 ? `<del>${fmtMoney(item.originalUnitPrice)}</del> ` : ''}${fmtMoney(item.price)} c/u ${item.promotion ? `<span class="pos-line-promo"><i class="ph-bold ph-tag"></i>${esc(item.promotion.label || item.promotion.name)}</span>` : ''}</small>
+              <small>${item.discountAmount > 0 ? `<del>${fmtMoney(item.originalUnitPrice)}</del> ` : ''}${fmtMoney(item.price)} ${currentBusinessType() === 'grocery' && item.groceryUnit === 'kg' ? '/ kg' : currentBusinessType() === 'grocery' && item.groceryUnit === 'liter' ? '/ L' : 'c/u'} ${item.promotion ? `<span class="pos-line-promo"><i class="ph-bold ph-tag"></i>${esc(item.promotion.label || item.promotion.name)}</span>` : ''}</small>
             </div>
             <div class="pos-cart-actions">
               <button type="button" class="btn btn-ghost btn-icon pos-dec-btn" data-pid="${item.id}" ${ck}><i class="ph-bold ph-minus"></i></button>
-              <span>${item.qty}</span>
+              ${currentBusinessType() === 'grocery' && ['kg', 'liter'].includes(item.groceryUnit) ? `<label class="pos-bulk-qty"><input type="number" min="0.001" max="9999" step="0.001" value="${item.qty}" data-pos-qty="${item.id}" ${ck} aria-label="Cantidad en ${item.groceryUnit === 'kg' ? 'kilogramos' : 'litros'}"><small>${item.groceryUnit === 'kg' ? 'kg' : 'L'}</small></label>` : `<span>${item.qty}</span>`}
               <button type="button" class="btn btn-ghost btn-icon pos-inc-btn" data-pid="${item.id}" ${ck}><i class="ph-bold ph-plus"></i></button>
             </div>
           </div>`;
@@ -7090,7 +7163,7 @@ function renderPosCart() {
         <div class="hint"><i class="ph-bold ph-info"></i> El cajero puede cobrar aunque deje vacíos estos datos o capture solamente los que necesite.</div>` : ''}
         <div class="field">
           <label><i class="ph-bold ph-note"></i> ${tableAccount ? 'Nota de la ronda' : 'Nota de venta'}</label>
-          <textarea id="posSaleNotes" rows="2" placeholder="${tableAccount ? 'Ej. Sin cebolla, término medio...' : POS_IS_DELIVERY ? 'Indicaciones de preparación: sin cebolla, salsa aparte...' : 'Mesa 4, venta rápida, pedido interno...'}">${esc(POS_PAYMENT_FORM.notes || '')}</textarea>
+          <textarea id="posSaleNotes" rows="2" placeholder="${currentBusinessType() === 'grocery' ? 'Ej. Entrega de abarrotes, sustitución autorizada...' : tableAccount ? 'Ej. Sin cebolla, término medio...' : POS_IS_DELIVERY ? 'Indicaciones de preparación: sin cebolla, salsa aparte...' : 'Mesa 4, venta rápida, pedido interno...'}">${esc(POS_PAYMENT_FORM.notes || '')}</textarea>
         </div>
         <div class="pos-checkout-actions">
           <button class="btn btn-primary" type="submit" ${submitDisabled}><i class="ph-bold ${POS_PAYMENT_METHOD === 'credit' ? 'ph-file-plus' : 'ph-check-circle'}"></i> ${creditEdit ? (POS_PAYMENT_METHOD === 'credit' ? 'Guardar cambios a crédito' : 'Guardar y cobrar crédito') : POS_PAYMENT_METHOD === 'credit' ? 'Registrar venta a crédito' : tableAccount ? 'Cerrar y cobrar cuenta' : 'Cobrar venta'}</button>
@@ -7115,6 +7188,7 @@ function renderPosCart() {
 
   document.querySelectorAll('.pos-dec-btn').forEach((button) => button.addEventListener('click', () => updatePosQty(button.dataset.pid, -1, button.dataset.cartKey || null)));
   document.querySelectorAll('.pos-inc-btn').forEach((button) => button.addEventListener('click', () => updatePosQty(button.dataset.pid, 1, button.dataset.cartKey || null)));
+  document.querySelectorAll('[data-pos-qty]').forEach((input) => input.addEventListener('change', () => setPosQty(input.dataset.posQty, input.value, input.dataset.cartKey || null)));
   document.querySelectorAll('[data-print-table-round]').forEach((button) => button.addEventListener('click', () => {
     const round = tableRounds.find((item) => Number(item.id) === Number(button.dataset.printTableRound));
     printTableRoundTicket(round, tableAccount, tableAccount.total);
@@ -9131,11 +9205,16 @@ function syncProductQrControls() {
   if (checkbox) checkbox.checked = enabled;
   $('#productQrPanel')?.classList.toggle('is-active', enabled);
   const generalButton = $('#generalProductQrBtn');
-  if (generalButton) generalButton.hidden = !enabled;
+  if (generalButton) {
+    generalButton.hidden = !enabled;
+    generalButton.innerHTML = `<i class="ph-bold ph-qr-code"></i> ${currentBusinessType() === 'grocery' ? 'QR del catálogo de tienda' : 'QR del menú completo'}`;
+  }
+  setBusinessText('#productQrPanel .product-qr-panel-copy b', currentBusinessType() === 'grocery' ? 'Catálogo QR para clientes' : 'Menú QR para clientes');
+  $('#productQrEnabled')?.setAttribute('aria-label', currentBusinessType() === 'grocery' ? 'Activar catálogo QR para clientes' : 'Activar menú QR para clientes');
   const hint = $('#productQrPanelHint');
-  if (hint) hint.textContent = enabled
-    ? 'El menú completo y cada producto activo tienen su propio QR. Puedes descargarlo en PDF para imprimirlo.'
-    : 'Enciéndelo para compartir el menú completo o un producto individual. Cada QR abre una página pública adaptable al celular.';
+  if (hint) hint.textContent = currentBusinessType() === 'grocery'
+    ? (enabled ? 'El catálogo de la tienda y cada artículo activo tienen su propio QR. Puedes descargarlo en PDF.' : 'Enciéndelo para compartir el catálogo de la tienda o un artículo individual.')
+    : (enabled ? 'El menú completo y cada producto activo tienen su propio QR. Puedes descargarlo en PDF para imprimirlo.' : 'Enciéndelo para compartir el menú completo o un producto individual. Cada QR abre una página pública adaptable al celular.');
 }
 
 function productVisibilityBadges(product) {
@@ -9145,9 +9224,13 @@ function productVisibilityBadges(product) {
 }
 
 function productBarcodeHTML(product) {
-  return product.barcode
+  const barcode = product.barcode
     ? `<span class="prod-barcode"><i class="ph-bold ph-barcode"></i> Código de barras: <code>${esc(product.barcode)}</code></span>`
     : '';
+  if (currentBusinessType() !== 'grocery') return barcode;
+  const details = [product.grocery_brand, product.grocery_presentation,
+    product.grocery_unit === 'kg' ? 'Precio por kg' : product.grocery_unit === 'liter' ? 'Precio por litro' : 'Precio por pieza'].filter(Boolean);
+  return `${barcode}<span class="prod-barcode">${esc(details.join(' · '))}</span>`;
 }
 
 function productQrButtonHTML(product) {
@@ -9156,17 +9239,17 @@ function productQrButtonHTML(product) {
 }
 
 function openProductQrModal(product = null) {
-  if (!productQrEnabled()) return toast('Activa el menú QR en Productos primero.', true);
+  if (!productQrEnabled()) return toast(currentBusinessType() === 'grocery' ? 'Activa el catálogo QR en Artículos primero.' : 'Activa el menú QR en Productos primero.', true);
   if (product && !product.active) return toast('Activa este producto para compartirlo por QR.', true);
   const slug = ME?.tenant?.slug || SETTINGS?.slug;
   if (!slug) return toast('No se encontró el enlace público del negocio.', true);
   const url = new URL(`/menu/${encodeURIComponent(slug)}`, location.origin);
   if (product) url.searchParams.set('producto', String(product.id));
   PRODUCT_QR_CURRENT = { url: url.href, product };
-  $('#productQrTitle').textContent = product ? `QR de ${product.name}` : 'QR del menú completo';
+  $('#productQrTitle').textContent = product ? `QR de ${product.name}` : currentBusinessType() === 'grocery' ? 'QR del catálogo de tienda' : 'QR del menú completo';
   $('#productQrDescription').textContent = product
-    ? 'Abre la ficha pública de este producto. El cliente también puede visitar el menú completo.'
-    : 'Abre el menú público adaptable al celular con tus productos activos.';
+    ? (currentBusinessType() === 'grocery' ? 'Abre la ficha pública de este artículo y el catálogo de la tienda.' : 'Abre la ficha pública de este producto. El cliente también puede visitar el menú completo.')
+    : (currentBusinessType() === 'grocery' ? 'Abre el catálogo público de la tienda con tus artículos activos.' : 'Abre el menú público adaptable al celular con tus productos activos.');
   $('#productQrUrl').value = url.href;
   $('#productQrPreview').href = url.href;
   const qrUrl = new URL('https://api.qrserver.com/v1/create-qr-code/');
@@ -9193,7 +9276,7 @@ $('#productQrEnabled')?.addEventListener('change', async (event) => {
     syncProductQrControls();
     renderProductsGrid();
     if (!checkbox.checked) $('#productQrModal')?.classList.remove('show');
-    toast(checkbox.checked ? 'Menú QR activado' : 'Menú QR desactivado');
+    toast(currentBusinessType() === 'grocery' ? (checkbox.checked ? 'Catálogo QR activado' : 'Catálogo QR desactivado') : (checkbox.checked ? 'Menú QR activado' : 'Menú QR desactivado'));
   } catch (error) {
     checkbox.checked = previous;
     toast(error.message, true);
@@ -9279,7 +9362,7 @@ $('#productQrDownload')?.addEventListener('click', async (event) => {
     const doc = new globalThis.jspdf.jsPDF({ orientation: 'portrait', unit: 'mm', format: 'letter', compress: true });
     const width = doc.internal.pageSize.getWidth();
     const name = String(ME?.tenant?.businessName || SETTINGS?.business_name || 'Mi negocio').trim();
-    const title = product ? product.name : 'Menú completo';
+    const title = product ? product.name : currentBusinessType() === 'grocery' ? 'Catálogo de tienda' : 'Menú completo';
     drawTenantQrPdfTitle(doc, name, width / 2, 25, 19, width - 28);
     doc.setTextColor(22, 39, 69);
     doc.setFont('helvetica', 'bold');
@@ -9288,7 +9371,7 @@ $('#productQrDownload')?.addEventListener('click', async (event) => {
     doc.addImage(image, 'PNG', (width - 112) / 2, 70, 112, 112, 'product-menu-qr', 'FAST');
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(11);
-    doc.text('Escanea para ver el producto o el menú', width / 2, 195, { align: 'center' });
+    doc.text(currentBusinessType() === 'grocery' ? 'Escanea para ver el artículo o el catálogo' : 'Escanea para ver el producto o el menú', width / 2, 195, { align: 'center' });
     doc.setFontSize(8);
     doc.setTextColor(95, 110, 132);
     doc.text(doc.splitTextToSize(url, width - 36), width / 2, 207, { align: 'center' });
@@ -10110,6 +10193,7 @@ function renderAiDraftRows() {
     const warnings = Array.isArray(item.warnings) ? item.warnings : [];
     const configRows = `
       <div class="ai-draft-config">
+        ${currentBusinessType() === 'grocery' ? `<section class="ai-grocery-config"><div class="ai-config-title"><b><i class="ph-bold ph-basket"></i> Datos de tienda</b></div><div class="row-2"><label>Marca<input class="ai-grocery-brand" maxlength="100" value="${esc(item.groceryBrand || '')}" placeholder="Ej. Lala" /></label><label>Presentación<input class="ai-grocery-presentation" maxlength="100" value="${esc(item.groceryPresentation || '')}" placeholder="Ej. botella 750 ml" /></label></div><label>Unidad de venta<select class="ai-grocery-unit"><option value="piece" ${item.groceryUnit === 'piece' || !item.groceryUnit ? 'selected' : ''}>Pieza / envase</option><option value="kg" ${item.groceryUnit === 'kg' ? 'selected' : ''}>Kilogramo a granel</option><option value="liter" ${item.groceryUnit === 'liter' ? 'selected' : ''}>Litro a granel</option></select></label></section>` : ''}
         <section>
           <div class="ai-config-title"><b><i class="ph-bold ph-stack"></i> Variantes de precio</b><button type="button" class="btn btn-ghost ai-add-variant"><i class="ph-bold ph-plus"></i> Agregar</button></div>
           <div class="ai-config-list">
@@ -10157,13 +10241,20 @@ function renderAiDraftRows() {
         <td>
           <div class="ai-config-summary">
             ${renderAiImageReview(item)}
-            <button type="button" class="btn btn-ghost ai-toggle-config" aria-expanded="${Boolean(item._expanded)}" aria-controls="ai-draft-detail-${idx}"><i class="ph-bold ph-${item._expanded ? 'caret-up' : 'caret-down'}"></i> ${item.variants.length} variantes · ${optionCount} opciones</button>
+            <button type="button" class="btn btn-ghost ai-toggle-config" aria-expanded="${Boolean(item._expanded)}" aria-controls="ai-draft-detail-${idx}"><i class="ph-bold ph-${item._expanded ? 'caret-up' : 'caret-down'}"></i> ${currentBusinessType() === 'grocery' ? `${item.groceryUnit === 'kg' ? 'Por kg' : item.groceryUnit === 'liter' ? 'Por litro' : 'Por pieza'} · ` : ''}${item.variants.length} variantes · ${optionCount} opciones</button>
           </div>
         </td>
         <td><button type="button" class="btn btn-danger btn-icon ai-del" title="Quitar"><i class="ph-bold ph-trash"></i></button></td>
       </tr>
       <tr id="ai-draft-detail-${idx}" class="ai-config-detail" data-ai-detail="${idx}" ${item._expanded ? '' : 'hidden'}><td colspan="7">${configRows}</td></tr>`;
   }).join('');
+
+  if (currentBusinessType() === 'grocery') rows.querySelectorAll('.ai-toggle-config').forEach((button) => {
+    const index = Number(button.closest('[data-ai-row]').dataset.aiRow);
+    const item = AI_PRODUCTS_DRAFT[index];
+    const unit = item.groceryUnit === 'kg' ? 'por kg' : item.groceryUnit === 'liter' ? 'por litro' : 'por pieza';
+    button.innerHTML = `<i class="ph-bold ph-${item._expanded ? 'caret-up' : 'caret-down'}"></i> Datos de tienda · ${unit}`;
+  });
 
   rows.querySelectorAll('.ai-name').forEach((input) => {
     input.addEventListener('input', (e) => {
@@ -10200,6 +10291,15 @@ function renderAiDraftRows() {
     input.addEventListener('input', (e) => {
       const i = Number(e.target.closest('[data-ai-row]').dataset.aiRow);
       AI_PRODUCTS_DRAFT[i].categoryName = e.target.value;
+    });
+  });
+  rows.querySelectorAll('.ai-grocery-brand, .ai-grocery-presentation, .ai-grocery-unit').forEach((input) => {
+    input.addEventListener('change', (event) => {
+      const i = Number(event.target.closest('[data-ai-detail]').dataset.aiDetail);
+      const field = event.target.classList.contains('ai-grocery-brand') ? 'groceryBrand'
+        : event.target.classList.contains('ai-grocery-presentation') ? 'groceryPresentation' : 'groceryUnit';
+      AI_PRODUCTS_DRAFT[i][field] = event.target.value;
+      if (field === 'groceryUnit') renderAiDraftRows();
     });
   });
   rows.querySelectorAll('.ai-del').forEach((btn) => {
@@ -10465,6 +10565,15 @@ $('#pBarcode')?.addEventListener('keydown', (event) => {
   if (!syncProductBarcodeStatus(true)) event.currentTarget.reportValidity();
 });
 
+function syncGroceryPriceUnit() {
+  if (currentBusinessType() !== 'grocery') return;
+  const unit = $('#pGroceryUnit')?.value;
+  const unitLabel = unit === 'kg' ? 'kilogramo' : unit === 'liter' ? 'litro' : 'pieza';
+  const taxSuffix = SETTINGS?.product_tax_enabled === '1' && SETTINGS?.product_tax_mode === 'added' ? ' sin IVA' : '';
+  if ($('#pPriceLabel')) $('#pPriceLabel').innerHTML = `<i class="ph-bold ph-currency-dollar"></i> Precio por ${unitLabel}${taxSuffix} *`;
+}
+$('#pGroceryUnit')?.addEventListener('change', syncGroceryPriceUnit);
+
 function openProdModal(p = null) {
   const ui = businessUi();
   $('#prodModalTitle').innerHTML = p
@@ -10476,6 +10585,10 @@ function openProdModal(p = null) {
   $('#pBarcode').value = p ? p.barcode || '' : '';
   syncProductBarcodeStatus();
   $('#pPrice').value = p ? p.price : '';
+  $('#pGroceryBrand').value = p?.grocery_brand || '';
+  $('#pGroceryPresentation').value = p?.grocery_presentation || '';
+  $('#pGroceryUnit').value = p?.grocery_unit || 'piece';
+  syncGroceryPriceUnit();
   $('#pSarTaxCategory').value = p?.sar_tax_category || '';
   $('#pCat').value = p && p.category_id ? p.category_id : '';
   $('#pActive').checked = p ? !!p.active : true;
@@ -10993,6 +11106,11 @@ $('#aiProductImport')?.addEventListener('click', async () => {
       price: Number(p.price) || 0,
       categoryName: String(p.categoryName || '').trim(),
       barcode: String(p.barcode || '').trim().toUpperCase().replace(/\s+/g, ''),
+      ...(currentBusinessType() === 'grocery' ? {
+        groceryBrand: String(p.groceryBrand || '').trim(),
+        groceryPresentation: String(p.groceryPresentation || '').trim(),
+        groceryUnit: p.groceryUnit || 'piece',
+      } : {}),
       variants: (p.variants || []).map((variant) => ({
         name: String(variant.name || '').trim(),
         price: Number(variant.price) || 0,
@@ -11084,6 +11202,11 @@ $('#prodForm').addEventListener('submit', async (e) => {
   fd.append('description', $('#pDesc').value);
   fd.append('barcode', $('#pBarcode').value.trim());
   fd.append('price', $('#pPrice').value);
+  if (currentBusinessType() === 'grocery') {
+    fd.append('groceryBrand', $('#pGroceryBrand').value.trim());
+    fd.append('groceryPresentation', $('#pGroceryPresentation').value.trim());
+    fd.append('groceryUnit', $('#pGroceryUnit').value);
+  }
   if (ME?.tenant?.phoneCountry === 'HN') fd.append('sarTaxCategory', $('#pSarTaxCategory').value);
   fd.append('categoryId', $('#pCat').value);
   fd.append('active', $('#pActive').checked ? '1' : '0');
@@ -13290,12 +13413,15 @@ function renderProductTaxConfig() {
   }
   const priceLabel = $('#pPriceLabel');
   const priceHint = $('#pPriceTaxHint');
-  if (priceLabel) priceLabel.innerHTML = `<i class="ph-bold ph-currency-dollar"></i> ${enabled && mode === 'added' ? 'Precio sin IVA *' : 'Precio de venta *'}`;
+  if (priceLabel) priceLabel.innerHTML = `<i class="ph-bold ph-currency-dollar"></i> ${currentBusinessType() === 'grocery' ? (enabled && mode === 'added' ? 'Precio por unidad sin IVA *' : 'Precio por unidad de venta *') : (enabled && mode === 'added' ? 'Precio sin IVA *' : 'Precio de venta *')}`;
   if (priceHint) {
-    priceHint.textContent = enabled
+    priceHint.textContent = currentBusinessType() === 'grocery'
+      ? `Captura el precio por pieza, kilogramo o litro según la unidad elegida.${enabled && mode === 'added' ? ` Se agregará ${ratePercent}% de IVA al cobrar.` : ''}`
+      : enabled
       ? (mode === 'added' ? `Al cobrar se agregará ${ratePercent}% de IVA. Si usas variantes, captura también sus precios sin IVA.` : `Este precio ya incluye ${ratePercent}% de IVA y se desglosará sin aumentar el cobro.`)
       : 'Se cobrará exactamente este precio. Si usas variantes, es el precio de referencia.';
   }
+  syncGroceryPriceUnit();
 }
 
 function fillProductTaxForm() {
@@ -14245,6 +14371,12 @@ const BUSINESS_MODELS = [
     tag: 'Por defecto',
   },
   {
+    id: 'grocery',
+    icon: 'ph-basket',
+    label: 'Tienda / abarrotes',
+    desc: 'Abarrotes, licores, frutas y verduras. Vende por pieza o a granel, con marca, presentación y código de barras.',
+  },
+  {
     id: 'furniture',
     icon: 'ph-armchair',
     label: 'Mueblería',
@@ -14435,6 +14567,11 @@ $('#initialIdentityForm')?.addEventListener('submit', (event) => {
 $('#initialIdentitySkip')?.addEventListener('click', () => completeInitialIdentitySetup());
 
 const BUSINESS_UI = {
+  grocery: {
+    orders: 'Pedidos', orderSingular: 'pedido', orderArticle: 'un', items: 'Artículos', itemSingular: 'artículo', itemIcon: 'ph-basket',
+    catalogSub: 'Tu surtido de tienda visible en el chatbot', shareAction: 'hacer su compra',
+    statusLabels: { pendiente: 'Pendiente', confirmado: 'Confirmado', preparando: 'Surtiendo', enviado: 'En camino', entregado: 'Entregado', cancelado: 'Cancelado' },
+  },
   restaurant: {
     orders: 'Pedidos', orderSingular: 'pedido', orderArticle: 'un', items: 'Productos', itemSingular: 'producto', itemIcon: 'ph-hamburger',
     catalogSub: 'Tu menú visible en el chatbot', shareAction: 'hacer su pedido', supportsRestaurantOperations: true,
@@ -14478,6 +14615,7 @@ const BUSINESS_UI = {
 };
 
 const BUSINESS_CATALOG_EXAMPLES = {
+  grocery: { name: 'Leche entera 1 L', description: 'Marca, contenido y presentación del artículo', optionLabel: 'Opciones', visible: 'Los clientes podrán comprarlo' },
   restaurant: { name: 'Hamburguesa clásica', description: 'Carne 150 g, queso, lechuga y tomate', optionLabel: 'Ingredientes / Opciones', visible: 'Los clientes podrán pedirlo' },
   furniture: { name: 'Sillón de dos plazas', description: 'Tapizado gris, 160 cm de ancho', optionLabel: 'Acabados / Opciones', visible: 'Los clientes podrán cotizarlo' },
   travel_agency: { name: 'Paquete Cancún 4 noches', description: 'Hotel, traslados y desayuno incluidos', optionLabel: 'Planes / Opciones', visible: 'Los clientes podrán reservarlo' },
@@ -14542,10 +14680,20 @@ function applyBusinessModelUI() {
   }
   const modifiersTab = $('#prodModifiersTab');
   if (modifiersTab) modifiersTab.innerHTML = `<i class="ph-bold ph-sliders"></i> ${esc(catalogExample.optionLabel)}`;
+  const groceryModel = currentBusinessType() === 'grocery';
+  const variantsTab = document.querySelector('#prodModalTabs [data-prod-tab="variants"]');
+  if (variantsTab) variantsTab.hidden = groceryModel;
+  if (modifiersTab) modifiersTab.hidden = groceryModel;
   const productImageLabel = $('#prodImageLabel');
   if (productImageLabel) productImageLabel.innerHTML = `<i class="ph-bold ph-image"></i> Foto de ${esc(ui.itemSingular)}`;
   if ($('#pName')) $('#pName').placeholder = catalogExample.name;
   if ($('#pDesc')) $('#pDesc').placeholder = catalogExample.description;
+  const groceryFields = $('#prodGroceryFields');
+  if (groceryFields) groceryFields.hidden = currentBusinessType() !== 'grocery';
+  syncProductQrControls();
+  if ($('#pPriceLabel')) $('#pPriceLabel').innerHTML = `<i class="ph-bold ph-currency-dollar"></i> ${currentBusinessType() === 'grocery' ? 'Precio por unidad de venta *' : 'Precio base *'}`;
+  syncGroceryPriceUnit();
+  setBusinessText('#pPriceTaxHint', currentBusinessType() === 'grocery' ? 'Captura el precio por pieza, kilogramo o litro según la unidad elegida.' : 'Si usas variantes, este precio es el de referencia.');
   setBusinessText('#prodVisibleHint', catalogExample.visible);
   const variantsHint = $('#prodVariantsHint');
   if (variantsHint) variantsHint.innerHTML = `<i class="ph-bold ph-info"></i> Usa variantes cuando el mismo ${esc(ui.itemSingular)} tenga distintas presentaciones, planes o modalidades con precios diferentes.`;
@@ -15034,7 +15182,7 @@ const INV_PERIOD_HINTS = {
 function invFmt(v) {
   if (v === null || v === undefined || v === '') return '—';
   const n = Number(v);
-  return Number.isFinite(n) ? n.toLocaleString('es-MX', { maximumFractionDigits: 2 }) : '—';
+  return Number.isFinite(n) ? n.toLocaleString('es-MX', { maximumFractionDigits: currentBusinessType() === 'grocery' ? 3 : 2 }) : '—';
 }
 
 function invDiffClass(v) {
@@ -15449,6 +15597,7 @@ function openInvInitModal(productId) {
   $('#invInitProductId').value = productId;
   $('#invInitProductName').value = row.product_name;
   $('#invInitStock').value = row.initial_stock ?? 0;
+  $('#invInitStock').step = currentBusinessType() === 'grocery' ? '0.001' : '0.01';
   $('#invInitUnit').value = row.unit || 'pcs';
   $('#invInitNotes').value = '';
   $('#invInitBranch').innerHTML = invBranchOptions();
@@ -17194,6 +17343,8 @@ function openInvMovModal(type, productId = null) {
   $('#invMovModalTitle').innerHTML = `<i class="ph-bold ${icon}"></i> ${title}`;
   $('#invMovType').value = type;
   $('#invMovQty').value = '';
+  $('#invMovQty').step = currentBusinessType() === 'grocery' ? '0.001' : '0.01';
+  $('#invMovQty').min = currentBusinessType() === 'grocery' ? '0.001' : '0.01';
   $('#invMovNotes').value = '';
   $('#invMovUnitCost').value = '';
   $('#invMovUnitCostField').hidden = type !== 'entrada';
@@ -17300,7 +17451,7 @@ function renderInvCountPage() {
       <td class="num">${invFmt(r.fisico_sistema)}</td>
       <td class="num inv-count-real-col">
         <input type="number" class="inv-count-input" data-pid="${r.product_id}"
-          min="0" step="0.01" placeholder="—"
+          min="0" step="${currentBusinessType() === 'grocery' ? '0.001' : '0.01'}" placeholder="—"
           value="${storedVal !== '' ? storedVal : ''}" />
       </td>
       <td class="num inv-count-diff-cell ${diffClass}" id="invCD_${r.product_id}">${diffText}</td>

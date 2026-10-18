@@ -10,14 +10,17 @@ const middleware = fs.readFileSync(path.join(root, 'src', 'middleware', 'auth.js
 const html = fs.readFileSync(path.join(root, 'public', 'app.html'), 'utf8');
 const script = fs.readFileSync(path.join(root, 'public', 'js', 'app.js'), 'utf8');
 
-test('solo los propietarios registrados desde ahora reciben el onboarding inicial', () => {
+test('las cuentas nuevas de ChatBotPro omiten la guía automática de seis pasos', () => {
   assert.match(db, /onboarding_completed INTEGER NOT NULL DEFAULT 1/);
   assert.match(db, /identity_completed INTEGER NOT NULL DEFAULT 1/);
-  assert.equal((auth.match(/INSERT INTO users \(tenant_id, username, password_hash, onboarding_completed, identity_completed\)[\s\S]{0,100}SELECT id, \$8, \$9, 0, 0 FROM new_tenant/g) || []).length, 2);
+  assert.match(auth, /SELECT id, \$8, \$9, CASE WHEN \$13 = 'invoicing' THEN 0 ELSE 1 END, 0 FROM new_tenant/);
+  assert.match(auth, /SELECT id, \$8, \$9, 1, 0 FROM new_tenant/);
   assert.match(middleware, /onboardingCompleted: Number\(authUser\.onboarding_completed \|\| 0\) === 1/);
   assert.match(middleware, /identityCompleted: Number\(authUser\.identity_completed \|\| 0\) === 1/);
   assert.match(auth, /onboardingRequired: req\.user\.role === 'owner'.*!req\.user\.impersonated/);
   assert.match(auth, /identityRequired: req\.user\.role === 'owner'.*!req\.user\.impersonated/);
+  const startup = script.slice(script.indexOf('function openNextInitialSetup()'), script.indexOf('async function closeOnboardingIntro()'));
+  assert.doesNotMatch(startup, /openOnboardingIntro\(/);
 });
 
 test('el estado se guarda al cerrar o comenzar la capacitación', () => {
@@ -37,7 +40,7 @@ test('la identidad inicial se completa por separado antes de la capacitación', 
   for (const field of ['initialIdentityName', 'initialIdentityLogo', 'initialIdentityColor', 'initialIdentityBusinessType', 'initialIdentityCurrency', 'initialIdentityTimezone']) {
     assert.match(html, new RegExp(`id="${field}"`));
   }
-  assert.match(script, /function openNextInitialSetup\(\)[\s\S]*ME\?\.identityRequired[\s\S]*openInitialIdentitySetup\(\)[\s\S]*ME\?\.onboardingRequired/);
+  assert.match(script, /function openNextInitialSetup\(\)[\s\S]*ME\?\.identityRequired[\s\S]*openInitialIdentitySetup\(\)[\s\S]*openEmptyCatalogAiWelcome\(\)/);
   assert.match(script, /function presentStartupJourney\(\)[\s\S]*ME\?\.identityRequired[\s\S]*openInitialIdentitySetup[\s\S]*ME\?\.trial\?\.isActive/);
   assert.match(script, /fd\.append\('business_name'[\s\S]*fd\.append\('primary_color'[\s\S]*fd\.append\('business_type'[\s\S]*fd\.append\('currency'[\s\S]*fd\.append\('timezone'/);
   assert.match(script, /api\('\/api\/settings', \{ method: 'PUT', body: fd \}\)[\s\S]*api\('\/api\/auth\/identity\/complete'/);

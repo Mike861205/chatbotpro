@@ -669,6 +669,7 @@ router.get('/tenants', requireSuperAdmin, async (req, res, next) => {
         t.id,
         t.slug,
         t.business_name,
+        t.business_type,
         t.owner_name,
         t.phone_enc,
         t.phone_country,
@@ -878,6 +879,7 @@ async function listClientRecords(req, res, next) {
         t.id,
         t.slug,
         t.business_name,
+        t.business_type,
         t.owner_name,
         t.phone_enc,
         t.phone_country,
@@ -1024,7 +1026,7 @@ router.get('/invoicing-businesses', requireSuperAdmin, async (req, res, next) =>
   try {
     await refreshTenantBillingStatuses();
     const result = await q(
-      `SELECT t.id,t.slug,t.business_name,t.owner_name,t.phone_enc,t.phone_country,t.phone_calling_code,
+      `SELECT t.id,t.slug,t.business_name,t.business_type,t.owner_name,t.phone_enc,t.phone_country,t.phone_calling_code,
               t.logo,t.primary_color,t.account_status,t.billing_status,t.plan_name,t.customer_since,
               t.invoicing_enabled,t.invoicing_environment,t.invoicing_activated_at,t.trial_status,
               t.trial_ends_on,t.sales_stage,t.next_follow_up_at,t.created_at,

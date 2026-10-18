@@ -90,6 +90,7 @@
       const $ = (id) => document.getElementById(id);
       let products = [];
       let currency = 'MXN';
+      let isGrocery = false;
       let category = '';
       const normalize = (value) => String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
       const money = (value) => { try { return new Intl.NumberFormat('es', { style:'currency', currency }).format(Number(value) || 0); } catch { return `${Number(value) || 0}`; } };
@@ -99,32 +100,35 @@
         const article = element('article', 'card');
         const src = safeImage(product.image);
         if (src) { const image = element('img', 'photo'); image.src = src; image.alt = product.name || ''; image.loading = 'lazy'; article.append(image); }
-        else article.append(element('div', 'photo placeholder', '🍽️'));
+        else article.append(element('div', 'photo placeholder', isGrocery ? '🛒' : '🍽️'));
         const body = element('div', 'card-content');
         if (product.category_name) body.append(element('span', 'category', product.category_name));
         body.append(element('h3', '', product.name));
+        if (isGrocery && (product.groceryBrand || product.groceryPresentation)) body.append(element('p', 'description', [product.groceryBrand, product.groceryPresentation].filter(Boolean).join(' · ')));
         if (product.description) body.append(element('p', 'description', product.description));
         const priceRow = element('div', 'price-row');
         if (Number(product.promotionalPrice) < Number(product.price)) priceRow.append(element('span', 'old-price', money(product.price)));
-        priceRow.append(element('span', 'price', money(product.promotionalPrice ?? product.price)));
+        priceRow.append(element('span', 'price', `${money(product.promotionalPrice ?? product.price)}${isGrocery ? (product.groceryUnit === 'kg' ? ' / kg' : product.groceryUnit === 'liter' ? ' / litro' : ' / pieza') : ''}`));
         body.append(priceRow);
         if (product.promotion) body.append(element('span', 'badge', product.promotion));
         if (!product.availableToday) body.append(element('span', 'badge', 'No disponible hoy'));
         const actions = element('div', 'card-actions');
-        if (!single) { const detail = element('a', '', 'Ver producto'); detail.href = `${menuUrl}?producto=${product.id}`; actions.append(detail); }
-        if (product.availableToday) { const order = element('a', 'order', 'Pedir por chatbot'); order.href = chatUrl; actions.append(order); }
+        if (!single) { const detail = element('a', '', isGrocery ? 'Ver artículo' : 'Ver producto'); detail.href = `${menuUrl}?producto=${product.id}`; actions.append(detail); }
+        if (product.availableToday) { const order = element('a', 'order', isGrocery ? 'Comprar por chatbot' : 'Pedir por chatbot'); order.href = chatUrl; actions.append(order); }
         if (actions.children.length) body.append(actions);
         article.append(body);
         return article;
       }
       function render() {
         const query = normalize($('search').value.trim());
-        const shown = products.filter((p) => (!category || String(p.category_id || '') === category) && (!query || normalize([p.name,p.description,p.category_name].join(' ')).includes(query)));
+        const shown = products.filter((p) => (!category || String(p.category_id || '') === category) && (!query || normalize([p.name,p.groceryBrand,p.groceryPresentation,p.description,p.category_name].join(' ')).includes(query)));
         $('grid').replaceChildren(...shown.map(card));
-        $('count').textContent = `${shown.length} ${shown.length === 1 ? 'producto' : 'productos'}`;
+        $('count').textContent = `${shown.length} ${isGrocery ? (shown.length === 1 ? 'artículo' : 'artículos') : (shown.length === 1 ? 'producto' : 'productos')}`;
         $('count').hidden = single;
         $('message').hidden = shown.length > 0;
-        if (!shown.length) $('message').textContent = products.length ? 'No hay productos que coincidan con tu búsqueda.' : 'Todavía no hay productos visibles en este menú.';
+        if (!shown.length) $('message').textContent = isGrocery
+          ? (products.length ? 'No hay artículos que coincidan con tu búsqueda.' : 'Todavía no hay artículos visibles en este catálogo.')
+          : (products.length ? 'No hay productos que coincidan con tu búsqueda.' : 'Todavía no hay productos visibles en este menú.');
       }
       function renderCategories() {
         const values = [...new Map(products.filter((p) => p.category_name).map((p) => [String(p.category_id), p.category_name])).entries()];
@@ -144,17 +148,26 @@
           if (!response.ok) throw new Error(data.error || 'No se pudo abrir el menú.');
           products = data.products || [];
           currency = data.currency || 'MXN';
-          $('businessName').textContent = data.businessName || 'Menú';
-          document.title = `${single ? products[0]?.name || 'Producto' : 'Menú'} · ${data.businessName || 'Negocio'}`;
+          isGrocery = data.businessType === 'grocery';
+          $('businessName').textContent = data.businessName || (isGrocery ? 'Tienda' : 'Menú');
+          document.title = `${single ? products[0]?.name || (isGrocery ? 'Artículo' : 'Producto') : (isGrocery ? 'Catálogo de tienda' : 'Menú')} · ${data.businessName || 'Negocio'}`;
+          if (isGrocery) {
+            $('pageTitle').textContent = 'Catálogo de tienda';
+            $('pageSubtitle').textContent = 'Explora abarrotes, bebidas y más artículos.';
+            $('mainLink').textContent = 'Comprar por chatbot';
+            $('search').placeholder = 'Buscar artículo, marca o categoría';
+            $('search').setAttribute('aria-label', 'Buscar artículo');
+            document.querySelector('.brand p').textContent = 'Explora nuestros artículos';
+          }
           if (/^#[0-9a-f]{6}$/i.test(data.primaryColor || '')) document.documentElement.style.setProperty('--accent', data.primaryColor);
           const logo = safeImage(data.logo);
           if (logo) { $('logo').src = logo; $('logo').hidden = false; }
           $('mainLink').href = chatUrl;
           if (single) {
             $('main').classList.add('single');
-            $('pageTitle').textContent = products[0]?.name || 'Producto';
-            $('pageSubtitle').textContent = 'Conoce este producto y visita el menú completo.';
-            $('mainLink').textContent = 'Ver menú completo';
+            $('pageTitle').textContent = products[0]?.name || (isGrocery ? 'Artículo' : 'Producto');
+            $('pageSubtitle').textContent = isGrocery ? 'Conoce este artículo y visita el catálogo de la tienda.' : 'Conoce este producto y visita el menú completo.';
+            $('mainLink').textContent = isGrocery ? 'Ver catálogo completo' : 'Ver menú completo';
             $('mainLink').href = menuUrl;
             $('mainLink').className = 'back-link';
           } else { $('controls').hidden = false; renderCategories(); }

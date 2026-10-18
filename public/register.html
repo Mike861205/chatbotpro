@@ -10,7 +10,7 @@
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/fill/style.css" />
   <link rel="stylesheet" href="/static/css/styles.css?v=20260811-6" />
   <link rel="prefetch" href="/app" as="document" />
-  <link rel="prefetch" href="/static/js/app.js?v=20260814regionalclock2" as="script" />
+  <link rel="prefetch" href="/static/js/app.js?v=20261018-costs-explained" as="script" />
   <link rel="icon" type="image/svg+xml" href="/static/favicon.svg" />
   <link rel="icon" type="image/png" href="/static/chatbotpro100.png" />
 </head>
@@ -23,12 +23,12 @@
         <strong>CHAT BOT PRO</strong>
         <span>EL ASISTENTE VIRTUAL 24/7</span>
       </div>
-      <h1>Crea tu chatbot de pedidos en <em>2 minutos</em></h1>
-      <p>Registra tu restaurante, sube tu menú y comparte tu liga. Tus clientes ordenan solos y tú recibes todo por WhatsApp.</p>
+      <h1>Crea el espacio de tu negocio en <em>2 minutos</em></h1>
+      <p>Registra tu negocio, presenta tus productos o servicios y comparte tu liga con tus clientes.</p>
       <div class="feats">
         <div class="feat"><span class="fi"><i class="ph-bold ph-number-circle-one"></i></span><span>Regístrate con los datos de tu negocio</span></div>
-        <div class="feat"><span class="fi"><i class="ph-bold ph-number-circle-two"></i></span><span>Da de alta tus productos con foto</span></div>
-        <div class="feat"><span class="fi"><i class="ph-bold ph-number-circle-three"></i></span><span>Comparte tu liga o QR y recibe pedidos</span></div>
+        <div class="feat"><span class="fi"><i class="ph-bold ph-number-circle-two"></i></span><span>Da de alta tus productos o servicios</span></div>
+        <div class="feat"><span class="fi"><i class="ph-bold ph-number-circle-three"></i></span><span>Comparte tu liga o QR y recibe solicitudes</span></div>
       </div>
       <section class="benefit-showcase" aria-labelledby="registerBenefitsTitle">
         <div class="benefit-showcase-head">
@@ -37,9 +37,9 @@
         </div>
         <div class="benefit-grid">
           <article class="benefit-item"><i class="ph-bold ph-storefront"></i><div><strong>Punto de venta</strong><span>Ventas y cobros desde caja.</span></div></article>
-          <article class="benefit-item"><i class="ph-bold ph-printer"></i><div><strong>Comandas y tickets</strong><span>Impresi&oacute;n para caja y cocina.</span></div></article>
+          <article class="benefit-item"><i class="ph-bold ph-printer"></i><div><strong>Tickets y comprobantes</strong><span>Impresi&oacute;n de tus operaciones.</span></div></article>
           <article class="benefit-item"><i class="ph-bold ph-calculator"></i><div><strong>Costo de ventas</strong><span>Costos, utilidad y m&aacute;rgenes.</span></div></article>
-          <article class="benefit-item"><i class="ph-bold ph-monitor"></i><div><strong>KDS en tiempo real</strong><span>Pedidos sincronizados en cocina.</span></div></article>
+          <article class="benefit-item"><i class="ph-bold ph-monitor"></i><div><strong>Gesti&oacute;n en tiempo real</strong><span>Consulta la actividad de tu negocio.</span></div></article>
           <article class="benefit-item"><i class="ph-bold ph-package"></i><div><strong>Stock de inventarios</strong><span>Entradas, salidas y existencias.</span></div></article>
           <article class="benefit-item"><i class="ph-bold ph-chart-line-up"></i><div><strong>Reportes de ventas</strong><span>Resultados claros y actualizados.</span></div></article>
         </div>
@@ -60,12 +60,12 @@
       <div class="auth-card">
         <div class="logo"><span class="dot dot-logo"><img src="/static/chatbotpro100.png" alt="" /></span> ChatBotPro</div>
         <h2>Registra tu negocio</h2>
-        <p class="sub">Crea la cuenta de tu restaurante.</p>
+        <p class="sub">Crea la cuenta de tu negocio.</p>
         <div class="auth-card-benefits" aria-label="Beneficios incluidos">
           <span><i class="ph-bold ph-storefront"></i> Punto de venta</span>
-          <span><i class="ph-bold ph-printer"></i> Tickets y comandas</span>
+          <span><i class="ph-bold ph-printer"></i> Tickets y comprobantes</span>
           <span><i class="ph-bold ph-calculator"></i> Costos</span>
-          <span><i class="ph-bold ph-monitor"></i> KDS en vivo</span>
+          <span><i class="ph-bold ph-monitor"></i> Actividad en vivo</span>
           <span><i class="ph-bold ph-package"></i> Inventarios</span>
         </div>
         <div class="error-box" id="error"><i class="ph-fill ph-warning-circle"></i><span id="errorMsg"></span></div>
@@ -93,7 +93,21 @@
           </div>
           <div class="field">
             <label><i class="ph-bold ph-storefront"></i> Nombre del negocio *</label>
-            <input type="text" id="businessName" placeholder="Tacos El Güero" required />
+            <input type="text" id="businessName" placeholder="Ej. Mi negocio" required />
+          </div>
+          <div class="field">
+            <label for="businessType"><i class="ph-bold ph-squares-four"></i> Modelo de negocio *</label>
+            <select id="businessType" required>
+              <option value="restaurant" selected>Restaurante / cafetería</option>
+              <option value="grocery">Tienda / abarrotes</option>
+              <option value="furniture">Mueblería</option>
+              <option value="travel_agency">Agencia de viajes</option>
+              <option value="office_services">Oficina / servicios profesionales</option>
+              <option value="screen_printing">Serigrafía / estampado</option>
+              <option value="carpentry">Carpintería</option>
+              <option value="health">Salud / clínica</option>
+              <option value="dentist">Consultorio dental</option>
+            </select>
           </div>
           <div class="field">
             <label><i class="ph-bold ph-link"></i> Slug (liga de tu negocio) *</label>
@@ -185,6 +199,7 @@
             phone: phoneData.phone,
             phoneCountry: phoneData.phoneCountry,
             businessName: bizInput.value,
+            businessType: document.getElementById('businessType').value,
             slug: slugInput.value,
             username: document.getElementById('username').value,
             password: document.getElementById('password').value,

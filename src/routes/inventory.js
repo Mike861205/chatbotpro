@@ -205,8 +205,9 @@ function calcRow(product, invItem, mots, salesMap, lastCount, scope = {}) {
   const diferencia = fisico_real !== null ? Number((fisico_real - fisico_sistema).toFixed(4)) : null;
   return {
     product_id: product.id,
-    product_name: product.name,
-    unit: invItem?.unit || 'pcs',
+    product_name: product.grocery_presentation && !String(product.name).toLocaleLowerCase('es').includes(String(product.grocery_presentation).toLocaleLowerCase('es'))
+      ? `${product.name} · ${product.grocery_presentation}` : product.name,
+    unit: invItem?.unit || (product.grocery_unit === 'kg' ? 'kg' : product.grocery_unit === 'liter' ? 'L' : 'pcs'),
     initial_stock: initial,
     entradas,
     compras,
@@ -237,7 +238,7 @@ router.get('/', async (req, res, next) => {
     movQuery += ` ORDER BY created_at DESC`;
     const countBranchClause = branchId ? 'WHERE branch_id=$1' : 'WHERE branch_id IS NULL';
     const [products, items, movements, counts, globalBaseline, branches, branchStocks, transfers] = await Promise.all([
-      t.all(`SELECT id, name FROM {s}.products WHERE (active = 1 OR pos_active = 1) ORDER BY name`),
+      t.all(`SELECT id, name, grocery_presentation, grocery_unit FROM {s}.products WHERE (active = 1 OR pos_active = 1) ORDER BY name`),
       t.all(`SELECT * FROM {s}.inventory_items`),
       t.all(movQuery, movParams),
       t.all(
@@ -378,7 +379,7 @@ router.post('/apply-real-to-initial', async (req, res, next) => {
       const prevInitial = prevItem?.initial_stock || 0;
       await t.run(
         `INSERT INTO {s}.inventory_items (product_id, initial_stock, unit, notes, updated_at)
-         VALUES ($1, $2, 'pcs', '', now())
+         VALUES ($1, $2, COALESCE((SELECT CASE grocery_unit WHEN 'kg' THEN 'kg' WHEN 'liter' THEN 'L' ELSE 'pcs' END FROM {s}.products WHERE id=$1), 'pcs'), '', now())
          ON CONFLICT (product_id)
          DO UPDATE SET initial_stock = EXCLUDED.initial_stock, baseline_started_at = now(), updated_at = now()`,
         [pid, n(latest.physical_qty)]
@@ -407,7 +408,7 @@ router.post('/apply-real-to-initial', async (req, res, next) => {
       const prevInitial = initialMap.get(productId) || 0;
       await t.run(
         `INSERT INTO {s}.inventory_items (product_id, initial_stock, unit, notes, updated_at)
-         VALUES ($1, $2, 'pcs', '', now())
+         VALUES ($1, $2, COALESCE((SELECT CASE grocery_unit WHEN 'kg' THEN 'kg' WHEN 'liter' THEN 'L' ELSE 'pcs' END FROM {s}.products WHERE id=$1), 'pcs'), '', now())
          ON CONFLICT (product_id)
          DO UPDATE SET initial_stock = EXCLUDED.initial_stock, baseline_started_at = now(), updated_at = now()`,
         [productId, n(row.physical_qty)]
@@ -444,6 +445,8 @@ router.post('/items', async (req, res, next) => {
       if (!branchId) throw Object.assign(new Error('Configura una sucursal antes de asignar inventario'), { statusCode: 400 });
       const branch = await tx.get('SELECT id,name FROM {s}.branches WHERE id=$1 AND active=1', [branchId]);
       if (!branch) throw Object.assign(new Error('Sucursal no disponible'), { statusCode: 400 });
+      const product = await tx.get('SELECT grocery_unit FROM {s}.products WHERE id=$1', [pid]);
+      const stockUnit = safe(unit || (product?.grocery_unit === 'kg' ? 'kg' : product?.grocery_unit === 'liter' ? 'L' : 'pcs'), 30);
       let branchStock = await tx.get('SELECT quantity::float AS quantity,initial_quantity::float AS initial_quantity FROM {s}.branch_inventory WHERE branch_id=$1 AND product_id=$2 FOR UPDATE', [branchId,pid]);
       if (!branchStock) { await tx.run('INSERT INTO {s}.branch_inventory(branch_id,product_id,quantity,initial_quantity,baseline_started_at) VALUES($1,$2,0,0,now())', [branchId,pid]); branchStock={quantity:0,initial_quantity:0}; }
       const previousInitial = n(branchStock.initial_quantity); const delta = n(stock - previousInitial);
@@ -451,8 +454,8 @@ router.post('/items', async (req, res, next) => {
       const nextQuantity = n(branchStock.quantity + delta);
       await tx.run('UPDATE {s}.branch_inventory SET initial_quantity=$1,quantity=$2,updated_at=now() WHERE branch_id=$3 AND product_id=$4', [stock,nextQuantity,branchId,pid]);
       const existing = await tx.get('SELECT id,initial_stock::float AS initial_stock FROM {s}.inventory_items WHERE product_id=$1 FOR UPDATE', [pid]);
-      if (existing) await tx.run('UPDATE {s}.inventory_items SET initial_stock=GREATEST(0,initial_stock+$1),unit=$2,notes=$3,updated_at=now() WHERE product_id=$4', [delta,safe(unit||'pcs',30),safe(notes),pid]);
-      else await tx.run('INSERT INTO {s}.inventory_items(product_id,initial_stock,unit,notes) VALUES($1,$2,$3,$4)', [pid,stock,safe(unit||'pcs',30),safe(notes)]);
+      if (existing) await tx.run('UPDATE {s}.inventory_items SET initial_stock=GREATEST(0,initial_stock+$1),unit=$2,notes=$3,updated_at=now() WHERE product_id=$4', [delta,stockUnit,safe(notes),pid]);
+      else await tx.run('INSERT INTO {s}.inventory_items(product_id,initial_stock,unit,notes) VALUES($1,$2,$3,$4)', [pid,stock,stockUnit,safe(notes)]);
       await tx.run(`INSERT INTO {s}.purchase_audit_log(entity_type,entity_id,action,payload,actor) VALUES('branch_stock',$1,'initial_stock_updated',$2,$3)`, [branchId,JSON.stringify({branch:branch.name,productId:pid,previousInitial,initialStock:stock,delta}),req.user?.username||'']);
       return { branchId, branchName: branch.name };
     });

@@ -505,7 +505,7 @@ async function getProductExtras(tdb, productIds = []) {
 
 async function listSoldQtyByProduct(tdb) {
   const rows = await tdb.all(
-    `SELECT product_id, SUM(qty)::int AS sold_qty
+    `SELECT product_id, SUM(qty)::float AS sold_qty
      FROM (
        SELECT
          CASE
@@ -514,7 +514,7 @@ async function listSoldQtyByProduct(tdb) {
            ELSE NULL
          END AS product_id,
          CASE
-           WHEN (it.item->>'qty') ~ '^[0-9]+$' THEN GREATEST((it.item->>'qty')::int, 1)
+           WHEN (it.item->>'qty') ~ '^[0-9]+([.][0-9]{1,3})?$' THEN GREATEST((it.item->>'qty')::numeric, 0)
            ELSE 1
          END AS qty
        FROM {s}.orders o
@@ -532,6 +532,7 @@ router.get('/', async (req, res, next) => {
   try {
     const rows = await req.tdb.all(
       `SELECT p.id, p.category_id, p.name, p.description, p.price::float AS price, p.image, p.active, p.pos_active, p.sale_days, p.barcode,
+              p.grocery_brand, p.grocery_presentation, p.grocery_unit,
               p.sat_product_code, p.sat_unit_code, p.sat_unit_name, p.tax_object, p.sar_tax_category,
               p.iva_rate::float AS iva_rate, p.isr_rate::float AS isr_rate,
               c.name AS category_name
@@ -789,7 +790,7 @@ router.post('/ai/suggest', uploadAiMenu.array('menuImages', 8), async (req, res,
       return res.status(422).json({ error: 'No se pudo interpretar una lista de productos valida desde IA.' });
     }
 
-    const products = normalizeAiCatalogProducts(parsed.products, { inferCategories: true });
+    const products = normalizeAiCatalogProducts(parsed.products, { inferCategories: true, businessType });
     const notes = Array.isArray(parsed.notes) ? parsed.notes.map((n) => String(n || '').trim()).filter(Boolean) : [];
     if (products.length >= 60) notes.push('Se alcanzó el límite de 60 productos por lote. Si el catálogo contiene más, divide el archivo y carga los restantes.');
     const croppedImageCount = await attachMenuImageCandidates(products, prepared.images);
@@ -838,8 +839,10 @@ router.post('/ai/import', uploadAiProductImages.array('productImages', 60), asyn
     if (Array.isArray(inputProducts) && inputProducts.length > 60) {
       throw Object.assign(new Error('Puedes importar hasta 60 productos por lote. Divide el catálogo.'), { status: 400 });
     }
-    const products = normalizeAiCatalogProducts(inputProducts, { strictBarcodes: true });
+    const businessType = await getSetting(req.tdb, 'business_type', 'restaurant');
+    const products = normalizeAiCatalogProducts(inputProducts, { strictBarcodes: true, businessType });
     if (!products.length) return res.status(400).json({ error: 'No hay productos válidos para importar.' });
+    const isGrocery = businessType === 'grocery';
 
     const createMissingCategories = body.createMissingCategories !== false && body.createMissingCategories !== 'false';
     const defaultActive = body.defaultActive === false || body.defaultActive === 'false' ? 0 : 1;
@@ -909,9 +912,11 @@ router.post('/ai/import', uploadAiProductImages.array('productImages', 60), asyn
         const image = optimizedImages.get(product.imageIndex) || null;
         if (image) usedImages.add(image);
 
+        const grocery = isGrocery ? groceryProductFields(product) : { brand: '', presentation: '', unit: 'piece' };
         const inserted = await tx.get(
-          'INSERT INTO {s}.products (name, description, price, category_id, image, active, pos_active, barcode) VALUES ($1,$2,$3,$4,$5,$6,$6,$7) RETURNING id',
-          [product.name, product.description, basePrice, categoryId, image, defaultActive, product.barcode || null]
+          'INSERT INTO {s}.products (name, description, price, category_id, image, active, pos_active, barcode, grocery_brand, grocery_presentation, grocery_unit) VALUES ($1,$2,$3,$4,$5,$6,$6,$7,$8,$9,$10) RETURNING id',
+          [product.name, product.description, basePrice, categoryId, image, defaultActive, product.barcode || null,
+            grocery.brand, grocery.presentation, grocery.unit]
         );
 
         for (let index = 0; index < product.variants.length; index += 1) {
@@ -1162,6 +1167,14 @@ function normalizeProductFiscal(body = {}, existing = {}) {
   return { productCode, unitCode, unitName, taxObject, ivaRate, isrRate };
 }
 
+function groceryProductFields(body, existing = null) {
+  const brand = String(body?.groceryBrand ?? existing?.grocery_brand ?? '').trim().slice(0, 100);
+  const presentation = String(body?.groceryPresentation ?? existing?.grocery_presentation ?? '').trim().slice(0, 100);
+  const unit = String(body?.groceryUnit ?? existing?.grocery_unit ?? 'piece').trim();
+  if (!['piece', 'kg', 'liter'].includes(unit)) throw Object.assign(new Error('Selecciona una unidad de venta válida'), { status: 400 });
+  return { brand, presentation, unit };
+}
+
 router.post('/', upload.single('image'), async (req, res, next) => {
   let img = null;
   try {
@@ -1174,16 +1187,19 @@ router.post('/', upload.single('image'), async (req, res, next) => {
     const sarCategory = req.tenant.phone_country === 'HN' ? String(req.body?.sarTaxCategory || '') : '';
     if (sarCategory && !['exempt', 'tax15', 'tax18'].includes(sarCategory)) throw Object.assign(new Error('Categoría ISV de Honduras inválida'), { status: 400 });
     const saleDays = normalizeProductSaleDays(req.body?.saleDays, { strict: true });
+    const grocery = (await getSetting(req.tdb, 'business_type', 'restaurant')) === 'grocery'
+      ? groceryProductFields(req.body) : { brand: '', presentation: '', unit: 'piece' };
     if (!name || !name.trim() || price === undefined || price === '') {
       throw Object.assign(new Error('Nombre y precio son obligatorios'), { status: 400 });
     }
     img = req.file ? await optimizeUploadedImage(req.file, { scope: req.tenant.slug, outputPrefix: 'prod' }) : null;
     const row = await req.tdb.get(
       `INSERT INTO {s}.products
-       (name,description,price,category_id,image,active,sale_days,barcode,sat_product_code,sat_unit_code,sat_unit_name,tax_object,iva_rate,isr_rate,sar_tax_category,pos_active)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16) RETURNING id`,
+       (name,description,price,category_id,image,active,sale_days,barcode,sat_product_code,sat_unit_code,sat_unit_name,tax_object,iva_rate,isr_rate,sar_tax_category,pos_active,grocery_brand,grocery_presentation,grocery_unit)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19) RETURNING id`,
       [name.trim(), description || '', Number(price) || 0, categoryId || null, img, active === '0' ? 0 : 1,
-        JSON.stringify(saleDays), barcode, fiscal.productCode, fiscal.unitCode, fiscal.unitName, fiscal.taxObject, fiscal.ivaRate, fiscal.isrRate, sarCategory, posActive]
+        JSON.stringify(saleDays), barcode, fiscal.productCode, fiscal.unitCode, fiscal.unitName, fiscal.taxObject, fiscal.ivaRate, fiscal.isrRate, sarCategory, posActive,
+        grocery.brand, grocery.presentation, grocery.unit]
     );
     res.json(row);
   } catch (e) {
@@ -1212,10 +1228,14 @@ router.put('/:id', upload.single('image'), async (req, res, next) => {
     const saleDays = Object.prototype.hasOwnProperty.call(req.body || {}, 'saleDays')
       ? normalizeProductSaleDays(req.body.saleDays, { strict: true })
       : normalizeProductSaleDays(existing.sale_days);
+    const grocery = (await getSetting(req.tdb, 'business_type', 'restaurant')) === 'grocery'
+      ? groceryProductFields(req.body, existing)
+      : groceryProductFields({}, existing);
     img = req.file ? await optimizeUploadedImage(req.file, { scope: req.tenant.slug, outputPrefix: 'prod' }) : existing.image;
     await req.tdb.run(
       `UPDATE {s}.products SET name=$1,description=$2,price=$3,category_id=$4,image=$5,active=$6,
-       sale_days=$7,barcode=$8,sat_product_code=$9,sat_unit_code=$10,sat_unit_name=$11,tax_object=$12,iva_rate=$13,isr_rate=$14,sar_tax_category=$16,pos_active=$17 WHERE id=$15`,
+       sale_days=$7,barcode=$8,sat_product_code=$9,sat_unit_code=$10,sat_unit_name=$11,tax_object=$12,iva_rate=$13,isr_rate=$14,sar_tax_category=$16,pos_active=$17,
+       grocery_brand=$18,grocery_presentation=$19,grocery_unit=$20 WHERE id=$15`,
       [
         (name || existing.name).trim(),
         description ?? existing.description,
@@ -1227,6 +1247,7 @@ router.put('/:id', upload.single('image'), async (req, res, next) => {
         fiscal.productCode, fiscal.unitCode, fiscal.unitName, fiscal.taxObject, fiscal.ivaRate, fiscal.isrRate,
         req.params.id, sarCategory,
         req.body?.posActive !== undefined ? (req.body.posActive === '0' || req.body.posActive === 0 || req.body.posActive === false ? 0 : 1) : existing.pos_active,
+        grocery.brand, grocery.presentation, grocery.unit,
       ]
     );
     if (req.file && existing.image && existing.image !== img) {

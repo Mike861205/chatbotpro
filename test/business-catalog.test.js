@@ -18,6 +18,27 @@ test('un giro desconocido conserva el comportamiento de restaurante', () => {
   assert.match(buildAiCatalogPrompt('otro', []), /menú de restaurante o cafetería/);
 });
 
+test('la carga de tienda distingue granel de envases y conserva marca y presentación', () => {
+  assert.match(buildAiCatalogPrompt('grocery', []), /kg y liter sólo para venta a granel/);
+  const products = normalizeAiCatalogProducts([
+    { name: 'Tomate por kg', price: 35, brand: 'Sin marca', presentation: 'a granel' },
+    { name: 'Arroz bolsa 1 kg', price: 42, brand: 'Campo', presentation: 'bolsa 1 kg' },
+  ], { businessType: 'grocery' });
+  assert.equal(products[0].groceryUnit, 'kg');
+  assert.equal(products[0].groceryBrand, 'Sin marca');
+  assert.equal(products[1].groceryUnit, 'piece');
+  assert.equal(products[1].groceryPresentation, 'bolsa 1 kg');
+});
+
+test('una tienda registra cada tamaño como artículo independiente', () => {
+  const products = normalizeAiCatalogProducts([
+    { name: 'Aceite vegetal', variants: [{ name: '500 ml', price: 35 }, { name: '1 L', price: 60 }] },
+  ], { businessType: 'grocery' });
+  assert.deepEqual(products.map((item) => item.name), ['Aceite vegetal 500 ml', 'Aceite vegetal 1 L']);
+  assert.deepEqual(products.map((item) => item.price), [35, 60]);
+  assert.ok(products.every((item) => item.variants.length === 0));
+});
+
 test('el prompt separa variantes, ingredientes incluidos y opciones elegibles', () => {
   const prompt = buildAiCatalogPrompt('restaurant', ['Hamburguesas']);
   assert.match(prompt, /UN solo producto base/);
