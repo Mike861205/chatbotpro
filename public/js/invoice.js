@@ -270,6 +270,12 @@
       const portal = await request('');
       currentPortal = portal;
       applyBusiness(portal);
+      if (portal.externalOnly) {
+        document.body.classList.add('external-only');
+        $('#portalUnavailable strong').textContent = 'Facturas de ventas externas';
+        setUnavailable('Este negocio usa otro punto de venta. Comparte tu folio y tus datos fiscales directamente con el negocio; su equipo emitirá el CFDI y te enviará el PDF y XML por correo. La búsqueda automática de tickets solo funciona con ventas registradas en ChatBotPro.');
+        return;
+      }
       portalAvailable = Boolean(portal.available);
       if (!portalAvailable) {
         setUnavailable(portal.unavailableReason || '', false);

@@ -3265,7 +3265,7 @@ select.status-sel {
 /* ---------- Plans ---------- */
 .subs-plans {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 16px;
 }
 .plan-card {
@@ -3284,13 +3284,6 @@ select.status-sel {
     linear-gradient(160deg, #ffffff, #f8fafc),
     repeating-linear-gradient(-45deg, rgba(148,163,184,.06) 0 12px, rgba(148,163,184,.02) 12px 24px);
   border-color: #dbe3ef;
-}
-.plan-promo {
-  background:
-    radial-gradient(360px 220px at 100% 0%, rgba(255,107,53,.18), transparent 70%),
-    linear-gradient(160deg, #fff7ef, #ffe7d6);
-  border-color: #ffcfac;
-  box-shadow: 0 18px 40px rgba(255,107,53,.18);
 }
 .plan-annual {
   z-index: 2;
@@ -3319,11 +3312,6 @@ select.status-sel {
   color: #4338ca;
   font-size: 26px;
   box-shadow: 0 10px 20px rgba(79,70,229,.18);
-}
-.plan-icon.promo {
-  background: linear-gradient(135deg, #ff6b35, #f43f5e 70%, #a855f7);
-  color: #fff;
-  box-shadow: 0 12px 24px rgba(244,63,94,.36);
 }
 .plan-icon.annual {
   background: linear-gradient(135deg, #0284c7, #0891b2 55%, #0f766e);
@@ -3374,25 +3362,10 @@ select.status-sel {
 .plan-branch-limit span { display: grid; gap: 1px; }
 .plan-branch-limit strong { font-size: 12.5px; line-height: 1.25; }
 .plan-branch-limit small { color: #64748b; font-size: 10.5px; font-weight: 700; }
-.plan-branch-limit.promo { border-color: #fdba74; background: rgba(255, 255, 255, .65); color: #9a3412; }
-.plan-branch-limit.promo > i { color: #ea580c; }
 .plan-branch-limit.annual { border-color: #67e8f9; background: rgba(255, 255, 255, .62); color: #0e7490; }
 .plan-branch-limit.annual > i { color: #0891b2; }
 .plan-branch-limit.invoicing { border-color:#86efac; background:rgba(255,255,255,.68); color:#166534; }
 .plan-branch-limit.invoicing > i { color:#16a34a; }
-.plan-regular-old {
-  margin-top: 10px;
-  font-size: 12px;
-  color: #94a3b8;
-  font-weight: 800;
-  text-transform: uppercase;
-  letter-spacing: .5px;
-}
-.plan-regular-old s {
-  color: #64748b;
-  text-decoration-thickness: 2px;
-  text-decoration-color: #f97316;
-}
 .plan-price {
   margin-top: 6px;
   display: flex; align-items: baseline; gap: 4px;
@@ -3427,15 +3400,8 @@ select.status-sel {
 .plan-stamp-bonus span { display:grid; gap:2px; }
 .plan-stamp-bonus strong { font-size:13px; }
 .plan-stamp-bonus small { color:#4b7560; font-size:10.5px; font-weight:700; line-height:1.35; }
-.annual-msi-highlight { margin-top:12px; padding:14px 15px; border:1px solid rgba(103,232,249,.7); border-radius:16px; background:linear-gradient(135deg,#082f49,#0e7490 58%,#0f766e); color:#fff; box-shadow:0 14px 30px rgba(8,145,178,.28),inset 0 0 22px rgba(34,211,238,.08); }
-.annual-msi-highlight>span { display:block; color:#cffafe; font-size:11px; font-weight:900; letter-spacing:.65px; text-transform:uppercase; }
-.annual-msi-highlight>div { display:flex; align-items:baseline; gap:4px; margin:4px 0 3px; }
-.annual-msi-highlight small { font-size:23px; font-weight:900; }
-.annual-msi-highlight strong { color:#fff; font-size:54px; line-height:1; letter-spacing:-2px; text-shadow:0 0 18px rgba(103,232,249,.75); }
-.annual-msi-highlight em { margin-left:4px; color:#ecfeff; font-size:13px; font-style:normal; font-weight:800; }
-.annual-msi-highlight>b { display:block; color:#a5f3fc; font-size:11px; line-height:1.4; }
-.plan-old.annual-saving { margin-top:9px; color:#075985; font-weight:800; }
-.plan-old.annual-saving b { color:#0f766e; }
+.plan-price.annual-price { flex-wrap: wrap; }
+.plan-price.annual-price .amt { font-size: clamp(38px, 3vw, 52px); }
 .plan-price .per {
   font-size: 14px; color: var(--ink-2); font-weight: 700; margin-left: 4px;
 }
@@ -3447,25 +3413,8 @@ select.status-sel {
 .plan-usd-equivalent span { display:grid; gap:2px; }
 .plan-usd-equivalent strong { font-size:13px; line-height:1.2; }
 .plan-usd-equivalent small { color:#526079; font-size:9.5px; font-weight:700; line-height:1.35; }
-.plan-usd-equivalent.promo { border-color:#fdba74; background:rgba(255,247,237,.86); color:#9a3412; }
-.plan-usd-equivalent.promo>i { color:#ea580c; }
 .plan-usd-equivalent.annual { border-color:#67e8f9; background:rgba(236,254,255,.78); color:#075985; }
 .plan-usd-equivalent.annual>i { color:#0891b2; }
-.plan-regular .plan-price .amt {
-  position: relative;
-}
-.plan-regular .plan-price .amt::after {
-  content: '';
-  position: absolute;
-  left: -4px;
-  right: -4px;
-  top: 48%;
-  height: 5px;
-  border-radius: 999px;
-  background: linear-gradient(90deg, rgba(249,115,22,.8), rgba(244,63,94,.7));
-  transform: rotate(-6deg);
-  box-shadow: 0 0 18px rgba(249,115,22,.22);
-}
 .plan-old {
   margin-top: 6px; font-size: 12.5px; color: var(--ink-2);
 }
@@ -3900,7 +3849,6 @@ select.status-sel {
   .subs-plans { grid-template-columns: 1fr; }
   .plan-annual,.plan-annual:hover { transform: none; }
   .plan-price .amt { font-size: 44px; }
-  .annual-msi-highlight strong { font-size: 46px; }
   .subs-currency-notice { align-items: flex-start; padding: 17px; }
   .subs-currency-notice>i { font-size: 31px; }
   .benefits-grid { grid-template-columns: repeat(2, minmax(0,1fr)); }

@@ -49,7 +49,16 @@ test('el panel independiente usa el motor fiscal real y presenta la identidad de
   assert.match(html, /id="view-portal"/);
   assert.match(html, /id="view-settings"/);
   assert.match(client, /api\('\/api\/invoicing\/bootstrap'\)/);
-  assert.match(client, /api\('\/api\/invoicing\/documents\?limit=20'\)/);
+  assert.match(client, /api\(`\/api\/invoicing\/documents\?\$\{query\}`\)/);
+  assert.match(html, /id="documentFilters"/);
+  assert.match(html, /id="documentPagination"/);
+  assert.match(html, /id="directEmitter"/);
+  assert.match(html, /id="manualGlobalEmitter"/);
+  assert.match(html, /id="csdEmitter"/);
+  assert.match(html, /id="fiscalEmitterForm"/);
+  assert.match(client, /emitterId: Number\(\$\('#directEmitter'\)\.value\)/);
+  assert.match(client, /defaultProductCode: \$\('#fiscalProductCode'\)\.value/);
+  assert.match(client, /defaultTaxObject: \$\('#fiscalTaxObject'\)\.value/);
   assert.match(client, /api\('\/api\/invoicing\/profile'/);
   assert.match(read('src/routes/invoicing.js'), /router\.put\('\/profile-draft', requireOwner/);
   assert.match(read('src/routes/invoicing.js'), /SET enabled=0,environment=\$1/);

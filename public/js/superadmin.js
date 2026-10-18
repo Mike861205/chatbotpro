@@ -268,6 +268,16 @@ function addOneMonth(dateText) {
   return new Date(y, m + 2, 0);
 }
 
+function addOneYear(dateText) {
+  const base = new Date(`${dateText}T00:00:00`);
+  if (Number.isNaN(base.getTime())) return null;
+  const year = base.getFullYear() + 1;
+  const month = base.getMonth();
+  const day = base.getDate();
+  const candidate = new Date(year, month, day);
+  return candidate.getMonth() === month ? candidate : new Date(year, month + 1, 0);
+}
+
 function statusChip(type, value) {
   const map = {
     account_active: ['Activa', 'ok'],
@@ -1582,7 +1592,8 @@ function closePaymentModal() {
 
 function updatePaymentNextDue() {
   const payDate = String($('#saPayDate')?.value || '');
-  const next = addOneMonth(payDate);
+  const planCode = String($('#saPayPlan')?.value || '');
+  const next = ['lifetime', 'annual'].includes(planCode) ? addOneYear(payDate) : addOneMonth(payDate);
   $('#saPayNextDue').value = next ? fmtDate(next) : '—';
 }
 
@@ -1593,8 +1604,8 @@ function openPaymentModal(tenant) {
   $('#saPayTenantId').value = String(tenant.id);
   $('#saPayTenantName').value = tenant.business_name || tenant.slug || `Tenant #${tenant.id}`;
   const currentPlan = String(tenant.plan_name || '').toLowerCase();
-  $('#saPayPlan').value = ['mensual', 'annual', 'invoicing_sat'].includes(currentPlan) ? currentPlan : 'mensual';
-  $('#saPayAmount').value = currentPlan === 'invoicing_sat' ? '1499' : '';
+  $('#saPayPlan').value = ['mensual', 'lifetime', 'annual', 'invoicing_sat'].includes(currentPlan) ? currentPlan : 'mensual';
+  $('#saPayAmount').value = currentPlan === 'invoicing_sat' ? '1499' : currentPlan === 'mensual' ? '999' : '';
   $('#saPayMethod').value = 'stripe';
   $('#saPayNote').value = '';
   $('#saPayDate').value = fmtInputDate(new Date());
@@ -1761,7 +1772,7 @@ async function submitPaymentForm(e) {
 
   const note = String($('#saPayNote')?.value || '').trim();
   const planCode = String($('#saPayPlan')?.value || '').trim().toLowerCase();
-  if (!['mensual', 'annual', 'invoicing_sat'].includes(planCode)) return toast('Selecciona un plan válido', true);
+  if (!['mensual', 'lifetime', 'annual', 'invoicing_sat'].includes(planCode)) return toast('Selecciona un plan válido', true);
 
   const payload = await api(`/api/superadmin/tenants/${tenantId}/payment`, {
     method: 'POST',
@@ -2578,7 +2589,9 @@ document.querySelectorAll('#saTenantFilters button').forEach((btn) => {
 
 $('#saPayDate')?.addEventListener('change', updatePaymentNextDue);
 $('#saPayPlan')?.addEventListener('change', (event) => {
-  if (event.target.value === 'invoicing_sat') $('#saPayAmount').value = '1499';
+  const amount = { mensual: '999', lifetime: '10999', invoicing_sat: '1499' }[event.target.value];
+  $('#saPayAmount').value = amount || '';
+  updatePaymentNextDue();
 });
 $('#saPayCancel')?.addEventListener('click', closePaymentModal);
 $('#saPaymentModal')?.addEventListener('click', (e) => {

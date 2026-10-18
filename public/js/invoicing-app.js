@@ -3,6 +3,7 @@ let ME = null;
 let INVOICING = null;
 let DOCUMENTS = [];
 let RECEIVABLES = [];
+let DOCUMENT_QUERY = { page: 1, limit: 20, type: 'all', status: 'all', dateFrom: '', dateTo: '', search: '' };
 
 function toast(message, error = false) {
   const element = $('#toast');
@@ -143,50 +144,63 @@ async function completeInvoicingWelcome(view) {
 function renderSummary() {
   const profile = INVOICING.profile;
   const activated = Boolean(ME.tenant.invoicingActivated);
-  const profileComplete = Boolean(profile?.rfc && profile?.legal_name && profile?.fiscal_regime && profile?.postal_code);
-  const csdComplete = Boolean(profile?.csd_uploaded || profile?.api_mode === 'web' || profile?.sandbox_shared);
+  const profiles = INVOICING.emitters || [];
+  const profileComplete = profiles.some((item) => item.enabled && item.rfc && item.legal_name && item.fiscal_regime && item.postal_code);
+  const csdComplete = profiles.some((item) => item.enabled && (item.csd_uploaded || item.api_mode === 'web' || item.sandbox_shared));
   const completed = [true, profileComplete, csdComplete, activated].filter(Boolean).length;
   $('#metricInvoices').textContent = String(INVOICING.invoices.length);
   $('#metricStamps').textContent = INVOICING.stampWallet?.unlimited ? 'Ilimitados' : String(INVOICING.stampWallet?.available ?? 0);
-  $('#metricEmitters').textContent = String(INVOICING.emitters.length);
+  $('#metricEmitters').textContent = String(profiles.filter((item) => item.enabled).length);
   $('#metricEnvironment').textContent = INVOICING.provider.environment === 'production' ? 'Producción' : 'Sandbox';
   $('#progressText').textContent = `${completed} de 4`;
-  if (profileComplete) $('#checkProfile').classList.add('done');
-  if (csdComplete) $('#checkCsd').classList.add('done');
-  if (activated) $('#checkActivation').classList.add('done');
+  $('#checkProfile').classList.toggle('done', profileComplete);
+  $('#checkCsd').classList.toggle('done', csdComplete);
+  $('#checkActivation').classList.toggle('done', activated);
   const status = $('#activationStatus');
-  status.classList.toggle('warning', !activated || !INVOICING.ready);
-  status.innerHTML = activated && INVOICING.ready ? '<i class="ph-bold ph-check-circle"></i> Portal activo' : '<i class="ph-bold ph-clock"></i> Configuración pendiente';
+  const ready = profiles.some((item) => item.enabled && item.rfc && item.legal_name && item.fiscal_regime && item.postal_code && (item.csd_uploaded || item.api_mode === 'web' || item.sandbox_shared));
+  status.classList.toggle('warning', !activated || !ready || !INVOICING.provider.configured);
+  status.innerHTML = activated && ready && INVOICING.provider.configured ? '<i class="ph-bold ph-check-circle"></i> Facturación lista' : '<i class="ph-bold ph-clock"></i> Configuración pendiente';
 }
 
 async function loadDocuments() {
-  const data = await api('/api/invoicing/documents?limit=20');
+  const query = new URLSearchParams(Object.entries(DOCUMENT_QUERY).filter(([, value]) => value !== ''));
+  const data = await api(`/api/invoicing/documents?${query}`);
   DOCUMENTS = data.rows || [];
-  $('#metricInvoices').textContent = String(data.pagination?.total ?? data.rows.length);
+  const pagination = data.pagination || { page: 1, pages: 1, total: DOCUMENTS.length, limit: 20 };
+  if (DOCUMENT_QUERY.type === 'all' && DOCUMENT_QUERY.status === 'all' && !DOCUMENT_QUERY.search && !DOCUMENT_QUERY.dateFrom && !DOCUMENT_QUERY.dateTo) {
+    $('#metricInvoices').textContent = String(pagination.total);
+  }
+  $('#documentsCount').textContent = `${pagination.total} CFDI encontrados`;
+  $('#documentPagination').innerHTML = `<label>Mostrar <select id="documentPageSize"><option value="10" ${pagination.limit === 10 ? 'selected' : ''}>10</option><option value="20" ${pagination.limit === 20 ? 'selected' : ''}>20</option><option value="50" ${pagination.limit === 50 ? 'selected' : ''}>50</option></select></label><span>Página ${pagination.page} de ${pagination.pages}</span><button class="iv-btn iv-btn-secondary" type="button" data-document-page="${pagination.page - 1}" ${pagination.page <= 1 ? 'disabled' : ''}>Anterior</button><button class="iv-btn iv-btn-secondary" type="button" data-document-page="${pagination.page + 1}" ${pagination.page >= pagination.pages ? 'disabled' : ''}>Siguiente</button>`;
+  $('#documentPageSize').onchange = (event) => { DOCUMENT_QUERY.limit = Number(event.target.value); DOCUMENT_QUERY.page = 1; loadDocuments().catch((error) => toast(error.message, true)); };
+  document.querySelectorAll('[data-document-page]').forEach((button) => button.onclick = () => { if (button.disabled) return; DOCUMENT_QUERY.page = Number(button.dataset.documentPage); loadDocuments().catch((error) => toast(error.message, true)); });
   if (!data.rows.length) {
-    $('#documentsTable').innerHTML = '<div class="iv-empty"><i class="ph-bold ph-file-dashed"></i>Aún no hay CFDI emitidos en esta cuenta.</div>';
+    $('#documentsTable').innerHTML = '<div class="iv-empty"><i class="ph-bold ph-file-dashed"></i>No hay CFDI para este filtro.</div>';
     return;
   }
-  $('#documentsTable').innerHTML = `<table class="iv-table"><thead><tr><th>Comprobante</th><th>Fecha</th><th>Receptor</th><th>Total</th><th>Pago</th><th>Estado</th><th>Acciones</th></tr></thead><tbody>${data.rows.map((document) => {
+  $('#documentsTable').innerHTML = `<table class="iv-table"><thead><tr><th>Comprobante</th><th>Fecha</th><th>Emisor</th><th>Receptor</th><th>Total</th><th>Pago</th><th>Estado</th><th>Acciones</th></tr></thead><tbody>${data.rows.map((document) => {
     const base = document.type === 'global' ? `/api/invoicing/global-invoices/${document.id}` : document.type === 'payment' ? `/api/invoicing/payment-complements/${document.id}` : ['direct','manual_global','credit_note'].includes(document.type) ? `/api/invoicing/direct-invoices/${document.id}` : `/api/invoicing/invoices/${document.id}`;
     const typeLabel = ({direct:'Venta externa',global:'Global POS',manual_global:'Global manual',credit_note:'Nota de crédito',payment:'Complemento de pago',individual:'Ticket'})[document.type] || document.type;
     const files = document.providerId ? `<a class="iv-btn iv-btn-secondary" href="${base}/pdf" target="_blank">PDF</a><a class="iv-btn iv-btn-secondary" href="${base}/xml" target="_blank">XML</a>` : '';
     const noteAction = document.status === 'active' && ['individual','global','direct'].includes(document.type) ? `<button class="iv-btn iv-btn-secondary" data-credit-document="${document.type}:${document.id}">Nota</button>` : '';
     const paymentAction = document.status === 'active' && document.paymentMethod === 'PPD' && ['individual','global','direct'].includes(document.type) ? `<button class="iv-btn iv-btn-primary" data-payment-document="${document.type}:${document.id}">Registrar pago</button>` : '';
     const actions = `${files}${document.status === 'active' ? `<button class="iv-btn iv-btn-secondary" data-email-document="${document.type}:${document.id}">Correo</button>${paymentAction}${noteAction}<button class="iv-btn iv-btn-secondary" data-cancel-document="${document.type}:${document.id}">Cancelar</button>` : ''}${document.status === 'cancel_pending' ? `<button class="iv-btn iv-btn-secondary" data-refresh-document="${document.type}:${document.id}">Actualizar</button>` : ''}${document.status === 'unknown' ? `<button class="iv-btn iv-btn-secondary" data-reconcile-document="${document.type}:${document.id}">Conciliar</button>` : ''}${document.hasCancellationReceipt ? `<a class="iv-btn iv-btn-secondary" href="/api/invoicing/documents/${document.type}/${document.id}/cancellation-receipt" target="_blank">Acuse</a>` : ''}`;
-    return `<tr><td><span class="iv-doc-type">${typeLabel}</span><b>${escapeHtml(document.series || '')}-${escapeHtml(document.folio || '')}</b><br><small>${escapeHtml(document.uuid || 'Sin UUID')}</small></td><td>${formatDate(document.issuedAt || document.createdAt)}</td><td>${escapeHtml(document.receiver?.rfc || '—')}</td><td>${formatMoney(document.total)}</td><td>${escapeHtml(document.paymentMethod || (document.type === 'payment' ? 'REP 2.0' : 'PUE'))}</td><td><span class="iv-doc-status ${escapeHtml(document.status)}">${escapeHtml(statusLabel(document.status))}</span></td><td><div class="iv-doc-actions">${actions}</div></td></tr>`;
+    return `<tr><td><span class="iv-doc-type">${typeLabel}</span><b>${escapeHtml(document.series || '')}-${escapeHtml(document.folio || '')}</b><br><small>${escapeHtml(document.uuid || 'Sin UUID')}</small></td><td>${formatDate(document.issuedAt || document.createdAt)}</td><td>${escapeHtml(document.issuerRfc || '—')}</td><td>${escapeHtml(document.receiver?.rfc || '—')}<br><small>${escapeHtml(document.receiver?.name || '')}</small></td><td>${formatMoney(document.total)}</td><td>${escapeHtml(document.paymentMethod || (document.type === 'payment' ? 'REP 2.0' : 'PUE'))}</td><td><span class="iv-doc-status ${escapeHtml(document.status)}">${escapeHtml(statusLabel(document.status))}</span>${document.error ? `<small class="iv-document-error">${escapeHtml(document.error)}</small>` : ''}${document.cancellationMessage ? `<small>${escapeHtml(document.cancellationMessage)}</small>` : ''}</td><td><div class="iv-doc-actions">${actions}</div></td></tr>`;
   }).join('')}</tbody></table>`;
   bindDocumentActions();
-  fillCreditSources();
 }
 
 function splitDocumentKey(value) { const [type,id] = String(value || '').split(':'); return { type,id:Number(id) }; }
 
-function fillCreditSources(selected = '') {
-  const select = $('#creditSource'); if (!select) return;
-  const rows = DOCUMENTS.filter((row) => row.status === 'active' && ['individual','global','direct'].includes(row.type));
-  select.innerHTML = `<option value="">Selecciona una factura</option>${rows.map((row) => `<option value="${row.type}:${row.id}">${escapeHtml(row.series)}-${escapeHtml(row.folio)} · ${escapeHtml(row.receiver?.rfc || '')} · ${formatMoney(row.total)}</option>`).join('')}`;
-  if (selected) select.value = selected;
+async function loadCreditSources(selected = '') {
+  const search = $('#creditSourceSearch').value.trim();
+  const query = new URLSearchParams({ type: 'direct', status: 'active', search, limit: '50', page: '1' });
+  const data = await api(`/api/invoicing/documents?${query}`);
+  const rows = data.rows || [];
+  const current = DOCUMENTS.find((row) => `${row.type}:${row.id}` === selected && row.status === 'active');
+  if (current && !rows.some((row) => `${row.type}:${row.id}` === selected)) rows.unshift(current);
+  $('#creditSource').innerHTML = `<option value="">${rows.length ? 'Selecciona una factura' : 'No hay coincidencias; busca por folio o UUID'}</option>${rows.map((row) => `<option value="${row.type}:${row.id}">${escapeHtml(row.series)}-${escapeHtml(row.folio)} · ${escapeHtml(row.receiver?.rfc || '')} · ${formatMoney(row.total)}</option>`).join('')}`;
+  if (selected) $('#creditSource').value = selected;
 }
 
 async function loadReceivables(selected = '') {
@@ -198,10 +212,26 @@ async function loadReceivables(selected = '') {
 
 function bindDocumentActions() {
   document.querySelectorAll('[data-email-document]').forEach((button) => button.onclick = async () => { const email = prompt('Correo al que se enviará el CFDI'); if (!email) return; const {type,id}=splitDocumentKey(button.dataset.emailDocument); try { await api(`/api/invoicing/documents/${type}/${id}/email`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email})});toast('CFDI enviado por correo'); } catch(error){toast(error.message,true);} });
-  document.querySelectorAll('[data-cancel-document]').forEach((button) => button.onclick = async () => { const motive = prompt('Motivo SAT: 01 con relación, 02 errores sin relación, 03 operación no realizada, 04 operación nominativa de global','02'); if (!motive) return; const replacementUuid = motive === '01' ? prompt('UUID del CFDI sustituto (debe tener relación 04)','') : ''; if (motive === '01' && !replacementUuid) return; if (!confirm('Se enviará la solicitud de cancelación al SAT mediante Facturama. ¿Continuar?')) return; const {type,id}=splitDocumentKey(button.dataset.cancelDocument); try { await api(`/api/invoicing/documents/${type}/${id}/cancel`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({motive,replacementUuid})});toast('Solicitud de cancelación enviada');await loadDocuments(); } catch(error){toast(error.message,true);} });
+  document.querySelectorAll('[data-cancel-document]').forEach((button) => button.onclick = async () => {
+    const motive = prompt('Motivo SAT: 01 con relación, 02 errores sin relación, 03 operación no realizada, 04 operación nominativa de global', '02');
+    if (!motive) return;
+    const replacementUuid = motive === '01' ? prompt('UUID del CFDI sustituto (debe tener relación 04)', '') : '';
+    if (motive === '01' && !replacementUuid) return;
+    if (!confirm('Se enviará la solicitud de cancelación al SAT mediante Facturama. ¿Continuar?')) return;
+    const { type, id } = splitDocumentKey(button.dataset.cancelDocument);
+    try {
+      const result = await api(`/api/invoicing/documents/${type}/${id}/cancel`, { method: 'POST',
+        headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ motive, replacementUuid }) });
+      const status = result.document?.status;
+      toast(status === 'canceled' ? 'CFDI cancelado y conservado en el historial'
+        : status === 'active' ? 'La cancelación no procedió; el CFDI continúa vigente'
+        : 'Solicitud enviada; espera la respuesta del receptor');
+      await loadDocuments();
+    } catch (error) { toast(error.message, true); }
+  });
   document.querySelectorAll('[data-refresh-document]').forEach((button) => button.onclick = async () => { const {type,id}=splitDocumentKey(button.dataset.refreshDocument); try { await api(`/api/invoicing/documents/${type}/${id}/refresh-cancellation`,{method:'POST'});toast('Estado actualizado');await loadDocuments(); } catch(error){toast(error.message,true);} });
   document.querySelectorAll('[data-reconcile-document]').forEach((button) => button.onclick = async () => { const {type,id}=splitDocumentKey(button.dataset.reconcileDocument); try { const result=await api(`/api/invoicing/documents/${type}/${id}/reconcile`,{method:'POST'});toast(result.message || (result.found ? 'CFDI conciliado' : 'Aún sin confirmación'));await loadDocuments(); } catch(error){toast(error.message,true);} });
-  document.querySelectorAll('[data-credit-document]').forEach((button) => button.onclick = () => { fillCreditSources(button.dataset.creditDocument); setView('payments'); });
+  document.querySelectorAll('[data-credit-document]').forEach((button) => button.onclick = () => setView('payments', { credit: button.dataset.creditDocument }));
   document.querySelectorAll('[data-payment-document]').forEach((button) => button.onclick = () => setView('payments', { receivable: button.dataset.paymentDocument }));
 }
 
@@ -214,7 +244,89 @@ function fillProfile() {
   $('#postalCode').value = profile.postal_code || '';
   $('#series').value = ['A', 'TEST'].includes(profile.series) ? 'FAC' : (profile.series || 'FAC');
   $('#ivaRate').value = String(Number(profile.default_iva_rate ?? .16));
+  $('#fiscalProductCode').value = profile.default_product_code || '01010101';
+  $('#fiscalUnitCode').value = profile.default_unit_code || 'E48';
+  $('#fiscalUnitName').value = profile.default_unit_name || 'Unidad de servicio';
+  $('#fiscalTaxObject').value = profile.default_tax_object || '02';
+  $('#fiscalIsrRate').value = String(Number(profile.default_isr_rate ?? 0));
 }
+
+function fiscalEmitterReady(emitter) {
+  return Boolean(emitter?.enabled && emitter.rfc && emitter.legal_name && emitter.fiscal_regime && emitter.postal_code
+    && (emitter.csd_uploaded || emitter.api_mode === 'web' || emitter.sandbox_shared));
+}
+
+function renderEmitterOptions() {
+  const emitters = INVOICING.emitters || [];
+  for (const selector of ['#directEmitter', '#manualGlobalEmitter']) {
+    const select = $(selector);
+    const previous = select.value;
+    select.innerHTML = `<option value="">Selecciona un emisor listo</option>${emitters.map((emitter) => `<option value="${Number(emitter.id)}" ${fiscalEmitterReady(emitter) ? '' : 'disabled'}>${escapeHtml(emitter.label || emitter.legal_name || emitter.rfc || `Emisor ${emitter.id}`)} · ${escapeHtml(emitter.rfc || 'Sin RFC')}${fiscalEmitterReady(emitter) ? '' : ' · pendiente'}</option>`).join('')}`;
+    const preferred = emitters.find((item) => Number(item.id) === Number(previous) && fiscalEmitterReady(item))
+      || emitters.find((item) => fiscalEmitterReady(item));
+    select.value = preferred ? String(preferred.id) : '';
+  }
+  const csdSelect = $('#csdEmitter');
+  const previousCsd = csdSelect.value;
+  const uploadable = emitters.filter((item) => item.enabled && item.rfc && item.api_mode !== 'web' && !item.sandbox_shared);
+  csdSelect.innerHTML = `<option value="">Selecciona un emisor</option>${uploadable.map((item) => `<option value="${Number(item.id)}">${escapeHtml(item.label || item.legal_name || item.rfc)} · ${escapeHtml(item.rfc)}</option>`).join('')}`;
+  csdSelect.value = uploadable.some((item) => String(item.id) === previousCsd) ? previousCsd : uploadable.length ? String(uploadable[0].id) : '';
+  $('#directEmitterStatus').textContent = emitters.some(fiscalEmitterReady) ? '' : 'Completa un emisor y carga su CSD en Configuración fiscal antes de timbrar.';
+  $('#csdForm').hidden = !uploadable.length;
+}
+
+function resetFiscalEmitterForm() {
+  $('#fiscalEmitterForm').reset();
+  $('#fiscalEmitterId').value = '';
+  $('#fiscalEmitterSeries').value = INVOICING?.profile?.series || 'FAC';
+  $('#fiscalEmitterProductCode').value = INVOICING?.profile?.default_product_code || '01010101';
+  $('#fiscalEmitterUnitCode').value = INVOICING?.profile?.default_unit_code || 'E48';
+  $('#fiscalEmitterUnitName').value = INVOICING?.profile?.default_unit_name || 'Unidad de servicio';
+  $('#fiscalEmitterTaxObject').value = INVOICING?.profile?.default_tax_object || '02';
+  $('#fiscalEmitterIvaRate').value = String(Number(INVOICING?.profile?.default_iva_rate ?? .16));
+  $('#fiscalEmitterIsrRate').value = String(Number(INVOICING?.profile?.default_isr_rate ?? 0));
+}
+
+function renderFiscalEmitters() {
+  const emitters = (INVOICING.emitters || []).filter((item) => Number(item.id) !== 1);
+  $('#fiscalEmittersList').innerHTML = emitters.length ? emitters.map((item) => `<div class="iv-emitter-row"><div><b>${escapeHtml(item.label || item.legal_name)}</b><small>${escapeHtml(item.rfc)} · ${item.enabled ? 'Activo' : 'Inactivo'} · ${fiscalEmitterReady(item) ? 'Listo para timbrar' : 'Falta CSD o configuración'}</small></div><div><button class="iv-btn iv-btn-secondary" type="button" data-edit-emitter="${Number(item.id)}">Editar</button><button class="iv-btn iv-btn-secondary" type="button" data-delete-emitter="${Number(item.id)}">Eliminar</button></div></div>`).join('') : '<p class="iv-hint">Por ahora solo tienes el emisor principal.</p>';
+  document.querySelectorAll('[data-edit-emitter]').forEach((button) => button.onclick = () => {
+    const item = emitters.find((row) => Number(row.id) === Number(button.dataset.editEmitter));
+    if (!item) return;
+    const values = { Id: item.id, Label: item.label, Rfc: item.rfc, LegalName: item.legal_name,
+      Regime: item.fiscal_regime, Postal: item.postal_code, Series: item.series,
+      ProductCode: item.default_product_code, UnitCode: item.default_unit_code,
+      UnitName: item.default_unit_name, TaxObject: item.default_tax_object,
+      IvaRate: Number(item.default_iva_rate ?? .16), IsrRate: Number(item.default_isr_rate ?? 0) };
+    for (const [key, value] of Object.entries(values)) $(`#fiscalEmitter${key}`).value = value ?? '';
+    $('#fiscalEmitterEnabled').checked = Boolean(item.enabled);
+    $('#fiscalEmitterForm').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  });
+  document.querySelectorAll('[data-delete-emitter]').forEach((button) => button.onclick = async () => {
+    if (!confirm('¿Eliminar este emisor fiscal? Los emisores con CFDI emitidos no se pueden borrar.')) return;
+    try { await api(`/api/invoicing/emitters/${button.dataset.deleteEmitter}`, { method: 'DELETE' });
+      toast('Emisor eliminado'); await initialize(); } catch (error) { toast(error.message, true); }
+  });
+}
+
+$('#resetFiscalEmitter').addEventListener('click', resetFiscalEmitterForm);
+$('#fiscalEmitterForm').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const id = Number($('#fiscalEmitterId').value || 0);
+  const body = { label: $('#fiscalEmitterLabel').value.trim(), enabled: $('#fiscalEmitterEnabled').checked,
+    rfc: $('#fiscalEmitterRfc').value.trim(), legalName: $('#fiscalEmitterLegalName').value.trim(),
+    fiscalRegime: $('#fiscalEmitterRegime').value.trim(), postalCode: $('#fiscalEmitterPostal').value.trim(),
+    series: $('#fiscalEmitterSeries').value.trim(), defaultProductCode: $('#fiscalEmitterProductCode').value.trim(),
+    defaultUnitCode: $('#fiscalEmitterUnitCode').value.trim(), defaultUnitName: $('#fiscalEmitterUnitName').value.trim(),
+    defaultTaxObject: $('#fiscalEmitterTaxObject').value, defaultIvaRate: Number($('#fiscalEmitterIvaRate').value),
+    defaultIsrRate: Number($('#fiscalEmitterIsrRate').value), defaultCardPaymentForm: '04' };
+  const button = event.currentTarget.querySelector('button[type="submit"]');
+  button.disabled = true;
+  try { await api(id ? `/api/invoicing/emitters/${id}` : '/api/invoicing/emitters', {
+    method: id ? 'PUT' : 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+  }); toast(id ? 'Emisor actualizado' : 'Emisor agregado'); await initialize(); resetFiscalEmitterForm(); }
+  catch (error) { toast(error.message, true); } finally { button.disabled = false; }
+});
 
 const viewMetadata = {
   summary: ['Resumen fiscal', 'Estado de tu cuenta y portal de facturación.'],
@@ -233,12 +345,32 @@ function setView(view, options = {}) {
   [$('#viewTitle').textContent, $('#viewSubtitle').textContent] = viewMetadata[safeView];
   history.replaceState(null, '', `#${safeView}`);
   $('#sidebar').classList.remove('open');
-  if (safeView === 'payments') loadReceivables(options.receivable || '').catch((error) => toast(error.message, true));
+  if (safeView === 'payments') {
+    loadReceivables(options.receivable || '').catch((error) => toast(error.message, true));
+    loadCreditSources(options.credit || '').catch((error) => toast(error.message, true));
+  }
 }
+
+let creditSourceSearchTimer = null;
+$('#creditSourceSearch').addEventListener('input', () => {
+  clearTimeout(creditSourceSearchTimer);
+  creditSourceSearchTimer = setTimeout(() => loadCreditSources().catch((error) => toast(error.message, true)), 250);
+});
 
 document.querySelectorAll('[data-view]').forEach((button) => button.addEventListener('click', () => setView(button.dataset.view)));
 $('#menuButton').addEventListener('click', () => $('#sidebar').classList.toggle('open'));
 $('#reloadDocuments').addEventListener('click', () => loadDocuments().then(() => toast('Documentos actualizados')).catch((error) => toast(error.message, true)));
+$('#documentFilters').addEventListener('submit', (event) => {
+  event.preventDefault();
+  DOCUMENT_QUERY = { ...DOCUMENT_QUERY, page: 1, search: $('#documentSearch').value.trim(), type: $('#documentType').value,
+    status: $('#documentStatus').value, dateFrom: $('#documentDateFrom').value, dateTo: $('#documentDateTo').value };
+  loadDocuments().catch((error) => toast(error.message, true));
+});
+$('#clearDocumentFilters').addEventListener('click', () => {
+  $('#documentFilters').reset();
+  DOCUMENT_QUERY = { ...DOCUMENT_QUERY, page: 1, type: 'all', status: 'all', dateFrom: '', dateTo: '', search: '' };
+  loadDocuments().catch((error) => toast(error.message, true));
+});
 $('#logout').addEventListener('click', async () => { await api('/api/auth/logout', { method: 'POST' }); location.replace('/facturacion/login'); });
 
 function updateDirectReceiverMode() {
@@ -281,6 +413,19 @@ installDirectFiscalControls();
 updateDirectReceiverMode();
 $('#directSuccessClose').addEventListener('click', () => { $('#directInvoiceSuccess').hidden = true; });
 $('#directInvoiceSuccess').addEventListener('click', (event) => { if (event.target === event.currentTarget) event.currentTarget.hidden = true; });
+$('#directSuccessEmailForm').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const id = Number(event.currentTarget.dataset.invoiceId);
+  if (!id) return;
+  const button = event.currentTarget.querySelector('button[type="submit"]');
+  button.disabled = true;
+  try {
+    await api(`/api/invoicing/documents/direct/${id}/email`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: $('#directSuccessEmail').value.trim() }) });
+    $('#directSuccessEmailStatus').textContent = 'Factura enviada al correo indicado.';
+  } catch (error) { $('#directSuccessEmailStatus').textContent = error.message; }
+  finally { button.disabled = false; }
+});
 
 $('#directInvoiceForm').addEventListener('submit', async (event) => {
   event.preventDefault();
@@ -290,7 +435,7 @@ $('#directInvoiceForm').addEventListener('submit', async (event) => {
   try {
     const result = await api('/api/invoicing/direct-invoices', {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({
-        externalReference: $('#directReference').value, saleDate: $('#directSaleDate').value,
+        emitterId: Number($('#directEmitter').value), externalReference: $('#directReference').value, saleDate: $('#directSaleDate').value,
         description: $('#directDescription').value, total: Number($('#directTotal').value), paymentMethod: $('#directPaymentMethod').value,
         paymentForm: $('#directPaymentForm').value, relationType: $('#directRelationType').value, relatedUuid: $('#directRelatedUuid').value,
         publicGeneral, receiver: publicGeneral ? null : { rfc: $('#directReceiverRfc').value, name: $('#directReceiverName').value,
@@ -299,9 +444,17 @@ $('#directInvoiceForm').addEventListener('submit', async (event) => {
       }),
     });
     const document = result.invoice;
+    if (document.status !== 'active' || !document.providerId) {
+      toast('La emisión sigue por verificar. Consulta el estado en CFDI emitidos antes de volver a intentarlo.', true);
+      await loadDocuments(); setView('documents');
+      return;
+    }
     const base = `/api/invoicing/direct-invoices/${document.id}`;
     $('#directSuccessUuid').textContent = document.uuid || `${document.series}-${document.folio}`;
     $('#directSuccessPdf').href = `${base}/pdf`; $('#directSuccessXml').href = `${base}/xml`;
+    $('#directSuccessEmailForm').dataset.invoiceId = String(document.id);
+    $('#directSuccessEmail').value = publicGeneral ? '' : $('#directReceiverEmail').value.trim();
+    $('#directSuccessEmailStatus').textContent = '';
     $('#directInvoiceSuccess').hidden = false;
     toast(result.message || 'Factura timbrada correctamente');
     event.currentTarget.reset(); $('#directSaleDate').value = new Date().toISOString().slice(0, 10); $('#directPaymentMethod').dispatchEvent(new Event('change')); updateDirectReceiverMode();
@@ -331,7 +484,7 @@ syncManualGlobalMonths();
 
 $('#manualGlobalForm').addEventListener('submit', async (event) => {
   event.preventDefault(); const button=event.currentTarget.querySelector('button[type="submit"]');button.disabled=true;
-  try{const result=await api('/api/invoicing/manual-global-invoices',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({externalReference:$('#manualGlobalReference').value,businessDate:$('#manualGlobalDate').value,description:$('#manualGlobalDescription').value,total:Number($('#manualGlobalTotal').value),paymentForm:$('#manualGlobalPaymentForm').value,periodicity:$('#manualGlobalPeriodicity').value,months:$('#manualGlobalMonth').value,year:Number($('#manualGlobalYear').value)})});toast(result.message);event.currentTarget.reset();const resetDate=new Date();$('#manualGlobalDate').value=resetDate.toISOString().slice(0,10);syncManualGlobalMonths();$('#manualGlobalYear').value=String(resetDate.getFullYear());$('#manualGlobalDescription').value='Ventas del día al público en general';await loadDocuments();setView('documents');}catch(error){toast(error.message,true);}finally{button.disabled=false;}
+  try{const result=await api('/api/invoicing/manual-global-invoices',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({emitterId:Number($('#manualGlobalEmitter').value),externalReference:$('#manualGlobalReference').value,businessDate:$('#manualGlobalDate').value,description:$('#manualGlobalDescription').value,total:Number($('#manualGlobalTotal').value),paymentForm:$('#manualGlobalPaymentForm').value,periodicity:$('#manualGlobalPeriodicity').value,months:$('#manualGlobalMonth').value,year:Number($('#manualGlobalYear').value)})});toast(result.message);event.currentTarget.reset();renderEmitterOptions();const resetDate=new Date();$('#manualGlobalDate').value=resetDate.toISOString().slice(0,10);syncManualGlobalMonths();$('#manualGlobalYear').value=String(resetDate.getFullYear());$('#manualGlobalDescription').value='Ventas del día al público en general';await loadDocuments();setView('documents');}catch(error){toast(error.message,true);}finally{button.disabled=false;}
 });
 
 $('#paymentSource').addEventListener('change',()=>{const selected=RECEIVABLES.find((row)=>`${row.type}:${row.id}`===$('#paymentSource').value);if(selected)$('#paymentAmount').value=selected.balance.toFixed(2);});
@@ -342,7 +495,7 @@ $('#creditNoteForm').addEventListener('submit',async(event)=>{event.preventDefau
 $('#fiscalForm').addEventListener('submit', async (event) => {
   event.preventDefault();
   try {
-    await api('/api/invoicing/profile', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled: true, rfc: $('#rfc').value, legalName: $('#legalName').value, fiscalRegime: $('#fiscalRegime').value, postalCode: $('#postalCode').value, series: $('#series').value, defaultProductCode: '01010101', defaultUnitCode: 'E48', defaultUnitName: 'Unidad de servicio', defaultTaxObject: '02', defaultIvaRate: Number($('#ivaRate').value), defaultIsrRate: 0, deliveryProductCode: '78101800', defaultCardPaymentForm: '04' }) });
+    await api('/api/invoicing/profile', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled: true, rfc: $('#rfc').value, legalName: $('#legalName').value, fiscalRegime: $('#fiscalRegime').value, postalCode: $('#postalCode').value, series: $('#series').value, defaultProductCode: $('#fiscalProductCode').value, defaultUnitCode: $('#fiscalUnitCode').value, defaultUnitName: $('#fiscalUnitName').value, defaultTaxObject: $('#fiscalTaxObject').value, defaultIvaRate: Number($('#ivaRate').value), defaultIsrRate: Number($('#fiscalIsrRate').value), deliveryProductCode: $('#fiscalProductCode').value, defaultCardPaymentForm: '04' }) });
     toast('Datos fiscales guardados'); await initialize(); setView('settings');
   } catch (error) { toast(error.message, true); }
 });
@@ -419,7 +572,7 @@ async function initialize() {
   $('#accountBusiness').textContent = ME.tenant.businessName;
   $('#accountUser').textContent = ME.displayName || ME.username;
   $('#directStampBalance').textContent = INVOICING.stampWallet?.unlimited ? '∞' : String(INVOICING.stampWallet?.available ?? 0);
-  renderSummary(); renderPortal(); fillProfile(); fillIdentity(); await loadDocuments();
+  renderSummary(); renderPortal(); fillProfile(); fillIdentity(); renderEmitterOptions(); renderFiscalEmitters(); await loadDocuments();
   $('#loading').hidden = true;
   setView(location.hash.slice(1) || 'summary');
   presentInvoicingStartup();

@@ -884,7 +884,10 @@ async function issueSaleInvoice({ tenant, tenantDb, orderId, receiverInput, requ
 }
 
 async function issueDirectInvoice({ tenant, tenantDb, input = {}, actor = '' }) {
-  const profile = await getEmitter(tenantDb, Number(input.emitterId || 1));
+  const emitterId = input.emitterId == null ? 1 : Number(input.emitterId);
+  const profile = Number.isInteger(emitterId) && emitterId > 0
+    ? safeProfile(await tenantDb.get('SELECT * FROM {s}.fiscal_emitters WHERE id=$1 LIMIT 1', [emitterId])) : null;
+  if (!profile) throw Object.assign(new Error('Selecciona un emisor fiscal válido'), { status: 400 });
   profile.environment = tenantEnvironment(tenant);
   const facturama = facturamaFor(profile);
   const readinessError = profileReadinessError(profile);
@@ -1033,7 +1036,10 @@ async function stampStandardDocument({ tenantDb, table, stampType, row, profile,
 }
 
 async function issueManualGlobalInvoice({ tenant, tenantDb, input = {}, actor = '' }) {
-  const profile = await getEmitter(tenantDb, Number(input.emitterId || 1));
+  const emitterId = input.emitterId == null ? 1 : Number(input.emitterId);
+  const profile = Number.isInteger(emitterId) && emitterId > 0
+    ? safeProfile(await tenantDb.get('SELECT * FROM {s}.fiscal_emitters WHERE id=$1 LIMIT 1', [emitterId])) : null;
+  if (!profile) throw Object.assign(new Error('Selecciona un emisor fiscal válido'), { status: 400 });
   profile.environment = tenantEnvironment(tenant);
   const facturama = facturamaFor(profile);
   const readinessError = profileReadinessError(profile);
@@ -1321,6 +1327,7 @@ router.get('/public/:slug', publicLimiter, async (req, res, next) => {
         postalCode: profile.postal_code,
       } : null,
       available: emitters.some((emitter) => profileReady(safeProfile(emitter))) || profileReady(profile),
+      externalOnly: tenant.product_code === 'invoicing',
       unavailableReason: emitters.length ? 'Ningún emisor fiscal está listo para timbrar' : profileReadinessError(profile),
       environment,
     });
@@ -1717,7 +1724,10 @@ router.delete('/emitters/:id', requireOwner, async (req, res, next) => {
     if (id === 1) return res.status(409).json({ error: 'El emisor principal no se puede eliminar' });
     const used = await req.tdb.get(
       `SELECT (SELECT count(*) FROM {s}.branches WHERE fiscal_emitter_id=$1)::int AS branches,
-              ((SELECT count(*) FROM {s}.invoices WHERE fiscal_emitter_id=$1)+(SELECT count(*) FROM {s}.global_invoices WHERE fiscal_emitter_id=$1))::int AS invoices`, [id]
+              ((SELECT count(*) FROM {s}.invoices WHERE fiscal_emitter_id=$1)
+              +(SELECT count(*) FROM {s}.global_invoices WHERE fiscal_emitter_id=$1)
+              +(SELECT count(*) FROM {s}.direct_invoices WHERE fiscal_emitter_id=$1)
+              +(SELECT count(*) FROM {s}.payment_complements WHERE fiscal_emitter_id=$1))::int AS invoices`, [id]
     );
     if (Number(used?.branches) || Number(used?.invoices)) return res.status(409).json({ error: 'No puedes eliminar un emisor asignado a sucursales o con CFDI emitidos' });
     const result = await req.tdb.run('DELETE FROM {s}.fiscal_emitters WHERE id=$1', [id]);

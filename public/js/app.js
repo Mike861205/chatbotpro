@@ -1528,6 +1528,7 @@ function subscriptionPlanLabel(planName) {
   const labels = {
     starter: 'Plan Starter',
     mensual: 'Plan mensual',
+    lifetime: 'Licencia de por vida',
     annual: 'Plan anual',
     anual: 'Plan anual',
     invoicing_sat: 'Plan Facturación Electrónica SAT',

@@ -312,6 +312,7 @@ button:disabled { cursor: wait; opacity: .68; }
 .availability-card p { margin: 5px 0 0; color: #80663f; font-size: 10px; line-height: 1.6; }
 body.portal-unavailable .lookup-card { opacity: .55; }
 body.portal-unavailable .lookup-card input, body.portal-unavailable .lookup-card button { pointer-events: none; }
+body.external-only .progress-steps, body.external-only .lookup-card { display: none; }
 
 .message { margin: 16px 0; padding: 14px 16px; display: flex; align-items: flex-start; gap: 9px; border: 1px solid #f3c7c7; border-radius: 14px; background: #fff2f2; color: var(--danger); font-size: 10px; font-weight: 600; line-height: 1.5; animation: card-enter .25s ease both; }
 .message.success-message { border-color: #bfe7d8; background: #effbf7; color: #08795a; }

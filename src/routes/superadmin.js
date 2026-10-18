@@ -2135,7 +2135,7 @@ router.post('/tenants/:id/payment', requireSuperAdmin, async (req, res, next) =>
     const method = ['stripe', 'transferencia', 'deposito'].includes(methodRaw) ? methodRaw : 'transferencia';
     const note = String(req.body?.note || '').trim().slice(0, 240);
     const planCode = String(req.body?.planCode || '').trim().toLowerCase();
-    if (!['mensual', 'annual', 'invoicing_sat'].includes(planCode)) {
+    if (!['mensual', 'lifetime', 'annual', 'invoicing_sat'].includes(planCode)) {
       return res.status(400).json({ error: 'Plan contratado inválido' });
     }
     if (!Number.isFinite(amount) || amount <= 0) {
@@ -2155,7 +2155,8 @@ router.post('/tenants/:id/payment', requireSuperAdmin, async (req, res, next) =>
       [tenantId, amount, method, note, req.superadmin.username, paidAt]
     );
 
-    const dueDateRow = await client.query('SELECT ($1::date + INTERVAL \'1 month\')::date AS next_due_date', [paidAt]);
+    const billingInterval = ['lifetime', 'annual'].includes(planCode) ? '1 year' : '1 month';
+    const dueDateRow = await client.query('SELECT ($1::date + $2::interval)::date AS next_due_date', [paidAt, billingInterval]);
     const nextDueDate = dueDateRow.rows[0]?.next_due_date;
     const paymentNote = `[PAGO ${paidAt}] ${amount.toFixed(2)} (${method}) [plan:${planCode}]${note ? ` - ${note}` : ''}`;
 
