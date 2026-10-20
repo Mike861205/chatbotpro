@@ -10,6 +10,7 @@
   let currentInvoice = null;
   let currentPortal = null;
   let portalAvailable = false;
+  let externalOnly = false;
 
   function formatMoney(value) {
     return new Intl.NumberFormat('es-MX', { style: 'currency', currency: 'MXN' }).format(Number(value || 0));
@@ -111,6 +112,8 @@
     const brand = /^#[0-9a-f]{6}$/i.test(business.primaryColor || '') ? business.primaryColor : '#6c47ff';
     setText('#businessName', name);
     setText('#mobileBusinessName', name);
+    if (portal.externalOnly) setText('#businessWelcome', 'Emite tu factura de una compra realizada en el punto de venta del negocio.');
+    if (portal.externalOnly) setText('#businessWelcome', 'Solicita tu CFDI de compras realizadas en el punto de venta del negocio.');
     document.title = `Facturación · ${name}`;
     document.documentElement.style.setProperty('--brand', brand);
     const theme = $('meta[name="theme-color"]');
@@ -146,11 +149,12 @@
 
     const badge = $('#environmentBadge');
     const sandbox = portal.environment === 'sandbox';
-    badge.className = `environment ${sandbox ? 'sandbox' : 'production'}`;
+    const ready = Boolean(portal.available);
+    badge.className = `environment ${!ready ? 'pending' : sandbox ? 'sandbox' : 'production'}`;
     badge.replaceChildren();
     const icon = document.createElement('i');
-    icon.className = sandbox ? 'ph-bold ph-flask' : 'ph-bold ph-seal-check';
-    badge.append(icon, document.createTextNode(sandbox ? ' Ambiente de pruebas' : ' Facturación activa'));
+    icon.className = !ready ? 'ph-bold ph-warning-circle' : sandbox ? 'ph-bold ph-flask' : 'ph-bold ph-seal-check';
+    badge.append(icon, document.createTextNode(!ready ? ' Configuración pendiente' : sandbox ? ' Ambiente de pruebas' : ' Facturación activa'));
   }
 
   function setUnavailable(text, blocking = true) {
@@ -228,8 +232,9 @@
   function invoiceDownloads(invoice, token) {
     currentInvoice = invoice;
     const suffix = `?code=${encodeURIComponent(token)}`;
-    $('#downloadPdf').href = `${apiBase}/invoices/${invoice.id}/pdf${suffix}`;
-    $('#downloadXml').href = `${apiBase}/invoices/${invoice.id}/xml${suffix}`;
+    const documentPath = currentTicket?.external ? `/direct-invoices/${invoice.id}` : `/invoices/${invoice.id}`;
+    $('#downloadPdf').href = `${apiBase}${documentPath}/pdf${suffix}`;
+    $('#downloadXml').href = `${apiBase}${documentPath}/xml${suffix}`;
     setText('#invoiceIdentity', invoice.uuid ? `UUID · ${invoice.uuid}` : `Serie ${invoice.series || '—'} · Folio ${invoice.folio || '—'}`);
     const receiverEmail = String($('#receiverEmail')?.value || invoice.receiver?.email || '').trim();
     $('#invoiceEmail').value = receiverEmail;
@@ -265,21 +270,92 @@
     $('#receiverStep').scrollIntoView({ behavior: 'smooth', block: 'start' });
   }
 
+  function externalConceptMode() {
+    return document.querySelector('input[name="externalConceptMode"]:checked')?.value === 'detailed' ? 'detailed' : 'total';
+  }
+
+  function readExternalItems() {
+    if (externalConceptMode() === 'total') {
+      return [{ name: $('#externalDescription').value.trim() || 'Consumo', qty: 1, price: Number($('#externalTotal').value || 0) }];
+    }
+    return $$('#externalItemList .external-item-row').map((row) => ({
+      name: row.querySelector('[data-item-name]').value.trim(),
+      qty: Number(row.querySelector('[data-item-qty]').value || 0),
+      price: Number(row.querySelector('[data-item-price]').value || 0),
+    }));
+  }
+
+  function externalSaleTotal() {
+    return Math.round(readExternalItems().reduce((sum, item) => sum + item.qty * item.price, 0) * 100) / 100;
+  }
+
+  function refreshExternalTotal() {
+    setText('#externalItemsTotal', formatMoney(externalSaleTotal()));
+  }
+
+  function addExternalItem() {
+    const list = $('#externalItemList');
+    if (!list || list.children.length >= 50) return;
+    const row = document.createElement('div');
+    row.className = 'external-item-row';
+    row.innerHTML = '<label><span>Producto o servicio</span><input data-item-name maxlength="240" placeholder="Ej. Consumo de alimentos" /></label><label><span>Cantidad</span><input data-item-qty type="number" min="0.001" max="100000" step="0.001" value="1" inputmode="decimal" /></label><label><span>Precio unitario</span><input data-item-price type="number" min="0.01" max="9999999999.99" step="0.01" placeholder="0.00" inputmode="decimal" /></label><button type="button" class="external-remove-item" aria-label="Quitar concepto"><i class="ph-bold ph-trash"></i></button>';
+    row.querySelectorAll('input').forEach((input) => input.addEventListener('input', refreshExternalTotal));
+    row.querySelector('.external-remove-item').addEventListener('click', () => {
+      if (list.children.length > 1) row.remove();
+      refreshExternalTotal();
+    });
+    list.append(row);
+    syncExternalConceptMode();
+    refreshExternalTotal();
+  }
+
+  function syncExternalConceptMode() {
+    const detailed = externalConceptMode() === 'detailed';
+    const totalPanel = $('#externalTotalPanel');
+    const detailedPanel = $('#externalDetailedPanel');
+    if (!totalPanel || !detailedPanel) return;
+    totalPanel.hidden = detailed;
+    detailedPanel.hidden = !detailed;
+    $('#externalDescription').required = !detailed;
+    $('#externalTotal').required = !detailed;
+    $$('#externalItemList input').forEach((input) => { input.required = detailed; });
+  }
+
   async function initialize() {
     try {
       const portal = await request('');
       currentPortal = portal;
       applyBusiness(portal);
       if (portal.externalOnly) {
+        externalOnly = true;
         document.body.classList.add('external-only');
-        $('#portalUnavailable strong').textContent = 'Facturas de ventas externas';
-        setUnavailable('Este negocio usa otro punto de venta. Comparte tu folio y tus datos fiscales directamente con el negocio; su equipo emitirá el CFDI y te enviará el PDF y XML por correo. La búsqueda automática de tickets solo funciona con ventas registradas en ChatBotPro.');
-        return;
+        setText('#purchaseHeading', 'Identifica tu compra');
+        setText('#purchaseIntro', 'Si tienes folio o número de ticket, puedes anotarlo como referencia. No necesitas un código de facturación.');
+        setText('#ticketLabel', 'Folio o número de ticket (opcional)');
+        setText('#ticketHint', 'Puedes continuar aunque tu comprobante no tenga folio.');
+        setText('#lookupStep .form-help strong', 'Ten tu comprobante a la mano');
+        setText('#lookupStep .form-help span', 'Después captura el consumo, la forma de pago y tus datos fiscales para timbrar tu factura.');
+        setText('[data-progress-step="lookup"] small', 'Referencia opcional');
+        $('#ticket').type = 'text';
+        $('#ticket').placeholder = 'Ej. V-1548';
+        $('#ticket').removeAttribute('min');
+        $('#ticket').removeAttribute('inputmode');
+        $('#ticket').removeAttribute('required');
+        $('#ticket').maxLength = 80;
+        $('#token').required = false;
+        $('#token').closest('.form-field').hidden = true;
+        $('#lookupForm .button-label').innerHTML = '<i class="ph-bold ph-arrow-right"></i> Continuar';
+        $('#lookupForm .button-loading').innerHTML = '<i class="ph-bold ph-spinner-gap"></i> Preparando factura…';
+        $('#invoiceForm').prepend($('#externalSaleFields'));
+        $('#externalSaleFields').hidden = false;
+        $('#ticketSummary').hidden = true;
+        $('#externalSaleDate').value = new Date().toISOString().slice(0, 10);
+        addExternalItem();
+        syncExternalConceptMode();
       }
       portalAvailable = Boolean(portal.available);
       if (!portalAvailable) {
-        setUnavailable(portal.unavailableReason || '', false);
-        portalAvailable = true;
+        setUnavailable(portal.unavailableReason || 'La facturación del negocio aún no está lista.', true);
       }
       const params = new URLSearchParams(location.search);
       if (params.get('ticket')) $('#ticket').value = params.get('ticket');
@@ -307,6 +383,14 @@
     if (!portalAvailable) return;
     message('');
     setBusy(form, true);
+    if (externalOnly) {
+      currentTicket = { external: true, reference: $('#ticket').value.trim(), token: '' };
+      $('#ticketSummary').hidden = true;
+      showSection('receiver');
+      $('#receiverStep').scrollIntoView({ behavior: 'smooth', block: 'start' });
+      setBusy(form, false);
+      return;
+    }
     try { await lookup($('#ticket').value, $('#token').value.trim()); }
     catch (error) { message(error.message); }
     finally { setBusy(form, false); }
@@ -319,26 +403,49 @@
     setBusy(form, true);
     try {
       if (!currentTicket) throw new Error('Busca primero tu ticket');
-      const data = await request('/issue', {
+      const isExternal = Boolean(currentTicket?.external);
+      if (isExternal && !currentTicket.token) currentTicket.token = crypto.randomUUID();
+      const payload = isExternal ? {
+        requestKey: currentTicket.token,
+        externalReference: currentTicket.reference,
+        saleDate: $('#externalSaleDate').value,
+        conceptMode: externalConceptMode(),
+        description: $('#externalDescription').value.trim(),
+        total: externalSaleTotal(),
+        items: readExternalItems(),
+        paymentForm: $('#externalPaymentForm').value,
+        receiver: {
+          rfc: $('#receiverRfc').value.trim().toUpperCase(), name: $('#receiverName').value.trim(),
+          fiscalRegime: $('#receiverRegime').value, postalCode: $('#receiverPostal').value.trim(),
+          cfdiUse: $('#receiverUse').value, email: $('#receiverEmail').value.trim(),
+        },
+      } : {
+        ticket: currentTicket.ticket,
+        code: currentTicket.token,
+        conceptMode: form.elements.conceptMode.value,
+        paymentForm: $('#receiverPaymentFormRow').hidden ? '' : $('#receiverPaymentForm').value,
+        receiver: {
+          rfc: $('#receiverRfc').value.trim().toUpperCase(),
+          name: $('#receiverName').value.trim(),
+          fiscalRegime: $('#receiverRegime').value,
+          postalCode: $('#receiverPostal').value.trim(),
+          cfdiUse: $('#receiverUse').value,
+          email: $('#receiverEmail').value.trim(),
+        },
+      };
+      const data = await request(isExternal ? '/issue-external' : '/issue', {
         method: 'POST',
-        body: JSON.stringify({
-          ticket: currentTicket.ticket,
-          code: currentTicket.token,
-          conceptMode: form.elements.conceptMode.value,
-          paymentForm: $('#receiverPaymentFormRow').hidden ? '' : $('#receiverPaymentForm').value,
-          receiver: {
-            rfc: $('#receiverRfc').value.trim().toUpperCase(),
-            name: $('#receiverName').value.trim(),
-            fiscalRegime: $('#receiverRegime').value,
-            postalCode: $('#receiverPostal').value.trim(),
-            cfdiUse: $('#receiverUse').value,
-            email: $('#receiverEmail').value.trim(),
-          },
-        }),
+        body: JSON.stringify(payload),
       });
-      if (data.invoice?.status !== 'active') throw new Error('El CFDI quedó en proceso de validación. Intenta consultar nuevamente este ticket en unos minutos.');
+      if (data.invoice?.status !== 'active') throw new Error(isExternal
+        ? 'La solicitud está en validación. Puedes volver a intentarlo en unos minutos; usa el mismo folio para no duplicarla.'
+        : 'El CFDI quedó en proceso de validación. Intenta consultar nuevamente este ticket en unos minutos.');
+      if (isExternal) currentTicket.token = data.code;
       invoiceDownloads(data.invoice, currentTicket.token);
-    } catch (error) { message(error.message); }
+    } catch (error) {
+      if (currentTicket?.external && /nueva solicitud/i.test(error.message)) currentTicket.token = '';
+      message(error.message);
+    }
     finally { setBusy(form, false); }
   });
 
@@ -355,11 +462,22 @@
     event.currentTarget.value = formatInvoiceCode(event.currentTarget.value);
   });
 
+  document.querySelectorAll('input[name="externalConceptMode"]').forEach((input) => input.addEventListener('change', syncExternalConceptMode));
+  $('#externalTotal')?.addEventListener('input', refreshExternalTotal);
+  $('#addExternalItem')?.addEventListener('click', addExternalItem);
+
   $('#invoiceAnother').addEventListener('click', () => {
     currentTicket = null;
     currentInvoice = null;
     $('#lookupForm').reset();
     $('#invoiceForm').reset();
+    $('#ticketSummary').hidden = externalOnly;
+    if (externalOnly) {
+      $('#externalSaleDate').value = new Date().toISOString().slice(0, 10);
+      $('#externalItemList').replaceChildren();
+      addExternalItem();
+      syncExternalConceptMode();
+    }
     configureTicketPayment();
     message('');
     showSection('lookup');
@@ -376,7 +494,8 @@
     setBusy(form, true);
     try {
       if (!currentInvoice || !currentTicket) throw new Error('Primero genera o consulta tu factura');
-      const data = await request(`/invoices/${currentInvoice.id}/email`, {
+      const invoicePath = currentTicket.external ? `/direct-invoices/${currentInvoice.id}` : `/invoices/${currentInvoice.id}`;
+      const data = await request(`${invoicePath}/email`, {
         method: 'POST',
         body: JSON.stringify({ code: currentTicket.token, email: $('#invoiceEmail').value.trim() }),
       });

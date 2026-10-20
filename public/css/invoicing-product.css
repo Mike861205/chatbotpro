@@ -425,3 +425,395 @@ body.iv-journey-open { overflow:hidden; }
   .iv-success-modal { padding: 30px 18px 20px; }.iv-success-actions { grid-template-columns: 1fr; }
   .iv-setup-backdrop,.iv-welcome-backdrop { padding:0; align-items:end; }.iv-setup-modal { max-height:96vh; border-radius:10px 10px 0 0; }.iv-setup-head { padding:20px 17px; align-items:flex-start; }.iv-setup-head h2 { font-size:25px; }.iv-setup-progress { display:none; }.iv-setup-form { padding:15px; }.iv-setup-columns { grid-template-columns:1fr; }.iv-setup-block { padding:15px; }.iv-setup-brand-row { grid-template-columns:1fr 84px; }.iv-setup-foot { align-items:stretch; flex-direction:column; }.iv-setup-foot .iv-btn { width:100%; }.iv-welcome-modal { max-height:96vh; overflow-y:auto; grid-template-columns:1fr; border-radius:10px 10px 0 0; }.iv-welcome-brand { min-height:165px; padding:20px; display:grid; grid-template-columns:62px 1fr; grid-template-rows:auto auto auto; column-gap:13px; align-content:center; }.iv-welcome-logo { grid-row:1/4; width:62px; height:62px; margin:0; }.iv-welcome-brand>strong { margin:4px 0; font-size:24px; }.iv-welcome-copy { padding:25px 18px 22px; }.iv-welcome-copy h2 { font-size:29px; }.iv-welcome-facts { grid-template-columns:1fr; }.iv-welcome-actions { align-items:stretch; flex-direction:column-reverse; }.iv-welcome-actions .iv-btn { width:100%; }
 }
+
+/* Panel independiente: tarjetas y superficies con identidad por módulo. */
+.iv-app { background: radial-gradient(circle at 82% 0, #e6f2ef 0, transparent 32%), linear-gradient(145deg, #f7f8f5, #eef3f1); }
+.iv-app-main { --view-accent: #168265; max-width: 1800px; width: 100%; }
+.iv-app-main:has(#view-new-invoice.active) { --view-accent: #e56b50; }
+.iv-app-main:has(#view-manual-global.active) { --view-accent: #d59a28; }
+.iv-app-main:has(#view-payments.active) { --view-accent: #60a93c; }
+.iv-app-main:has(#view-documents.active) { --view-accent: #13a3b5; }
+.iv-app-main:has(#view-portal.active) { --view-accent: #7957d9; }
+.iv-app-main:has(#view-settings.active) { --view-accent: #4187c6; }
+.iv-app-top { position: relative; margin-bottom: 23px; padding-bottom: 18px; border-bottom: 1px solid #dce7e2; }
+.iv-app-top::after { content: ''; position: absolute; bottom: -1px; left: 0; width: 74px; height: 3px; border-radius: 3px; background: var(--view-accent); }
+.iv-app-top h1 { color: #142c29; font-size: clamp(29px, 2.2vw, 35px); }
+.iv-app-top p { margin-top: 6px; font-size: 11px; line-height: 1.5; }
+.iv-status { padding: 8px 12px; font-size: 10px; }
+
+.iv-metrics { gap: 15px; }
+.iv-metric { --metric: #168265; --metric-deep: #0d5f4c; --metric-pale: #e9f7f1; position: relative; isolation: isolate; min-width: 0; min-height: 164px; overflow: hidden; padding: 18px 20px; border: 1px solid color-mix(in srgb, var(--metric) 22%, white); border-radius: 17px; background: linear-gradient(135deg, #fff 18%, var(--metric-pale) 100%); box-shadow: 0 12px 30px rgba(22, 49, 44, .07), inset 0 1px 0 rgba(255,255,255,.9); transition: transform .2s ease, box-shadow .2s ease; }
+.iv-metric::before { content: ''; position: absolute; z-index: -1; right: -35px; bottom: -78px; width: 165px; height: 165px; border: 1px solid color-mix(in srgb, var(--metric) 18%, transparent); border-radius: 50%; box-shadow: 0 0 0 26px color-mix(in srgb, var(--metric) 5%, transparent), 0 0 0 54px color-mix(in srgb, var(--metric) 3%, transparent); }
+.iv-metric::after { content: ''; position: absolute; top: 0; left: 20px; width: 42px; height: 3px; border-radius: 0 0 6px 6px; background: var(--metric); }
+.iv-metric:hover { transform: translateY(-3px); box-shadow: 0 18px 36px rgba(22, 49, 44, .12); }
+.iv-metric--coral { --metric: #e56b50; --metric-deep: #a93f2d; --metric-pale: #fff0eb; }
+.iv-metric--violet { --metric: #7957d9; --metric-deep: #5335a5; --metric-pale: #f3eeff; }
+.iv-metric--blue { --metric: #2785ba; --metric-deep: #17618d; --metric-pale: #eaf5fc; }
+.iv-metric-head { gap: 8px; color: var(--metric-deep); font-size: 11px; letter-spacing: .035em; }
+.iv-metric-head i { width: 40px; height: 40px; flex: 0 0 40px; border-radius: 12px; color: #fff; background: var(--metric); box-shadow: 0 7px 16px color-mix(in srgb, var(--metric) 26%, transparent); font-size: 20px; }
+.iv-metric strong { position: relative; display: block; margin-top: 15px; color: var(--metric-deep); font-family: 'DM Serif Display', serif; font-size: clamp(31px, 2.3vw, 39px); line-height: 1; font-weight: 400; overflow-wrap: anywhere; }
+.iv-metric #metricEnvironment { font-size: clamp(24px, 1.9vw, 30px); }
+.iv-metric > small { position: relative; display: block; margin-top: 9px; color: #526761; font-size: 10.5px; font-weight: 600; line-height: 1.4; }
+
+.iv-grid-main { margin-top: 16px; gap: 16px; }
+.iv-panel { min-width: 0; padding: 23px; border: 1px solid #dce7e2; border-radius: 17px; background: #fff; box-shadow: 0 12px 30px rgba(21, 55, 49, .065); }
+.iv-panel-head { margin-bottom: 18px; align-items: center; }
+.iv-panel h2, .iv-panel h3 { color: #183b35; font-size: 17px; line-height: 1.3; }
+.iv-panel-head p { margin-top: 6px; font-size: 10px; line-height: 1.5; }
+.iv-summary-progress { border-top: 4px solid #20a47d; background: linear-gradient(180deg, #f7fcf9 0, #fff 105px); }
+.iv-summary-portal { border-top: 4px solid #7957d9; background: linear-gradient(180deg, #f9f7ff 0, #fff 105px); }
+.iv-checklist { gap: 9px; border: 0; background: transparent; }
+.iv-check { position: relative; width: 100%; min-height: 62px; padding: 11px 13px; gap: 12px; border: 1px solid #e3eae6; border-radius: 11px; background: #f9fbfa; color: var(--iv-ink); font-family: inherit; text-align: left; }
+.iv-check:is(button) { cursor: pointer; transition: transform .18s ease, border-color .18s ease, box-shadow .18s ease; }
+.iv-check:is(button):not(:disabled):hover { transform: translateY(-1px); border-color: color-mix(in srgb, #168265 38%, white); box-shadow: 0 7px 16px rgba(22,130,101,.09); }
+.iv-check:is(button):focus-visible { outline: 3px solid rgba(22,130,101,.28); outline-offset: 2px; }
+.iv-check:disabled { cursor: default; }
+.iv-check.done { border-color: #d8eee4; background: #f0faf5; }
+.iv-check > i { width: 36px; height: 36px; border-radius: 10px; background: #e8eeeb; color: #687b73; font-size: 18px; }
+.iv-check.done > i { background: #168265; box-shadow: 0 5px 12px rgba(22,130,101,.2); }
+.iv-check div { gap: 3px; }
+.iv-check strong { color: #203d35; font-size: 11px; }
+.iv-check span { font-size: 9px; line-height: 1.35; }
+.iv-check-action { margin-left: auto; flex: 0 0 auto; color: #168265; font-size: 17px; opacity: .62; transition: transform .18s ease, opacity .18s ease; }
+.iv-check:is(button):hover .iv-check-action { transform: translate(2px,-2px); opacity: 1; }
+.iv-check:is(button).done .iv-check-action { display: none; }
+.iv-portal-preview { overflow: hidden; border: 1px solid rgba(18,60,55,.12); border-radius: 15px; background: #fff; box-shadow: 0 15px 26px rgba(18, 60, 55, .13); }
+.iv-portal-brand { position: relative; min-height: 194px; padding: 18px 20px 19px; display: flex; flex-direction: column; align-items: flex-start; justify-content: flex-end; gap: 7px; overflow: hidden; isolation: isolate; background: linear-gradient(135deg, color-mix(in srgb, var(--tenant-color, #123c37) 77%, #132542), var(--tenant-color, #123c37) 58%, color-mix(in srgb, var(--tenant-color, #123c37) 72%, #fff)); }
+.iv-portal-brand::before { content: ''; position: absolute; z-index: -1; top: -83px; right: -39px; width: 215px; height: 215px; border: 1px solid rgba(255,255,255,.25); border-radius: 50%; box-shadow: 0 0 0 22px rgba(255,255,255,.08), 0 0 0 48px rgba(255,255,255,.055), 0 0 0 76px rgba(255,255,255,.035); }
+.iv-portal-kicker { position: relative; z-index: 1; margin-bottom: 2px; padding: 6px 9px; display: inline-flex; align-items: center; gap: 6px; border: 1px solid rgba(255,255,255,.24); border-radius: 99px; color: rgba(255,255,255,.94); background: rgba(13,33,48,.16); font-size: 7px; font-weight: 800; letter-spacing: .09em; }
+.iv-portal-kicker i { color: #ffe6a2; font-size: 12px; }
+.iv-portal-brand img { position: absolute; z-index: 1; top: 17px; left: 19px; width: 47px; height: 47px; padding: 4px; border: 1px solid rgba(255,255,255,.7); border-radius: 13px; object-fit: contain; background: #fff; box-shadow: 0 8px 18px rgba(0,0,0,.18); }
+.iv-portal-brand h3 { position: relative; z-index: 1; max-width: 100%; margin: 0; color: #fff; font-size: 24px; text-shadow: 0 2px 12px rgba(0,0,0,.16); }
+.iv-portal-brand p { position: relative; z-index: 1; margin: 0; color: rgba(255,255,255,.82); font-size: 9px; line-height: 1.4; }
+.iv-portal-link { min-height: 57px; padding: 10px 12px; gap: 8px; background: linear-gradient(100deg, #113a36, #174e47); }
+.iv-portal-link > i { color: #a9e7d5; font-size: 15px; }
+.iv-portal-link span { color: rgba(255,255,255,.82); font-size: 9px; }
+.iv-portal-link .iv-btn { flex: 0 0 auto; }
+.iv-portal-benefits { margin-top: 11px; display: flex; flex-wrap: wrap; gap: 7px; }
+.iv-portal-benefits span { padding: 7px 9px; display: inline-flex; align-items: center; gap: 6px; border: 1px solid #e3e9f2; border-radius: 99px; color: #52655f; background: #f8fafc; font-size: 8px; font-weight: 700; }
+.iv-portal-benefits i { color: #168265; font-size: 13px; }
+
+#view-new-invoice .iv-direct-form { --direct-accent: #e56b50; --direct-deep: #a93f2d; --direct-soft: #fff1eb; }
+#view-manual-global .iv-global-operation { --operation-accent: #d59a28; --operation-deep: #80540f; --operation-soft: #fff7e7; }
+#view-payments .iv-payment-operation { --operation-accent: #60a93c; --operation-deep: #3e7028; --operation-soft: #f1f9eb; }
+#view-portal .iv-panel { border-top: 4px solid #7957d9; background: linear-gradient(180deg, #faf8ff 0, #fff 115px); }
+#view-documents .iv-panel { border-top: 4px solid #13a3b5; background: linear-gradient(180deg, #f4fcfd 0, #fff 120px); }
+#view-settings .iv-fiscal-operation { --operation-accent: #4187c6; --operation-deep: #245a89; --operation-soft: #eff6fd; }
+#view-settings .iv-csd-operation { --operation-accent: #1b9caf; --operation-deep: #146373; --operation-soft: #ebf9fb; }
+.iv-csd-guidance { margin: 0 0 20px; padding: 12px 14px; border: 1px solid #f0d7ac; border-radius: 10px; color: #77551d; background: #fff9ec; font-size: 11px; font-weight: 700; line-height: 1.55; }
+.iv-csd-guidance.ready { border-color: #bfe3dd; color: #145f57; background: #edfaf7; }
+.iv-csd-operation input:disabled, .iv-csd-operation select:disabled { opacity: .58; cursor: not-allowed; }
+.iv-csd-operation button:disabled { cursor: not-allowed; opacity: .52; box-shadow: none; }
+.iv-direct-form, .iv-operation-form { border-radius: 17px; box-shadow: 0 15px 36px rgba(21, 55, 49, .09); }
+.iv-workspace-head, .iv-operation-head { background: linear-gradient(110deg, var(--direct-soft, var(--operation-soft, #fff)) 0, #fff 55%, var(--direct-soft, var(--operation-soft, #fff)) 100%); }
+.iv-operation-icon, .iv-block-title > i { border-radius: 12px; }
+.iv-form-section { border-radius: 14px; box-shadow: 0 10px 25px rgba(21,55,49,.05); }
+.iv-table th { font-size: 9px; }
+.iv-table td { font-size: 10px; }
+
+@media (max-width: 980px) {
+  .iv-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 640px) {
+  .iv-app-main { padding: 19px 13px 35px; }
+  .iv-app-top h1 { font-size: 28px; }
+  .iv-metrics { gap: 10px; }
+  .iv-metric { min-height: 151px; padding: 14px; }
+  .iv-metric-head { font-size: 9px; }
+  .iv-metric-head i { width: 34px; height: 34px; flex-basis: 34px; font-size: 17px; }
+  .iv-metric strong { margin-top: 17px; font-size: 31px; }
+  .iv-metric #metricEnvironment { font-size: 23px; }
+  .iv-metric > small { font-size: 9px; }
+  .iv-panel { padding: 17px; }
+  .iv-panel h2, .iv-panel h3 { font-size: 16px; }
+  .iv-summary-progress .iv-status { display: inline-flex; white-space: nowrap; }
+}
+@media (max-width: 390px) {
+  .iv-metrics { grid-template-columns: 1fr; }
+  .iv-metric { min-height: 138px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .iv-metric { transition: none; }
+  .iv-metric:hover { transform: none; }
+}
+
+/* Mi portal: compartir primero, personalizar después; la vista se adapta al espacio disponible. */
+.iv-portal-layout { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(300px, .65fr); gap: 16px; align-items: stretch; }
+.iv-portal-layout > .iv-panel { padding: 24px; }
+.iv-portal-share-card { --portal-accent: var(--tenant-color, #7957d9); position: relative; overflow: hidden; border-top: 4px solid var(--portal-accent) !important; background: linear-gradient(145deg, color-mix(in srgb, var(--portal-accent) 5%, white), #fff 48%) !important; }
+.iv-portal-section-head { margin-bottom: 22px; display: grid; grid-template-columns: 48px minmax(0,1fr) auto; align-items: center; gap: 13px; }
+.iv-portal-section-icon { width: 48px; height: 48px; display: grid; place-items: center; border: 1px solid color-mix(in srgb, var(--portal-accent) 20%, white); border-radius: 14px; color: var(--portal-accent); background: color-mix(in srgb, var(--portal-accent) 9%, white); font-size: 22px; }
+.iv-portal-section-head > div:nth-child(2) > span, .iv-portal-help-heading > span { color: var(--portal-accent, #7957d9); font-size: 8px; font-weight: 800; letter-spacing: .12em; }
+.iv-portal-section-head h2 { margin: 3px 0 3px; font-size: 19px; }
+.iv-portal-section-head p, .iv-portal-help-heading p { margin: 0; color: var(--iv-muted); font-size: 10px; line-height: 1.5; }
+.iv-portal-public-pill { padding: 8px 10px; display: inline-flex; align-items: center; gap: 6px; border: 1px solid #cde9dd; border-radius: 99px; color: #167255; background: #effaf5; font-size: 8px; font-weight: 800; white-space: nowrap; }
+.iv-portal-share-body { display: grid; grid-template-columns: 220px minmax(0,1fr); align-items: center; gap: clamp(20px, 3vw, 34px); }
+.iv-portal-qr-card { display: grid; justify-items: center; gap: 11px; }
+.iv-portal-qr-frame { width: 204px; min-height: 232px; padding: 13px 13px 10px; display: grid; justify-items: center; align-content: center; gap: 8px; border: 1px solid #e1e8e5; border-radius: 17px; background: #fff; box-shadow: 0 13px 28px rgba(23,52,47,.09); }
+.iv-portal-qr-frame img { width: 174px; height: 174px; display: block; object-fit: contain; image-rendering: pixelated; }
+.iv-portal-qr-frame > span { display: inline-flex; align-items: center; gap: 5px; color: #52655f; font-size: 8px; font-weight: 800; }
+.iv-portal-qr-frame > span i { color: var(--portal-accent, #7957d9); font-size: 13px; }
+.iv-portal-qr-open { display: inline-flex; align-items: center; gap: 6px; color: var(--portal-accent, #7957d9); font-size: 9px; font-weight: 800; text-decoration: none; }
+.iv-portal-qr-open:hover { text-decoration: underline; }
+.iv-portal-share-details { min-width: 0; }
+.iv-portal-business-lockup { display: flex; align-items: center; gap: 12px; }
+.iv-portal-business-lockup img { width: 50px; height: 50px; padding: 4px; border: 1px solid #e4eae7; border-radius: 14px; object-fit: contain; background: white; box-shadow: 0 6px 14px rgba(24,57,50,.08); }
+.iv-portal-business-lockup div { min-width: 0; }
+.iv-portal-business-lockup span { color: var(--portal-accent, #7957d9); font-size: 7px; font-weight: 800; letter-spacing: .1em; }
+.iv-portal-business-lockup h3 { margin: 3px 0 0; color: #173d36; font-family: 'DM Serif Display',serif; font-size: 23px; font-weight: 400; overflow-wrap: anywhere; }
+.iv-portal-share-copy { margin: 15px 0 18px; color: #566862; font-size: 10px; line-height: 1.6; }
+.iv-portal-url-label { display: block; margin-bottom: 6px; color: #264b42; font-size: 9px; font-weight: 800; }
+.iv-portal-url-field { min-width: 0; min-height: 45px; padding: 4px 5px 4px 12px; display: flex; align-items: center; gap: 9px; border: 1px solid #dce6e1; border-radius: 10px; background: #fff; }
+.iv-portal-url-field > i { flex: 0 0 auto; color: var(--portal-accent, #7957d9); font-size: 16px; }
+.iv-portal-url-field input { min-width: 0; width: 100%; padding: 6px 0; border: 0; outline: 0; color: #405851; background: transparent; font-size: 10px; text-overflow: ellipsis; }
+.iv-portal-copy-icon { width: 34px; height: 34px; flex: 0 0 34px; display: grid; place-items: center; border: 0; border-radius: 8px; cursor: pointer; color: var(--portal-accent, #7957d9); background: color-mix(in srgb, var(--portal-accent, #7957d9) 9%, white); }
+.iv-portal-copy-icon:hover { background: color-mix(in srgb, var(--portal-accent, #7957d9) 16%, white); }
+.iv-portal-share-actions { margin-top: 13px; display: flex; flex-wrap: wrap; gap: 8px; }
+.iv-portal-share-actions .iv-btn { min-height: 40px; font-size: 10px; }
+.iv-portal-share-actions .iv-btn-primary { background: var(--portal-accent, #7957d9); box-shadow: 0 8px 18px color-mix(in srgb, var(--portal-accent, #7957d9) 21%, transparent); }
+.iv-portal-share-actions .iv-btn-primary:hover:not(:disabled) { filter: brightness(.95); }
+.iv-portal-share-card .iv-portal-benefits { margin-top: 16px; }
+.iv-portal-help-card { display: flex; flex-direction: column; border-top: 4px solid #168265 !important; background: linear-gradient(155deg, #f4fbf7, #fff 66%) !important; }
+.iv-portal-help-heading { margin-bottom: 18px; }
+.iv-portal-help-heading > span { color: #168265; }
+.iv-portal-help-heading h2 { margin: 4px 0 6px; font-size: 18px; }
+.iv-portal-help-list { display: grid; gap: 10px; }
+.iv-portal-help-list > div { min-width: 0; padding: 12px; display: flex; align-items: flex-start; gap: 10px; border: 1px solid #e0ece6; border-radius: 12px; background: rgba(255,255,255,.82); }
+.iv-portal-help-list > div > i { width: 34px; height: 34px; flex: 0 0 34px; display: grid; place-items: center; border-radius: 10px; color: #fff; background: #168265; box-shadow: 0 5px 12px rgba(22,130,101,.16); font-size: 16px; }
+.iv-portal-help-list span { min-width: 0; display: grid; gap: 3px; }
+.iv-portal-help-list b { color: #26483f; font-size: 10px; }
+.iv-portal-help-list small { color: var(--iv-muted); font-size: 9px; line-height: 1.45; }
+.iv-portal-help-note { margin-top: auto; padding: 11px 12px 0; display: flex; align-items: flex-start; gap: 8px; color: #62746e; font-size: 9px; line-height: 1.5; }
+.iv-portal-help-note i { flex: 0 0 auto; color: #d49425; font-size: 16px; }
+.iv-portal-help-note.warning { margin-top: 16px; padding: 10px; border: 1px solid #f0d8a7; border-radius: 10px; color: #795b25; background: #fff9ec; }
+.iv-portal-help-note.warning i { color: #b67a1b; }
+#view-portal .iv-identity-operation { width: 100%; max-width: none; margin-top: 16px; }
+#view-portal .iv-identity-operation .iv-operation-head { background: linear-gradient(110deg, #fff5ed, #fff 55%, #fff8f2); }
+
+/* Nueva factura: jerarquía visual clara, captura guiada y desglose adaptable. */
+#view-new-invoice .iv-invoice-workspace { grid-template-columns: minmax(0, 1fr) minmax(245px, 290px); gap: 18px; align-items: start; }
+#view-new-invoice .iv-direct-form { border: 1px solid #f0d8ce; border-top: 4px solid #de5d43; border-radius: 19px; background: linear-gradient(180deg,#fff 0,#fffdfa 100%); box-shadow: 0 18px 44px rgba(117,55,37,.09); }
+#view-new-invoice .iv-workspace-head { padding: 25px 27px; background: radial-gradient(circle at 100% 0,rgba(255,177,138,.28),transparent 35%),linear-gradient(115deg,#fff3ec,#fffaf6 58%,#fff); }
+#view-new-invoice .iv-workspace-head > div > span { color: #c64c34; }
+#view-new-invoice .iv-workspace-head h2 { color: #263936; font-size: clamp(25px,2vw,31px); letter-spacing: -.025em; }
+#view-new-invoice .iv-workspace-head p { color: #697974; font-size: 11px; }
+#view-new-invoice .iv-stamp-pill { border-color: #f3c9b8; border-radius: 12px; color: #a9432e; background: #fff; box-shadow: 0 5px 14px rgba(160,68,43,.08); }
+#view-new-invoice .iv-form-block { padding: 22px 26px; border-color: #f0e7e1; }
+#view-new-invoice .iv-block-title { margin-bottom: 17px; }
+#view-new-invoice .iv-block-title > i { width: 39px; height: 39px; color: #c64c34; background: linear-gradient(145deg,#fff0e9,#ffe2d5); box-shadow: inset 0 0 0 1px #f8d2c3; font-size: 19px; }
+#view-new-invoice .iv-block-title b { color: #283e39; font-size: 13px; }
+#view-new-invoice .iv-block-title span { color: #74837d; font-size: 9px; }
+#view-new-invoice .iv-direct-form .iv-field label { color: #394f49; font-size: 10px; }
+#view-new-invoice .iv-direct-form .iv-field label small { color: #8a9691; font-size: 9px; font-weight: 600; }
+#view-new-invoice .iv-direct-form .iv-input input, #view-new-invoice .iv-direct-form .iv-input select { height: 48px; border-color: #d9e2de; border-radius: 10px; color: #263a35; background-color: #fff; font-size: 11px; transition: border-color .16s ease,box-shadow .16s ease,background .16s ease; }
+#view-new-invoice .iv-direct-form .iv-input input:hover, #view-new-invoice .iv-direct-form .iv-input select:hover { border-color: #e8a58f; }
+#view-new-invoice .iv-direct-form .iv-input input:focus, #view-new-invoice .iv-direct-form .iv-input select:focus { border-color: #dd684d; background: #fffefd; box-shadow: 0 0 0 3px rgba(221,104,77,.13); }
+#view-new-invoice .iv-direct-form .iv-input > i { color: #c7674d; }
+#view-new-invoice .iv-direct-form .iv-hint { color: #84918c; font-size: 9px; }
+#view-new-invoice .iv-concept-mode { padding: 4px; border: 1px solid #f0ddd4; border-radius: 12px; background: #fff8f4; }
+#view-new-invoice .iv-concept-mode label { min-width: 0; }
+#view-new-invoice .iv-concept-mode label span { min-height: 42px; border-radius: 9px; color: #697772; font-size: 10px; }
+#view-new-invoice .iv-concept-mode input:checked + span { color: #a9432e; background: #fff; box-shadow: 0 2px 8px rgba(102,50,34,.1); }
+#view-new-invoice .iv-concept-mode input:focus-visible + span { outline: 3px solid rgba(221,104,77,.28); outline-offset: 2px; }
+#view-new-invoice .iv-concepts-heading { margin-bottom: 9px; display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+#view-new-invoice .iv-concepts-heading > div { display: grid; gap: 3px; }
+#view-new-invoice .iv-concepts-heading b { color: #344b45; font-size: 10px; }
+#view-new-invoice .iv-concepts-heading span { color: #7c8984; font-size: 9px; line-height: 1.5; }
+#view-new-invoice .iv-concepts-heading .iv-btn { min-height: 36px; padding: 0 12px; color: #a9432e; border-color: #f0c9b9; background: #fff; font-size: 9px; white-space: nowrap; }
+#view-new-invoice .iv-direct-items { display: grid; gap: 9px; }
+#view-new-invoice .iv-direct-item { padding: 11px; display: grid; grid-template-columns: minmax(150px,1fr) minmax(82px,.35fr) minmax(150px,.7fr) 34px; align-items: end; gap: 9px; border: 1px solid #f0e1d9; border-radius: 12px; background: linear-gradient(120deg,#fffaf7,#fff); }
+#view-new-invoice .iv-direct-item label { min-width: 0; display: grid; gap: 5px; }
+#view-new-invoice .iv-direct-item label span { color: #75817c; font-size: 8px; font-weight: 800; }
+#view-new-invoice .iv-direct-item input { width: 100%; min-width: 0; height: 40px; padding: 0 10px; border: 1px solid #d9e2de; border-radius: 8px; outline: 0; color: #283d37; background: white; font: inherit; font-size: 10px; }
+#view-new-invoice .iv-direct-item input:focus { border-color: #dd684d; box-shadow: 0 0 0 3px rgba(221,104,77,.12); }
+#view-new-invoice .iv-direct-item-remove { width: 34px; height: 40px; border: 1px solid #f2d4cc; border-radius: 9px; cursor: pointer; color: #b44c39; background: #fff4f0; }
+#view-new-invoice .iv-direct-item-remove:hover { color: #fff; background: #d9533b; }
+#view-new-invoice #directItemsTotal { color: #9f432f; font-weight: 800; background: #fff8f4; }
+#view-new-invoice .iv-direct-tax-note { margin-top: 16px; padding: 11px 13px; display: flex; align-items: flex-start; gap: 9px; border: 1px solid #eadff8; border-radius: 11px; color: #5f5d79; background: linear-gradient(100deg,#faf6ff,#fff); font-size: 9px; line-height: 1.55; }
+#view-new-invoice .iv-direct-tax-note i { flex: 0 0 auto; color: #7957d9; font-size: 16px; }
+#view-new-invoice .iv-issue-bar { padding: 18px 26px; border-top: 1px solid #f0e7e1; background: linear-gradient(100deg,#fff7f3,#fff 65%,#f3fbf8); }
+#view-new-invoice .iv-issue-bar > div > i { color: #168265; }
+#view-new-invoice .iv-issue-bar small { color: #75827d; }
+#view-new-invoice .iv-issue-bar .iv-btn { min-height: 48px; padding-inline: 23px; border-radius: 11px; background: linear-gradient(105deg,#e86749,#c94b30); box-shadow: 0 9px 19px rgba(201,75,48,.22); }
+#view-new-invoice .iv-workspace-aside { top: 22px; border: 1px solid rgba(255,255,255,.09); border-radius: 18px; background: radial-gradient(circle at 100% 5%,rgba(44,145,121,.42),transparent 37%),linear-gradient(155deg,#123e38,#0a2926 75%); }
+#view-new-invoice .iv-aside-visual { min-height: 350px; padding: 25px; }
+#view-new-invoice .iv-aside-visual > i { border-radius: 13px; background: linear-gradient(145deg,#f7835f,#de5038); box-shadow: 0 9px 20px rgba(224,89,57,.28); }
+#view-new-invoice .iv-aside-visual > span { color: #ffad8e; }
+#view-new-invoice .iv-aside-visual strong { font-size: 37px; letter-spacing: -.025em; }
+#view-new-invoice .iv-aside-visual p { max-width: 250px; font-size: 10px; }
+#view-new-invoice .iv-aside-steps div { min-height: 83px; padding: 13px 9px; }
+#view-new-invoice .iv-aside-steps b { color: #ffad8e; font-size: 10px; }
+#view-new-invoice .iv-aside-steps span { font-size: 8px; }
+@media (max-width: 1120px) {
+  #view-new-invoice .iv-invoice-workspace { grid-template-columns: minmax(0,1fr) 240px; }
+  #view-new-invoice .iv-direct-item { grid-template-columns: minmax(120px,1fr) 80px minmax(120px,.75fr) 34px; }
+}
+@media (max-width: 900px) {
+  #view-new-invoice .iv-invoice-workspace { grid-template-columns: 1fr; }
+  #view-new-invoice .iv-workspace-aside { position: static; display: grid; grid-template-columns: 1fr auto; }
+  #view-new-invoice .iv-aside-visual { min-height: 230px; }
+  #view-new-invoice .iv-aside-steps { grid-template-columns: 1fr; border-top: 0; border-left: 1px solid rgba(255,255,255,.12); }
+  #view-new-invoice .iv-aside-steps div { min-width: 100px; border-right: 0; border-bottom: 1px solid rgba(255,255,255,.1); }
+}
+@media (max-width: 620px) {
+  #view-new-invoice .iv-form-block { padding: 18px 15px; }
+  #view-new-invoice .iv-workspace-head { padding: 20px 16px; }
+  #view-new-invoice .iv-direct-item { grid-template-columns: minmax(0,1fr) 78px 34px; }
+  #view-new-invoice .iv-direct-item label:first-child { grid-column: 1 / -1; }
+  #view-new-invoice .iv-direct-item label:nth-child(3) { grid-column: 1 / 3; }
+  #view-new-invoice .iv-concepts-heading { align-items: flex-start; }
+  #view-new-invoice .iv-workspace-aside { grid-template-columns: 1fr; }
+  #view-new-invoice .iv-aside-steps { grid-template-columns: repeat(3,1fr); border-left: 0; border-top: 1px solid rgba(255,255,255,.12); }
+  #view-new-invoice .iv-aside-steps div { min-width: 0; border-right: 1px solid rgba(255,255,255,.1); border-bottom: 0; }
+}
+@media (prefers-reduced-motion: reduce) { #view-new-invoice .iv-direct-form *, #view-new-invoice .iv-workspace-aside * { transition-duration: .01ms !important; } }
+
+/* Mobile-first refinements for registration, access, the fiscal panel and portal. */
+@media (max-width: 980px) {
+  .iv-auth { min-height: 100svh; }
+  .iv-app { min-height: 100svh; }
+  .iv-sidebar { width: min(300px, 86vw); height: 100dvh; padding: max(16px,env(safe-area-inset-top)) 14px max(14px,env(safe-area-inset-bottom)); overflow-y: auto; overscroll-behavior: contain; }
+  .iv-menu { min-height: 0; overscroll-behavior: contain; }
+  .iv-account { margin-top: 12px; }
+}
+@media (max-width: 640px) {
+  body.iv-menu-open { overflow: hidden; touch-action: none; }
+  .iv-app { position: relative; }
+  .iv-app::before { content: ''; position: fixed; z-index: 35; inset: 0; visibility: hidden; opacity: 0; background: rgba(4,22,20,.52); backdrop-filter: blur(2px); transition: opacity .2s ease,visibility .2s ease; }
+  .iv-app:has(.iv-sidebar.open)::before { visibility: visible; opacity: 1; }
+  .iv-sidebar { z-index: 40; width: min(310px, 88vw); padding-top: max(16px,env(safe-area-inset-top)); padding-bottom: max(14px,env(safe-area-inset-bottom)); box-shadow: 16px 0 42px rgba(1,17,15,.3); }
+  .iv-menu button { min-height: 54px; padding-block: 8px; }
+  .iv-menu-label { margin-top: 17px; }
+  .iv-account button { min-height: 44px; }
+  .iv-app-main { min-height: 100svh; padding: max(15px,env(safe-area-inset-top)) 14px max(28px,env(safe-area-inset-bottom)); }
+  .iv-app-top { align-items: center; flex-wrap: wrap; gap: 10px 12px; margin-bottom: 17px; }
+  .iv-app-top > div { min-width: 0; gap: 10px !important; }
+  .iv-mobile-menu { width: 46px; height: 46px; flex: 0 0 46px; border-radius: 13px; color: #176c58; background: linear-gradient(145deg,#fff,#eaf5f0); box-shadow: 0 5px 14px rgba(20,91,73,.1); }
+  .iv-app-top h1 { font-size: clamp(23px,7vw,28px); line-height: 1.05; }
+  .iv-app-top p { max-width: 230px; font-size: 10px; line-height: 1.4; }
+  .iv-status { display: inline-flex; min-height: 34px; max-width: 100%; padding: 7px 10px; font-size: 9px; }
+  #activationStatus { margin-left: 56px; max-width: calc(100% - 56px); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .iv-metrics { grid-template-columns: repeat(2,minmax(0,1fr)); gap: 9px; }
+  .iv-metric { min-height: 134px; padding: 13px; border-radius: 15px; }
+  .iv-metric-head { align-items: flex-start; gap: 6px; font-size: 8px; line-height: 1.35; }
+  .iv-metric-head i { width: 31px; height: 31px; flex: 0 0 31px; border-radius: 10px; }
+  .iv-metric strong { margin-top: 15px; font-size: clamp(25px,8vw,32px); }
+  .iv-metric #metricEnvironment { font-size: clamp(19px,6vw,24px); }
+  .iv-metric > small { font-size: 9px; line-height: 1.35; }
+  .iv-grid-main { margin-top: 12px; gap: 12px; }
+  .iv-panel { padding: 16px; border-radius: 16px; }
+  .iv-panel-head { align-items: flex-start; }
+  .iv-panel-head h2 { font-size: 16px; }
+  .iv-panel-head p { font-size: 10px; line-height: 1.5; }
+  .iv-summary-progress .iv-panel-head { gap: 8px; }
+  .iv-check { min-height: 66px; padding: 11px; gap: 10px; }
+  .iv-check > i { width: 38px; height: 38px; flex-basis: 38px; }
+  .iv-check strong { font-size: 11px; }
+  .iv-check span { font-size: 9px; line-height: 1.4; }
+  .iv-summary-portal .iv-portal-brand { min-height: 166px; }
+  .iv-portal-link { flex-wrap: wrap; }
+  .iv-portal-link span { font-size: 9px; }
+  .iv-portal-link .iv-btn { min-height: 42px !important; }
+  .iv-form-grid { grid-template-columns: minmax(0,1fr); gap: 14px; }
+  .iv-form-grid > .iv-span-2 { grid-column: auto; }
+  .iv-field label { font-size: 11px; }
+  .iv-input input, .iv-input select, .iv-input textarea { min-height: 50px; height: 50px; font-size: 16px !important; }
+  .iv-form input, .iv-form select, .iv-setup-form input:not([type="file"]):not([type="color"]), .iv-setup-form select, .iv-document-filters input, .iv-document-filters select, .iv-operation-form input, .iv-operation-form select, .iv-identity-operation input, .iv-identity-operation select, .iv-csd-operation input:not([type="file"]), .iv-csd-operation select { font-size: 16px; }
+  .iv-form-grid .iv-field { min-width: 0; }
+  .iv-btn { min-height: 46px; font-size: 11px; }
+  .iv-direct-form, .iv-operation-form { border-radius: 16px; }
+  .iv-workspace-head,.iv-form-block,.iv-issue-bar { padding-inline: 15px; }
+  .iv-operation-head { grid-template-columns: 42px minmax(0,1fr); }
+  .iv-operation-head h2 { font-size: 21px; }
+  .iv-operation-head p { font-size: 10px; }
+  .iv-operation-body { padding-inline: 15px; }
+  .iv-operation-foot { padding-inline: 15px; }
+  .iv-settings-stack,.iv-collections-grid,.iv-portal-layout { grid-template-columns: minmax(0,1fr); }
+  .iv-config-form,.iv-global-operation,.iv-identity-operation { width: 100%; max-width: none; }
+  .iv-csd-upload { grid-template-columns: 34px minmax(0,1fr); padding: 12px; }
+  .iv-csd-upload input[type=file] { font-size: 12px; }
+  .iv-csd-upload input[type=file]::file-selector-button { min-height: 40px; padding-inline: 10px; font-size: 10px; }
+  .iv-document-filters { grid-template-columns: minmax(0,1fr); gap: 9px; }
+  .iv-document-filters input:first-child { grid-column: auto; }
+  .iv-document-filters input,.iv-document-filters select { min-height: 48px; font-size: 16px; }
+  .iv-document-filters .iv-btn { width: 100%; }
+  .iv-table-wrap { overflow: visible; }
+  .iv-table { display: block; min-width: 0; border-collapse: separate; }
+  .iv-table thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; }
+  .iv-table tbody { display: grid; gap: 11px; }
+  .iv-table tr { padding: 9px 12px; display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 0 12px; border: 1px solid #dce7e2; border-radius: 14px; background: linear-gradient(145deg,#fff,#f9fcfa); box-shadow: 0 7px 18px rgba(21,55,49,.06); }
+  .iv-table td { min-width: 0; padding: 9px 0; display: grid; align-content: start; gap: 4px; border-bottom: 1px solid #edf1ef; white-space: normal; overflow-wrap: anywhere; font-size: 11px; }
+  .iv-table td::before { content: attr(data-label); color: #74827c; font-size: 8px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; }
+  .iv-table td:first-child,.iv-table td:last-child { grid-column: 1/-1; }
+  .iv-table td:first-child::before { display: none; }
+  .iv-table td:last-child { border-bottom: 0; }
+  .iv-doc-type { font-size: 8px; }
+  .iv-doc-status { width: fit-content; font-size: 9px; }
+  .iv-document-error { max-width: none; font-size: 10px; }
+  .iv-doc-actions { gap: 7px; }
+  .iv-doc-actions .iv-btn { min-height: 42px; padding-inline: 11px; font-size: 10px; }
+  .iv-documents-pages { justify-content: center; gap: 8px; }
+  .iv-documents-pages > span { width: 100%; text-align: center; }
+  .iv-documents-pages .iv-btn { min-height: 42px; }
+  .iv-documents-pages select { min-height: 42px; font-size: 16px; }
+  .iv-emitter-row { gap: 10px; }
+  .iv-emitter-row div:last-child { width: 100%; }
+  .iv-emitter-row .iv-btn { flex: 1; }
+  .iv-success-modal { width: min(100%,480px); max-height: calc(100dvh - 24px - env(safe-area-inset-top)); overflow-y: auto; padding: 30px 18px max(22px,env(safe-area-inset-bottom)); border-radius: 20px; }
+  .iv-modal-backdrop { padding: max(12px,env(safe-area-inset-top)) 12px max(12px,env(safe-area-inset-bottom)); align-items: end; }
+  .iv-success-actions { grid-template-columns: 1fr; }
+  .iv-success-actions .iv-btn { min-height: 48px; }
+  .iv-success-email div { flex-direction: column; }
+  .iv-success-email input,.iv-success-email button { min-height: 48px; font-size: 16px; }
+  .iv-setup-backdrop,.iv-welcome-backdrop { padding-bottom: env(safe-area-inset-bottom); }
+  .iv-setup-modal,.iv-welcome-modal { max-height: calc(100dvh - env(safe-area-inset-top)); }
+  .iv-setup-foot .iv-btn,.iv-welcome-actions .iv-btn { min-height: 48px; }
+  .iv-toast { left: 12px; right: 12px; bottom: max(14px,env(safe-area-inset-bottom)); max-width: none; text-align: center; }
+}
+@media (max-width: 390px) {
+  .iv-app-main { padding-inline: 11px; }
+  .iv-metrics { grid-template-columns: repeat(2,minmax(0,1fr)); }
+  .iv-metric { min-height: 138px; padding: 11px; }
+  .iv-metric-head { font-size: 7.5px; }
+  .iv-app-top p { max-width: 190px; }
+  .iv-check { align-items: flex-start; }
+  .iv-check-action { margin-top: 8px; }
+  .iv-document-filters { grid-template-columns: minmax(0,1fr); }
+  .iv-portal-share-actions { grid-template-columns: minmax(0,1fr); }
+}
+@media (max-width: 340px) {
+  .iv-app-top { gap: 8px; }
+  .iv-app-top > div { gap: 8px !important; }
+  .iv-app-top h1 { font-size: 22px; }
+  .iv-mobile-menu { width: 42px; height: 42px; flex-basis: 42px; }
+  #activationStatus { margin-left: 50px; max-width: calc(100% - 50px); }
+  .iv-direct-item { grid-template-columns: minmax(0,1fr) 66px 32px; }
+}
+@media (prefers-reduced-motion: reduce) { .iv-app::before { transition: none; } }
+@media (max-width: 1120px) {
+  .iv-portal-layout { grid-template-columns: minmax(0, 1.15fr) minmax(275px, .85fr); }
+  .iv-portal-share-body { grid-template-columns: 185px minmax(0,1fr); gap: 18px; }
+  .iv-portal-qr-frame { width: 178px; min-height: 207px; }
+  .iv-portal-qr-frame img { width: 150px; height: 150px; }
+}
+@media (max-width: 860px) {
+  .iv-portal-layout { grid-template-columns: 1fr; }
+  .iv-portal-help-card { min-height: auto; }
+  .iv-portal-help-note { margin-top: 16px; }
+}
+@media (max-width: 560px) {
+  .iv-portal-layout { gap: 12px; }
+  .iv-portal-layout > .iv-panel { padding: 17px; }
+  .iv-portal-section-head { grid-template-columns: 42px minmax(0,1fr); gap: 10px; align-items: start; }
+  .iv-portal-section-icon { width: 42px; height: 42px; border-radius: 12px; }
+  .iv-portal-section-head h2 { font-size: 17px; }
+  .iv-portal-public-pill { grid-column: 2; justify-self: start; margin-top: -3px; }
+  .iv-portal-share-body { grid-template-columns: 1fr; gap: 20px; }
+  .iv-portal-qr-frame { width: 198px; min-height: 224px; }
+  .iv-portal-qr-frame img { width: 168px; height: 168px; }
+  .iv-portal-share-details { width: 100%; }
+  .iv-portal-business-lockup h3 { font-size: 21px; }
+  .iv-portal-share-actions { display: grid; grid-template-columns: 1fr 1fr; }
+  .iv-portal-share-actions .iv-btn { padding-inline: 9px; }
+  #view-portal .iv-identity-operation .iv-operation-head { grid-template-columns: 42px minmax(0,1fr); }
+}

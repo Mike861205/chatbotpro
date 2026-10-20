@@ -51,15 +51,33 @@ function routeForPortal(url) {
 
 function renderPortal() {
   const portalUrl = routeForPortal(INVOICING.portalUrl);
+  const absolutePortalUrl = new URL(portalUrl, location.origin).href;
   const color = /^#[0-9a-f]{6}$/i.test(ME.tenant.primaryColor || '') ? ME.tenant.primaryColor : '#123c37';
   document.documentElement.style.setProperty('--tenant-color', color);
-  ['#portalBrand', '#portalBrandLarge'].forEach((selector) => $(selector).style.setProperty('--tenant-color', color));
+  ['#portalBrand', '.iv-portal-share-card'].forEach((selector) => $(selector).style.setProperty('--tenant-color', color));
   ['#portalBusiness', '#portalBusinessLarge'].forEach((selector) => $(selector).textContent = ME.tenant.businessName);
   ['#portalLogo', '#portalLogoLarge', '#accountLogo'].forEach((selector) => { $(selector).src = ME.tenant.logo || '/static/chatbotpro100.png'; });
   $('#portalUrlShort').textContent = portalUrl;
-  $('#portalUrlLarge').textContent = portalUrl;
+  $('#portalShareUrl').value = absolutePortalUrl;
+  $('#portalOpenButton').href = absolutePortalUrl;
+  const qrUrl = new URL('https://api.qrserver.com/v1/create-qr-code/');
+  qrUrl.searchParams.set('size', '360x360');
+  qrUrl.searchParams.set('margin', '12');
+  qrUrl.searchParams.set('data', absolutePortalUrl);
+  $('#portalQrCode').src = qrUrl.href;
+  $('#portalQrOpen').href = qrUrl.href;
+  const isLocalPreview = ['localhost', '127.0.0.1'].includes(location.hostname);
+  $('#portalQrEnvironmentHint').classList.toggle('warning', isLocalPreview);
+  $('#portalQrEnvironmentHint').innerHTML = isLocalPreview
+    ? '<i class="ph-bold ph-warning-circle"></i><span>Estás en localhost: este QR solo abre en este equipo. Comparte el QR cuando uses el dominio público.</span>'
+    : '<i class="ph-bold ph-lightbulb"></i><span>El código QR siempre abre la liga pública de este negocio.</span>';
   $('#openPortal').onclick = () => window.open(portalUrl, '_blank', 'noopener');
-  $('#copyPortal').onclick = async () => { await navigator.clipboard.writeText(new URL(portalUrl, location.origin).href); toast('Liga del portal copiada'); };
+  const copyPortalLink = async () => {
+    try { await navigator.clipboard.writeText(absolutePortalUrl); toast('Liga del portal copiada'); }
+    catch { $('#portalShareUrl').focus(); $('#portalShareUrl').select(); toast('Selecciona y copia la liga del portal', true); }
+  };
+  $('#copyPortal').onclick = copyPortalLink;
+  $('#portalCopyButton').onclick = copyPortalLink;
 }
 
 $('#identityBusinessName').addEventListener('input', (event) => {
@@ -70,7 +88,7 @@ $('#identityBusinessName').addEventListener('input', (event) => {
 $('#identityColor').addEventListener('input', (event) => {
   const color = event.target.value;
   document.documentElement.style.setProperty('--tenant-color', color);
-  ['#portalBrand', '#portalBrandLarge'].forEach((selector) => $(selector).style.setProperty('--tenant-color', color));
+  ['#portalBrand', '.iv-portal-share-card'].forEach((selector) => $(selector).style.setProperty('--tenant-color', color));
 });
 
 $('#identityLogo').addEventListener('change', (event) => {
@@ -155,6 +173,9 @@ function renderSummary() {
   $('#checkProfile').classList.toggle('done', profileComplete);
   $('#checkCsd').classList.toggle('done', csdComplete);
   $('#checkActivation').classList.toggle('done', activated);
+  $('#checkProfile').disabled = profileComplete;
+  $('#checkCsd').disabled = csdComplete;
+  $('#checkActivation').disabled = activated;
   const status = $('#activationStatus');
   const ready = profiles.some((item) => item.enabled && item.rfc && item.legal_name && item.fiscal_regime && item.postal_code && (item.csd_uploaded || item.api_mode === 'web' || item.sandbox_shared));
   status.classList.toggle('warning', !activated || !ready || !INVOICING.provider.configured);
@@ -184,7 +205,7 @@ async function loadDocuments() {
     const noteAction = document.status === 'active' && ['individual','global','direct'].includes(document.type) ? `<button class="iv-btn iv-btn-secondary" data-credit-document="${document.type}:${document.id}">Nota</button>` : '';
     const paymentAction = document.status === 'active' && document.paymentMethod === 'PPD' && ['individual','global','direct'].includes(document.type) ? `<button class="iv-btn iv-btn-primary" data-payment-document="${document.type}:${document.id}">Registrar pago</button>` : '';
     const actions = `${files}${document.status === 'active' ? `<button class="iv-btn iv-btn-secondary" data-email-document="${document.type}:${document.id}">Correo</button>${paymentAction}${noteAction}<button class="iv-btn iv-btn-secondary" data-cancel-document="${document.type}:${document.id}">Cancelar</button>` : ''}${document.status === 'cancel_pending' ? `<button class="iv-btn iv-btn-secondary" data-refresh-document="${document.type}:${document.id}">Actualizar</button>` : ''}${document.status === 'unknown' ? `<button class="iv-btn iv-btn-secondary" data-reconcile-document="${document.type}:${document.id}">Conciliar</button>` : ''}${document.hasCancellationReceipt ? `<a class="iv-btn iv-btn-secondary" href="/api/invoicing/documents/${document.type}/${document.id}/cancellation-receipt" target="_blank">Acuse</a>` : ''}`;
-    return `<tr><td><span class="iv-doc-type">${typeLabel}</span><b>${escapeHtml(document.series || '')}-${escapeHtml(document.folio || '')}</b><br><small>${escapeHtml(document.uuid || 'Sin UUID')}</small></td><td>${formatDate(document.issuedAt || document.createdAt)}</td><td>${escapeHtml(document.issuerRfc || '—')}</td><td>${escapeHtml(document.receiver?.rfc || '—')}<br><small>${escapeHtml(document.receiver?.name || '')}</small></td><td>${formatMoney(document.total)}</td><td>${escapeHtml(document.paymentMethod || (document.type === 'payment' ? 'REP 2.0' : 'PUE'))}</td><td><span class="iv-doc-status ${escapeHtml(document.status)}">${escapeHtml(statusLabel(document.status))}</span>${document.error ? `<small class="iv-document-error">${escapeHtml(document.error)}</small>` : ''}${document.cancellationMessage ? `<small>${escapeHtml(document.cancellationMessage)}</small>` : ''}</td><td><div class="iv-doc-actions">${actions}</div></td></tr>`;
+    return `<tr><td data-label="Comprobante"><span class="iv-doc-type">${typeLabel}</span><b>${escapeHtml(document.series || '')}-${escapeHtml(document.folio || '')}</b><br><small>${escapeHtml(document.uuid || 'Sin UUID')}</small></td><td data-label="Fecha">${formatDate(document.issuedAt || document.createdAt)}</td><td data-label="Emisor">${escapeHtml(document.issuerRfc || '—')}</td><td data-label="Receptor">${escapeHtml(document.receiver?.rfc || '—')}<br><small>${escapeHtml(document.receiver?.name || '')}</small></td><td data-label="Total">${formatMoney(document.total)}</td><td data-label="Pago">${escapeHtml(document.paymentMethod || (document.type === 'payment' ? 'REP 2.0' : 'PUE'))}</td><td data-label="Estado"><span class="iv-doc-status ${escapeHtml(document.status)}">${escapeHtml(statusLabel(document.status))}</span>${document.error ? `<small class="iv-document-error">${escapeHtml(document.error)}</small>` : ''}${document.cancellationMessage ? `<small>${escapeHtml(document.cancellationMessage)}</small>` : ''}</td><td data-label="Acciones"><div class="iv-doc-actions">${actions}</div></td></tr>`;
   }).join('')}</tbody></table>`;
   bindDocumentActions();
 }
@@ -255,6 +276,31 @@ function fiscalEmitterReady(emitter) {
     && (emitter.csd_uploaded || emitter.api_mode === 'web' || emitter.sandbox_shared));
 }
 
+function updateCsdFormState() {
+  const emitters = INVOICING?.emitters || [];
+  const selected = emitters.find((item) => String(item.id) === $('#csdEmitter').value);
+  const canUpload = Boolean(selected && selected.enabled && selected.rfc && selected.api_mode !== 'web' && !selected.sandbox_shared);
+  const webIssuer = emitters.some((item) => item.enabled && item.api_mode === 'web');
+  const sharedIssuer = emitters.some((item) => item.enabled && item.sandbox_shared);
+  const message = canUpload
+    ? selected.csd_uploaded
+      ? `El CSD de ${selected.rfc} ya está cargado. Puedes reemplazarlo con un nuevo .cer, .key y contraseña.`
+      : `Carga el .cer, el .key y la contraseña del RFC ${selected.rfc}. Se validarán para preparar el timbrado.`
+    : webIssuer
+      ? 'Este RFC usa la API Web de Facturama. Sus sellos digitales se administran en el perfil de Facturama; aquí no se requiere cargarlos.'
+      : sharedIssuer
+        ? 'El emisor compartido de pruebas no requiere cargar sellos digitales.'
+        : 'Primero completa y guarda los datos fiscales del emisor principal. Después podrás seleccionar su CSD aquí.';
+  $('#csdGuidance').textContent = message;
+  $('#csdGuidance').classList.toggle('ready', canUpload);
+  $('#csdState').innerHTML = canUpload
+    ? selected.csd_uploaded ? '<i class="ph-bold ph-check-circle"></i> CSD cargado' : '<i class="ph-bold ph-upload-simple"></i> Listo para cargar'
+    : webIssuer ? '<i class="ph-bold ph-cloud-check"></i> Gestionado en Facturama'
+      : sharedIssuer ? '<i class="ph-bold ph-check-circle"></i> No requerido'
+        : '<i class="ph-bold ph-clock"></i> Pendiente';
+  $('#csdForm').querySelectorAll('input, select, button[type="submit"]').forEach((control) => { control.disabled = !canUpload; });
+}
+
 function renderEmitterOptions() {
   const emitters = INVOICING.emitters || [];
   for (const selector of ['#directEmitter', '#manualGlobalEmitter']) {
@@ -271,8 +317,10 @@ function renderEmitterOptions() {
   csdSelect.innerHTML = `<option value="">Selecciona un emisor</option>${uploadable.map((item) => `<option value="${Number(item.id)}">${escapeHtml(item.label || item.legal_name || item.rfc)} · ${escapeHtml(item.rfc)}</option>`).join('')}`;
   csdSelect.value = uploadable.some((item) => String(item.id) === previousCsd) ? previousCsd : uploadable.length ? String(uploadable[0].id) : '';
   $('#directEmitterStatus').textContent = emitters.some(fiscalEmitterReady) ? '' : 'Completa un emisor y carga su CSD en Configuración fiscal antes de timbrar.';
-  $('#csdForm').hidden = !uploadable.length;
+  updateCsdFormState();
 }
+
+$('#csdEmitter').addEventListener('change', updateCsdFormState);
 
 function resetFiscalEmitterForm() {
   $('#fiscalEmitterForm').reset();
@@ -343,12 +391,50 @@ function setView(view, options = {}) {
   document.querySelectorAll('[data-view]').forEach((button) => button.classList.toggle('active', button.dataset.view === safeView));
   [$('#viewTitle').textContent, $('#viewSubtitle').textContent] = viewMetadata[safeView];
   history.replaceState(null, '', `#${safeView}`);
-  $('#sidebar').classList.remove('open');
+  setMobileMenu(false);
   if (safeView === 'payments') {
     loadReceivables(options.receivable || '').catch((error) => toast(error.message, true));
     loadCreditSources(options.credit || '').catch((error) => toast(error.message, true));
   }
 }
+
+function setMobileMenu(open) {
+  const sidebar = $('#sidebar');
+  const button = $('#menuButton');
+  sidebar.classList.toggle('open', Boolean(open));
+  document.body.classList.toggle('iv-menu-open', Boolean(open));
+  button.setAttribute('aria-expanded', String(Boolean(open)));
+}
+
+function focusMissingFiscalField() {
+  const requiredFields = ['#rfc', '#legalName', '#fiscalRegime', '#postalCode'];
+  const missing = requiredFields.map((selector) => $(selector)).find((field) => !String(field.value || '').trim());
+  const target = missing || $('#fiscalForm');
+  target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  missing?.focus({ preventScroll: true });
+}
+
+function openFiscalChecklistStep(step) {
+  setView('settings');
+  requestAnimationFrame(() => {
+    if (step === 'profile' || !$('#checkProfile').classList.contains('done')) {
+      focusMissingFiscalField();
+      return;
+    }
+    if (step === 'csd' || (step === 'activation' && !$('#checkCsd').classList.contains('done'))) {
+      const target = $('#csdForm');
+      target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      if (!$('#certificate').disabled) $('#certificate').focus({ preventScroll: true });
+      return;
+    }
+    $('#activationStatus').scrollIntoView({ behavior: 'smooth', block: 'center' });
+    toast('Tu expediente está completo. El equipo de soporte debe activar el servicio y la bolsa de timbres.');
+  });
+}
+
+document.querySelectorAll('[data-setup-step]').forEach((button) => {
+  button.addEventListener('click', () => openFiscalChecklistStep(button.dataset.setupStep));
+});
 
 let creditSourceSearchTimer = null;
 $('#creditSourceSearch').addEventListener('input', () => {
@@ -357,7 +443,11 @@ $('#creditSourceSearch').addEventListener('input', () => {
 });
 
 document.querySelectorAll('[data-view]').forEach((button) => button.addEventListener('click', () => setView(button.dataset.view)));
-$('#menuButton').addEventListener('click', () => $('#sidebar').classList.toggle('open'));
+$('#menuButton').addEventListener('click', () => setMobileMenu(!$('#sidebar').classList.contains('open')));
+document.addEventListener('click', (event) => {
+  if ($('#sidebar').classList.contains('open') && !$('#sidebar').contains(event.target) && !$('#menuButton').contains(event.target)) setMobileMenu(false);
+});
+document.addEventListener('keydown', (event) => { if (event.key === 'Escape' && $('#sidebar').classList.contains('open')) setMobileMenu(false); });
 $('#reloadDocuments').addEventListener('click', () => loadDocuments().then(() => toast('Documentos actualizados')).catch((error) => toast(error.message, true)));
 $('#documentFilters').addEventListener('submit', (event) => {
   event.preventDefault();
@@ -382,13 +472,18 @@ function updateDirectReceiverMode() {
   if (publicGeneral && $('#directPaymentMethod')) { $('#directPaymentMethod').value = 'PUE'; $('#directPaymentMethod').dispatchEvent(new Event('change')); }
 }
 
+function localDateForInput(date = new Date()) {
+  return new Date(date.getTime() - date.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+}
+
 function installDirectFiscalControls() {
   const paymentForm = $('#directPaymentForm');
-  paymentForm.querySelector('option[value="99"]')?.remove();
+  paymentForm.innerHTML = `<option value="01">01 · Efectivo</option><option value="02">02 · Cheque nominativo</option><option value="03">03 · Transferencia electrónica</option><option value="04">04 · Tarjeta de crédito</option><option value="05">05 · Monedero electrónico</option><option value="06">06 · Dinero electrónico</option><option value="08">08 · Vales de despensa</option><option value="12">12 · Dación en pago</option><option value="13">13 · Pago por subrogación</option><option value="14">14 · Pago por consignación</option><option value="15">15 · Condonación</option><option value="17">17 · Compensación</option><option value="23">23 · Novación</option><option value="24">24 · Confusión</option><option value="25">25 · Remisión de deuda</option><option value="26">26 · Prescripción o caducidad</option><option value="27">27 · A satisfacción del acreedor</option><option value="28">28 · Tarjeta de débito</option><option value="29">29 · Tarjeta de servicios</option><option value="30">30 · Aplicación de anticipos</option><option value="31">31 · Intermediario de pagos</option>`;
   const paymentWrap = paymentForm.closest('.iv-field');
   paymentWrap.insertAdjacentHTML('beforebegin', `<div class="iv-field"><label for="directPaymentMethod">Método de pago *</label><div class="iv-input"><i class="ph-bold ph-calendar-check"></i><select id="directPaymentMethod"><option value="PUE">PUE · Pagado al emitir</option><option value="PPD">PPD · Pago diferido o parcialidades</option></select></div></div>`);
   paymentWrap.id = 'directPaymentFormWrap';
   paymentWrap.closest('.iv-form-grid').insertAdjacentHTML('beforeend', `<div class="iv-field iv-span-2"><details><summary>Relacionar o sustituir otro CFDI</summary><div class="iv-form-grid" style="margin-top:12px"><div class="iv-field"><label>Tipo de relación</label><select id="directRelationType"><option value="">Sin relación</option><option value="04">04 · Sustitución de CFDI previos</option><option value="07">07 · Aplicación de anticipo</option></select></div><div class="iv-field"><label>UUID relacionado</label><input id="directRelatedUuid" maxlength="36" placeholder="XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX" /></div></div></details></div>`);
+  $('#directRelationType').addEventListener('change', () => { $('#directRelatedUuid').required = Boolean($('#directRelationType').value); });
   const receiverRegime = $('#directReceiverRegime');
   if (receiverRegime?.tagName === 'SELECT') {
     const replacement = document.createElement('input');
@@ -405,8 +500,52 @@ function installDirectFiscalControls() {
   });
 }
 
+function directConceptMode() {
+  return document.querySelector('input[name="directConceptMode"]:checked')?.value === 'detailed' ? 'detailed' : 'total';
+}
+
+function addDirectConcept(name = '', quantity = '1', unitPrice = '') {
+  const list = $('#directItems');
+  if (list.children.length >= 50) return toast('Puedes agregar hasta 50 conceptos.', true);
+  const row = document.createElement('div');
+  row.className = 'iv-direct-item';
+  row.innerHTML = `<label><span>Producto o servicio</span><input class="direct-item-name" maxlength="240" required placeholder="Ej. Platillo o servicio" /></label><label><span>Cantidad</span><input class="direct-item-qty" type="number" min="0.001" max="100000" step="0.001" required value="1" /></label><label><span>Precio unitario con impuestos</span><input class="direct-item-price" type="number" min="0.01" max="9999999999.99" step="0.01" required placeholder="0.00" /></label><button class="iv-direct-item-remove" type="button" aria-label="Quitar concepto"><i class="ph-bold ph-trash"></i></button>`;
+  row.querySelector('.direct-item-name').value = name;
+  row.querySelector('.direct-item-qty').value = quantity;
+  row.querySelector('.direct-item-price').value = unitPrice;
+  row.querySelectorAll('input').forEach((input) => input.addEventListener('input', updateDirectConceptTotal));
+  row.querySelector('.iv-direct-item-remove').addEventListener('click', () => { row.remove(); updateDirectConceptTotal(); });
+  list.append(row);
+  updateDirectConceptTotal();
+}
+
+function updateDirectConceptTotal() {
+  const amount = [...document.querySelectorAll('.iv-direct-item')].reduce((sum, row) => {
+    const qty = Number(row.querySelector('.direct-item-qty').value || 0);
+    const price = Number(row.querySelector('.direct-item-price').value || 0);
+    return sum + Math.round(qty * price * 100) / 100;
+  }, 0);
+  $('#directItemsTotal').value = new Intl.NumberFormat('es-MX', { style: 'currency', currency: 'MXN' }).format(amount);
+}
+
+function updateDirectConceptMode() {
+  const detailed = directConceptMode() === 'detailed';
+  $('#directSingleConcept').hidden = detailed;
+  $('#directSingleTotal').hidden = detailed;
+  $('#directDescription').required = !detailed;
+  $('#directTotal').required = !detailed;
+  $('#directItemsField').hidden = !detailed;
+  $('#directCalculatedTotal').hidden = !detailed;
+  $('#directItems').querySelectorAll('input').forEach((input) => { input.required = detailed; });
+  if (detailed && !$('#directItems').children.length) addDirectConcept();
+}
+
+document.querySelectorAll('input[name="directConceptMode"]').forEach((input) => input.addEventListener('change', updateDirectConceptMode));
+$('#addDirectItem').addEventListener('click', () => addDirectConcept());
+updateDirectConceptMode();
+
 document.querySelectorAll('input[name="directReceiverMode"]').forEach((input) => input.addEventListener('change', updateDirectReceiverMode));
-$('#directSaleDate').value = new Date().toISOString().slice(0, 10);
+$('#directSaleDate').value = localDateForInput();
 installDirectFiscalControls();
 [['607','Enajenación o adquisición de bienes'],['608','Demás ingresos'],['610','Residentes en el extranjero'],['611','Ingresos por dividendos'],['614','Ingresos por intereses'],['615','Obtención de premios'],['620','Sociedades cooperativas de producción'],['622','Actividades agrícolas, ganaderas, silvícolas y pesqueras'],['623','Opcional para grupos de sociedades'],['624','Coordinados']].forEach(([value,label]) => { if (!$('#fiscalRegime').querySelector(`option[value="${value}"]`)) $('#fiscalRegime').add(new Option(`${value} · ${label}`, value)); });
 updateDirectReceiverMode();
@@ -433,10 +572,17 @@ $('#directInvoiceForm').addEventListener('submit', async (event) => {
   const publicGeneral = document.querySelector('input[name="directReceiverMode"]:checked')?.value === 'public';
   button.disabled = true;
   try {
+    if (!form.dataset.requestKey) form.dataset.requestKey = crypto.randomUUID();
+    const conceptMode = directConceptMode();
+    const items = conceptMode === 'detailed' ? [...form.querySelectorAll('.iv-direct-item')].map((row) => ({
+      name: row.querySelector('.direct-item-name').value.trim(), qty: Number(row.querySelector('.direct-item-qty').value),
+      price: Number(row.querySelector('.direct-item-price').value),
+    })) : [];
     const result = await api('/api/invoicing/direct-invoices', {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({
-        emitterId: Number($('#directEmitter').value), externalReference: $('#directReference').value, saleDate: $('#directSaleDate').value,
-        description: $('#directDescription').value, total: Number($('#directTotal').value), paymentMethod: $('#directPaymentMethod').value,
+        requestKey: form.dataset.requestKey, emitterId: Number($('#directEmitter').value), externalReference: $('#directReference').value, saleDate: $('#directSaleDate').value,
+        conceptMode, items, description: $('#directDescription').value, total: conceptMode === 'detailed'
+          ? items.reduce((sum, item) => sum + Math.round(item.qty * item.price * 100) / 100, 0) : Number($('#directTotal').value), paymentMethod: $('#directPaymentMethod').value,
         paymentForm: $('#directPaymentForm').value, relationType: $('#directRelationType').value, relatedUuid: $('#directRelatedUuid').value,
         publicGeneral, receiver: publicGeneral ? null : { rfc: $('#directReceiverRfc').value, name: $('#directReceiverName').value,
           fiscalRegime: $('#directReceiverRegime').value, postalCode: $('#directReceiverPostal').value,
@@ -457,7 +603,7 @@ $('#directInvoiceForm').addEventListener('submit', async (event) => {
     $('#directSuccessEmailStatus').textContent = '';
     $('#directInvoiceSuccess').hidden = false;
     toast(result.message || 'Factura timbrada correctamente');
-    form.reset(); $('#directSaleDate').value = new Date().toISOString().slice(0, 10); $('#directPaymentMethod').dispatchEvent(new Event('change')); updateDirectReceiverMode();
+    form.reset(); form.dataset.requestKey = ''; $('#directItems').replaceChildren(); $('#directSaleDate').value = localDateForInput(); $('#directPaymentMethod').dispatchEvent(new Event('change')); $('#directRelationType').dispatchEvent(new Event('change')); updateDirectReceiverMode(); updateDirectConceptMode();
     await initialize();
   } catch (error) { toast(error.message, true); }
   finally { button.disabled = false; }

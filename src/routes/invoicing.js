@@ -344,7 +344,7 @@ async function requireMexico(req, res, next) {
 
 async function findPublicTenant(slug) {
   const found = await q(
-    `SELECT id, slug, business_name, phone_country, phone_calling_code, logo, primary_color, account_status, billing_status, invoicing_enabled, invoicing_environment,
+    `SELECT id, slug, business_name, product_code, phone_country, phone_calling_code, logo, primary_color, account_status, billing_status, invoicing_enabled, invoicing_environment,
             timezone, customer_since, trial_status, trial_started_on, trial_ends_on
      FROM tenants WHERE slug = $1 LIMIT 1`,
     [String(slug || '').trim().toLowerCase()]
@@ -884,6 +884,10 @@ async function issueSaleInvoice({ tenant, tenantDb, orderId, receiverInput, requ
 }
 
 async function issueDirectInvoice({ tenant, tenantDb, input = {}, actor = '' }) {
+  const publicExternal = input.publicExternal === true;
+  const requestKeyInput = String(input.requestKey || '');
+  let requestKey = UUID_RE.test(requestKeyInput) ? requestKeyInput : createRequestKey();
+  if (!UUID_RE.test(requestKey)) throw Object.assign(new Error('La solicitud de factura no es válida'), { status: 400 });
   const emitterId = input.emitterId == null ? 1 : Number(input.emitterId);
   const profile = Number.isInteger(emitterId) && emitterId > 0
     ? safeProfile(await tenantDb.get('SELECT * FROM {s}.fiscal_emitters WHERE id=$1 LIMIT 1', [emitterId])) : null;
@@ -893,13 +897,36 @@ async function issueDirectInvoice({ tenant, tenantDb, input = {}, actor = '' }) 
   const readinessError = profileReadinessError(profile);
   if (readinessError) throw Object.assign(new Error(readinessError), { status: 409 });
 
-  const externalReference = String(input.externalReference || '').trim().slice(0, 80);
-  const description = String(input.description || '').trim().replace(/\s+/g, ' ').slice(0, 1000);
-  const total = Math.round(Number(input.total || 0) * 100) / 100;
+  let externalReference = String(input.externalReference || '').trim().slice(0, 80);
+  if (!externalReference) externalReference = `WEB-${requestKey.slice(0, 8).toUpperCase()}`;
+  const saleItems = Array.isArray(input.items) ? input.items.map((item) => ({ ...item })) : [];
+  const conceptMode = input.conceptMode === 'total' ? 'total' : input.conceptMode === 'detailed' ? 'detailed' : saleItems.length ? 'detailed' : 'total';
+  let description = String(input.description || '').trim().replace(/\s+/g, ' ').slice(0, 1000);
+  let total = Math.round(Number(input.total || 0) * 100) / 100;
+  if (conceptMode === 'total') {
+    if (publicExternal) {
+      if (!description) description = 'Consumo';
+    }
+    if (!Number.isFinite(total) || total <= 0) throw Object.assign(new Error('Captura el total pagado'), { status: 400 });
+    saleItems.splice(0, saleItems.length, { name: description || 'Consumo', qty: 1, price: total });
+  } else {
+    if (!saleItems.length || saleItems.length > 50) throw Object.assign(new Error('Agrega entre 1 y 50 conceptos de compra'), { status: 400 });
+    saleItems.forEach((item, index) => {
+      item.name = String(item.name || '').trim().replace(/\s+/g, ' ').slice(0, 240);
+      item.qty = Number(item.qty);
+      item.price = Number(item.price);
+      if (!item.name || !Number.isFinite(item.qty) || item.qty <= 0 || item.qty > 100000 || !Number.isFinite(item.price) || item.price <= 0 || item.price > 9999999999.99) {
+        throw Object.assign(new Error(`Revisa el nombre, cantidad y precio del concepto ${index + 1}`), { status: 400 });
+      }
+    });
+    const itemsTotal = saleItems.reduce((sum, item) => sum + Math.round(item.qty * item.price * 100) / 100, 0);
+    if (!Number.isFinite(total) || total <= 0) total = itemsTotal;
+    if (Math.abs(itemsTotal - total) > 0.01) throw Object.assign(new Error('La suma de los conceptos no coincide con el total de compra'), { status: 400 });
+    description = saleItems.length === 1 ? saleItems[0].name : `Consumo desglosado (${saleItems.length} conceptos)`;
+  }
   const saleDate = /^\d{4}-\d{2}-\d{2}$/.test(String(input.saleDate || '')) ? String(input.saleDate) : new Date().toISOString().slice(0, 10);
   const paymentMethod = normalizePaymentMethod(input.paymentMethod);
   const paymentForm = paymentMethod === 'PPD' ? '99' : String(input.paymentForm || '01').trim();
-  if (!externalReference) throw Object.assign(new Error('Captura el folio o referencia de la venta'), { status: 400 });
   if (!description) throw Object.assign(new Error('Captura el concepto de la venta'), { status: 400 });
   if (!Number.isFinite(total) || total <= 0 || total > 9999999999.99) throw Object.assign(new Error('Captura un total válido mayor a cero'), { status: 400 });
   if (!PAYMENT_FORMS.has(paymentForm) || (paymentMethod === 'PUE' && paymentForm === '99')) throw Object.assign(new Error('Selecciona una forma de pago válida'), { status: 400 });
@@ -923,17 +950,29 @@ async function issueDirectInvoice({ tenant, tenantDb, input = {}, actor = '' }) 
   }
   const relation = relationFromInput(input);
   const items = buildFacturamaItems({
-    items: [{ name: description, qty: 1, price: total }], total, delivery_fee: 0,
-  }, new Map(), profile, { conceptMode: 'detailed' });
+    items: saleItems, total, delivery_fee: 0,
+  }, new Map(), profile, { conceptMode });
+  if (conceptMode === 'total' && description) items[0].Description = description;
 
   const allocated = await tenantDb.tx(async (tx) => {
     const lockedProfile = await tx.get('SELECT * FROM {s}.fiscal_emitters WHERE id=$1 FOR UPDATE', [profile.id || 1]);
+    const sameRequest = await tx.get(
+      `SELECT * FROM {s}.direct_invoices WHERE request_key=$1 AND document_kind='invoice' ORDER BY id DESC LIMIT 1 FOR UPDATE`, [requestKey]
+    );
+    if (sameRequest && sameRequest.status !== 'failed') return { duplicate: sameRequest };
+    if (sameRequest?.status === 'failed' && publicExternal) {
+      throw Object.assign(new Error('La solicitud anterior no se pudo timbrar. Revisa tus datos e intenta con una nueva solicitud.'), { status: 409 });
+    }
+    if (sameRequest?.status === 'failed') requestKey = createRequestKey();
     const duplicate = await tx.get(
       `SELECT * FROM {s}.direct_invoices WHERE fiscal_emitter_id=$1 AND document_kind='invoice'
        AND external_reference=$2 AND sale_date=$3::date AND status IN ('pending','unknown','active','cancel_pending')
        ORDER BY id DESC LIMIT 1 FOR UPDATE`,[lockedProfile.id,externalReference,saleDate]
     );
-    if (duplicate) return { duplicate };
+    if (duplicate) {
+      if (publicExternal) throw Object.assign(new Error('Ya existe una factura asociada a ese folio y fecha. Si necesitas corregirla, comunícate con el negocio.'), { status: 409 });
+      return { duplicate };
+    }
     const folio = String(lockedProfile.next_folio || 1);
     await tx.run('UPDATE {s}.fiscal_emitters SET next_folio=next_folio+1,updated_at=now() WHERE id=$1', [lockedProfile.id]);
     const snapshot = {
@@ -946,7 +985,7 @@ async function issueDirectInvoice({ tenant, tenantDb, input = {}, actor = '' }) 
        (external_reference,sale_date,description,total,payment_form,payment_method,document_kind,request_key,environment,api_mode,series,folio,status,
          receiver_data_enc,fiscal_snapshot_enc,issued_by,fiscal_emitter_id,issuer_rfc,relation_type,related_uuids_enc)
         VALUES($1,$2,$3,$4,$5,$6,'invoice',$7,$8,$9,$10,$11,'pending',$12,$13,$14,$15,$16,$17,$18) RETURNING *`,
-      [externalReference,saleDate,description,total,paymentForm,paymentMethod,createRequestKey(),profile.environment,profile.api_mode,
+      [externalReference,saleDate,description,total,paymentForm,paymentMethod,requestKey,profile.environment,profile.api_mode,
         invoiceSeries,folio,encrypt(JSON.stringify(receiver)),encrypt(JSON.stringify(snapshot)),actor,lockedProfile.id,profile.rfc,
         relation.relationType || null,relation.uuids.length ? encrypt(JSON.stringify(relation.uuids)) : null]
     );
@@ -1408,6 +1447,83 @@ router.post('/public/:slug/issue', publicLimiter, async (req, res, next) => {
     res.json({ ok: true, ...result, token });
   } catch (error) {
     if (error.status) return res.status(error.status).json({ error: error.message, uncertain: Boolean(error.uncertain) });
+    next(error);
+  }
+});
+
+router.post('/public/:slug/issue-external', publicLimiter, async (req, res, next) => {
+  try {
+    const tenant = await findPublicTenant(req.params.slug);
+    if (!tenant || tenant.product_code !== 'invoicing') return res.status(404).json({ error: 'Portal de facturación no disponible' });
+    const suppliedKey = String(req.body?.requestKey || '').trim();
+    const requestKey = UUID_RE.test(suppliedKey) ? suppliedKey : createRequestKey();
+    const result = await issueDirectInvoice({
+      tenant,
+      tenantDb: tdb(tenant.slug),
+      input: { ...(req.body || {}), publicExternal: true, requestKey, emitterId: 1 },
+      actor: 'autofacturación pública',
+    });
+    res.json({ ok: true, ...result, code: requestKey });
+  } catch (error) {
+    if (error.status) return res.status(error.status).json({ error: error.message, uncertain: Boolean(error.uncertain) });
+    next(error);
+  }
+});
+
+router.get('/public/:slug/direct-invoices/:id/:format', publicLimiter, async (req, res, next) => {
+  try {
+    const tenant = await findPublicTenant(req.params.slug);
+    if (!tenant || tenant.product_code !== 'invoicing') return res.status(404).end();
+    if (!['xml', 'pdf'].includes(req.params.format)) return res.status(400).json({ error: 'Formato no válido' });
+    const token = String(req.query.code || '').trim();
+    if (!UUID_RE.test(token)) return res.status(404).end();
+    const tenantDb = tdb(tenant.slug);
+    const invoice = await tenantDb.get(
+      `SELECT * FROM {s}.direct_invoices WHERE id=$1 AND request_key=$2 AND document_kind='invoice' LIMIT 1`,
+      [req.params.id, token]
+    );
+    if (!invoice || invoice.status !== 'active') return res.status(404).end();
+    const format = req.params.format;
+    let content = decrypt(format === 'xml' ? invoice.xml_enc : invoice.pdf_enc);
+    if (!content && invoice.provider_id) {
+      const profile = await getEmitter(tenantDb, invoice.fiscal_emitter_id);
+      const downloaded = await facturamaFor(invoice.environment || profile).downloadCfdi(invoice.provider_id, format, apiModeFor(invoice, profile));
+      content = String(downloaded?.Content || '');
+      if (content) await tenantDb.run(`UPDATE {s}.direct_invoices SET ${format === 'xml' ? 'xml_enc' : 'pdf_enc'}=$1,updated_at=now() WHERE id=$2`, [encrypt(content), invoice.id]);
+    }
+    if (!content) return res.status(404).json({ error: 'El archivo todavía no está disponible' });
+    res.type(format === 'xml' ? 'application/xml' : 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="CFDI-${invoice.uuid || invoice.folio}.${format}"`);
+    res.send(Buffer.from(content, 'base64'));
+  } catch (error) { next(error); }
+});
+
+router.post('/public/:slug/direct-invoices/:id/email', publicLimiter, async (req, res, next) => {
+  try {
+    const tenant = await findPublicTenant(req.params.slug);
+    if (!tenant || tenant.product_code !== 'invoicing') return res.status(404).json({ error: 'Portal de facturación no disponible' });
+    const token = String(req.body?.code || '').trim();
+    if (!UUID_RE.test(token)) return res.status(404).json({ error: 'Factura no encontrada' });
+    const tenantDb = tdb(tenant.slug);
+    const invoice = await tenantDb.get(
+      `SELECT * FROM {s}.direct_invoices WHERE id=$1 AND request_key=$2 AND document_kind='invoice' LIMIT 1`,
+      [req.params.id, token]
+    );
+    if (!invoice) return res.status(404).json({ error: 'Factura no encontrada' });
+    if (invoice.status !== 'active' || !invoice.provider_id) return res.status(409).json({ error: 'La factura todavía no está lista para enviarse' });
+    const email = validateInvoiceEmail(req.body?.email);
+    const profile = await getEmitter(tenantDb, invoice.fiscal_emitter_id);
+    await facturamaFor(invoice.environment || profile).sendCfdiEmail(invoice.provider_id, email, apiModeFor(invoice, profile), {
+      subject: `CFDI ${invoice.series || ''}-${invoice.folio || ''} · ${tenant.business_name}`,
+      comments: 'Adjuntamos la representación PDF y el archivo XML de tu CFDI.',
+    });
+    await tenantDb.run(
+      `INSERT INTO {s}.fiscal_document_events(document_type,document_id,event_type,detail,actor) VALUES('direct',$1,'email_sent',$2,'autofacturación pública')`,
+      [invoice.id, `Enviado a ${maskInvoiceEmail(email)}`]
+    );
+    res.json({ ok: true, message: 'Factura enviada al correo indicado' });
+  } catch (error) {
+    if (error.status) return res.status(error.status).json({ error: error.message });
     next(error);
   }
 });

@@ -53,6 +53,11 @@ test('el panel independiente usa el motor fiscal real y presenta la identidad de
   assert.match(html, /id="documentFilters"/);
   assert.match(html, /id="documentPagination"/);
   assert.match(html, /id="directEmitter"/);
+  assert.match(html, /id="menuButton"[^>]*aria-controls="sidebar"[^>]*aria-expanded="false"/);
+  assert.match(html, /name="directConceptMode" value="detailed"/);
+  assert.match(html, /id="directItems"/);
+  assert.match(html, /id="directReceiverRegime"/);
+  assert.match(html, /id="directReceiverUse"/);
   assert.match(html, /id="manualGlobalEmitter"/);
   assert.match(html, /id="csdEmitter"/);
   assert.match(html, /id="fiscalEmitterForm"/);
@@ -71,9 +76,14 @@ test('el panel independiente usa el motor fiscal real y presenta la identidad de
   assert.match(read('src/routes/invoicing.js'), /if \(profile\.api_mode === 'web'\) return/);
   assert.match(client, /api\('\/api\/invoicing\/csd'/);
   assert.match(client, /api\('\/api\/invoicing\/direct-invoices'/);
+  assert.match(client, /requestKey: form\.dataset\.requestKey/);
+  assert.match(client, /function addDirectConcept/);
+  assert.match(client, /items, description: \$\('#directDescription'\)\.value/);
+  assert.match(read('src/routes/invoicing.js'), /items: saleItems, total, delivery_fee: 0/);
   assert.match(client, /api\('\/api\/settings'/);
   assert.match(html, /id="invoicingSetupModal"/);
-  assert.match(html, /id="setupLogo"[^>]*required/);
+  assert.match(html, /id="setupLogo"[^>]*hidden/);
+  assert.match(html, /Opcional · PNG, JPG o WEBP/);
   assert.match(html, /id="setupRfc"/);
   assert.match(html, /id="setupLegalName"/);
   assert.match(html, /id="setupFiscalRegime"/);
@@ -93,11 +103,14 @@ test('el panel independiente usa el motor fiscal real y presenta la identidad de
   assert.match(client, /api\('\/api\/invoicing\/profile-draft'/);
   assert.match(client, /api\('\/api\/auth\/identity\/complete'/);
   assert.match(client, /api\('\/api\/auth\/onboarding\/complete'/);
-  assert.match(read('src/routes/auth.js'), /if \(req\.tenant\.product_code === 'invoicing'\)/);
-  assert.match(read('src/routes/auth.js'), /'Completa nombre, logo y color'/);
+  assert.match(read('src/routes/auth.js'), /const tenantProductCode = tenant\.product_code === 'invoicing' \? 'invoicing' : 'chatbotpro'/);
+  assert.match(read('src/routes/auth.js'), /datos fiscales/);
   assert.match(client, /¡Felicidades por tu registro, \$\{ownerName\}!/);
   assert.match(client, /ME\.tenant\.primaryColor/);
   assert.match(css, /@media \(max-width: 640px\)/);
+  assert.match(css, /body\.iv-menu-open \{ overflow: hidden; touch-action: none; \}/);
+  assert.match(css, /\.iv-table td::before \{ content: attr\(data-label\)/);
+  assert.match(client, /event\.key === 'Escape'.*setMobileMenu\(false\)/);
 });
 
 test('Super Admin mantiene una cartera separada para facturación independiente', () => {
