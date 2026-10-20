@@ -7732,12 +7732,13 @@ $('#fiscalProfileForm')?.addEventListener('submit', async (event) => {
 });
 $('#fiscalCsdForm')?.addEventListener('submit', async (event) => {
   event.preventDefault();
-  const button = event.currentTarget.querySelector('button[type="submit"]'); button.disabled = true;
+  const form = event.currentTarget;
+  const button = form.querySelector('button[type="submit"]'); button.disabled = true;
   try {
     const headers = {}; const scope = getAuthScope(); if (scope) headers['x-cbp-auth-scope'] = scope;
-    const response = await fetch('/api/invoicing/csd', { method: 'POST', headers, body: new FormData(event.currentTarget) });
+    const response = await fetch('/api/invoicing/csd', { method: 'POST', headers, body: new FormData(form) });
     const data = await response.json().catch(() => ({})); if (!response.ok) throw new Error(data.error || 'No se pudo cargar el CSD');
-    event.currentTarget.reset(); toast(`Sellos digitales cargados · ${data.legalName || 'emisor validado'}`); await loadInvoicing();
+    form.reset(); toast(`Sellos digitales cargados · ${data.legalName || 'emisor validado'}`); await loadInvoicing();
   } catch (error) { toast(error.message, true); } finally { button.disabled = false; }
 });
 

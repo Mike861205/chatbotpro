@@ -1757,6 +1757,7 @@ router.post('/csd', requireOwner, csdUpload.fields([{ name: 'certificate', maxCo
       certificate: certificate.buffer.toString('base64'),
       privateKey: privateKey.buffer.toString('base64'),
       privateKeyPassword: password,
+      replace: profile.csd_uploaded,
     });
     await req.tdb.run('UPDATE {s}.fiscal_emitters SET legal_name=$1,csd_uploaded=1,csd_updated_at=now(),updated_at=now() WHERE id=$2', [certificateIdentity.legalName, emitterId]);
     if (emitterId === 1) await req.tdb.run('UPDATE {s}.fiscal_profiles SET legal_name=$1,csd_uploaded=1,csd_updated_at=now(),updated_at=now() WHERE id=1', [certificateIdentity.legalName]);

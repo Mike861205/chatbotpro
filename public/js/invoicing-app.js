@@ -428,7 +428,8 @@ $('#directSuccessEmailForm').addEventListener('submit', async (event) => {
 
 $('#directInvoiceForm').addEventListener('submit', async (event) => {
   event.preventDefault();
-  const button = event.currentTarget.querySelector('button[type="submit"]');
+  const form = event.currentTarget;
+  const button = form.querySelector('button[type="submit"]');
   const publicGeneral = document.querySelector('input[name="directReceiverMode"]:checked')?.value === 'public';
   button.disabled = true;
   try {
@@ -456,7 +457,7 @@ $('#directInvoiceForm').addEventListener('submit', async (event) => {
     $('#directSuccessEmailStatus').textContent = '';
     $('#directInvoiceSuccess').hidden = false;
     toast(result.message || 'Factura timbrada correctamente');
-    event.currentTarget.reset(); $('#directSaleDate').value = new Date().toISOString().slice(0, 10); $('#directPaymentMethod').dispatchEvent(new Event('change')); updateDirectReceiverMode();
+    form.reset(); $('#directSaleDate').value = new Date().toISOString().slice(0, 10); $('#directPaymentMethod').dispatchEvent(new Event('change')); updateDirectReceiverMode();
     await initialize();
   } catch (error) { toast(error.message, true); }
   finally { button.disabled = false; }
@@ -482,14 +483,14 @@ $('#manualGlobalPeriodicity').addEventListener('change', syncManualGlobalMonths)
 syncManualGlobalMonths();
 
 $('#manualGlobalForm').addEventListener('submit', async (event) => {
-  event.preventDefault(); const button=event.currentTarget.querySelector('button[type="submit"]');button.disabled=true;
-  try{const result=await api('/api/invoicing/manual-global-invoices',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({emitterId:Number($('#manualGlobalEmitter').value),externalReference:$('#manualGlobalReference').value,businessDate:$('#manualGlobalDate').value,description:$('#manualGlobalDescription').value,total:Number($('#manualGlobalTotal').value),paymentForm:$('#manualGlobalPaymentForm').value,periodicity:$('#manualGlobalPeriodicity').value,months:$('#manualGlobalMonth').value,year:Number($('#manualGlobalYear').value)})});toast(result.message);event.currentTarget.reset();renderEmitterOptions();const resetDate=new Date();$('#manualGlobalDate').value=resetDate.toISOString().slice(0,10);syncManualGlobalMonths();$('#manualGlobalYear').value=String(resetDate.getFullYear());$('#manualGlobalDescription').value='Ventas del día al público en general';await loadDocuments();setView('documents');}catch(error){toast(error.message,true);}finally{button.disabled=false;}
+  event.preventDefault(); const form=event.currentTarget;const button=form.querySelector('button[type="submit"]');button.disabled=true;
+  try{const result=await api('/api/invoicing/manual-global-invoices',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({emitterId:Number($('#manualGlobalEmitter').value),externalReference:$('#manualGlobalReference').value,businessDate:$('#manualGlobalDate').value,description:$('#manualGlobalDescription').value,total:Number($('#manualGlobalTotal').value),paymentForm:$('#manualGlobalPaymentForm').value,periodicity:$('#manualGlobalPeriodicity').value,months:$('#manualGlobalMonth').value,year:Number($('#manualGlobalYear').value)})});toast(result.message);form.reset();renderEmitterOptions();const resetDate=new Date();$('#manualGlobalDate').value=resetDate.toISOString().slice(0,10);syncManualGlobalMonths();$('#manualGlobalYear').value=String(resetDate.getFullYear());$('#manualGlobalDescription').value='Ventas del día al público en general';await loadDocuments();setView('documents');}catch(error){toast(error.message,true);}finally{button.disabled=false;}
 });
 
 $('#paymentSource').addEventListener('change',()=>{const selected=RECEIVABLES.find((row)=>`${row.type}:${row.id}`===$('#paymentSource').value);if(selected)$('#paymentAmount').value=selected.balance.toFixed(2);});
-$('#paymentComplementForm').addEventListener('submit',async(event)=>{event.preventDefault();const button=event.currentTarget.querySelector('button[type="submit"]');button.disabled=true;try{const source=splitDocumentKey($('#paymentSource').value);const result=await api('/api/invoicing/payment-complements',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sourceType:source.type,sourceId:source.id,amount:Number($('#paymentAmount').value),paymentDate:new Date($('#paymentDate').value).toISOString(),paymentForm:$('#paymentForm').value,operationNumber:$('#paymentOperation').value})});toast(result.message);event.currentTarget.reset();const resetDate=new Date();$('#paymentDate').value=new Date(resetDate.getTime()-resetDate.getTimezoneOffset()*60000).toISOString().slice(0,16);await loadDocuments();await loadReceivables();setView('documents');}catch(error){toast(error.message,true);}finally{button.disabled=false;}});
+$('#paymentComplementForm').addEventListener('submit',async(event)=>{event.preventDefault();const form=event.currentTarget;const button=form.querySelector('button[type="submit"]');button.disabled=true;try{const source=splitDocumentKey($('#paymentSource').value);const result=await api('/api/invoicing/payment-complements',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sourceType:source.type,sourceId:source.id,amount:Number($('#paymentAmount').value),paymentDate:new Date($('#paymentDate').value).toISOString(),paymentForm:$('#paymentForm').value,operationNumber:$('#paymentOperation').value})});toast(result.message);form.reset();const resetDate=new Date();$('#paymentDate').value=new Date(resetDate.getTime()-resetDate.getTimezoneOffset()*60000).toISOString().slice(0,16);await loadDocuments();await loadReceivables();setView('documents');}catch(error){toast(error.message,true);}finally{button.disabled=false;}});
 
-$('#creditNoteForm').addEventListener('submit',async(event)=>{event.preventDefault();const button=event.currentTarget.querySelector('button[type="submit"]');button.disabled=true;try{const source=splitDocumentKey($('#creditSource').value);const result=await api('/api/invoicing/credit-notes',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sourceType:source.type,sourceId:source.id,total:Number($('#creditTotal').value),description:$('#creditDescription').value,paymentForm:$('#creditPaymentForm').value})});toast(result.message);event.currentTarget.reset();await loadDocuments();setView('documents');}catch(error){toast(error.message,true);}finally{button.disabled=false;}});
+$('#creditNoteForm').addEventListener('submit',async(event)=>{event.preventDefault();const form=event.currentTarget;const button=form.querySelector('button[type="submit"]');button.disabled=true;try{const source=splitDocumentKey($('#creditSource').value);const result=await api('/api/invoicing/credit-notes',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sourceType:source.type,sourceId:source.id,total:Number($('#creditTotal').value),description:$('#creditDescription').value,paymentForm:$('#creditPaymentForm').value})});toast(result.message);form.reset();await loadDocuments();setView('documents');}catch(error){toast(error.message,true);}finally{button.disabled=false;}});
 
 $('#fiscalForm').addEventListener('submit', async (event) => {
   event.preventDefault();
@@ -501,9 +502,10 @@ $('#fiscalForm').addEventListener('submit', async (event) => {
 
 $('#csdForm').addEventListener('submit', async (event) => {
   event.preventDefault();
+  const form = event.currentTarget;
   try {
-    await api('/api/invoicing/csd', { method: 'POST', body: new FormData(event.currentTarget) });
-    event.currentTarget.reset(); toast('Certificado de Sello Digital cargado'); await initialize(); setView('settings');
+    await api('/api/invoicing/csd', { method: 'POST', body: new FormData(form) });
+    form.reset(); toast('Certificado de Sello Digital cargado'); await initialize(); setView('settings');
   } catch (error) { toast(error.message, true); }
 });
 

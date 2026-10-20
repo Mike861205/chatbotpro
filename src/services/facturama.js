@@ -207,9 +207,9 @@ class FacturamaClient {
     return this.request(`/api-lite/cfdis/${encodeURIComponent(id)}?${query}`, { method: 'DELETE' });
   }
 
-  uploadCsd({ rfc, certificate, privateKey, privateKeyPassword }) {
-    return this.request('/api-lite/csds', {
-      method: 'POST',
+  uploadCsd({ rfc, certificate, privateKey, privateKeyPassword, replace = false }) {
+    return this.request(replace ? `/api-lite/csds/${encodeURIComponent(rfc)}` : '/api-lite/csds', {
+      method: replace ? 'PUT' : 'POST',
       body: { Rfc: rfc, Certificate: certificate, PrivateKey: privateKey, PrivateKeyPassword: privateKeyPassword },
     });
   }
