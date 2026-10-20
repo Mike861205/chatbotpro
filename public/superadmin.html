@@ -7,7 +7,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/regular/style.css" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/bold/style.css" />
-  <link rel="stylesheet" href="/static/css/styles.css?v=20261008-non-renewals" />
+  <link rel="stylesheet" href="/static/css/styles.css?v=20261020-production-invoicing" />
   <link rel="icon" type="image/svg+xml" href="/static/favicon.svg?v=20260623" />
   <link rel="icon" type="image/png" href="/static/chatbotpro100.png?v=20260623" />
   <link rel="shortcut icon" href="/static/chatbotpro100.png?v=20260623" />
@@ -28,6 +28,7 @@
         <a href="#clients" data-sa-view="clients" data-color="green"><span class="nav-ic"><i class="ph-fill ph-handshake"></i></span><span>Clientes</span><span class="sa-module-icon"><i class="ph-bold ph-identification-card"></i></span></a>
         <a href="#non-renewals" data-sa-view="non-renewals" data-color="rose"><span class="nav-ic"><i class="ph-fill ph-user-minus"></i></span><span>No renovación</span><span class="sa-module-icon"><i class="ph-bold ph-folder-open"></i></span></a>
         <a href="#invoicing" data-sa-view="invoicing" data-color="amber"><span class="nav-ic"><i class="ph-fill ph-file-text"></i></span><span>Facturación</span><span class="sa-module-icon"><i class="ph-bold ph-stamp"></i></span></a>
+        <a href="#production-invoicing" data-sa-view="production-invoicing" data-color="green"><span class="nav-ic"><i class="ph-fill ph-receipt"></i></span><span>Facturación Producción</span><span class="sa-module-icon"><i class="ph-bold ph-files"></i></span></a>
         <a href="#demo-leads" data-sa-view="demo-leads" data-color="violet"><span class="nav-ic"><i class="ph-fill ph-rocket-launch"></i></span><span>Leads demo</span><span class="sa-module-icon"><i class="ph-bold ph-phone-call"></i></span></a>
         <a href="#follow-up" data-sa-view="follow-up" data-color="cyan"><span class="nav-ic"><i class="ph-fill ph-path"></i></span><span>Seguimiento</span><span class="sa-module-icon"><i class="ph-bold ph-kanban"></i></span></a>
         <a href="#resellers" data-sa-view="resellers" data-color="green"><span class="nav-ic"><i class="ph-fill ph-users-four"></i></span><span>Resellers</span><span class="sa-module-icon"><i class="ph-bold ph-link"></i></span></a>
@@ -188,6 +189,28 @@
           </div>
           <div id="saInvoicingTable"></div>
         </div>
+      </section>
+
+      <section id="saViewProductionInvoicing" class="section" hidden>
+        <div class="card clients-hero-card" style="padding:18px;margin-bottom:14px">
+          <div><span class="clients-hero-kicker"><i class="ph-bold ph-receipt"></i> Control fiscal global</span><h3>Facturación Producción</h3><p>CFDI registrados por ChatBotPro en Producción. No incluye documentos creados fuera del sistema. Los saldos de timbres son internos del tenant y se comparten con Sandbox.</p></div>
+          <button type="button" class="btn btn-ghost" id="saProductionReload"><i class="ph-bold ph-arrows-clockwise"></i> Actualizar</button>
+        </div>
+        <div class="card" style="padding:16px;margin-bottom:14px">
+          <form id="saProductionFilters" class="sa-production-filters">
+            <label>Tenants <select id="saProductionScope"><option value="all">Todos</option><option value="active">Activos con facturación habilitada</option></select></label>
+            <label>Negocio <select id="saProductionTenant"><option value="">Todos los negocios</option></select></label>
+            <label>Tipo <select id="saProductionType"><option value="all">Todos</option><option value="individual">Ticket</option><option value="global">Global</option><option value="direct">Directa</option><option value="manual_global">Global manual</option><option value="credit_note">Nota de crédito</option><option value="payment">Complemento de pago</option></select></label>
+            <label>Estado <select id="saProductionStatus"><option value="all">Todos</option><option value="active">Activo</option><option value="canceled">Cancelado</option><option value="cancel_pending">Cancelación pendiente</option><option value="pending">Pendiente</option><option value="unknown">Indeterminado</option><option value="failed">Fallido</option></select></label>
+            <label>Desde <input id="saProductionFrom" type="date" /></label>
+            <label>Hasta <input id="saProductionTo" type="date" /></label>
+            <label>Buscar CFDI <input id="saProductionSearch" type="search" placeholder="UUID, RFC o folio" maxlength="80" /></label>
+            <button type="submit" class="btn btn-primary"><i class="ph-bold ph-funnel"></i> Filtrar</button>
+          </form>
+        </div>
+        <div class="card" style="padding:16px;margin-bottom:14px"><div id="saProductionSummary" class="client-summary-grid"></div><p class="hint" style="margin-top:10px">Los documentos y timbres consumidos siguen los filtros. Los timbres disponibles muestran el saldo actual del tenant.</p></div>
+        <div class="card" style="padding:16px;margin-bottom:14px"><h3><i class="ph-bold ph-buildings"></i> Por tenant</h3><p class="hint">Los importes son CFDI de ingreso activos. Notas de crédito y complementos se muestran aparte.</p><div id="saProductionTenants"></div></div>
+        <div class="card" style="padding:16px"><h3><i class="ph-bold ph-files"></i> CFDI de Producción</h3><p class="hint">Incluye tickets, globales, facturas directas, notas de crédito y complementos. Nunca mezcla Sandbox.</p><div id="saProductionDocuments"></div><div id="saProductionPagination" class="sa-production-pagination"></div></div>
       </section>
 
       <section id="saViewDemoLeads" class="section" hidden>
@@ -675,6 +698,6 @@
       </form>
     </div>
   </div>
-  <script src="/static/js/superadmin.js?v=20261008-non-renewals"></script>
+  <script src="/static/js/superadmin.js?v=20261020-production-invoicing"></script>
 </body>
 </html>

@@ -11,6 +11,7 @@ const { createRateLimiter } = require('../middleware/security');
 const { describeStoredPhone, normalizeInternationalPhone } = require('../utils/phone');
 const { buildClientSummary } = require('../utils/customerLifecycle');
 const { isMexicoIdentity } = require('../utils/invoicing');
+const { productionFilters, productionDocumentSql } = require('../utils/productionInvoicing');
 const {
   loadTenantOperationResetPreview,
   resetBlockerMessages,
@@ -1768,6 +1769,94 @@ function serializeStampWallet(wallet) {
     lowBalanceThreshold: Number(wallet?.low_balance_threshold || 20),
   };
 }
+
+router.get('/production-invoicing', requireSuperAdmin, async (req, res, next) => {
+  try {
+    const filters = productionFilters(req.query);
+    const tenantRows = (await q(
+      `SELECT id,slug,business_name,account_status,invoicing_enabled,invoicing_environment
+       FROM tenants WHERE slug<>$1 AND (invoicing_enabled=1 OR invoicing_environment='production' OR invoicing_activated_at IS NOT NULL)
+       ORDER BY business_name,id`,
+      [config.DEMO_TENANT_SLUG]
+    )).rows;
+    if (filters.tenantId && !tenantRows.some((tenant) => Number(tenant.id) === filters.tenantId)) {
+      return res.status(404).json({ error: 'Tenant no encontrado' });
+    }
+    const selected = tenantRows.filter((tenant) =>
+      (!filters.tenantId || Number(tenant.id) === filters.tenantId)
+      && (filters.scope !== 'active' || (tenant.account_status === 'active' && Number(tenant.invoicing_enabled) === 1))
+    );
+    const built = productionDocumentSql(selected, filters);
+    const emptySummary = { documents: 0, active: 0, canceled: 0, pending: 0, stampsConsumed: 0, incomeTotal: 0, creditTotal: 0, paymentTotal: 0 };
+    let groups = [];
+    let documentRows = [];
+    if (built) {
+      const groupSql = `${built.cte}
+        SELECT tenant_id,COUNT(*)::int AS documents,
+          COUNT(*) FILTER (WHERE status='active')::int AS active,
+          COUNT(*) FILTER (WHERE status='canceled')::int AS canceled,
+          COUNT(*) FILTER (WHERE status IN ('pending','unknown','cancel_pending'))::int AS pending,
+          COUNT(*) FILTER (WHERE stamp_consumed)::int AS stamps_consumed,
+          COALESCE(SUM(total) FILTER (WHERE status='active' AND document_type IN ('individual','global','direct','manual_global')),0)::float AS income_total,
+          COALESCE(SUM(total) FILTER (WHERE status='active' AND document_type='credit_note'),0)::float AS credit_total,
+          COALESCE(SUM(total) FILTER (WHERE status='active' AND document_type='payment'),0)::float AS payment_total
+        FROM filtered GROUP BY tenant_id`;
+      const limit = 25;
+      const offset = (filters.page - 1) * limit;
+      const rowsSql = `${built.cte} SELECT tenant_id,document_type,document_id,status,uuid,series,folio,issuer_rfc,api_mode,total,
+        issued_at,created_at,activity_at,stamp_consumed FROM filtered
+        ORDER BY activity_at DESC,tenant_id DESC,document_id DESC LIMIT $${built.params.length + 1} OFFSET $${built.params.length + 2}`;
+      const [groupResult, rowResult] = await Promise.all([
+        q(groupSql, built.params),
+        q(rowsSql, [...built.params, limit, offset]),
+      ]);
+      groups = groupResult.rows;
+      documentRows = rowResult.rows;
+    }
+    const groupByTenant = new Map(groups.map((row) => [Number(row.tenant_id), row]));
+    const walletRows = await Promise.all(selected.map(async (tenant) => {
+      const wallet = await tdb(tenant.slug).get('SELECT unlimited,balance,reserved FROM {s}.stamp_wallet WHERE id=1');
+      return [Number(tenant.id), serializeStampWallet(wallet)];
+    }));
+    const wallets = new Map(walletRows);
+    const tenants = selected.map((tenant) => {
+      const figures = groupByTenant.get(Number(tenant.id)) || emptySummary;
+      return {
+        id: Number(tenant.id), slug: tenant.slug, businessName: tenant.business_name,
+        accountActive: tenant.account_status === 'active', invoicingEnabled: Boolean(Number(tenant.invoicing_enabled)),
+        environment: tenant.invoicing_environment || 'sandbox', wallet: wallets.get(Number(tenant.id)),
+        figures: {
+          documents: Number(figures.documents || 0), active: Number(figures.active || 0),
+          canceled: Number(figures.canceled || 0), pending: Number(figures.pending || 0),
+          stampsConsumed: Number(figures.stamps_consumed || 0),
+          incomeTotal: Number(figures.income_total || 0), creditTotal: Number(figures.credit_total || 0),
+          paymentTotal: Number(figures.payment_total || 0),
+        },
+      };
+    });
+    const totals = tenants.reduce((sum, tenant) => {
+      Object.keys(emptySummary).forEach((key) => { sum[key] += tenant.figures[key]; });
+      sum.stampsAvailable += Number(tenant.wallet?.available || 0);
+      sum.stampsReserved += Number(tenant.wallet?.reserved || 0);
+      sum.unlimitedWallets += tenant.wallet?.unlimited ? 1 : 0;
+      return sum;
+    }, { ...emptySummary, stampsAvailable: 0, stampsReserved: 0, unlimitedWallets: 0 });
+    const tenantNames = new Map(tenantRows.map((tenant) => [Number(tenant.id), tenant.business_name]));
+    res.json({
+      filters, totals,
+      tenantOptions: tenantRows.map((tenant) => ({ id: Number(tenant.id), businessName: tenant.business_name, slug: tenant.slug })),
+      tenants,
+      documents: documentRows.map((row) => ({
+        tenantId: Number(row.tenant_id), tenantName: tenantNames.get(Number(row.tenant_id)) || '',
+        type: row.document_type, id: Number(row.document_id), status: row.status,
+        uuid: row.uuid || '', series: row.series || '', folio: row.folio || '', issuerRfc: row.issuer_rfc || '',
+        apiMode: row.api_mode || '', total: Number(row.total || 0), issuedAt: row.issued_at,
+        createdAt: row.created_at, activityAt: row.activity_at, stampConsumed: Boolean(row.stamp_consumed),
+      })),
+      pagination: { page: filters.page, limit: 25, total: totals.documents, pages: Math.max(1, Math.ceil(totals.documents / 25)) },
+    });
+  } catch (error) { next(error); }
+});
 
 router.get('/tenants/:id/stamps', requireSuperAdmin, async (req, res, next) => {
   try {

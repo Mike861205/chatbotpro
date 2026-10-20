@@ -11269,3 +11269,12 @@ body.onboarding-open { overflow: hidden; }
 .pos-bulk-qty input { width: 72px; padding: 5px 6px; text-align: right; }
 .pos-bulk-qty small { font-size: 11px; color: var(--muted, #667085); }
 body[data-business-type="grocery"] .ai-draft-config section:not(.ai-grocery-config) { display: none; }
+.sa-production-filters { display:flex; flex-wrap:wrap; align-items:end; gap:10px; }
+.sa-production-filters label { display:flex; flex-direction:column; gap:5px; min-width:130px; flex:1 1 145px; font-size:12px; font-weight:700; }
+.sa-production-filters label:nth-child(2) { flex-basis:225px; }
+.sa-production-filters label:last-of-type { flex-basis:190px; }
+.sa-production-filters input, .sa-production-filters select { width:100%; min-height:38px; }
+.sa-production-filters button { min-height:38px; }
+.sa-production-pagination { display:flex; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap; margin-top:12px; }
+.sa-production-pagination > div { display:flex; gap:8px; }
+.sa-production-pagination button:disabled { opacity:.45; cursor:not-allowed; }

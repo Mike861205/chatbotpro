@@ -7,6 +7,8 @@ let SA_CLIENT_FILTER = 'all';
 let SA_CLIENT_SUMMARY = null;
 let SA_INVOICING = [];
 let SA_INVOICING_FILTER = 'all';
+let SA_PRODUCTION_DATA = null;
+let SA_PRODUCTION_PAGE = 1;
 let SA_DEMO_LEADS = [];
 let SA_FOLLOW_UP = [];
 let SA_RESELLERS = [];
@@ -1575,6 +1577,76 @@ async function loadInvoicingBusinesses() {
   renderInvoicingTable();
 }
 
+const SA_PRODUCTION_TYPES = {
+  individual: 'Ticket', global: 'Global', direct: 'Directa', manual_global: 'Global manual',
+  credit_note: 'Nota de crédito', payment: 'Complemento de pago',
+};
+const SA_PRODUCTION_STATUSES = {
+  active: 'Activo', canceled: 'Cancelado', cancel_pending: 'Cancelación pendiente',
+  pending: 'Pendiente', unknown: 'Indeterminado', failed: 'Fallido',
+};
+
+function renderProductionInvoicing(data) {
+  const totals = data.totals || {};
+  const cards = [
+    ['Registros fiscales', totals.documents, 'ph-files', 'tone-total'],
+    ['CFDI activos', totals.active, 'ph-seal-check', 'tone-active'],
+    ['Timbres consumidos', totals.stampsConsumed, 'ph-stamp', 'tone-current'],
+    ['Ingresos activos', fmtMoney(totals.incomeTotal), 'ph-currency-dollar', 'tone-active'],
+    ['Notas de crédito activas', fmtMoney(totals.creditTotal), 'ph-arrow-u-up-left', 'tone-due'],
+    ['Timbres disponibles', totals.unlimitedWallets ? `${Number(totals.stampsAvailable || 0)} + ${totals.unlimitedWallets} ilimitado(s)` : totals.stampsAvailable, 'ph-wallet', 'tone-soon'],
+  ];
+  $('#saProductionSummary').innerHTML = cards.map(([label, value, icon, tone]) =>
+    `<div class="pos-mini-stat sa-client-summary-card ${tone}"><span><i class="ph-bold ${icon}"></i> ${esc(label)}</span><b>${esc(value ?? 0)}</b></div>`
+  ).join('');
+
+  const selectedTenant = $('#saProductionTenant').value;
+  $('#saProductionTenant').innerHTML = '<option value="">Todos los negocios</option>'
+    + (data.tenantOptions || []).map((tenant) => `<option value="${Number(tenant.id)}">${esc(tenant.businessName)} · /${esc(tenant.slug)}</option>`).join('');
+  $('#saProductionTenant').value = selectedTenant;
+
+  const tenants = [...(data.tenants || [])].sort((a, b) => Number(b.figures.documents) - Number(a.figures.documents) || a.businessName.localeCompare(b.businessName, 'es'));
+  $('#saProductionTenants').innerHTML = tenants.length
+    ? `<div class="table-wrap"><table><thead><tr><th>Tenant</th><th>Ambiente actual</th><th>CFDI / activos</th><th>Ingresos activos</th><th>Timbres usados</th><th>Disponibles</th><th>Acciones</th></tr></thead><tbody>${tenants.map((tenant) => {
+      const wallet = tenant.wallet || {};
+      return `<tr><td><b>${esc(tenant.businessName)}</b><div class="meta">/${esc(tenant.slug)}</div></td><td><span class="tag ${tenant.environment === 'production' ? 'ok' : 'warn'}">${tenant.environment === 'production' ? 'Producción' : 'Sandbox'}</span><div class="meta">${tenant.invoicingEnabled ? 'Facturación habilitada' : 'Facturación desactivada'}</div></td><td><b>${Number(tenant.figures.documents)} / ${Number(tenant.figures.active)}</b><div class="meta">${Number(tenant.figures.canceled)} cancelados · ${Number(tenant.figures.pending)} pendientes</div></td><td><b>${fmtMoney(tenant.figures.incomeTotal)}</b></td><td><b>${Number(tenant.figures.stampsConsumed)}</b></td><td><b>${wallet.unlimited ? 'Ilimitados' : Number(wallet.available || 0)}</b><div class="meta">${Number(wallet.reserved || 0)} reservados</div></td><td><div class="sa-actions-grid"><button type="button" class="btn btn-ghost" data-production-tenant="${tenant.id}">Ver CFDI</button><button type="button" class="btn btn-ghost" data-production-stamps="${tenant.id}">Timbres</button></div></td></tr>`;
+    }).join('')}</tbody></table></div>`
+    : '<div class="empty"><b>Sin tenants para este filtro</b></div>';
+  $('#saProductionTenants').querySelectorAll('[data-production-tenant]').forEach((button) => button.addEventListener('click', () => {
+    $('#saProductionTenant').value = button.dataset.productionTenant;
+    SA_PRODUCTION_PAGE = 1;
+    loadProductionInvoicing().catch((error) => toast(error.message, true));
+  }));
+  $('#saProductionTenants').querySelectorAll('[data-production-stamps]').forEach((button) => button.addEventListener('click', () =>
+    manageTenantStamps(Number(button.dataset.productionStamps)).catch((error) => toast(error.message, true))));
+
+  const documents = data.documents || [];
+  $('#saProductionDocuments').innerHTML = documents.length
+    ? `<div class="table-wrap"><table><thead><tr><th>Fecha</th><th>Tenant / RFC emisor</th><th>Tipo</th><th>Folio / UUID</th><th>Importe</th><th>Estado</th><th>Timbre</th></tr></thead><tbody>${documents.map((doc) =>
+      `<tr><td>${fmtDateTime(doc.activityAt)}</td><td><b>${esc(doc.tenantName)}</b><div class="meta">${esc(doc.issuerRfc || 'RFC no registrado')}</div></td><td>${esc(SA_PRODUCTION_TYPES[doc.type] || doc.type)}<div class="meta">${doc.apiMode === 'multi' ? 'Multiemisor' : doc.apiMode === 'web' ? 'API Web' : '—'}</div></td><td><b>${esc([doc.series, doc.folio].filter(Boolean).join('-') || '—')}</b><div class="meta">${esc(doc.uuid || 'Sin UUID')}</div></td><td><b>${fmtMoney(doc.total)}</b></td><td><span class="tag ${doc.status === 'active' ? 'ok' : 'warn'}">${esc(SA_PRODUCTION_STATUSES[doc.status] || doc.status)}</span></td><td>${doc.stampConsumed ? '<span class="tag ok">Consumido</span>' : '<span class="tag warn">Sin consumo</span>'}</td></tr>`
+    ).join('')}</tbody></table></div>`
+    : '<div class="empty"><b>Sin CFDI de Producción</b><p>No hay documentos para los filtros elegidos.</p></div>';
+  const pagination = data.pagination || { page: 1, pages: 1, total: 0 };
+  $('#saProductionPagination').innerHTML = `<span class="hint">${Number(pagination.total)} documentos · página ${Number(pagination.page)} de ${Number(pagination.pages)}</span><div><button type="button" class="btn btn-ghost" data-production-page="prev" ${pagination.page <= 1 ? 'disabled' : ''}>Anterior</button><button type="button" class="btn btn-ghost" data-production-page="next" ${pagination.page >= pagination.pages ? 'disabled' : ''}>Siguiente</button></div>`;
+  $('#saProductionPagination').querySelectorAll('[data-production-page]').forEach((button) => button.addEventListener('click', () => {
+    SA_PRODUCTION_PAGE += button.dataset.productionPage === 'next' ? 1 : -1;
+    loadProductionInvoicing().catch((error) => toast(error.message, true));
+  }));
+}
+
+async function loadProductionInvoicing() {
+  if (!SA_PRODUCTION_DATA) $('#saProductionDocuments').innerHTML = '<div class="empty">Consultando facturación de Producción…</div>';
+  const params = new URLSearchParams({
+    scope: $('#saProductionScope').value, tenantId: $('#saProductionTenant').value,
+    type: $('#saProductionType').value, status: $('#saProductionStatus').value,
+    from: $('#saProductionFrom').value, to: $('#saProductionTo').value,
+    search: $('#saProductionSearch').value.trim(), page: String(SA_PRODUCTION_PAGE),
+  });
+  const data = await api(`/api/superadmin/production-invoicing?${params}`);
+  SA_PRODUCTION_DATA = data;
+  renderProductionInvoicing(data);
+}
+
 async function refreshBilling() {
   const payload = await api('/api/superadmin/billing/refresh', { method: 'POST' });
   await Promise.all([loadTenants(), loadClients()]);
@@ -2459,6 +2531,7 @@ function setView(view) {
   const isClients = view === 'clients';
   const isNonRenewals = view === 'non-renewals';
   const isInvoicing = view === 'invoicing';
+  const isProductionInvoicing = view === 'production-invoicing';
   const isDemoLeads = view === 'demo-leads';
   const isFollowUp = view === 'follow-up';
   const isResellers = view === 'resellers';
@@ -2476,6 +2549,9 @@ function setView(view) {
   } else if (isInvoicing) {
     title = '<i class="ph-bold ph-file-text"></i> Facturación';
     subtitle = 'Prospectos y clientes del portal fiscal independiente.';
+  } else if (isProductionInvoicing) {
+    title = '<i class="ph-bold ph-receipt"></i> Facturación Producción';
+    subtitle = 'CFDI y timbres de Producción por tenant.';
   } else if (isDemoLeads) {
     title = '<i class="ph-bold ph-rocket-launch"></i> Leads demo';
     subtitle = 'Contactos que pidieron acceso al demo con sus datos de negocio.';
@@ -2498,6 +2574,8 @@ function setView(view) {
   $('#saViewNonRenewals').classList.toggle('active', isNonRenewals);
   $('#saViewInvoicing').hidden = !isInvoicing;
   $('#saViewInvoicing').classList.toggle('active', isInvoicing);
+  $('#saViewProductionInvoicing').hidden = !isProductionInvoicing;
+  $('#saViewProductionInvoicing').classList.toggle('active', isProductionInvoicing);
   $('#saViewDemoLeads').hidden = !isDemoLeads;
   $('#saViewDemoLeads').classList.toggle('active', isDemoLeads);
   $('#saViewFollowUp').hidden = !isFollowUp;
@@ -2506,8 +2584,8 @@ function setView(view) {
   $('#saViewResellers').classList.toggle('active', isResellers);
   $('#saViewStorageHygiene').hidden = !isStorageHygiene;
   $('#saViewStorageHygiene').classList.toggle('active', isStorageHygiene);
-  $('#saViewIntegrations').hidden = isTenants || isStorageHygiene || isClients || isNonRenewals || isInvoicing || isDemoLeads || isFollowUp || isResellers;
-  $('#saViewIntegrations').classList.toggle('active', !isTenants && !isStorageHygiene && !isClients && !isNonRenewals && !isInvoicing && !isDemoLeads && !isFollowUp && !isResellers);
+  $('#saViewIntegrations').hidden = isTenants || isStorageHygiene || isClients || isNonRenewals || isInvoicing || isProductionInvoicing || isDemoLeads || isFollowUp || isResellers;
+  $('#saViewIntegrations').classList.toggle('active', !isTenants && !isStorageHygiene && !isClients && !isNonRenewals && !isInvoicing && !isProductionInvoicing && !isDemoLeads && !isFollowUp && !isResellers);
   $('#saTitle').innerHTML = title;
   $('#saSub').textContent = subtitle;
   document.querySelectorAll('[data-sa-view]').forEach((a) => a.classList.toggle('active', a.dataset.saView === view));
@@ -2521,6 +2599,7 @@ async function boot() {
     initSalesStageControls();
     await Promise.all([loadTenants(), loadClients(), loadNonRenewals(), loadInvoicingBusinesses(), loadDemoLeads(), loadFollowUp(), loadResellers(), loadIntegrations(), loadDeployStatus(), loadGitDeployStatus()]);
     if (SA_ACTIVE_VIEW === 'storage-hygiene') await loadStorageHygiene();
+    if (SA_ACTIVE_VIEW === 'production-invoicing') await loadProductionInvoicing();
   } catch (err) {
     toast(err.message, true);
   }
@@ -2547,6 +2626,12 @@ $('#saReloadClients')?.addEventListener('click', () => loadClients().catch((e) =
 $('#saNonRenewalSearch')?.addEventListener('input', renderNonRenewals);
 $('#saReloadNonRenewals')?.addEventListener('click', () => loadNonRenewals().catch((e) => toast(e.message, true)));
 $('#saReloadInvoicing')?.addEventListener('click', () => loadInvoicingBusinesses().catch((e) => toast(e.message, true)));
+$('#saProductionReload')?.addEventListener('click', () => loadProductionInvoicing().catch((e) => toast(e.message, true)));
+$('#saProductionFilters')?.addEventListener('submit', (event) => {
+  event.preventDefault();
+  SA_PRODUCTION_PAGE = 1;
+  loadProductionInvoicing().catch((e) => toast(e.message, true));
+});
 $('#saInvoicingSearch')?.addEventListener('input', renderInvoicingTable);
 document.querySelectorAll('#saInvoicingFilters button').forEach((button) => button.addEventListener('click', () => {
   SA_INVOICING_FILTER = button.dataset.status;
@@ -2578,6 +2663,7 @@ document.querySelectorAll('[data-sa-view]').forEach((a) => {
     setView(a.dataset.saView);
     history.replaceState(null, '', `#${a.dataset.saView}`);
     if (a.dataset.saView === 'storage-hygiene' && !SA_STORAGE_REPORT) loadStorageHygiene().catch((error) => toast(error.message, true));
+    if (a.dataset.saView === 'production-invoicing' && !SA_PRODUCTION_DATA) loadProductionInvoicing().catch((error) => toast(error.message, true));
   });
 });
 
@@ -2670,7 +2756,7 @@ $('#saResellerCancel')?.addEventListener('click', closeResellerModal);
 $('#saResellerModal')?.addEventListener('click', (event) => { if (event.target?.id === 'saResellerModal') closeResellerModal(); });
 $('#saResellerForm')?.addEventListener('submit', (event) => saveReseller(event).catch((error) => toast(error.message, true)));
 
-const SA_INITIAL_VIEW = ['tenants', 'storage-hygiene', 'clients', 'non-renewals', 'invoicing', 'demo-leads', 'follow-up', 'resellers', 'integrations'].includes((location.hash || '#tenants').slice(1))
+const SA_INITIAL_VIEW = ['tenants', 'storage-hygiene', 'clients', 'non-renewals', 'invoicing', 'production-invoicing', 'demo-leads', 'follow-up', 'resellers', 'integrations'].includes((location.hash || '#tenants').slice(1))
   ? (location.hash || '#tenants').slice(1)
   : 'tenants';
 setView(SA_INITIAL_VIEW);
