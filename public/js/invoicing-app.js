@@ -55,7 +55,7 @@ function renderPortal() {
   document.documentElement.style.setProperty('--tenant-color', color);
   ['#portalBrand', '#portalBrandLarge'].forEach((selector) => $(selector).style.setProperty('--tenant-color', color));
   ['#portalBusiness', '#portalBusinessLarge'].forEach((selector) => $(selector).textContent = ME.tenant.businessName);
-  ['#portalLogo', '#portalLogoLarge'].forEach((selector) => { $(selector).src = ME.tenant.logo || '/static/chatbotpro100.png'; });
+  ['#portalLogo', '#portalLogoLarge', '#accountLogo'].forEach((selector) => { $(selector).src = ME.tenant.logo || '/static/chatbotpro100.png'; });
   $('#portalUrlShort').textContent = portalUrl;
   $('#portalUrlLarge').textContent = portalUrl;
   $('#openPortal').onclick = () => window.open(portalUrl, '_blank', 'noopener');
@@ -99,7 +99,6 @@ function fillInvoicingSetup() {
   $('#setupFiscalRegime').value = profile.fiscal_regime || '';
   $('#setupPostalCode').value = profile.postal_code || '';
   const logo = String(ME?.tenant?.logo || '').trim();
-  $('#setupLogo').required = !logo;
   $('#setupLogoPreview').innerHTML = logo ? `<img src="${escapeHtml(logo)}" alt="Logo actual" />` : '<i class="ph-bold ph-image-square"></i>';
 }
 
@@ -531,7 +530,8 @@ $('#invoicingSetupForm').addEventListener('submit', async (event) => {
   const button = $('#invoicingSetupSubmit');
   const errorBox = $('#invoicingSetupError');
   const identity = new FormData();
-  identity.append('business_name', $('#setupBusinessName').value.trim());
+  const businessName = $('#setupBusinessName').value.trim();
+  if (businessName.length >= 2) identity.append('business_name', businessName);
   identity.append('primary_color', $('#setupColor').value);
   const logo = $('#setupLogo').files?.[0];
   if (logo) identity.append('logo', logo);

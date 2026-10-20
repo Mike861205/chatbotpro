@@ -5,23 +5,27 @@
   <title>Panel de facturación | ChatBotPro</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" /><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display&family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/bold/style.css" /><link rel="stylesheet" href="/static/css/invoicing-product.css?v=20260906allforms" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/bold/style.css" /><link rel="stylesheet" href="/static/css/invoicing-product.css?v=20261019sidebar" />
   <link rel="icon" type="image/png" href="/static/chatbotpro100.png" />
 </head>
 <body>
   <div class="iv-app">
     <aside class="iv-sidebar" id="sidebar">
-      <a class="iv-brand" href="/facturacion/panel"><img src="/static/chatbotpro100.png" alt="" /><span><strong>Facturación</strong><small>ChatBotPro</small></span></a>
+      <a class="iv-brand" href="/facturacion/panel"><span class="iv-brand-mark"><img src="/static/chatbotpro100.png" alt="" /></span><span><strong>Facturación</strong><small>ChatBotPro · CFDI 4.0</small></span></a>
       <nav class="iv-menu">
-        <button class="active" data-view="summary"><i class="ph-bold ph-squares-four"></i> Resumen</button>
-        <button data-view="new-invoice"><i class="ph-bold ph-file-plus"></i> Nueva factura</button>
-        <button data-view="manual-global"><i class="ph-bold ph-users-three"></i> Global manual</button>
-        <button data-view="payments"><i class="ph-bold ph-hand-coins"></i> Cobranza y REP</button>
-        <button data-view="documents"><i class="ph-bold ph-files"></i> CFDI emitidos</button>
-        <button data-view="portal"><i class="ph-bold ph-storefront"></i> Mi portal</button>
-        <button data-view="settings"><i class="ph-bold ph-sliders-horizontal"></i> Configuración fiscal</button>
+        <span class="iv-menu-label" data-tone="mint"><i class="ph-bold ph-gauge"></i><span>Panel</span></span>
+        <button class="active" data-view="summary" data-tone="mint"><span class="iv-nav-ic"><i class="ph-bold ph-squares-four"></i></span><span class="iv-nav-text"><b>Resumen</b><small>Estado fiscal</small></span></button>
+        <span class="iv-menu-label" data-tone="coral"><i class="ph-bold ph-lightning"></i><span>Emisión</span></span>
+        <button data-view="new-invoice" data-tone="coral"><span class="iv-nav-ic"><i class="ph-bold ph-file-plus"></i></span><span class="iv-nav-text"><b>Nueva factura</b><small>Venta externa</small></span></button>
+        <button data-view="manual-global" data-tone="amber"><span class="iv-nav-ic"><i class="ph-bold ph-users-three"></i></span><span class="iv-nav-text"><b>Global manual</b><small>Público en general</small></span></button>
+        <button data-view="payments" data-tone="lime"><span class="iv-nav-ic"><i class="ph-bold ph-hand-coins"></i></span><span class="iv-nav-text"><b>Cobranza y REP</b><small>Pagos y notas</small></span></button>
+        <span class="iv-menu-label" data-tone="cyan"><i class="ph-bold ph-archive"></i><span>Expediente</span></span>
+        <button data-view="documents" data-tone="cyan"><span class="iv-nav-ic"><i class="ph-bold ph-files"></i></span><span class="iv-nav-text"><b>CFDI emitidos</b><small>PDF, XML y cancelación</small></span></button>
+        <span class="iv-menu-label" data-tone="violet"><i class="ph-bold ph-storefront"></i><span>Mi negocio</span></span>
+        <button data-view="portal" data-tone="violet"><span class="iv-nav-ic"><i class="ph-bold ph-storefront"></i></span><span class="iv-nav-text"><b>Mi portal</b><small>Identidad y liga pública</small></span></button>
+        <button data-view="settings" data-tone="sky"><span class="iv-nav-ic"><i class="ph-bold ph-sliders-horizontal"></i></span><span class="iv-nav-text"><b>Configuración fiscal</b><small>Emisor y CSD</small></span></button>
       </nav>
-      <div class="iv-account"><strong id="accountBusiness">Cargando…</strong><span id="accountUser"></span><button id="logout" type="button"><i class="ph-bold ph-sign-out"></i> Cerrar sesión</button></div>
+      <div class="iv-account"><div class="iv-account-id"><img id="accountLogo" src="/static/chatbotpro100.png" alt="" /><div><strong id="accountBusiness">Cargando…</strong><span id="accountUser"></span></div></div><button id="logout" type="button"><i class="ph-bold ph-sign-out"></i> Cerrar sesión</button></div>
     </aside>
 
     <main class="iv-app-main">
@@ -32,7 +36,7 @@
         <div class="iv-metrics"><article class="iv-metric"><div class="iv-metric-head"><span>CFDI emitidos</span><i class="ph-bold ph-files"></i></div><strong id="metricInvoices">0</strong></article><article class="iv-metric"><div class="iv-metric-head"><span>Timbres disponibles</span><i class="ph-bold ph-stamp"></i></div><strong id="metricStamps">0</strong></article><article class="iv-metric"><div class="iv-metric-head"><span>Emisores</span><i class="ph-bold ph-buildings"></i></div><strong id="metricEmitters">0</strong></article><article class="iv-metric"><div class="iv-metric-head"><span>Ambiente</span><i class="ph-bold ph-shield-check"></i></div><strong id="metricEnvironment" style="font-size:22px">Sandbox</strong></article></div>
         <div class="iv-grid-main">
           <article class="iv-panel"><div class="iv-panel-head"><div><h2>Activa tu espacio fiscal</h2><p>Completa estos pasos para publicar el portal.</p></div><span class="iv-status warning" id="progressText">0 de 4</span></div><div class="iv-checklist"><div class="iv-check done"><i class="ph-bold ph-check"></i><div><strong>Cuenta del negocio</strong><span>Tu acceso independiente ya está creado.</span></div></div><div class="iv-check" id="checkProfile"><i class="ph-bold ph-identification-card"></i><div><strong>Datos del emisor</strong><span>RFC, razón social, régimen y lugar de expedición.</span></div></div><div class="iv-check" id="checkCsd"><i class="ph-bold ph-certificate"></i><div><strong>Certificado de Sello Digital</strong><span>Archivos oficiales requeridos para producción.</span></div></div><div class="iv-check" id="checkActivation"><i class="ph-bold ph-power"></i><div><strong>Activación del servicio</strong><span>Nuestro equipo valida y activa tu bolsa de timbres.</span></div></div></div></article>
-          <article class="iv-panel"><div class="iv-panel-head"><div><h2>Tu portal público</h2><p>Así verán tu negocio tus clientes.</p></div></div><div class="iv-portal-preview"><div class="iv-portal-brand" id="portalBrand"><img id="portalLogo" src="/static/chatbotpro100.png" alt="" /><h3 id="portalBusiness">Tu negocio</h3></div><div class="iv-portal-link"><i class="ph-bold ph-link"></i><span id="portalUrlShort">—</span><button class="iv-btn iv-btn-primary" id="openPortal" type="button" style="min-height:32px;padding:0 10px">Abrir</button></div></div></article>
+          <article class="iv-panel"><div class="iv-panel-head"><div><h2>Identidad publica de facturacion</h2><p>Comparte esta liga para que tus clientes sepan como solicitar su CFDI.</p></div></div><div class="iv-portal-preview"><div class="iv-portal-brand" id="portalBrand"><img id="portalLogo" src="/static/chatbotpro100.png" alt="" /><h3 id="portalBusiness">Tu negocio</h3></div><div class="iv-portal-link"><i class="ph-bold ph-link"></i><span id="portalUrlShort">—</span><button class="iv-btn iv-btn-primary" id="openPortal" type="button" style="min-height:32px;padding:0 10px">Abrir</button></div></div></article>
         </div>
       </section>
 
@@ -116,7 +120,7 @@
 
       <section class="iv-view" id="view-documents"><article class="iv-panel"><div class="iv-panel-head"><div><h2>Comprobantes fiscales</h2><p>Consulta, envía, cancela y descarga todos tus documentos emitidos.</p></div><button class="iv-btn iv-btn-secondary" id="reloadDocuments" type="button"><i class="ph-bold ph-arrows-clockwise"></i> Actualizar</button></div><form class="iv-document-filters" id="documentFilters"><input id="documentSearch" type="search" placeholder="UUID, folio o RFC emisor" aria-label="Buscar CFDI" /><select id="documentType" aria-label="Tipo de CFDI"><option value="all">Todos los tipos</option><option value="direct">Facturas externas</option><option value="manual_global">Globales manuales</option><option value="credit_note">Notas de crédito</option><option value="payment">Complementos de pago</option><option value="individual">Tickets POS</option><option value="global">Globales POS</option></select><select id="documentStatus" aria-label="Estado de CFDI"><option value="all">Todos los estados</option><option value="active">Vigentes</option><option value="cancel_pending">Cancelación pendiente</option><option value="canceled">Cancelados</option><option value="unknown">Por verificar</option><option value="failed">Fallidos</option></select><input id="documentDateFrom" type="date" aria-label="Desde" /><input id="documentDateTo" type="date" aria-label="Hasta" /><button class="iv-btn iv-btn-primary" type="submit">Filtrar</button><button class="iv-btn iv-btn-secondary" id="clearDocumentFilters" type="button">Limpiar</button></form><p class="iv-documents-count" id="documentsCount"></p><div class="iv-table-wrap" id="documentsTable"></div><div class="iv-documents-pages" id="documentPagination"></div></article></section>
 
-      <section class="iv-view" id="view-portal"><div class="iv-grid-main"><article class="iv-panel"><div class="iv-panel-head"><div><h2>Portal con identidad de tu negocio</h2><p>Esta liga es pública y puedes colocarla en tickets, WhatsApp o tu sitio.</p></div></div><div class="iv-portal-preview"><div class="iv-portal-brand" id="portalBrandLarge"><img id="portalLogoLarge" src="/static/chatbotpro100.png" alt="" /><h3 id="portalBusinessLarge">Tu negocio</h3></div><div class="iv-portal-link"><i class="ph-bold ph-globe"></i><span id="portalUrlLarge">—</span><button class="iv-btn iv-btn-primary" id="copyPortal" type="button" style="min-height:32px;padding:0 10px"><i class="ph-bold ph-copy"></i> Copiar</button></div></div></article><article class="iv-panel"><h2 style="margin-bottom:12px">Uso recomendado</h2><div class="iv-checklist"><div class="iv-check done"><i class="ph-bold ph-receipt"></i><div><strong>En tus tickets</strong><span>Imprime la liga y el código de cada venta.</span></div></div><div class="iv-check done"><i class="ph-bold ph-whatsapp-logo"></i><div><strong>En atención a clientes</strong><span>Compártela cuando soliciten factura.</span></div></div><div class="iv-check done"><i class="ph-bold ph-qr-code"></i><div><strong>Mediante QR</strong><span>Dirige al comprador a su captura fiscal.</span></div></div></div></article></div>
+      <section class="iv-view" id="view-portal"><div class="iv-grid-main"><article class="iv-panel"><div class="iv-panel-head"><div><h2>Portal con identidad de tu negocio</h2><p>Esta liga publica explica a tus clientes como solicitar su CFDI.</p></div></div><div class="iv-portal-preview"><div class="iv-portal-brand" id="portalBrandLarge"><img id="portalLogoLarge" src="/static/chatbotpro100.png" alt="" /><h3 id="portalBusinessLarge">Tu negocio</h3></div><div class="iv-portal-link"><i class="ph-bold ph-globe"></i><span id="portalUrlLarge">—</span><button class="iv-btn iv-btn-primary" id="copyPortal" type="button" style="min-height:32px;padding:0 10px"><i class="ph-bold ph-copy"></i> Copiar</button></div></div></article><article class="iv-panel"><h2 style="margin-bottom:12px">Uso recomendado</h2><div class="iv-checklist"><div class="iv-check done"><i class="ph-bold ph-receipt"></i><div><strong>En tus tickets</strong><span>Indica que el cliente solicite su factura al personal del negocio.</span></div></div><div class="iv-check done"><i class="ph-bold ph-whatsapp-logo"></i><div><strong>Atencion a clientes</strong><span>Compartela junto con el folio de venta y los datos fiscales que debe enviar.</span></div></div><div class="iv-check done"><i class="ph-bold ph-qr-code"></i><div><strong>Mediante QR</strong><span>Dirige al cliente a la informacion de contacto y facturacion de tu negocio.</span></div></div></div></article></div>
         <form class="iv-operation-form iv-identity-operation" id="identityForm">
           <header class="iv-operation-head"><div class="iv-operation-icon"><i class="ph-bold ph-palette"></i></div><div><span>IDENTIDAD · PORTAL DE CLIENTES</span><h2>Haz reconocible tu espacio fiscal</h2><p>Tu nombre, logo y color acompañarán a tus clientes cuando soliciten una factura.</p></div><span class="iv-operation-chip"><i class="ph-bold ph-sparkle"></i> Tu marca</span></header>
           <div class="iv-operation-body iv-identity-body">
@@ -178,20 +182,20 @@
   <div class="iv-modal-backdrop iv-setup-backdrop" id="invoicingSetupModal" hidden>
     <section class="iv-setup-modal" role="dialog" aria-modal="true" aria-labelledby="invoicingSetupTitle">
       <header class="iv-setup-head">
-        <div><span>PASO INICIAL · IDENTIDAD FISCAL</span><h2 id="invoicingSetupTitle">Prepara tu espacio de facturación</h2><p>Sube la identidad que aparecerá en tu portal y experiencia de facturación. Captura los datos fiscales que tengas; podrás completar los faltantes después.</p></div>
+        <div><span>PASO INICIAL · IDENTIDAD FISCAL</span><h2 id="invoicingSetupTitle">Prepara tu espacio de facturación</h2><p>Personaliza tu portal con tu logo y color, y captura los datos fiscales que tengas. Todo es opcional: puedes continuar sin llenar nada y completarlo después.</p></div>
         <div class="iv-setup-progress"><b>1</b><i></i><b>2</b><small>Identidad y expediente</small></div>
       </header>
       <form id="invoicingSetupForm" class="iv-setup-form">
         <div class="iv-setup-columns">
           <section class="iv-setup-block identity">
-            <div class="iv-setup-block-title"><i class="ph-bold ph-palette"></i><div><small>Tu marca</small><h3>Identidad del portal</h3></div><span>Requerido</span></div>
-            <div class="iv-field"><label for="setupBusinessName">Nombre comercial *</label><div class="iv-input"><i class="ph-bold ph-storefront"></i><input id="setupBusinessName" maxlength="160" required /></div></div>
+            <div class="iv-setup-block-title"><i class="ph-bold ph-palette"></i><div><small>Tu marca</small><h3>Identidad del portal</h3></div><span class="optional">Opcional</span></div>
+            <div class="iv-field"><label for="setupBusinessName">Nombre comercial</label><div class="iv-input"><i class="ph-bold ph-storefront"></i><input id="setupBusinessName" maxlength="160" /></div></div>
             <div class="iv-setup-brand-row">
-              <label class="iv-setup-logo-picker" for="setupLogo"><span id="setupLogoPreview"><i class="ph-bold ph-image-square"></i></span><b>Subir logotipo *</b><small>PNG, JPG o WEBP · máximo 8 MB</small></label>
-              <input id="setupLogo" type="file" accept="image/png,image/jpeg,image/webp" required hidden />
-              <div class="iv-field"><label for="setupColor">Color principal *</label><input id="setupColor" type="color" value="#123c37" /></div>
+              <label class="iv-setup-logo-picker" for="setupLogo"><span id="setupLogoPreview"><i class="ph-bold ph-image-square"></i></span><b>Subir logotipo</b><small>Opcional · PNG, JPG o WEBP · máx. 8 MB</small></label>
+              <input id="setupLogo" type="file" accept="image/png,image/jpeg,image/webp" hidden />
+              <div class="iv-field"><label for="setupColor">Color principal</label><input id="setupColor" type="color" value="#123c37" /></div>
             </div>
-            <div class="iv-setup-note"><i class="ph-bold ph-file-text"></i><span>El logo identificará tu portal de clientes y todo tu espacio de facturación.</span></div>
+            <div class="iv-setup-note"><i class="ph-bold ph-file-text"></i><span>Si no subes logo, usaremos el de ChatBotPro hasta que lo agregues desde “Mi portal”.</span></div>
           </section>
           <section class="iv-setup-block fiscal">
             <div class="iv-setup-block-title"><i class="ph-bold ph-identification-card"></i><div><small>Tu expediente</small><h3>Datos fiscales disponibles</h3></div><span class="optional">Opcional ahora</span></div>
@@ -225,6 +229,6 @@
   </div>
   <div class="iv-modal-backdrop" id="directInvoiceSuccess" hidden><section class="iv-success-modal" role="dialog" aria-modal="true" aria-labelledby="directSuccessTitle"><button class="iv-modal-close" id="directSuccessClose" type="button" aria-label="Cerrar"><i class="ph-bold ph-x"></i></button><div class="iv-success-seal"><i class="ph-bold ph-check"></i></div><span>CFDI TIMBRADO</span><h2 id="directSuccessTitle">Factura emitida correctamente</h2><p>El documento quedó guardado en tu expediente fiscal y consumió un timbre.</p><div class="iv-success-identity"><small>Folio fiscal</small><b id="directSuccessUuid">—</b></div><div class="iv-success-actions"><a class="iv-btn iv-btn-primary" id="directSuccessPdf" target="_blank"><i class="ph-bold ph-file-pdf"></i> Descargar PDF</a><a class="iv-btn iv-btn-secondary" id="directSuccessXml" target="_blank"><i class="ph-bold ph-file-code"></i> Descargar XML</a></div><form id="directSuccessEmailForm" class="iv-success-email"><label for="directSuccessEmail">Enviar PDF y XML al cliente</label><div><input id="directSuccessEmail" type="email" required maxlength="254" placeholder="cliente@correo.com" /><button class="iv-btn iv-btn-primary" type="submit">Enviar</button></div><small id="directSuccessEmailStatus" role="status"></small></form></section></div>
   <div class="iv-toast" id="toast" hidden></div>
-  <script src="/static/js/invoicing-app.js?v=20260906allforms" defer></script>
+  <script src="/static/js/invoicing-app.js?v=20261019optional" defer></script>
 </body>
 </html>

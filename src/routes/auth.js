@@ -948,15 +948,8 @@ router.post('/onboarding/complete', requireAuth, requireOwner, async (req, res, 
 router.post('/identity/complete', requireAuth, requireOwner, async (req, res, next) => {
   try {
     // ChatBotPro ya recibe nombre y región al registrarse. El resto de la
-    // personalización es opcional y no debe impedir explorar el panel.
-    if (req.tenant.product_code === 'invoicing') {
-      const fiscalIdentityComplete = String(req.tenant.business_name || '').trim().length >= 2
-        && Boolean(req.tenant.logo)
-        && /^#[0-9a-fA-F]{6}$/.test(String(req.tenant.primary_color || ''));
-      if (!fiscalIdentityComplete) {
-        return res.status(400).json({ error: 'Completa nombre, logo y color' });
-      }
-    }
+    // personalización (logo, color y datos fiscales) es opcional y no debe
+    // impedir explorar el panel, tampoco en facturación independiente.
     await q('UPDATE users SET identity_completed = 1 WHERE id = $1', [req.user.uid]);
     res.json({ ok: true });
   } catch (e) {
