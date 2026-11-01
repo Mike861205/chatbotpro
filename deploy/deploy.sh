@@ -93,38 +93,15 @@ else
 fi
 chmod 600 .env.production
 
-echo "==> 8) ecosystem.config.js"
-cat > "$APP_DIR/ecosystem.config.js" <<'EOF'
-module.exports = {
-  apps: [
-    {
-      name: 'chatbotpro',
-      script: 'server.js',
-      cwd: '/var/www/chatbotpro',
-      instances: 1,
-      exec_mode: 'fork',
-      autorestart: true,
-      watch: false,
-      max_memory_restart: '500M',
-      env: {
-        NODE_ENV: 'production',
-        ENV_FILE: '.env.production',
-        PORT: 3003,
-      },
-      env_production: {
-        NODE_ENV: 'production',
-        ENV_FILE: '.env.production',
-        PORT: 3003,
-      },
-    },
-  ],
-};
-EOF
+echo "==> 8) ecosystem.config.js del repositorio"
 
 echo "==> 9) Iniciar PM2"
 cd "$APP_DIR"
 pm2 delete chatbotpro >/dev/null 2>&1 || true
-pm2 start ecosystem.config.js --env production
+pm2 start ecosystem.config.js --only chatbotpro --env production
+if grep -Eq '^WHATSAPP_BOT_GATEWAY_SECRET=.{32,}$' .env.production; then
+  pm2 start ecosystem.config.js --only chatbotpro-whatsapp-bot --env production
+fi
 pm2 save
 pm2 startup systemd -u root --hp /root | tail -n 1 | bash || true
 systemctl enable pm2-root >/dev/null 2>&1 || true

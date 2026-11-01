@@ -41,6 +41,9 @@ fi
 npm ci --omit=dev
 echo '==> Recargando PM2 con configuración de producción'
 pm2 startOrReload ecosystem.config.js --only "__PM2_APP__" --env production --update-env
+if grep -Eq '^WHATSAPP_BOT_GATEWAY_SECRET=.{32,}$' .env.production; then
+  pm2 startOrReload ecosystem.config.js --only chatbotpro-whatsapp-bot --env production --update-env
+fi
 echo '==> Esperando a que la aplicación inicie en __HEALTH_URL__'
 i=1
 while [ "$i" -le 45 ]; do

@@ -146,6 +146,10 @@ Recomendación:
 - Usa un `DATABASE_URL` distinto para test y producción.
 - No subas `.env*` al repo (excepto `.env.example`).
 
+## WhatsApp Bot QR
+
+El módulo **WhatsApp Bot QR** funciona como canal separado de Zernio. Incluye sesiones Baileys por tenant, QR, mensajes entrantes, integración con pedidos y plantillas editables. Para activarlo, configura `WHATSAPP_BOT_GATEWAY_SECRET` y ejecuta el proceso PM2 `chatbotpro-whatsapp-bot`. Consulta [la guía de arquitectura y operación](docs/whatsapp-bot-qr.md).
+
 ## Portal de resellers
 
 1. Entra a `/superadmin` y abre **Resellers**.

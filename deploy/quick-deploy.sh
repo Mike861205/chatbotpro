@@ -40,6 +40,9 @@ npm ci --omit=dev
 
 echo "==> Restart PM2 app"
 pm2 restart "${PM2_APP}"
+if grep -Eq '^WHATSAPP_BOT_GATEWAY_SECRET=.{32,}$' .env.production; then
+  pm2 startOrReload ecosystem.config.js --only chatbotpro-whatsapp-bot --env production --update-env
+fi
 pm2 save >/dev/null 2>&1 || true
 
 echo "==> Active commit"

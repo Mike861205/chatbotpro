@@ -8,12 +8,14 @@
   },
   "scripts": {
     "start": "node server.js",
+    "start:whatsapp-bot": "node src/whatsapp-bot/gateway.js",
     "dev": "node --watch server.js",
     "test": "node --test",
     "cleanup:uploads": "node scripts/cleanup-uploads.js"
   },
   "dependencies": {
     "@napi-rs/canvas": "0.1.100",
+    "@whiskeysockets/baileys": "^7.0.0-rc14",
     "bcryptjs": "^2.4.3",
     "cookie-parser": "^1.4.7",
     "dotenv": "^16.4.5",
@@ -27,6 +29,8 @@
     "openai": "^6.49.0",
     "pdfjs-dist": "5.5.207",
     "pg": "^8.21.0",
+    "pino": "^9.14.0",
+    "qrcode": "^1.5.4",
     "qz-tray": "^2.3.0",
     "sharp": "^0.35.5",
     "socket.io": "^4.8.3",

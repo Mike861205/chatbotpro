@@ -1106,6 +1106,7 @@ const VIEW_META = {
   empleados: ['Productividad Empleados', 'Métricas, comisiones y desempeño del equipo', 'ph-identification-badge'],
   chatbot: ['Mi chatbot', 'Configura el flujo y comparte tu liga', 'ph-chat-circle-dots'],
   whatsapp: ['WhatsApp', 'Conecta Zernio y atiende pedidos desde WhatsApp', 'ph-whatsapp-logo'],
+  'whatsapp-bot': ['WhatsApp Bot QR', 'Conecta por QR y administra plantillas de pedidos', 'ph-qr-code'],
   config: ['Mi negocio', 'Identidad, branding y contacto', 'ph-storefront'],
   suscripciones: ['Suscripciones', 'Planes, beneficios y pago seguro', 'ph-crown'],
   instrucciones: ['Instrucciones', 'Guía rápida para configurar y probar tu sistema', 'ph-book-open-text'],
@@ -1133,6 +1134,7 @@ const VIEW_LOADERS = {
   empleados: loadEmpleados,
   chatbot: fillBotForm,
   whatsapp: loadWhatsApp,
+  'whatsapp-bot': loadWhatsAppBot,
   config: fillConfigForm,
   suscripciones: () => {},
   instrucciones: renderInstructions,
@@ -3775,7 +3777,7 @@ function orderBranchLabel(order) {
 
 function orderSourceChannel(order) {
   const stored = String(order?.source_channel || '').trim().toLowerCase();
-  if (['chatbot', 'whatsapp', 'kiosk', 'pos'].includes(stored)) return stored;
+  if (['chatbot', 'whatsapp', 'whatsapp_bot', 'kiosk', 'pos'].includes(stored)) return stored;
   if (order?.self_service_device_id || order?.self_service_folio) return 'kiosk';
   if (['chatbot', 'whatsapp'].includes(order?.channel)) return 'chatbot';
   if (order?.channel === 'pos' && /Pedido chatbot #/i.test(String(order?.notes || ''))) return 'chatbot';
@@ -3786,6 +3788,7 @@ function orderOriginMeta(order) {
   const source = orderSourceChannel(order);
   if (source === 'kiosk') return { source, label: 'Autoservicio', icon: 'ph-device-tablet-camera', tone: 'kiosk' };
   if (source === 'whatsapp') return { source, label: 'WhatsApp', icon: 'ph-whatsapp-logo', tone: 'whatsapp' };
+  if (source === 'whatsapp_bot') return { source, label: 'WhatsApp Bot QR', icon: 'ph-whatsapp-logo', tone: 'whatsapp' };
   if (source === 'chatbot' && order?.channel === 'pos') return { source, label: 'Chatbot → Punto de venta', icon: 'ph-chats-circle', tone: 'chatbot-pos' };
   if (source === 'chatbot') return { source, label: 'Chatbot', icon: 'ph-chats-circle', tone: 'chatbot' };
   return { source: 'pos', label: 'Punto de venta', icon: 'ph-cash-register', tone: 'pos' };

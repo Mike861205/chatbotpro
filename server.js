@@ -103,6 +103,7 @@ app.use('/api/users', require('./src/routes/users'));
 app.use('/api/pos', require('./src/routes/pos'));
 app.use('/api/chat', chatLimiter, require('./src/routes/chatbot'));
 app.use('/api/whatsapp', require('./src/routes/whatsapp'));
+app.use('/api/whatsapp-bot', require('./src/routes/whatsappBot'));
 app.use('/api/superadmin', require('./src/routes/superadmin'));
 app.use('/api/resellers', require('./src/routes/resellers'));
 app.use('/api/notifications', require('./src/routes/notifications'));
@@ -280,7 +281,7 @@ initMaster({
         if (sessionRole === 'staff') {
           let permissions = [];
           try { permissions = JSON.parse(uRows[0]?.permissions_json || '[]'); } catch {}
-          if (!permissions.some((key) => ['pedidos', 'pos', 'cortes', 'cancelaciones', 'whatsapp'].includes(key))) return next(new Error('auth'));
+          if (!permissions.some((key) => ['pedidos', 'pos', 'cortes', 'cancelaciones', 'whatsapp', 'whatsapp-bot'].includes(key))) return next(new Error('auth'));
         }
         socket.tenantSlug = tenantSlug;
         socket.clientType = scope;

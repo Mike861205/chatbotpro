@@ -257,6 +257,12 @@ async function initMaster(options = {}) {
     );
     CREATE INDEX IF NOT EXISTS idx_whatsapp_webhook_tokens_tenant
       ON whatsapp_webhook_tokens(tenant_slug, connection_id);
+    CREATE TABLE IF NOT EXISTS whatsapp_bot_registry (
+      session_id UUID PRIMARY KEY,
+      tenant_slug TEXT NOT NULL UNIQUE REFERENCES tenants(slug) ON DELETE CASCADE,
+      enabled BOOLEAN NOT NULL DEFAULT TRUE,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
   `);
 
   await q(`ALTER TABLE tenants ADD COLUMN IF NOT EXISTS account_status TEXT DEFAULT 'active'`);
@@ -945,6 +951,57 @@ async function createTenantSchema(slug) {
     ALTER TABLE "${s}".whatsapp_events ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT now();
     CREATE INDEX IF NOT EXISTS idx_${s}_whatsapp_events_connection
       ON "${s}".whatsapp_events(connection_id, created_at DESC);
+    CREATE TABLE IF NOT EXISTS "${s}".whatsapp_bot_templates (
+      id BIGSERIAL PRIMARY KEY,
+      name TEXT NOT NULL,
+      body TEXT NOT NULL,
+      preset_key TEXT NOT NULL DEFAULT '',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+    ALTER TABLE "${s}".whatsapp_bot_templates ADD COLUMN IF NOT EXISTS preset_key TEXT NOT NULL DEFAULT '';
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_${s}_whatsapp_bot_templates_preset
+      ON "${s}".whatsapp_bot_templates(preset_key) WHERE preset_key <> '';
+    CREATE TABLE IF NOT EXISTS "${s}".whatsapp_bot_messages (
+      id BIGSERIAL PRIMARY KEY,
+      session_id UUID NOT NULL,
+      external_message_id TEXT NOT NULL,
+      contact_jid_enc TEXT NOT NULL DEFAULT '',
+      contact_jid_hash TEXT NOT NULL DEFAULT '',
+      direction TEXT NOT NULL,
+      message_type TEXT NOT NULL DEFAULT 'text',
+      body TEXT NOT NULL DEFAULT '',
+      media_path TEXT NOT NULL DEFAULT '',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      UNIQUE(session_id, external_message_id)
+    );
+    ALTER TABLE "${s}".whatsapp_bot_messages ADD COLUMN IF NOT EXISTS contact_jid_enc TEXT NOT NULL DEFAULT '';
+    ALTER TABLE "${s}".whatsapp_bot_messages ADD COLUMN IF NOT EXISTS contact_jid_hash TEXT NOT NULL DEFAULT '';
+    ALTER TABLE "${s}".whatsapp_bot_messages ADD COLUMN IF NOT EXISTS media_path TEXT NOT NULL DEFAULT '';
+    DO $$ BEGIN
+      IF EXISTS (SELECT 1 FROM information_schema.columns
+        WHERE table_schema='${s}' AND table_name='whatsapp_bot_messages' AND column_name='contact_jid') THEN
+        ALTER TABLE "${s}".whatsapp_bot_messages ALTER COLUMN contact_jid DROP NOT NULL;
+      END IF;
+    END $$;
+    CREATE INDEX IF NOT EXISTS idx_${s}_whatsapp_bot_messages_contact
+      ON "${s}".whatsapp_bot_messages(contact_jid_hash, created_at DESC);
+    CREATE TABLE IF NOT EXISTS "${s}".whatsapp_bot_choices (
+      session_id UUID NOT NULL,
+      contact_jid_hash TEXT NOT NULL,
+      choices_json TEXT NOT NULL DEFAULT '[]',
+      PRIMARY KEY(session_id, contact_jid_hash)
+    );
+    DO $$ BEGIN
+      IF EXISTS (SELECT 1 FROM information_schema.columns
+        WHERE table_schema='${s}' AND table_name='whatsapp_bot_choices' AND column_name='contact_jid') THEN
+        TRUNCATE TABLE "${s}".whatsapp_bot_choices;
+        ALTER TABLE "${s}".whatsapp_bot_choices DROP CONSTRAINT IF EXISTS whatsapp_bot_choices_pkey;
+        ALTER TABLE "${s}".whatsapp_bot_choices DROP COLUMN contact_jid;
+        ALTER TABLE "${s}".whatsapp_bot_choices ADD COLUMN IF NOT EXISTS contact_jid_hash TEXT NOT NULL DEFAULT '';
+        ALTER TABLE "${s}".whatsapp_bot_choices ADD CONSTRAINT whatsapp_bot_choices_pkey PRIMARY KEY(session_id, contact_jid_hash);
+      END IF;
+    END $$;
     ALTER TABLE "${s}".orders ADD COLUMN IF NOT EXISTS pickup_branch_id INTEGER;
     ALTER TABLE "${s}".orders ADD COLUMN IF NOT EXISTS pickup_branch_name TEXT;
     ALTER TABLE "${s}".orders ADD COLUMN IF NOT EXISTS customer_location_lat NUMERIC(10,7);

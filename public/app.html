@@ -11,7 +11,7 @@
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/fill/style.css" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/duotone/style.css" />
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-  <link rel="stylesheet" href="/static/css/styles.css?v=20261018-costs-explained" />
+  <link rel="stylesheet" href="/static/css/styles.css?v=20261029-whatsapp-bot-templates" />
   <link rel="stylesheet" href="/static/css/sar.css?v=20260929-tabs-1" />
   <link rel="icon" type="image/svg+xml" href="/static/favicon.svg" />
   <link rel="icon" type="image/png" href="/static/chatbotpro100.png" />
@@ -71,6 +71,7 @@
         <div class="nav-label nav-label-chatbot"><i class="ph-fill ph-chat-circle-dots"></i> Chatbot</div>
         <a href="#chatbot" data-view="chatbot" data-color="cyan"><span class="nav-ic"><i class="ph-duotone ph-robot"></i></span><span>Mi chatbot</span></a>
         <a href="#whatsapp" data-view="whatsapp" data-color="emerald"><span class="nav-ic"><i class="ph-duotone ph-whatsapp-logo"></i></span><span>WhatsApp</span></a>
+        <a href="#whatsapp-bot" data-view="whatsapp-bot" data-color="emerald"><span class="nav-ic"><i class="ph-duotone ph-qr-code"></i></span><span>WhatsApp Bot QR</span></a>
         <div class="nav-label nav-label-negocio"><i class="ph-fill ph-briefcase"></i> Negocio</div>
         <a href="#config" data-view="config" data-color="amber"><span class="nav-ic"><i class="ph-duotone ph-buildings"></i></span><span>Mi negocio</span></a>
         <a href="#suscripciones" data-view="suscripciones" data-color="violet"><span class="nav-ic"><i class="ph-duotone ph-seal-check"></i></span><span>Suscripciones</span></a>
@@ -567,11 +568,11 @@
           </div>
         </div>
         <div class="segmented expense-tabs" role="tablist" aria-label="Secciones de gastos">
-          <button type="button" class="on" data-expense-tab="register" role="tab" aria-selected="true">Registrar gasto</button>
+          <button type="button" class="on" data-expense-tab="reports" role="tab" aria-selected="true">Reportes</button>
           <button type="button" data-expense-tab="categories" role="tab" aria-selected="false">Categorías</button>
-          <button type="button" data-expense-tab="reports" role="tab" aria-selected="false">Reportes</button>
+          <button type="button" data-expense-tab="register" role="tab" aria-selected="false">Registrar gasto</button>
         </div>
-        <div data-expense-panel="register">
+        <div data-expense-panel="register" hidden>
           <div class="card costing-expense-form-card">
             <div class="sales-panel-heading"><div><h3><i class="ph-bold ph-plus-circle"></i> Registrar gasto</h3><p>Los gastos se descuentan de la utilidad de la sucursal en el reporte de Ventas.</p></div></div>
             <form id="costingExpenseForm" class="costing-expense-form">
@@ -592,7 +593,7 @@
             <div id="expenseCategoriesList" class="table-wrap"></div>
           </div>
         </div>
-        <div data-expense-panel="reports" hidden>
+        <div data-expense-panel="reports">
           <div class="card expense-report-toolbar">
             <div class="expense-quick-period"><button class="btn btn-ghost" type="button" data-expense-period="day">Día</button><button class="btn btn-ghost" type="button" data-expense-period="week">Semana</button><button class="btn btn-ghost" type="button" data-expense-period="month">Mes</button><button class="btn btn-ghost" type="button" data-expense-period="custom">Personalizado</button></div>
             <div class="expense-report-period">
@@ -1321,6 +1322,18 @@
 
       <div class="modal-bg" id="cfdiCancelModal"><div class="modal cfdi-cancel-modal"><div class="cfdi-cancel-head"><div><span>Solicitud ante el SAT</span><h3><i class="ph-bold ph-file-x"></i> Cancelar <b id="cfdiCancelIdentity">CFDI</b></h3></div><button type="button" class="modal-close" id="cfdiCancelClose"><i class="ph-bold ph-x"></i></button></div><div class="cfdi-cancel-warning"><i class="ph-bold ph-info"></i><div><b>El CFDI no se eliminará.</b><span>Se conservará en el historial y su estado cambiará según la respuesta de Facturama y, cuando corresponda, la aceptación del receptor.</span></div></div><form id="cfdiCancelForm"><input type="hidden" id="cfdiCancelId"/><input type="hidden" id="cfdiCancelType"/><div class="field"><label>Motivo de cancelación</label><select id="cfdiCancelMotive"><option value="02">02 · Comprobante con errores sin relación</option><option value="01">01 · Comprobante con errores con relación</option><option value="03">03 · No se llevó a cabo la operación</option><option value="04">04 · Operación nominativa relacionada en factura global</option></select></div><div class="field" id="cfdiReplacementRow" hidden><label>UUID del CFDI que lo sustituye</label><input id="cfdiReplacementUuid" maxlength="36" placeholder="XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX"/><p class="hint">El nuevo CFDI debe estar relacionado con tipo de relación 04.</p></div><div class="cfdi-cancel-note"><i class="ph-bold ph-clock-countdown"></i><span>Si requiere aceptación, el receptor dispone del plazo fiscal aplicable para aceptar o rechazar. Mientras tanto aparecerá como pendiente.</span></div><div class="modal-actions"><button type="button" class="btn btn-ghost" id="cfdiCancelBack">Regresar</button><button class="btn btn-danger" type="submit"><i class="ph-bold ph-paper-plane-tilt"></i> Enviar solicitud</button></div></form></div></div>
 
+      <section class="section" id="view-whatsapp-bot">
+        <div class="wab-hero"><div><span class="whatsapp-section-kicker">Canal independiente</span><h2><i class="ph-duotone ph-whatsapp-logo"></i> WhatsApp Bot QR</h2><p>Vincula un dispositivo por código QR y recibe pedidos con el catálogo y el motor de pedidos del sistema. Usa un número distinto al que tengas activo en Zernio.</p></div><span id="wabBadge" class="whatsapp-status-pill">Sin conectar</span></div>
+        <div class="wab-grid">
+          <article class="card wab-card"><h3>Conexión por QR</h3><p class="hint">En tu teléfono: WhatsApp → Dispositivos vinculados → Vincular dispositivo. Esta sesión es independiente de Zernio.</p><div id="wabQrBox" class="wab-qr-box"><span>Conecta para generar el QR</span></div><p id="wabStatus" class="hint" role="status" aria-live="polite">Sin conectar</p><div class="wab-actions"><button id="wabConnect" class="btn btn-primary" type="button">Conectar / renovar QR</button><button id="wabDisconnect" class="btn btn-ghost" type="button" hidden>Desvincular</button></div><h4>Enlace para tus clientes</h4><p class="hint">Comparte este enlace en tus redes o menú para que te escriban “Hola” y empiecen su pedido. El QR de arriba es sólo para vincular tu teléfono.</p><div class="wab-actions"><input id="wabCustomerLink" type="text" readonly aria-label="Enlace de WhatsApp para clientes" placeholder="Conecta un número para obtener el enlace"><button id="wabCopyLink" class="btn btn-ghost" type="button" disabled>Copiar enlace</button></div><p id="wabLinkStatus" class="hint" role="status"></p></article>
+          <article class="card wab-card"><h3>Probar envío</h3><p class="hint">Envía un mensaje a un número con clave de país. Usa un número autorizado para la prueba.</p><form id="wabTestForm"><div class="field"><label for="wabTestPhone">Número</label><input id="wabTestPhone" inputmode="tel" placeholder="521234567890" required></div><div class="field"><label for="wabTestMessage">Mensaje</label><textarea id="wabTestMessage" rows="4" maxlength="10000">Hola, esta es una prueba de WhatsApp Bot.</textarea></div><button class="btn btn-primary" type="submit">Enviar prueba</button></form><p id="wabTestStatus" class="hint" role="status"></p></article>
+        </div>
+        <div class="wab-grid wab-lower">
+          <article class="card wab-card"><h3>Plantillas prediseñadas</h3><p class="hint">Elige una base, edítala y guárdala. La solicitud de ubicación y la confirmación se usan automáticamente en el bot; las demás puedes enviarlas desde aquí.</p><div id="wabPresets" class="wab-list"></div><h3>Mis plantillas</h3><div id="wabTemplates" class="wab-list"></div></article>
+          <article class="card wab-card"><h3>Editor de plantilla</h3><form id="wabTemplateForm"><input id="wabTemplateId" type="hidden"><input id="wabTemplatePresetKey" type="hidden"><div class="field"><label for="wabTemplateName">Nombre</label><input id="wabTemplateName" maxlength="80" required></div><div class="field"><label for="wabTemplateBody">Mensaje</label><textarea id="wabTemplateBody" rows="8" maxlength="4000" required></textarea></div><p id="wabVariables" class="hint"></p><div class="wab-actions"><button class="btn btn-primary" type="submit">Guardar plantilla</button><button id="wabTemplateClear" class="btn btn-ghost" type="button">Nueva</button><button id="wabTemplateDelete" class="btn btn-ghost" type="button" hidden>Eliminar</button></div></form><h4>Completar y enviar</h4><div class="field"><label for="wabOrderSelect">Pedido de WhatsApp Bot</label><select id="wabOrderSelect"><option value="">Sin pedido: mensaje manual</option></select><small class="hint">Al elegir un pedido, el subtotal, envío, total, dirección y ubicación se rellenan con los datos reales.</small></div><div class="field"><label for="wabCustomerName">Nombre (para mensajes manuales)</label><input id="wabCustomerName" maxlength="120" placeholder="Nombre del cliente"></div><p id="wabTemplateRecipient" class="hint">Sin pedido: se enviará al número del recuadro “Probar envío”.</p><details class="wab-advanced"><summary>Otras variables manuales</summary><p class="hint">JSON opcional para variables propias, por ejemplo {"saludo":"Buenas tardes"}.</p><textarea id="wabPreviewValues" rows="3">{}</textarea></details><pre id="wabPreview" class="wab-preview"></pre><button id="wabTemplateSend" class="btn btn-primary" type="button" hidden>Enviar este mensaje</button><p id="wabTemplateStatus" class="hint" role="status"></p></article>
+        </div>
+        <article class="card wab-card wab-recent"><h3>Actividad reciente</h3><div id="wabMessages" class="wab-list"></div></article>
+      </section>
       <section class="section" id="view-whatsapp">
         <div class="whatsapp-hero">
           <div>
@@ -3801,7 +3814,8 @@
   <script src="/socket.io/socket.io.js"></script>
   <script src="/static/vendor/qz-tray.js?v=2.3.0"></script>
   <script src="/static/js/whatsapp.js?v=20261009-whatsapp-inbox-app"></script>
-  <script src="/static/js/app.js?v=20261018-costs-explained"></script>
+  <script src="/static/js/whatsapp-bot.js?v=20261029-qr-2"></script>
+  <script src="/static/js/app.js?v=20261029-whatsapp-bot-templates"></script>
   <script src="/static/js/sar.js?v=20260929-tabs-1"></script>
 </body>
 </html>
