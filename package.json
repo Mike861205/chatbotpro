@@ -9,7 +9,7 @@
   "scripts": {
     "start": "node server.js",
     "start:whatsapp-bot": "node src/whatsapp-bot/gateway.js",
-    "dev": "node --watch server.js",
+    "dev": "node src/whatsapp-bot/dev-runner.js",
     "test": "node --test",
     "cleanup:uploads": "node scripts/cleanup-uploads.js"
   },

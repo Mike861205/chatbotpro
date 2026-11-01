@@ -24,6 +24,16 @@ function wabConnection(connection) {
   const phone = status === 'connected' ? String(connection?.phone || '').replace(/\D/g, '') : '';
   wab('wabCustomerLink').value = /^\d{8,15}$/.test(phone) ? `https://wa.me/${phone}?text=Hola%2C%20quiero%20hacer%20un%20pedido` : '';
   wab('wabCopyLink').disabled = !wab('wabCustomerLink').value;
+  wab('wabShareLink').disabled = !wab('wabCustomerLink').value;
+  const customerQrPanel = wab('wabCustomerQrPanel');
+  customerQrPanel.hidden = !wab('wabCustomerLink').value;
+  if (wab('wabCustomerLink').value) {
+    if (!wab('wabCustomerQr').getAttribute('src')) wab('wabCustomerQr').src = '/api/whatsapp-bot/customer-qr';
+    wab('wabCustomerQrDownload').href = '/api/whatsapp-bot/customer-qr?download=1';
+  } else {
+    wab('wabCustomerQr').removeAttribute('src');
+    wab('wabCustomerQrDownload').href = '#';
+  }
 }
 function wabRenderLists() {
   wab('wabPresets').innerHTML = WAB_DATA.presets.map((row, index) => { const saved = WAB_DATA.templates.find(template => template.presetKey === row.key); return `<button type="button" data-wab-preset="${index}"><b>${wabEsc(row.name)}${saved ? ' · Personalizada' : ''}</b><small>${wabEsc(saved?.body || row.body)}</small></button>`; }).join('');
@@ -89,6 +99,13 @@ async function loadWhatsAppBot() {
   const data = await api('/api/whatsapp-bot');
   WAB_DATA = data;
   wabConnection(data.connection);
+  if (wab('wabMenuMode')) wab('wabMenuMode').value = data.menuMode || 'catalog';
+  if (wab('wabMenuImageForm')) wab('wabMenuImageForm').hidden = !canManageConnection;
+  if (wab('wabMenuImagePreview')) {
+    wab('wabMenuImagePreview').hidden = !data.hasMenuImage;
+    wab('wabMenuImagePreview').style.display = data.hasMenuImage ? 'block' : 'none';
+    wab('wabMenuImagePreview').src = data.hasMenuImage ? `/api/whatsapp-bot/menu-image?v=${Date.now()}` : '';
+  }
   if (!canManageConnection) wab('wabDisconnect').hidden = true;
   wabRenderLists();
   wabRenderOrders();
@@ -107,9 +124,12 @@ async function loadWhatsAppBot() {
 function wabBind() {
   WAB_BOUND = true;
   wab('wabCopyLink').addEventListener('click', async () => { try { await navigator.clipboard.writeText(wab('wabCustomerLink').value); wab('wabLinkStatus').textContent = 'Enlace copiado. Compártelo con tus clientes.'; } catch { wab('wabCustomerLink').select(); wab('wabLinkStatus').textContent = 'Selecciona y copia el enlace.'; } });
+  wab('wabShareLink').addEventListener('click', async () => { const url = wab('wabCustomerLink').value; if (!url) return; try { if (navigator.share) await navigator.share({ title: `Pide por WhatsApp · ${WAB_DATA.businessName || 'negocio'}`, text: 'Haz tu pedido por WhatsApp:', url }); else { await navigator.clipboard.writeText(url); wab('wabLinkStatus').textContent = 'Enlace copiado. Pégalo en tus redes o chats.'; } } catch (error) { if (error.name !== 'AbortError') wabError(error, 'wabLinkStatus'); } });
   wab('wabConnect').addEventListener('click', async () => { try { wab('wabStatus').textContent = 'Iniciando sesión…'; await api('/api/whatsapp-bot/connect', { method: 'POST' }); await loadWhatsAppBot(); } catch (error) { wabError(error); } });
   wab('wabDisconnect').addEventListener('click', async () => { if (!confirm('¿Desvincular este dispositivo y borrar sus credenciales locales?')) return; try { await api('/api/whatsapp-bot/disconnect', { method: 'POST' }); await loadWhatsAppBot(); } catch (error) { wabError(error); } });
   wab('wabTestForm').addEventListener('submit', async (event) => { event.preventDefault(); try { await api('/api/whatsapp-bot/test', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ phone: wab('wabTestPhone').value, message: wab('wabTestMessage').value }) }); wab('wabTestStatus').textContent = 'Mensaje enviado.'; await wabRecent(); } catch (error) { wabError(error, 'wabTestStatus'); } });
+  wab('wabMenuImageForm').addEventListener('submit', async (event) => { event.preventDefault(); const file = wab('wabMenuImageFile').files[0]; if (!file) { wabError(new Error('Selecciona primero la imagen.'), 'wabMenuStatus'); return; } try { const form = new FormData(); form.append('image', file); await api('/api/whatsapp-bot/menu-image', { method: 'POST', body: form }); wab('wabMenuStatus').textContent = 'Imagen guardada. Ahora puedes elegir “Imagen de mi menú” y guardar la opción.'; await loadWhatsAppBot(); } catch (error) { wabError(error, 'wabMenuStatus'); } });
+  wab('wabMenuModeSave').addEventListener('click', async () => { try { const result = await api('/api/whatsapp-bot/menu-config', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ mode: wab('wabMenuMode').value }) }); wab('wabMenuStatus').textContent = result.mode === 'image' ? 'Los clientes recibirán la imagen cuando pidan el menú.' : 'Los clientes verán el catálogo configurado en el sistema.'; } catch (error) { wabError(error, 'wabMenuStatus'); } });
   wab('wabPresets').addEventListener('click', (event) => { const button = event.target.closest('[data-wab-preset]'); if (!button) return; const preset = WAB_DATA.presets[Number(button.dataset.wabPreset)]; wabEdit(WAB_DATA.templates.find(row => row.presetKey === preset.key) || preset); });
   wab('wabTemplates').addEventListener('click', (event) => { const button = event.target.closest('[data-wab-template]'); if (button) wabEdit(WAB_DATA.templates.find(row => Number(row.id) === Number(button.dataset.wabTemplate))); });
   wab('wabOrderSelect').addEventListener('change', wabSelectOrder);

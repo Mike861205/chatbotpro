@@ -117,7 +117,7 @@ async function start(row) {
 
 const app = express();
 app.disable('x-powered-by');
-app.use(express.json({ limit: '32kb' }), authorized);
+app.use(express.json({ limit: '2mb' }), authorized);
 app.post('/sessions', async (req, res) => {
   const { id, tenant } = req.body || {};
   if (!uuid.test(id) || !slug.test(tenant)) return res.status(400).json({ error: 'Identificador inválido' });
@@ -141,6 +141,18 @@ app.post('/sessions/:id/send', async (req, res) => {
   if (!/^\d{8,20}@(s\.whatsapp\.net|lid)$/.test(jid) || !message || message.length > 10000) return res.status(400).json({ error: 'Destinatario o mensaje inválido' });
   try {
     const sent = await row.socket.sendMessage(jid, { text: message });
+    res.json({ ok: true, messageId: sent?.key?.id || '' });
+  } catch (error) { res.status(502).json({ error: error.message }); }
+});
+app.post('/sessions/:id/send-image', async (req, res) => {
+  const row = sessions.get(req.params.id);
+  const jid = String(req.body?.jid || '');
+  const encoded = String(req.body?.imageBase64 || '');
+  const caption = String(req.body?.caption || '').slice(0, 1000);
+  if (!row || row.status !== 'connected') return res.status(409).json({ error: 'WhatsApp no está conectado' });
+  if (!/^\d{8,20}@(s\.whatsapp\.net|lid)$/.test(jid) || encoded.length > 1300000 || !/^[A-Za-z0-9+/]+={0,2}$/.test(encoded)) return res.status(400).json({ error: 'Destinatario o imagen inválidos' });
+  try {
+    const sent = await row.socket.sendMessage(jid, { image: Buffer.from(encoded, 'base64'), ...(caption ? { caption } : {}) });
     res.json({ ok: true, messageId: sent?.key?.id || '' });
   } catch (error) { res.status(502).json({ error: error.message }); }
 });

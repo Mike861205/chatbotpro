@@ -2038,15 +2038,15 @@ async function handleMessage(t, slug, sessionId, rawInput, runtime = {}) {
       ...mode,
       label: `${receivingModeIcon(mode.behavior)} ${mode.label}`,
     })),
-  ];
+  ].filter((mode) => !runtime.whatsappBot || ['delivery', 'branch'].includes(mode.behavior));
   const chatPaymentDeliverySettings = {
-    cash: deliveryCashRaw === '1',
-    transfer: deliveryTransferRaw === '1',
+    cash: runtime.whatsappBot || deliveryCashRaw === '1',
+    transfer: runtime.whatsappBot || deliveryTransferRaw === '1',
     card: deliveryCardRaw === '1',
   };
   const chatPaymentPickupSettings = {
-    cash: pickupCashRaw === '1',
-    transfer: pickupTransferRaw === '1',
+    cash: runtime.whatsappBot || pickupCashRaw === '1',
+    transfer: runtime.whatsappBot || pickupTransferRaw === '1',
     card: pickupCardRaw === '1',
     platform: pickupPlatformRaw === '1',
   };
@@ -2332,6 +2332,12 @@ async function handleMessage(t, slug, sessionId, rawInput, runtime = {}) {
       state.customer.locationResolved = '';
     }
     if (mode.behavior === 'delivery') {
+      if (runtime.whatsappBot) {
+        state.step = 'ask_required_location';
+        reply.messages = ['Comparte tu ubicación actual de WhatsApp para calcular el costo de entrega.'];
+        reply.options = [{ label: '📍 Comparte tu ubicación', value: 'share_location' }];
+        return;
+      }
       state.step = 'ask_address';
       reply.messages = ['¿Cuál es tu *domicilio* de entrega? Incluye calle/edificio 📍'];
       if (locationEnabled || deliveryCoordinatesRequired) reply.options = [{ label: '📍 Comparte tu ubicación', value: 'share_location' }];
@@ -2377,6 +2383,11 @@ async function handleMessage(t, slug, sessionId, rawInput, runtime = {}) {
   };
 
   const continueCustomerFlowCore = () => {
+    if (runtime.whatsappBot) {
+      state.step = 'ask_name';
+      reply.messages = ['Para registrar tu pedido, ¿cuál es tu *nombre*?'];
+      return;
+    }
     const hasReturningData =
       Boolean(state.customer?.name) &&
       Boolean(state.customer?.phone) &&
@@ -2504,7 +2515,7 @@ Encontré tu último pedido a domicilio.`,
     reply.options = [{ label: '🆕 Hacer otro pedido', value: 'start' }];
     return finish();
   }
-  const formSteps = new Set(['ask_order_note_choice', 'ask_order_note_text', 'ask_scheduled_order', 'ask_scheduled_time', 'ask_scheduled_datetime', 'checkout_identity_choice', 'ask_returning_phone', 'confirm_returning_address', 'ask_name', 'ask_phone', 'ask_delivery', 'ask_branch', 'ask_address', 'ask_address_after_location', 'ask_neighborhood', 'ask_location_optional', 'ask_reference', 'ask_payment_method', 'ask_cash_change_choice', 'ask_cash_payment_amount', 'confirm_edit_note_text']);
+  const formSteps = new Set(['ask_order_note_choice', 'ask_order_note_text', 'ask_scheduled_order', 'ask_scheduled_time', 'ask_scheduled_datetime', 'checkout_identity_choice', 'ask_returning_phone', 'confirm_returning_address', 'ask_name', 'ask_phone', 'ask_delivery', 'ask_branch', 'ask_required_location', 'ask_address', 'ask_address_after_location', 'ask_neighborhood', 'ask_location_optional', 'ask_reference', 'ask_payment_method', 'ask_cash_change_choice', 'ask_cash_payment_amount', 'confirm_edit_note_text']);
   if (formSteps.has(state.step) && (lower === 'checkout' || NATURAL_FINISH_INTENTS.has(normalizeSearchText(input)))) {
     reply.messages = [state.lastPrompt || 'Para terminar, responde primero la pregunta actual.'];
     reply.options = state.lastOptions || [];
@@ -2524,7 +2535,7 @@ Encontré tu último pedido a domicilio.`,
     const defaultWelcome = typeof labels.welcomeDefault === 'function'
       ? labels.welcomeDefault(businessName)
       : `¡Hola! Bienvenido a ${businessName} 👋`;
-    reply.messages = [await getSetting(t, 'welcome_message', defaultWelcome)];
+    reply.messages = [runtime.welcomeMessage || await getSetting(t, 'welcome_message', defaultWelcome)];
     if (businessHoursEnabled) {
       const status = businessStatusAt(businessHours, new Date(), timeZone);
       if (status.open) reply.messages.push('🟢 En este momento estamos abiertos.');
@@ -3551,6 +3562,30 @@ Referencia: ${branch.reference}` : ''}`.trim()];
     return finish();
   }
 
+  if (state.step === 'ask_required_location') {
+    const geo = parseGeoInput(input);
+    if (!geo) {
+      reply.messages = ['Para calcular el servicio de tu zona necesito que envíes tu ubicación actual desde WhatsApp: clip o + → Ubicación → Enviar ubicación actual.'];
+      reply.options = [{ label: '📍 Comparte tu ubicación', value: 'share_location' }];
+      return finish();
+    }
+    state.customer.locationLat = geo.lat;
+    state.customer.locationLng = geo.lng;
+    state.customer.locationText = geo.label || `${geo.lat.toFixed(5)}, ${geo.lng.toFixed(5)}`;
+    const deliveryQuote = await refreshDeliveryQuote();
+    if (!deliveryQuote.valid) {
+      requestValidDeliveryLocation(deliveryQuote.reason);
+      return finish();
+    }
+    state.step = 'ask_address_after_location';
+    reply.messages = [
+      `Ubicación recibida: ${mapsUrl(geo.lat, geo.lng)}${Number(state.customer.deliveryFee || 0) > 0 ? `\nEnvío estimado: ${money(state.customer.deliveryFee, currency)}${state.customer.deliveryZoneName ? ` (${state.customer.deliveryZoneName})` : ''}` : ''}`,
+      deliveryQuote.pendingReview ? 'El negocio revisará la cobertura y confirmará el costo antes de preparar el pedido.' : '',
+      'Ahora escribe tu domicilio y una referencia para encontrar tu casa.',
+    ].filter(Boolean);
+    return finish();
+  }
+
   if (state.step === 'ask_address') {
     if (lower === 'share_location') {
       reply.messages = ['Activa la ubicación en tu celular para compartirla 📍'];
@@ -3720,6 +3755,10 @@ Referencia: ${branch.reference}` : ''}`.trim()];
 
   if (state.step === 'ask_reference') {
     if (lower === 'skip_reference') {
+      if (runtime.whatsappBot) {
+        reply.messages = ['Para que el repartidor encuentre tu casa, escribe una referencia breve (por ejemplo: portón negro o casa esquina).'];
+        return finish();
+      }
       state.customer.reference = '';
       goToPaymentOrConfirm();
       return finish();

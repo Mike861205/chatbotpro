@@ -1,27 +1,31 @@
 const express = require('express');
+const multer = require('multer');
+const sharp = require('sharp');
+const QRCode = require('qrcode');
 const crypto = require('node:crypto');
 const fs = require('node:fs/promises');
 const path = require('node:path');
-const { q, tdb, getSetting } = require('../db');
+const { q, tdb, getSetting, setSetting } = require('../db');
 const { requireAuth, requireModules } = require('../middleware/auth');
 const { handleMessage } = require('../chatbot/engine');
 const { emitWhatsAppUpdate } = require('../notifications');
 const { encrypt, decrypt, lookupHash } = require('../utils/crypto');
 
 const router = express.Router();
+const menuUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 8 * 1024 * 1024 }, fileFilter: (_req, file, cb) => cb(null, /^image\/(png|jpeg|webp)$/.test(file.mimetype)) });
 const secret = String(process.env.WHATSAPP_BOT_GATEWAY_SECRET || '');
 const gateway = `http://127.0.0.1:${Number(process.env.WHATSAPP_BOT_GATEWAY_PORT || 3013)}`;
 const mediaRoot = path.join(__dirname, '../..', 'data', 'whatsapp-bot-media');
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const presets = [
-  { key: 'welcome', name: 'Bienvenida', body: '¡Hola {nombre}! 👋 Bienvenido a {negocio}. Escribe *menú* para ver nuestros productos o cuéntame qué te gustaría pedir. Te guiaré paso a paso.' },
-  { key: 'location_request', name: 'Solicitar ubicación', body: '📍 Para calcular el servicio a domicilio, comparte tu ubicación actual desde WhatsApp: toca el clip o + → Ubicación → Enviar ubicación actual. Después te pediré la dirección. El costo de envío se calculará con las zonas y tarifas configuradas por {negocio}; si está fuera de cobertura, te avisaremos antes de confirmar el costo.' },
-  { key: 'order_confirmation', name: 'Confirmación con total y envío', body: '✅ *Pedido #{pedido} recibido en {negocio}*\nHola {nombre}, este es tu resumen:\n{productos}\n\nSubtotal: {subtotal}\nServicio a domicilio: {envio}\n*Total: {total}*\nModalidad: {servicio}\nDirección: {direccion}\nUbicación: {ubicacion}\n{nota_envio}' },
+  { key: 'welcome', name: 'Bienvenida', body: '¡Hola! 👋 Bienvenido a {negocio}. Escribe *menú* para ver lo que tenemos y elegir tus productos. Después te pediré tus datos para preparar y confirmar tu pedido.' },
+  { key: 'location_request', name: 'Solicitar ubicación', body: '📍 Para calcular el servicio a domicilio, comparte tu ubicación actual en WhatsApp: toca el clip o + → Ubicación → Enviar ubicación actual. Después indícanos la dirección y una referencia de tu casa. Calcularemos el costo con las tarifas configuradas para tu zona.' },
+  { key: 'order_confirmation', name: 'Confirmación del pedido', body: '✅ *Pedido #{pedido} confirmado en {negocio}*\nHola {nombre}, recibimos tu pedido:\n{productos}\n\nSubtotal: {subtotal}\nServicio a domicilio: {envio}\n*Total: {total}*\nModalidad: {servicio}\nSucursal/domicilio: {direccion}\nReferencia: {referencia}\nUbicación: {ubicacion}\nPago: {pago}\n{nota_envio}\n\n¡Gracias por tu compra! Te avisaremos cuando esté listo.' },
   { key: 'preparing', name: 'Pedido en preparación', body: '👨‍🍳 Hola {nombre}, estamos preparando tu pedido #{pedido} de {negocio}.\nTotal: {total}.\nTe avisaremos cuando esté listo.' },
   { key: 'ready', name: 'Pedido listo', body: '🎉 ¡Listo, {nombre}! Tu pedido #{pedido} está preparado.\nModalidad: {servicio}.\nTotal: {total}.\nGracias por elegir {negocio}.' },
   { key: 'delivery', name: 'Pedido en camino', body: '🛵 Hola {nombre}, tu pedido #{pedido} va en camino.\nDirección: {direccion}\nUbicación: {ubicacion}\nEnvío: {envio}\nTotal: {total}.' },
 ];
-const ORDER_VARIABLES = new Set(['pedido', 'productos', 'subtotal', 'envio', 'total', 'servicio', 'direccion', 'ubicacion', 'zona', 'nota_envio']);
+const ORDER_VARIABLES = new Set(['pedido', 'productos', 'subtotal', 'envio', 'total', 'servicio', 'direccion', 'referencia', 'ubicacion', 'zona', 'pago', 'nota_envio']);
 function presetBody(key) { return presets.find(preset => preset.key === key)?.body || ''; }
 async function activePresetBody(t, key) {
   const saved = await t.get('SELECT body FROM {s}.whatsapp_bot_templates WHERE preset_key=$1 LIMIT 1', [key]);
@@ -46,8 +50,10 @@ function orderTemplateValues(order, { businessName, currency }) {
     envio: delivery ? pending ? 'Por confirmar' : formatMoney(order.delivery_fee, currency) : 'No aplica',
     total: pending ? `${formatMoney(order.total, currency)} + envío por confirmar` : formatMoney(order.total, currency),
     servicio: delivery ? 'Entrega a domicilio' : order.receiving_mode_label || 'Recoger en sucursal',
-    direccion: delivery ? order.delivery_address || 'Pendiente de indicar' : order.pickup_branch_name || 'Recoger en sucursal',
+    direccion: delivery ? order.delivery_address || 'Pendiente de indicar' : [order.pickup_branch_name, order.pickup_branch_address].filter(Boolean).join(' · ') || 'Recoger en sucursal',
+    referencia: order.delivery_reference || 'Sin referencia',
     ubicacion: location,
+    pago: order.payment_method === 'transfer' ? 'Transferencia' : order.payment_method === 'cash' ? 'Efectivo' : order.payment_method || 'Por confirmar',
     zona: order.delivery_zone_name || (delivery ? 'Por confirmar' : 'No aplica'),
     nota_envio: pending ? '⚠️ La zona y el costo final del servicio a domicilio están pendientes de validar.' : '',
   };
@@ -55,8 +61,10 @@ function orderTemplateValues(order, { businessName, currency }) {
 async function loadOrderContext(t, orderId) {
   const order = await t.get(`SELECT o.id,o.items,o.subtotal,o.total,o.delivery_fee,o.delivery_zone_name,o.delivery,
     o.receiving_mode_behavior,o.receiving_mode_label,o.delivery_address,o.pickup_branch_name,
-    o.customer_location_lat,o.customer_location_lng,c.name_enc,c.phone_enc
+    o.delivery_reference,o.payment_method,o.customer_location_lat,o.customer_location_lng,
+    b.address AS pickup_branch_address,c.name_enc,c.phone_enc
     FROM {s}.orders o LEFT JOIN {s}.customers c ON c.id=o.customer_id
+    LEFT JOIN {s}.branches b ON b.id=o.pickup_branch_id
     WHERE o.id=$1 AND o.source_channel='whatsapp_bot' LIMIT 1`, [orderId]);
   if (!order) return null;
   const businessName = await getSetting(t, 'business_name', 'Tu negocio');
@@ -106,7 +114,11 @@ async function gatewayCall(route, method = 'GET', body) {
   if (!response.ok) { const error = new Error(result.error || 'Error en la pasarela'); error.status = response.status; throw error; }
   return result;
 }
-function fail(next, error) { if (error.status) return next(Object.assign(error, { statusCode: error.status })); return next(error); }
+function fail(next, error, res) {
+  if (error.status === 503 && res && !res.headersSent) return res.status(503).json({ error: error.message });
+  if (error.status) return next(Object.assign(error, { statusCode: error.status }));
+  return next(error);
+}
 function signatureMatches(req) {
   if (secret.length < 32 || !req.rawBody) return false;
   const supplied = String(req.get('x-gateway-signature') || '');
@@ -127,6 +139,12 @@ async function sendAndRecord(t, sessionId, jid, text) {
     VALUES($1,$2,$3,$4,'outbound',$5) ON CONFLICT(session_id,external_message_id) DO NOTHING`,
   [sessionId, result.messageId || crypto.randomUUID(), encrypt(jid), lookupHash(jid), text]);
 }
+async function sendImageAndRecord(t, sessionId, jid, bytes, caption = '') {
+  const result = await gatewayCall(`/sessions/${sessionId}/send-image`, 'POST', { jid, imageBase64: bytes.toString('base64'), caption: String(caption).slice(0, 1000) });
+  await t.run(`INSERT INTO {s}.whatsapp_bot_messages(session_id,external_message_id,contact_jid_enc,contact_jid_hash,direction,message_type,body)
+    VALUES($1,$2,$3,$4,'outbound','image',$5) ON CONFLICT(session_id,external_message_id) DO NOTHING`,
+  [sessionId, result.messageId || crypto.randomUUID(), encrypt(jid), lookupHash(jid), caption || 'Menú del negocio']);
+}
 async function runBot(t, tenant, sessionId, jid, text, customerName) {
   const chatId = `wab_${crypto.createHash('sha256').update(`${sessionId}:${jid}`).digest('hex').slice(0, 48)}`;
   if (!text.trim()) { await sendAndRecord(t, sessionId, jid, 'Recibí tu imagen 📷. Para continuar con tu pedido, escribe lo que necesitas o envía *hola*.'); return; }
@@ -138,17 +156,30 @@ async function runBot(t, tenant, sessionId, jid, text, customerName) {
       input = choices[Number(input.trim()) - 1]?.value || input;
     } catch {}
   }
+  const businessName = await getSetting(t, 'business_name', 'tu negocio');
+  const welcome = renderTemplate(await activePresetBody(t, 'welcome'), { nombre: customerName || 'hola', negocio: businessName });
   const reply = await handleMessage(t, tenant, chatId, input, {
-    orderChannel: 'chatbot', sourceChannel: 'whatsapp', customerPhone: jid.endsWith('@s.whatsapp.net') ? jid.split('@')[0] : '', customerName,
+    orderChannel: 'chatbot', sourceChannel: 'whatsapp', whatsappBot: true, welcomeMessage: welcome,
+    customerPhone: jid.endsWith('@s.whatsapp.net') ? jid.split('@')[0] : '', customerName,
   });
-  const messages = (reply.messages || []).filter(message => !/el negocio aún no tiene un WhatsApp válido/i.test(String(message)));
+  const menuMode = await getSetting(t, 'whatsapp_bot_menu_mode', 'catalog');
+  const menuImage = await getSetting(t, 'whatsapp_bot_menu_image', '');
+  const requestedMenu = /^(menu|menú|ver menu|ver menú|catalogo|catálogo)$/i.test(input.trim());
+  let messages = (reply.messages || []).filter(message => !/el negocio aún no tiene un WhatsApp válido/i.test(String(message)));
   if ((reply.options || []).some(option => option.value === 'share_location')) {
     const businessName = await getSetting(t, 'business_name', 'el negocio');
     const prompt = renderTemplate(await activePresetBody(t, 'location_request'), { negocio: businessName });
     if (messages.length) messages[messages.length - 1] = prompt;
     else messages.push(prompt);
   }
-  const choices = replyChoices(reply);
+  let choices = replyChoices(reply);
+  const menuImagePath = requestedMenu && menuMode === 'image' && menuImage
+    ? path.resolve(mediaRoot, tenant, path.basename(menuImage)) : '';
+  const hasMenuImage = Boolean(menuImagePath && await fs.access(menuImagePath).then(() => true, () => false));
+  if (hasMenuImage) {
+    messages = ['Aquí tienes nuestro menú. Escribe el nombre del producto y la cantidad para agregarlo a tu pedido.'];
+    choices = (reply.options || []).filter(option => !['menu', 'cart'].includes(option.value)).map(option => ({ label: option.label, value: option.value })).slice(0, 30);
+  }
   await t.run(`INSERT INTO {s}.whatsapp_bot_choices(session_id,contact_jid_hash,choices_json) VALUES($1,$2,$3)
     ON CONFLICT(session_id,contact_jid_hash) DO UPDATE SET choices_json=EXCLUDED.choices_json`, [sessionId, lookupHash(jid), JSON.stringify(choices)]);
   if (choices.length) messages.push(`Responde con el número de una opción:\n${choices.map((option, index) => `${index + 1}. ${option.label}`).join('\n')}`);
@@ -157,6 +188,7 @@ async function runBot(t, tenant, sessionId, jid, text, customerName) {
     const context = await loadOrderContext(t, reply.order.id);
     if (context) messages[0] = renderTemplate(await activePresetBody(t, 'order_confirmation'), context.values);
   }
+  if (hasMenuImage) await sendImageAndRecord(t, sessionId, jid, await fs.readFile(menuImagePath), '');
   for (const message of messages.filter(Boolean)) await sendAndRecord(t, sessionId, jid, String(message));
   emitWhatsAppUpdate(tenant, { event: 'message' });
 }
@@ -197,7 +229,19 @@ router.use(requireAuth, requireModules('whatsapp-bot'));
 async function connectionStatus(req) {
   const row = (await q('SELECT session_id FROM whatsapp_bot_registry WHERE tenant_slug=$1 AND enabled=TRUE', [req.tenant.slug])).rows[0];
   let connection = { status: 'not_connected', qr: '', phone: '' };
-  if (row) connection = await gatewayCall(`/sessions/${row.session_id}`).catch(error => ({ status: 'unavailable', qr: '', phone: '', error: error.message }));
+  if (row) {
+    try { connection = await gatewayCall(`/sessions/${row.session_id}`); }
+    catch (error) {
+      if (error.status === 404) {
+        try {
+          await gatewayCall('/sessions', 'POST', { id: row.session_id, tenant: req.tenant.slug });
+          connection = await gatewayCall(`/sessions/${row.session_id}`);
+        } catch (recoveryError) {
+          connection = { status: 'unavailable', qr: '', phone: '', error: recoveryError.message };
+        }
+      } else connection = { status: 'unavailable', qr: '', phone: '', error: error.message };
+    }
+  }
   if (connection.phone) {
     const zernio = await req.tdb.get(`SELECT id FROM {s}.whatsapp_connections
       WHERE enabled=1 AND regexp_replace(phone_number,'[^0-9]','','g')=$1 LIMIT 1`, [connection.phone]);
@@ -207,7 +251,7 @@ async function connectionStatus(req) {
 }
 router.get('/status', async (req, res, next) => {
   try { res.json({ connection: await connectionStatus(req) }); }
-  catch (error) { fail(next, error); }
+  catch (error) { fail(next, error, res); }
 });
 router.get('/', async (req, res, next) => {
   try {
@@ -218,11 +262,58 @@ router.get('/', async (req, res, next) => {
       WHERE o.source_channel='whatsapp_bot' ORDER BY o.id DESC LIMIT 30`);
     const currency = await getSetting(req.tdb, 'currency', 'MXN');
     const businessName = await getSetting(req.tdb, 'business_name', req.tenant.business_name || 'Tu negocio');
-    res.json({ connection, templates, presets, businessName, orders: orders.map(row => ({
+    const menuImage = await getSetting(req.tdb, 'whatsapp_bot_menu_image', '');
+    res.json({ connection, templates, presets, businessName,
+      menuMode: await getSetting(req.tdb, 'whatsapp_bot_menu_mode', 'catalog'),
+      hasMenuImage: Boolean(menuImage), orders: orders.map(row => ({
       id: Number(row.id), label: `#${row.id} · ${decrypt(row.name_enc || '') || 'Cliente'} · ${formatMoney(row.total, currency)}`,
       phone: validPhone(decrypt(row.phone_enc || '')),
     })) });
-  } catch (error) { fail(next, error); }
+  } catch (error) { fail(next, error, res); }
+});
+router.put('/menu-config', owner, async (req, res, next) => {
+  try {
+    const mode = req.body?.mode === 'image' ? 'image' : 'catalog';
+    const image = await getSetting(req.tdb, 'whatsapp_bot_menu_image', '');
+    if (mode === 'image' && !image) return res.status(400).json({ error: 'Sube una imagen del menú antes de activar esta opción' });
+    await setSetting(req.tdb, 'whatsapp_bot_menu_mode', mode);
+    res.json({ ok: true, mode, hasMenuImage: Boolean(image) });
+  } catch (error) { next(error); }
+});
+router.post('/menu-image', owner, menuUpload.single('image'), async (req, res, next) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: 'Selecciona una imagen PNG, JPG o WEBP de hasta 8 MB' });
+    const tenantDir = path.join(mediaRoot, req.tenant.slug);
+    await fs.mkdir(tenantDir, { recursive: true, mode: 0o700 });
+    const filename = `${crypto.randomUUID()}.jpg`;
+    const output = await sharp(req.file.buffer, { failOn: 'error' }).rotate().resize({ width: 1600, height: 1600, fit: 'inside', withoutEnlargement: true }).jpeg({ quality: 82, mozjpeg: true }).toBuffer();
+    if (output.length > 950000) return res.status(400).json({ error: 'La imagen sigue siendo muy pesada. Usa una imagen más ligera (máximo 950 KB optimizada).' });
+    const oldImage = await getSetting(req.tdb, 'whatsapp_bot_menu_image', '');
+    await fs.writeFile(path.join(tenantDir, filename), output, { mode: 0o600 });
+    await setSetting(req.tdb, 'whatsapp_bot_menu_image', filename);
+    if (oldImage && oldImage !== filename) await fs.rm(path.join(tenantDir, path.basename(oldImage)), { force: true });
+    res.status(201).json({ ok: true, hasMenuImage: true });
+  } catch (error) { next(error); }
+});
+router.get('/menu-image', async (req, res, next) => {
+  try {
+    const filename = await getSetting(req.tdb, 'whatsapp_bot_menu_image', '');
+    if (!filename) return res.status(404).end();
+    const imagePath = path.resolve(mediaRoot, req.tenant.slug, path.basename(filename));
+    res.type('jpeg').sendFile(imagePath);
+  } catch (error) { next(error); }
+});
+router.get('/customer-qr', async (req, res, next) => {
+  try {
+    const connection = await connectionStatus(req);
+    const phone = validPhone(connection.phone);
+    if (connection.status !== 'connected' || !phone) return res.status(409).json({ error: 'Vincula primero el teléfono para generar el QR de pedidos' });
+    const link = `https://wa.me/${phone}?text=${encodeURIComponent('Hola, quiero hacer un pedido')}`;
+    const png = await QRCode.toBuffer(link, { type: 'png', width: 480, margin: 2, errorCorrectionLevel: 'H', color: { dark: '#111827', light: '#FFFFFF' } });
+    res.type('png');
+    if (req.query.download === '1') res.set('Content-Disposition', 'attachment; filename="qr-pedidos-whatsapp.png"');
+    res.send(png);
+  } catch (error) { next(error); }
 });
 router.get('/orders/:id/context', async (req, res, next) => {
   try {
@@ -239,7 +330,7 @@ router.post('/connect', owner, async (req, res, next) => {
     else await q('UPDATE whatsapp_bot_registry SET enabled=TRUE WHERE tenant_slug=$1', [req.tenant.slug]);
     await gatewayCall('/sessions', 'POST', { id: row.session_id, tenant: req.tenant.slug });
     res.json({ ok: true });
-  } catch (error) { fail(next, error); }
+  } catch (error) { fail(next, error, res); }
 });
 router.post('/disconnect', owner, async (req, res, next) => {
   try {
@@ -249,7 +340,7 @@ router.post('/disconnect', owner, async (req, res, next) => {
       await q('DELETE FROM whatsapp_bot_registry WHERE tenant_slug=$1', [req.tenant.slug]);
     }
     res.json({ ok: true });
-  } catch (error) { fail(next, error); }
+  } catch (error) { fail(next, error, res); }
 });
 router.post('/test', async (req, res, next) => {
   try {
@@ -261,7 +352,7 @@ router.post('/test', async (req, res, next) => {
     if (!text) return res.status(400).json({ error: 'Escribe un mensaje' });
     await sendAndRecord(req.tdb, row.session_id, `${phone}@s.whatsapp.net`, text);
     res.json({ ok: true });
-  } catch (error) { fail(next, error); }
+  } catch (error) { fail(next, error, res); }
 });
 router.post('/templates', async (req, res, next) => {
   try {
@@ -301,7 +392,7 @@ router.post('/templates/:id/preview', async (req, res, next) => {
     if (!row) return res.status(404).json({ error: 'Plantilla no encontrada' });
     const prepared = await templatePayload(req.tdb, row.body, req.body);
     res.json({ text: prepared.text, variables: variables(row.body) });
-  } catch (error) { fail(next, error); }
+  } catch (error) { fail(next, error, res); }
 });
 async function sendTemplate(req, res, next, body) {
   try {
@@ -310,7 +401,7 @@ async function sendTemplate(req, res, next, body) {
     const prepared = await templatePayload(req.tdb, body, req.body, { requireRecipient: true });
     await sendAndRecord(req.tdb, row.session_id, `${prepared.phone}@s.whatsapp.net`, prepared.text);
     res.json({ ok: true, text: prepared.text });
-  } catch (error) { fail(next, error); }
+  } catch (error) { fail(next, error, res); }
 }
 router.post('/templates/send', async (req, res, next) => {
   const body = String(req.body?.body || '').trim().slice(0, 4000);
@@ -322,7 +413,7 @@ router.post('/templates/:id/send', async (req, res, next) => {
     const template = await req.tdb.get('SELECT body FROM {s}.whatsapp_bot_templates WHERE id=$1', [Number(req.params.id)]);
     if (!template) return res.status(404).json({ error: 'Plantilla no encontrada' });
     return sendTemplate(req, res, next, template.body);
-  } catch (error) { fail(next, error); }
+  } catch (error) { fail(next, error, res); }
 });
 router.get('/messages', async (req, res, next) => {
   try {
