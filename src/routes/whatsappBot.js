@@ -104,6 +104,26 @@ function replyChoices(reply) {
   ].slice(0, 30);
 }
 function validPhone(value) { const phone = String(value || '').replace(/\D/g, ''); return /^\d{8,15}$/.test(phone) ? phone : ''; }
+function normalizeContactCommand(value) { return String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim(); }
+function startsOrderIntent(value) {
+  const command = normalizeContactCommand(value);
+  return /^(?:hola\s+)?(?:quiero\s+(?:hacer\s+)?(?:un\s+)?pedido|hacer\s+(?:un\s+)?pedido|pedido|menu|ver\s+menu|quiero\s+ver\s+(?:el\s+)?menu|quiero\s+(?:ordenar|pedir))$/.test(command);
+}
+function isStopCommand(value) { return /^(stop|parar bot|detener bot|salir|baja|dejar de recibir mensajes|no mas mensajes)$/.test(normalizeContactCommand(value)); }
+async function admitWhatsAppContact(t, sessionId, jid, text) {
+  const contactHash = lookupHash(jid);
+  const contact = await t.get('SELECT opted_in,active_until FROM {s}.whatsapp_bot_contacts WHERE session_id=$1 AND contact_jid_hash=$2', [sessionId, contactHash]);
+  if (isStopCommand(text) && contact?.opted_in) {
+    await t.run('UPDATE {s}.whatsapp_bot_contacts SET opted_in=FALSE,active_until=now(),updated_at=now() WHERE session_id=$1 AND contact_jid_hash=$2', [sessionId, contactHash]);
+    return { accepted: true, optedOut: true, newlyOptedIn: false };
+  }
+  const active = Boolean(contact?.opted_in && contact.active_until && new Date(contact.active_until).getTime() > Date.now());
+  if (!active && !startsOrderIntent(text)) return { accepted: false, optedOut: false, newlyOptedIn: false };
+  await t.run(`INSERT INTO {s}.whatsapp_bot_contacts(session_id,contact_jid_hash,opted_in,active_until,updated_at)
+    VALUES($1,$2,TRUE,now()+interval '24 hours',now())
+    ON CONFLICT(session_id,contact_jid_hash) DO UPDATE SET opted_in=TRUE,active_until=EXCLUDED.active_until,updated_at=now()`, [sessionId, contactHash]);
+  return { accepted: true, optedOut: false, newlyOptedIn: !active };
+}
 function owner(req, res, next) { return req.user.role === 'owner' ? next() : res.status(403).json({ error: 'Sólo el propietario puede administrar la conexión' }); }
 async function gatewayCall(route, method = 'GET', body) {
   if (secret.length < 32) { const error = new Error('Configura WHATSAPP_BOT_GATEWAY_SECRET para activar el canal'); error.status = 503; throw error; }
@@ -145,8 +165,9 @@ async function sendImageAndRecord(t, sessionId, jid, bytes, caption = '') {
     VALUES($1,$2,$3,$4,'outbound','image',$5) ON CONFLICT(session_id,external_message_id) DO NOTHING`,
   [sessionId, result.messageId || crypto.randomUUID(), encrypt(jid), lookupHash(jid), caption || 'Menú del negocio']);
 }
-async function runBot(t, tenant, sessionId, jid, text, customerName) {
+async function runBot(t, tenant, sessionId, jid, text, customerName, admission = {}) {
   const chatId = `wab_${crypto.createHash('sha256').update(`${sessionId}:${jid}`).digest('hex').slice(0, 48)}`;
+  if (admission.optedOut) { await sendAndRecord(t, sessionId, jid, 'Listo, pausé la atención automática para este chat. Si quieres volver a pedir, escribe *PEDIDO*.'); return; }
   if (!text.trim()) { await sendAndRecord(t, sessionId, jid, 'Recibí tu imagen 📷. Para continuar con tu pedido, escribe lo que necesitas o envía *hola*.'); return; }
   let input = text;
   if (/^\d{1,2}$/.test(input.trim())) {
@@ -156,12 +177,21 @@ async function runBot(t, tenant, sessionId, jid, text, customerName) {
       input = choices[Number(input.trim()) - 1]?.value || input;
     } catch {}
   }
+  const beginsOrder = startsOrderIntent(input);
+  if (beginsOrder) input = 'menu';
   const businessName = await getSetting(t, 'business_name', 'tu negocio');
   const welcome = renderTemplate(await activePresetBody(t, 'welcome'), { nombre: customerName || 'hola', negocio: businessName });
-  const reply = await handleMessage(t, tenant, chatId, input, {
+  const runtime = {
     orderChannel: 'chatbot', sourceChannel: 'whatsapp', whatsappBot: true, welcomeMessage: welcome,
     customerPhone: jid.endsWith('@s.whatsapp.net') ? jid.split('@')[0] : '', customerName,
-  });
+  };
+  let reply = await handleMessage(t, tenant, chatId, input, runtime);
+  // The order engine initializes a first WhatsApp conversation with its start
+  // menu. For an explicit order/menu request, advance once so the catalog is
+  // shown immediately after the welcome instead of requiring another message.
+  if (admission.newlyOptedIn && beginsOrder && !(reply.products || []).length) {
+    reply = await handleMessage(t, tenant, chatId, 'menu', runtime);
+  }
   const menuMode = await getSetting(t, 'whatsapp_bot_menu_mode', 'catalog');
   const menuImage = await getSetting(t, 'whatsapp_bot_menu_image', '');
   const requestedMenu = /^(menu|menú|ver menu|ver menú|catalogo|catálogo)$/i.test(input.trim());
@@ -180,6 +210,7 @@ async function runBot(t, tenant, sessionId, jid, text, customerName) {
     messages = ['Aquí tienes nuestro menú. Escribe el nombre del producto y la cantidad para agregarlo a tu pedido.'];
     choices = (reply.options || []).filter(option => !['menu', 'cart'].includes(option.value)).map(option => ({ label: option.label, value: option.value })).slice(0, 30);
   }
+  if (admission.newlyOptedIn) messages.unshift(welcome);
   await t.run(`INSERT INTO {s}.whatsapp_bot_choices(session_id,contact_jid_hash,choices_json) VALUES($1,$2,$3)
     ON CONFLICT(session_id,contact_jid_hash) DO UPDATE SET choices_json=EXCLUDED.choices_json`, [sessionId, lookupHash(jid), JSON.stringify(choices)]);
   if (choices.length) messages.push(`Responde con el número de una opción:\n${choices.map((option, index) => `${index + 1}. ${option.label}`).join('\n')}`);
@@ -205,6 +236,9 @@ router.post('/internal/message', async (req, res, next) => {
     if (!registry) return res.status(404).json({ error: 'Sesión desconocida' });
     const t = tdb(registry.tenant_slug);
     const kind = type === 'image' ? 'image' : type === 'location' ? 'location' : 'text';
+    const inboundText = String(text || '').slice(0, 10000);
+    const admission = await admitWhatsAppContact(t, sessionId, jid, inboundText);
+    if (!admission.accepted) return res.json({ ok: true, ignored: true });
     const geo = kind === 'location' ? String(text || '').match(/^geo:(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?)(?:\|.*)?$/) : null;
     if (kind === 'location' && (!geo || Math.abs(Number(geo[1])) > 90 || Math.abs(Number(geo[2])) > 180)) return res.status(400).json({ error: 'Ubicación inválida' });
     const storedBody = kind === 'location' ? `Ubicación compartida: https://www.google.com/maps?q=${geo[1]},${geo[2]}` : String(text || '').slice(0, 10000);
@@ -220,7 +254,7 @@ router.post('/internal/message', async (req, res, next) => {
     [sessionId, messageId, encrypt(jid), lookupHash(jid), kind, storedBody, mediaPath]);
     if (!row) { if (mediaPath) await fs.rm(mediaPath, { force: true }); return res.json({ ok: true, duplicate: true }); }
     res.json({ ok: true });
-    enqueue(`${sessionId}:${jid}`, () => runBot(t, registry.tenant_slug, sessionId, jid, String(text || '').slice(0, 10000), String(pushName || '').slice(0, 120)))
+    enqueue(`${sessionId}:${jid}`, () => runBot(t, registry.tenant_slug, sessionId, jid, inboundText, String(pushName || '').slice(0, 120), admission))
       .catch(error => console.error('[whatsapp-bot][engine]', registry.tenant_slug, error.message));
   } catch (error) { next(error); }
 });
@@ -348,6 +382,8 @@ router.post('/test', async (req, res, next) => {
     if (!phone) return res.status(400).json({ error: 'Indica un número con clave de país' });
     const row = (await q('SELECT session_id FROM whatsapp_bot_registry WHERE tenant_slug=$1 AND enabled=TRUE', [req.tenant.slug])).rows[0];
     if (!row) return res.status(409).json({ error: 'Conecta WhatsApp primero' });
+    const connection = await gatewayCall(`/sessions/${row.session_id}`);
+    if (connection.phone && validPhone(connection.phone) === phone) return res.status(400).json({ error: 'Usa otro telÃ©fono para la prueba. El nÃºmero vinculado no recibe sus propios mensajes como mensajes entrantes.' });
     const text = String(req.body?.message || 'Hola, esta es una prueba de WhatsApp Bot.').trim().slice(0, 10000);
     if (!text) return res.status(400).json({ error: 'Escribe un mensaje' });
     await sendAndRecord(req.tdb, row.session_id, `${phone}@s.whatsapp.net`, text);
@@ -414,6 +450,43 @@ router.post('/templates/:id/send', async (req, res, next) => {
     if (!template) return res.status(404).json({ error: 'Plantilla no encontrada' });
     return sendTemplate(req, res, next, template.body);
   } catch (error) { fail(next, error, res); }
+});
+router.get('/conversations', async (req, res, next) => {
+  try {
+    const rows = await req.tdb.all(`WITH grouped AS (
+        SELECT contact_jid_hash,COUNT(*)::int AS message_count,MAX(created_at) AS last_at
+        FROM {s}.whatsapp_bot_messages WHERE contact_jid_hash<>'' GROUP BY contact_jid_hash
+      ), latest AS (
+        SELECT DISTINCT ON (contact_jid_hash) contact_jid_hash,contact_jid_enc,
+          COALESCE(to_jsonb(m)->>'contact_jid','') AS legacy_jid,direction,message_type,body,media_path<>'' AS has_media
+        FROM {s}.whatsapp_bot_messages m WHERE contact_jid_hash<>'' ORDER BY contact_jid_hash,id DESC
+      )
+      SELECT g.contact_jid_hash AS id,g.message_count,g.last_at,l.contact_jid_enc,l.legacy_jid,
+        l.direction AS last_direction,l.message_type AS last_type,l.body AS last_body,l.has_media
+      FROM grouped g JOIN latest l USING(contact_jid_hash) ORDER BY g.last_at DESC LIMIT 250`);
+    res.json({ conversations: rows.map(row => {
+      const jid = decrypt(row.contact_jid_enc) || row.legacy_jid || '';
+      const [contact, domain] = jid.split('@');
+      const isPhone = domain === 's.whatsapp.net' && /^\d{8,20}$/.test(contact || '');
+      return { id: row.id, phone: isPhone ? contact : '', label: isPhone ? contact : 'Contacto de WhatsApp',
+        lastAt: row.last_at, messageCount: Number(row.message_count || 0), lastDirection: row.last_direction,
+        lastType: row.last_type, lastBody: row.last_body || (row.last_type === 'image' ? 'Imagen' : ''), hasMedia: Boolean(row.has_media) };
+    }) });
+  } catch (error) { next(error); }
+});
+router.get('/conversations/:id', async (req, res, next) => {
+  try {
+    const contactHash = String(req.params.id || '');
+    if (!/^[a-f0-9]{64}$/.test(contactHash)) return res.status(400).json({ error: 'ConversaciÃ³n invÃ¡lida' });
+    const rows = await req.tdb.all(`SELECT m.id,m.contact_jid_enc,
+      COALESCE(to_jsonb(m)->>'contact_jid','') AS legacy_jid,
+      m.direction,m.message_type,m.body,m.created_at,m.media_path<>'' AS has_media
+      FROM (SELECT * FROM {s}.whatsapp_bot_messages WHERE contact_jid_hash=$1 ORDER BY id DESC LIMIT 250) m
+      ORDER BY m.id ASC`, [contactHash]);
+    const messages = rows.map(({ contact_jid_enc, legacy_jid, ...row }) => ({ ...row,
+      contact_jid: decrypt(contact_jid_enc) || legacy_jid, has_media: Boolean(row.has_media) }));
+    res.json({ messages });
+  } catch (error) { next(error); }
 });
 router.get('/messages', async (req, res, next) => {
   try {

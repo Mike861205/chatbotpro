@@ -1,6 +1,8 @@
 /* Canal QR independiente del módulo Zernio. */
 let WAB_DATA = { templates: [], presets: [], orders: [] };
 let WAB_ORDER_CONTEXT = null;
+let WAB_CONVERSATIONS = [];
+let WAB_SELECTED_CONVERSATION = '';
 let WAB_BOUND = false;
 let WAB_TIMER = null;
 let WAB_TICKS = 0;
@@ -83,13 +85,59 @@ function wabEdit(row) {
   wab('wabTemplateSend').hidden = !row?.body;
   wabPreview();
 }
+function wabRenderConversations() {
+  const query = String(wab('wabConversationSearch').value || '').replace(/\D/g, '');
+  const rows = WAB_CONVERSATIONS.filter(row => !query || String(row.phone || row.label).includes(query));
+  wab('wabConversationList').innerHTML = rows.length ? rows.map(row => {
+    const preview = row.lastType === 'image' ? '\uD83D\uDCF7 Imagen' : row.lastType === 'location' ? '\uD83D\uDCCD Ubicaci\u00F3n' : String(row.lastBody || '');
+    const direction = row.lastDirection === 'outbound' ? 'T\u00FA: ' : '';
+    const time = new Date(row.lastAt).toLocaleString([], { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
+    return `<button type="button" class="wab-conversation${row.id === WAB_SELECTED_CONVERSATION ? ' selected' : ''}" data-wab-conversation="${wabEsc(row.id)}"><span class="wab-avatar">${row.phone ? wabEsc(row.phone.slice(-2)) : 'WA'}</span><span class="wab-conversation-copy"><span class="wab-conversation-top"><strong>${wabEsc(row.label)}</strong><time>${wabEsc(time)}</time></span><span class="wab-conversation-preview">${wabEsc(direction + preview)}</span></span></button>`;
+  }).join('') : `<div class="wab-inbox-empty">${WAB_CONVERSATIONS.length ? 'No hay coincidencias para ese n\u00FAmero.' : 'Todav\u00EDa no hay conversaciones.'}</div>`;
+}
+async function wabOpenConversation(id, scrollBottom = true) {
+  const selected = WAB_CONVERSATIONS.find(row => row.id === id);
+  if (!selected) return;
+  const messageBox = wab('wabChatMessages');
+  const wasAtBottom = messageBox.scrollHeight - messageBox.clientHeight - messageBox.scrollTop < 48;
+  WAB_SELECTED_CONVERSATION = id;
+  wabRenderConversations();
+  wab('wabChatPlaceholder').hidden = true;
+  wab('wabChatView').hidden = false;
+  wab('wabChatPhone').textContent = selected.label;
+  wab('wabChatAvatar').textContent = selected.phone ? selected.phone.slice(-2) : 'WA';
+  wab('wabChatMeta').textContent = `${selected.messageCount} mensajes \u00B7 WhatsApp`;
+  const data = await api(`/api/whatsapp-bot/conversations/${encodeURIComponent(id)}`);
+  const content = (data.messages || []).map(row => {
+    const body = String(row.body || (row.message_type === 'image' ? 'Imagen' : ''));
+    const maps = row.message_type === 'location' ? body.match(/(https:\/\/www\.google\.com\/maps\?q=-?[\d.]+,-?[\d.]+)/) : null;
+    const text = maps ? `<a target="_blank" rel="noopener" href="${wabEsc(maps[1])}">\uD83D\uDCCD Ver ubicaci\u00F3n en Maps</a>` : wabEsc(body);
+    const image = row.has_media ? `<a class="wab-chat-image" target="_blank" rel="noopener" href="/api/whatsapp-bot/media/${Number(row.id)}"><img loading="lazy" src="/api/whatsapp-bot/media/${Number(row.id)}" alt="Imagen enviada en la conversaci\u00F3n"></a>` : '';
+    const label = row.direction === 'inbound' ? 'Cliente' : 'WhatsApp Bot';
+    return `<article class="wab-bubble ${row.direction === 'outbound' ? 'outbound' : 'inbound'}">${image}${text ? `<div class="wab-bubble-text">${text}</div>` : ''}<footer><span>${label}</span><time>${wabEsc(new Date(row.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }))}</time></footer></article>`;
+  }).join('');
+  wab('wabChatMessages').innerHTML = content || '<div class="wab-inbox-empty">No hay mensajes guardados en esta conversaci\u00F3n.</div>';
+  if (scrollBottom || wasAtBottom) messageBox.scrollTop = messageBox.scrollHeight;
+}
 async function wabRecent() {
-  const data = await api('/api/whatsapp-bot/messages');
-  wab('wabMessages').innerHTML = data.messages.length ? data.messages.map(row => {
-    const maps = row.message_type === 'location' ? String(row.body || '').match(/^Ubicación compartida: (https:\/\/www\.google\.com\/maps\?q=-?[\d.]+,-?[\d.]+)$/) : null;
-    const content = maps ? `<a target="_blank" rel="noopener" href="${wabEsc(maps[1])}">📍 Abrir ubicación en Maps</a>` : wabEsc(row.body || (row.message_type === 'image' ? '📷 Imagen' : ''));
-    return `<div class="wab-message"><b>${wabEsc(row.contact_jid.split('@')[0])}</b> · ${row.direction === 'inbound' ? 'Recibido' : 'Enviado'}<small>${wabEsc(new Date(row.created_at).toLocaleString())}</small><span>${content}</span>${row.has_media ? ` <a target="_blank" rel="noopener" href="/api/whatsapp-bot/media/${Number(row.id)}">Ver imagen</a>` : ''}</div>`;
-  }).join('') : '<p class="hint">Todavía no hay mensajes.</p>';
+  const data = await api('/api/whatsapp-bot/conversations');
+  WAB_CONVERSATIONS = data.conversations || [];
+  wabRenderConversations();
+  if (WAB_SELECTED_CONVERSATION && WAB_CONVERSATIONS.some(row => row.id === WAB_SELECTED_CONVERSATION)) return wabOpenConversation(WAB_SELECTED_CONVERSATION, false);
+  if (WAB_CONVERSATIONS.length) return wabOpenConversation(WAB_CONVERSATIONS[0].id, false);
+  WAB_SELECTED_CONVERSATION = '';
+  wab('wabChatView').hidden = true;
+  wab('wabChatPlaceholder').hidden = false;
+}
+function wabSetTab(tab) {
+  const activity = tab === 'activity';
+  wab('wabSetupPanel').hidden = activity;
+  wab('wabActivityPanel').hidden = !activity;
+  wab('wabTabSetup').classList.toggle('active', !activity);
+  wab('wabTabSetup').setAttribute('aria-selected', String(!activity));
+  wab('wabTabActivity').classList.toggle('active', activity);
+  wab('wabTabActivity').setAttribute('aria-selected', String(activity));
+  if (activity) wabRecent().catch(error => wabError(error, 'wabConversationList'));
 }
 async function loadWhatsAppBot() {
   if (!WAB_BOUND) wabBind();
@@ -116,13 +164,21 @@ async function loadWhatsAppBot() {
     WAB_POLL_BUSY = true;
     try {
       if (++WAB_TICKS % 3 === 0) await loadWhatsAppBot();
-      else { const refreshed = await api('/api/whatsapp-bot/status'); wabConnection(refreshed.connection); if (typeof ME !== 'undefined' && ME?.role !== 'owner') wab('wabDisconnect').hidden = true; }
+      else { const refreshed = await api('/api/whatsapp-bot/status'); wabConnection(refreshed.connection); if (!wab('wabActivityPanel').hidden) await wabRecent(); if (typeof ME !== 'undefined' && ME?.role !== 'owner') wab('wabDisconnect').hidden = true; }
     } catch (error) { wabError(error); }
     finally { WAB_POLL_BUSY = false; }
   }, 4000);
 }
 function wabBind() {
   WAB_BOUND = true;
+  wab('wabTabSetup').addEventListener('click', () => wabSetTab('setup'));
+  wab('wabTabActivity').addEventListener('click', () => wabSetTab('activity'));
+  wab('wabConversationSearch').addEventListener('input', wabRenderConversations);
+  wab('wabConversationList').addEventListener('click', event => {
+    const button = event.target.closest('[data-wab-conversation]');
+    if (button) wabOpenConversation(button.dataset.wabConversation).catch(error => wabError(error, 'wabConversationList'));
+  });
+  wab('wabRefreshActivity').addEventListener('click', () => wabRecent().catch(error => wabError(error, 'wabConversationList')));
   wab('wabCopyLink').addEventListener('click', async () => { try { await navigator.clipboard.writeText(wab('wabCustomerLink').value); wab('wabLinkStatus').textContent = 'Enlace copiado. Compártelo con tus clientes.'; } catch { wab('wabCustomerLink').select(); wab('wabLinkStatus').textContent = 'Selecciona y copia el enlace.'; } });
   wab('wabShareLink').addEventListener('click', async () => { const url = wab('wabCustomerLink').value; if (!url) return; try { if (navigator.share) await navigator.share({ title: `Pide por WhatsApp · ${WAB_DATA.businessName || 'negocio'}`, text: 'Haz tu pedido por WhatsApp:', url }); else { await navigator.clipboard.writeText(url); wab('wabLinkStatus').textContent = 'Enlace copiado. Pégalo en tus redes o chats.'; } } catch (error) { if (error.name !== 'AbortError') wabError(error, 'wabLinkStatus'); } });
   wab('wabConnect').addEventListener('click', async () => { try { wab('wabStatus').textContent = 'Iniciando sesión…'; await api('/api/whatsapp-bot/connect', { method: 'POST' }); await loadWhatsAppBot(); } catch (error) { wabError(error); } });

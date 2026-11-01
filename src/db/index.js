@@ -992,6 +992,14 @@ async function createTenantSchema(slug) {
       choices_json TEXT NOT NULL DEFAULT '[]',
       PRIMARY KEY(session_id, contact_jid_hash)
     );
+    CREATE TABLE IF NOT EXISTS "${s}".whatsapp_bot_contacts (
+      session_id UUID NOT NULL,
+      contact_jid_hash TEXT NOT NULL,
+      opted_in BOOLEAN NOT NULL DEFAULT FALSE,
+      active_until TIMESTAMPTZ,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      PRIMARY KEY(session_id, contact_jid_hash)
+    );
     DO $$ BEGIN
       IF EXISTS (SELECT 1 FROM information_schema.columns
         WHERE table_schema='${s}' AND table_name='whatsapp_bot_choices' AND column_name='contact_jid') THEN
