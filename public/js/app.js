@@ -88,6 +88,7 @@ let BRANCHES = [];
 let CASHIERS = [];
 let INTERNAL_USERS = [];
 let MODULE_CATALOG = [];
+const PAID_MODULES = new Set(['empleados']);
 let LAST_ORDERS = [];
 let POS_OVERVIEW = null;
 let POS_PAYMENT_REPORT_REQUEST = 0;
@@ -1151,6 +1152,7 @@ function isHondurasTenant() {
 }
 
 function normalizeView(view) {
+  if (PAID_MODULES.has(view)) return 'dashboard';
   if (isCashierUser()) {
     return CASHIER_ALLOWED_VIEWS.has(view) ? view : 'pos';
   }
@@ -1205,7 +1207,7 @@ function applyUserScopeUI() {
     const ownerVisible = ME?.role !== 'owner' || !hiddenModules.has(a.dataset.view);
     const businessAllowed = a.dataset.businessFeature !== 'restaurant' || businessUi().supportsRestaurantOperations;
     const hondurasAllowed = a.dataset.hondurasOnly !== 'true' || (isHondurasTenant() && ME?.role === 'owner');
-    const allowed = mexicoAllowed && hondurasAllowed && roleAllowed && ownerVisible && businessAllowed;
+    const allowed = !PAID_MODULES.has(a.dataset.view) && mexicoAllowed && hondurasAllowed && roleAllowed && ownerVisible && businessAllowed;
     a.hidden = !allowed;
   });
   document.querySelectorAll('[data-mexico-only="true"]:not(.sidebar nav a)').forEach((element) => {

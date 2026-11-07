@@ -2,7 +2,7 @@ const jwt = require('jsonwebtoken');
 const config = require('../config');
 const { q, tdb } = require('../db');
 const { normalizeTimeZone } = require('../utils/regional');
-const { normalizeModules } = require('../utils/modules');
+const { normalizeModules, PAID_MODULES } = require('../utils/modules');
 const { trialState } = require('../utils/trialAccess');
 
 const COOKIE_NAME = 'cbp_token';
@@ -178,8 +178,10 @@ function requireOwner(req, res, next) {
 function requireModules(...moduleKeys) {
   return (req, res, next) => {
     if (!req.user) return res.status(401).json({ error: 'No autenticado' });
-    if (req.user.role === 'cashier' && moduleKeys.some((key) => ['pos', 'gastos', 'pedidos', 'cortes', 'cancelaciones'].includes(key))) return next();
-    if (req.user.role === 'owner' || (req.user.role === 'staff' && moduleKeys.some((key) => req.user.permissions.includes(key)))) return next();
+    const availableModuleKeys = moduleKeys.filter((key) => !PAID_MODULES.has(key));
+    if (!availableModuleKeys.length) return res.status(403).json({ error: 'Este módulo requiere una licencia de pago activa' });
+    if (req.user.role === 'cashier' && availableModuleKeys.some((key) => ['pos', 'gastos', 'pedidos', 'cortes', 'cancelaciones'].includes(key))) return next();
+    if (req.user.role === 'owner' || (req.user.role === 'staff' && availableModuleKeys.some((key) => req.user.permissions.includes(key)))) return next();
     return res.status(403).json({ error: 'No tienes permiso para acceder a este modulo' });
   };
 }

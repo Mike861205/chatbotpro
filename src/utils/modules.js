@@ -1,4 +1,6 @@
-const MODULES = Object.freeze([
+const PAID_MODULES = new Set(['empleados']);
+
+const ALL_MODULES = Object.freeze([
   ['dashboard', 'Dashboard'], ['pedidos', 'Pedidos'], ['clientes', 'Clientes'],
   ['pos', 'Punto de venta'], ['gastos', 'Gastos'], ['ventas', 'Ventas'], ['facturacion', 'Facturacion MX'],
   ['cfdi', 'CFDI emitidos'], ['cancelaciones', 'Cancelaciones'], ['cortes', 'Cortes'],
@@ -8,6 +10,9 @@ const MODULES = Object.freeze([
   ['config', 'Mi negocio'], ['suscripciones', 'Suscripciones'], ['instrucciones', 'Instrucciones'],
 ]);
 
+// Paid add-ons stay out of the standard module catalog until an entitlement
+// flow is available. Existing module implementation and data remain intact.
+const MODULES = Object.freeze(ALL_MODULES.filter(([key]) => !PAID_MODULES.has(key)));
 const MODULE_KEYS = new Set(MODULES.map(([key]) => key));
 
 function normalizeModules(raw) {
@@ -23,4 +28,4 @@ function hasModule(user, moduleKey) {
   return user?.role === 'owner' || normalizeModules(user?.permissions).includes(moduleKey);
 }
 
-module.exports = { MODULES, MODULE_KEYS, normalizeModules, hasModule };
+module.exports = { MODULES, MODULE_KEYS, PAID_MODULES, normalizeModules, hasModule };
