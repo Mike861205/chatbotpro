@@ -14867,7 +14867,7 @@ async function completeInitialIdentitySetup({ save = false } = {}) {
     setTimeout(presentStartupJourney, 140);
   } catch (err) {
     error.textContent = err instanceof TypeError && /fetch/i.test(err.message)
-      ? 'No hay conexión con el servidor local. Tus datos no se perdieron; vuelve a intentarlo cuando esté disponible.'
+      ? 'No hay conexión con el servidor. Tus datos no se perdieron; vuelve a intentarlo en unos segundos.'
       : (err.message || 'No se pudo continuar. Inténtalo de nuevo.');
     error.hidden = false;
   } finally {

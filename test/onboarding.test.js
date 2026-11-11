@@ -32,8 +32,6 @@ test('el estado se guarda al cerrar o comenzar la capacitación', () => {
 
 test('la identidad inicial se completa por separado antes de la capacitación', () => {
   assert.match(auth, /router\.post\('\/identity\/complete', requireAuth, requireOwner/);
-  assert.match(auth, /if \(req\.tenant\.product_code === 'invoicing'\)/);
-  assert.match(auth, /'Completa nombre, logo y color'/);
   assert.match(auth, /UPDATE users SET identity_completed = 1 WHERE id = \$1/);
   assert.match(html, /id="initialIdentityModal"/);
   assert.match(html, /id="initialIdentityForm"/);
@@ -53,7 +51,12 @@ test('ChatBotPro permite omitir la personalización sin logo ni otros datos adic
   assert.match(script, /completeInitialIdentitySetup\(\{ save = false \} = \{\}\)/);
   assert.match(script, /if \(save\) \{[\s\S]*api\('\/api\/settings', \{ method: 'PUT', body: fd \}\)/);
   assert.match(script, /initialIdentitySkip'\)\?\.addEventListener\('click', \(\) => completeInitialIdentitySetup\(\)\)/);
-  assert.match(auth, /if \(req\.tenant\.product_code === 'invoicing'\)[\s\S]*UPDATE users SET identity_completed = 1/);
+  // La personalización es opcional también en facturación independiente: el backend
+  // cierra el paso sin exigir nombre, logo ni color.
+  const identityHandler = auth.slice(auth.indexOf("router.post('/identity/complete'"));
+  assert.match(identityHandler, /UPDATE users SET identity_completed = 1/);
+  assert.doesNotMatch(identityHandler, /product_code/);
+  assert.doesNotMatch(identityHandler, /Completa nombre, logo y color/);
 });
 
 test('el panel incluye el módulo permanente debajo de Pedidos en vivo y los seis pasos', () => {
