@@ -11,8 +11,9 @@
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/fill/style.css" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/duotone/style.css" />
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-  <link rel="stylesheet" href="/static/css/styles.css?v=20261101-whatsapp-bot-activity" />
+  <link rel="stylesheet" href="/static/css/styles.css?v=20261110-expense-measure" />
   <link rel="stylesheet" href="/static/css/sar.css?v=20260929-tabs-1" />
+  <link rel="stylesheet" href="/static/css/checador-admin.css?v=20261106-1" />
   <link rel="icon" type="image/svg+xml" href="/static/favicon.svg" />
   <link rel="icon" type="image/png" href="/static/chatbotpro100.png" />
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
@@ -66,6 +67,8 @@
         <a href="#stock-sucursales" data-view="stock-sucursales" data-color="cyan"><span class="nav-ic"><i class="ph-duotone ph-warehouse"></i></span><span>Stock por sucursal</span></a>
         <div class="nav-label nav-label-compras"><i class="ph-fill ph-shopping-bag-open"></i> Compras</div>
         <a href="#compras" data-view="compras" data-color="blue"><span class="nav-ic"><i class="ph-duotone ph-shopping-bag-open"></i></span><span>Compras</span></a>
+        <div class="nav-label nav-label-personal"><i class="ph-fill ph-users-three"></i> Personal</div>
+        <a href="#checador" data-view="checador" data-color="violet"><span class="nav-ic"><i class="ph-duotone ph-clock-user"></i></span><span>Reloj checador</span></a>
         <div class="nav-label nav-label-chatbot"><i class="ph-fill ph-chat-circle-dots"></i> Chatbot</div>
         <a href="#chatbot" data-view="chatbot" data-color="cyan"><span class="nav-ic"><i class="ph-duotone ph-robot"></i></span><span>Mi chatbot</span></a>
         <a href="#whatsapp" data-view="whatsapp" data-color="emerald"><span class="nav-ic"><i class="ph-duotone ph-whatsapp-logo"></i></span><span>WhatsApp</span></a>
@@ -569,6 +572,29 @@
           <button type="button" class="on" data-expense-tab="reports" role="tab" aria-selected="true">Reportes</button>
           <button type="button" data-expense-tab="categories" role="tab" aria-selected="false">Categorías</button>
           <button type="button" data-expense-tab="register" role="tab" aria-selected="false">Registrar gasto</button>
+          <button type="button" data-expense-tab="measure" role="tab" aria-selected="false">Medición</button>
+        </div>
+        <div data-expense-panel="measure" hidden>
+          <div class="card expense-report-toolbar">
+            <div class="expense-quick-period" id="expMeasurePeriods"><button class="btn btn-ghost" type="button" data-measure-period="month">Mes actual</button><button class="btn btn-ghost" type="button" data-measure-period="prevMonth">Mes anterior</button><button class="btn btn-ghost" type="button" data-measure-period="days30">Últimos 30 días</button><button class="btn btn-ghost" type="button" data-measure-period="year">Año actual</button><button class="btn btn-ghost" type="button" data-measure-period="all">Todo el historial</button></div>
+            <div class="expense-report-period">
+              <div class="field"><label for="expMeasureFrom">Desde</label><input type="date" id="expMeasureFrom" /></div>
+              <div class="field"><label for="expMeasureTo">Hasta</label><input type="date" id="expMeasureTo" /></div>
+              <div class="field" id="expMeasureBranchField"><label for="expMeasureBranch">Sucursal</label><select id="expMeasureBranch"><option value="all">Global (todas las sucursales)</option><option value="general">Sin sucursal</option></select></div>
+              <label class="exp-measure-check"><input type="checkbox" id="expMeasureWithdrawals" /> Incluir retiros de caja</label>
+              <button class="btn btn-ghost" id="expMeasureRefresh" type="button" aria-label="Actualizar medición"><i class="ph-bold ph-arrows-clockwise"></i></button>
+            </div>
+          </div>
+          <p class="hint exp-measure-scope" id="expMeasureScope" aria-live="polite"></p>
+          <div class="expense-summary-cards exp-measure-kpis" id="expMeasureKpis" aria-label="Indicadores de gasto"></div>
+          <div class="exp-measure-grid">
+            <div class="card exp-measure-card"><div class="sales-panel-heading"><div><h3><i class="ph-bold ph-chart-pie-slice"></i> Gasto por categoría</h3><p>Porcentaje que representa cada categoría del gasto total.</p></div></div><div class="exp-measure-pie"><div class="exp-measure-canvas"><canvas id="expMeasureCategoryChart" aria-label="Gráfico de pastel de gasto por categoría" role="img"></canvas></div><div class="exp-measure-legend" id="expMeasureCategoryLegend"></div></div></div>
+            <div class="card exp-measure-card"><div class="sales-panel-heading"><div><h3 id="expMeasureSecondTitle"><i class="ph-bold ph-storefront"></i> Gasto por sucursal</h3><p id="expMeasureSecondHint">Qué sucursal concentra más gasto.</p></div></div><div class="exp-measure-pie"><div class="exp-measure-canvas"><canvas id="expMeasureSecondChart" aria-label="Gráfico de pastel secundario" role="img"></canvas></div><div class="exp-measure-legend" id="expMeasureSecondLegend"></div></div></div>
+          </div>
+          <div class="card exp-measure-card"><div class="sales-panel-heading"><div><h3><i class="ph-bold ph-chart-bar"></i> Comportamiento en el tiempo</h3><p id="expMeasureTrendHint">Gasto por categoría a lo largo del periodo.</p></div></div><div class="exp-measure-trend"><canvas id="expMeasureTrendChart" aria-label="Gráfico de gasto por fecha y categoría" role="img"></canvas></div></div>
+          <div class="card exp-measure-card"><div class="sales-panel-heading"><div><h3><i class="ph-bold ph-ranking"></i> Ranking de categorías</h3><p>Monto, porcentaje y variación contra el periodo anterior.</p></div></div><div class="table-wrap" id="expMeasureRanking"></div></div>
+          <div class="card exp-measure-card" id="expMeasureMatrixCard"><div class="sales-panel-heading"><div><h3><i class="ph-bold ph-table"></i> Categoría por sucursal</h3><p>Monto y porcentaje de cada categoría dentro de cada sucursal.</p></div></div><div class="table-wrap" id="expMeasureMatrix"></div></div>
+          <div class="card exp-measure-card"><div class="sales-panel-heading"><div><h3><i class="ph-bold ph-arrow-fat-lines-up"></i> Gastos más altos</h3><p>Los 10 movimientos de mayor monto del periodo.</p></div></div><div class="table-wrap" id="expMeasureTop"></div></div>
         </div>
         <div data-expense-panel="register" hidden>
           <div class="card costing-expense-form-card">
@@ -577,6 +603,7 @@
               <div class="field"><label>Sucursal</label><select id="costingExpenseBranch"><option value="general">Sin sucursal</option></select></div>
               <div class="field"><label>Fecha</label><input type="date" id="costingExpenseDate" required /></div>
               <div class="field"><label for="costingExpenseCategory">Categoría de gasto</label><select id="costingExpenseCategory" required><option value="">Selecciona una categoría</option></select></div>
+              <div class="field" id="costingExpenseEmployeeWrap" hidden><label for="costingExpenseEmployee">Empleado (adelanto de nómina)</label><select id="costingExpenseEmployee"><option value="">Selecciona al empleado</option></select><small id="costingExpenseEmployeeHint" class="hint"></small></div>
               <div class="field"><label>Concepto</label><input type="text" id="costingExpenseConcept" maxlength="120" placeholder="Ej. Gas, renta, insumos" required /></div>
               <div class="field"><label>Monto</label><input type="number" id="costingExpenseAmount" min="0.01" step="0.01" placeholder="0.00" required /></div>
               <div class="field costing-expense-notes"><label>Notas</label><input type="text" id="costingExpenseNotes" maxlength="240" placeholder="Opcional" /></div>
@@ -842,6 +869,290 @@
               </div>
               <div class="hint" style="margin-bottom:12px">Asigna un esquema de comisión a cada empleado, opcionalmente vinculado a una métrica específica.</div>
               <div class="table-wrap" id="empAssignTable"></div>
+            </div>
+
+          </div>
+        </div>
+
+      </section>
+
+      <!-- ──────── Reloj checador ──────── -->
+      <section class="section" id="view-checador">
+
+        <div class="chk-kpis" id="chkKpis"></div>
+
+        <div class="chk-toolbar">
+          <div class="segmented" id="chkTabs">
+            <button type="button" class="on" data-chk-tab="board"><i class="ph-bold ph-gauge"></i> Tablero</button>
+            <button type="button" data-chk-tab="attendance"><i class="ph-bold ph-calendar-check"></i> Asistencia</button>
+            <button type="button" data-chk-tab="employees"><i class="ph-bold ph-users-three"></i> Empleados</button>
+            <button type="button" data-chk-tab="payroll"><i class="ph-bold ph-money"></i> Nómina</button>
+            <button type="button" data-chk-tab="config"><i class="ph-bold ph-sliders"></i> Configurar</button>
+          </div>
+          <button class="btn btn-ghost" type="button" id="chkRefreshBtn"><i class="ph-bold ph-arrows-clockwise"></i> Actualizar</button>
+        </div>
+
+        <!-- ── Tablero ── -->
+        <div class="chk-panel" id="chkPanelBoard">
+          <div class="card">
+            <div class="chk-card-head">
+              <h3><i class="ph-bold ph-user-list"></i> Jornada de hoy</h3>
+              <span class="hint" id="chkBoardDate">—</span>
+            </div>
+            <div class="chk-today-grid" id="chkTodayGrid"></div>
+          </div>
+          <div class="card">
+            <div class="chk-card-head">
+              <h3><i class="ph-bold ph-clock-countdown"></i> Últimos movimientos</h3>
+              <button class="btn btn-ghost btn-sm" type="button" id="chkAddPunchBtn"><i class="ph-bold ph-plus"></i> Checada manual</button>
+            </div>
+            <div class="table-wrap" id="chkRecentTable"></div>
+          </div>
+        </div>
+
+        <!-- ── Asistencia ── -->
+        <div class="chk-panel" id="chkPanelAttendance" hidden>
+          <div class="card chk-filters">
+            <div class="chk-filter-row">
+              <div class="segmented chk-presets" id="chkPresets">
+                <button type="button" data-preset="today">Hoy</button>
+                <button type="button" data-preset="week" class="on">Semana</button>
+                <button type="button" data-preset="biweek">Quincena</button>
+                <button type="button" data-preset="month">Mes</button>
+                <button type="button" data-preset="custom">Personalizado</button>
+              </div>
+              <div class="chk-filter-dates">
+                <input type="date" id="chkFrom" aria-label="Desde" />
+                <span>a</span>
+                <input type="date" id="chkTo" aria-label="Hasta" />
+              </div>
+            </div>
+            <div class="chk-filter-row">
+              <select id="chkGroup" aria-label="Agrupación">
+                <option value="day">Distribución por día</option>
+                <option value="week">Distribución por semana</option>
+                <option value="biweek">Distribución por quincena</option>
+                <option value="month">Distribución por mes</option>
+              </select>
+              <select id="chkBranchFilter" aria-label="Sucursal"><option value="">Todas las sucursales</option></select>
+              <select id="chkEmployeeFilter" aria-label="Empleado"><option value="">Todos los empleados</option></select>
+              <button class="btn btn-primary" type="button" id="chkApplyBtn"><i class="ph-bold ph-magnifying-glass"></i> Consultar</button>
+              <button class="btn btn-ghost" type="button" id="chkExportBtn"><i class="ph-bold ph-file-xls"></i> Exportar</button>
+            </div>
+          </div>
+
+          <div class="chk-kpis chk-kpis-sm" id="chkAttendanceTotals"></div>
+          <div class="card">
+            <div class="chk-card-head">
+              <h3><i class="ph-bold ph-table"></i> Distribución de horas</h3>
+              <span class="hint" id="chkAttendanceRange">—</span>
+            </div>
+            <div class="table-wrap" id="chkAttendanceTable"></div>
+          </div>
+          <div class="card" id="chkDetailCard" hidden>
+            <div class="chk-card-head">
+              <h3><i class="ph-bold ph-list-magnifying-glass"></i> Detalle diario — <span id="chkDetailName">—</span></h3>
+              <button class="btn btn-ghost btn-sm" type="button" id="chkDetailClose"><i class="ph-bold ph-x"></i> Cerrar</button>
+            </div>
+            <div class="table-wrap" id="chkDetailTable"></div>
+          </div>
+        </div>
+
+        <!-- ── Empleados ── -->
+        <div class="chk-panel" id="chkPanelEmployees" hidden>
+          <div class="chk-panel-actions">
+            <button class="btn btn-primary" type="button" id="chkAddEmployeeBtn"><i class="ph-bold ph-user-plus"></i> Nuevo empleado</button>
+            <button class="btn btn-ghost" type="button" id="chkPrintBadgesBtn"><i class="ph-bold ph-identification-badge"></i> Imprimir gafetes QR</button>
+          </div>
+          <div class="chk-employee-grid" id="chkEmployeeGrid"></div>
+        </div>
+
+        <!-- ── Nómina ── -->
+        <div class="chk-panel" id="chkPanelPayroll" hidden>
+          <div class="card chk-filters">
+            <div class="chk-filter-row">
+              <div class="segmented chk-presets" id="chkPayrollPresets">
+                <button type="button" data-preset="biweek" class="on">Quincena actual</button>
+                <button type="button" data-preset="last_biweek">Quincena anterior</button>
+                <button type="button" data-preset="week">Semana</button>
+                <button type="button" data-preset="month">Mes</button>
+                <button type="button" data-preset="custom">Personalizado</button>
+              </div>
+              <div class="chk-filter-dates">
+                <input type="date" id="chkPayFrom" aria-label="Desde" />
+                <span>a</span>
+                <input type="date" id="chkPayTo" aria-label="Hasta" />
+              </div>
+            </div>
+            <div class="chk-filter-row">
+              <select id="chkPayBranch" aria-label="Sucursal"><option value="">Todas las sucursales</option></select>
+              <button class="btn btn-primary" type="button" id="chkPayPreviewBtn"><i class="ph-bold ph-calculator"></i> Calcular nómina</button>
+              <button class="btn btn-ghost" type="button" id="chkPaySaveBtn"><i class="ph-bold ph-floppy-disk"></i> Guardar periodo</button>
+              <button class="btn btn-ghost" type="button" id="chkPayExportBtn"><i class="ph-bold ph-file-xls"></i> Exportar</button>
+            </div>
+          </div>
+
+          <div class="chk-kpis chk-kpis-sm" id="chkPayrollTotals"></div>
+          <div class="card">
+            <div class="chk-card-head">
+              <h3><i class="ph-bold ph-receipt"></i> Recibos del periodo</h3>
+              <span class="hint" id="chkPayrollRange">—</span>
+              <button class="btn btn-ghost btn-sm" type="button" id="chkPayReceiptsBtn"><i class="ph-bold ph-file-pdf"></i> Recibos PDF (todos)</button>
+            </div>
+            <div class="table-wrap" id="chkPayrollTable"></div>
+          </div>
+          <div class="card">
+            <div class="chk-card-head">
+              <h3><i class="ph-bold ph-hand-coins"></i> Adelantos de nómina</h3>
+              <span class="hint">Gastos de categoría NOMINA ligados a un empleado; se descuentan al guardar el periodo.</span>
+            </div>
+            <div class="table-wrap" id="chkPayrollAdvances"></div>
+          </div>
+          <div class="card">
+            <div class="chk-card-head">
+              <h3><i class="ph-bold ph-archive"></i> Periodos guardados</h3>
+            </div>
+            <div class="table-wrap" id="chkPayrollPeriods"></div>
+          </div>
+        </div>
+
+        <!-- ── Configurar ── -->
+        <div class="chk-panel" id="chkPanelConfig" hidden>
+          <div class="chk-config-grid">
+
+            <div class="card chk-span">
+              <div class="chk-card-head">
+                <h3><i class="ph-bold ph-link"></i> Ligas del checador</h3>
+                <button class="btn btn-primary btn-sm" type="button" id="chkAddDeviceBtn"><i class="ph-bold ph-plus"></i> Nueva liga</button>
+              </div>
+              <div class="hint" style="margin-bottom:14px">Cada liga es un reloj checador independiente: ábrela en una tableta, un celular, una TV o conéctala a tu lector de huella. Define qué métodos acepta y desde dónde se puede checar.</div>
+              <div class="chk-device-grid" id="chkDeviceGrid"></div>
+            </div>
+
+            <div class="card">
+              <div class="chk-card-head">
+                <h3><i class="ph-bold ph-calendar-dots"></i> Horarios y turnos</h3>
+                <button class="btn btn-primary btn-sm" type="button" id="chkAddScheduleBtn"><i class="ph-bold ph-plus"></i> Nuevo horario</button>
+              </div>
+              <div class="hint" style="margin-bottom:14px">Define la jornada de cada día de la semana. Sobre este horario se calculan retardos, faltas y tiempo extra.</div>
+              <div id="chkScheduleList"></div>
+            </div>
+
+            <div class="card">
+              <div class="chk-card-head">
+                <h3><i class="ph-bold ph-first-aid-kit"></i> Incidencias</h3>
+                <button class="btn btn-primary btn-sm" type="button" id="chkAddIncidenceBtn"><i class="ph-bold ph-plus"></i> Registrar</button>
+              </div>
+              <div class="hint" style="margin-bottom:14px">Vacaciones, permisos, incapacidades y días festivos. Determinan si el día se paga aunque no haya checada.</div>
+              <div class="table-wrap" id="chkIncidenceTable"></div>
+            </div>
+
+            <div class="card chk-span">
+              <div class="chk-card-head">
+                <h3><i class="ph-bold ph-sliders-horizontal"></i> Reglas de cálculo</h3>
+                <button class="btn btn-primary btn-sm" type="button" id="chkSaveRulesBtn"><i class="ph-bold ph-check"></i> Guardar reglas</button>
+              </div>
+              <form id="chkRulesForm" class="chk-rules-grid">
+                <div class="field">
+                  <label><i class="ph-bold ph-clock"></i> Jornada estándar (horas/día)</label>
+                  <input type="number" id="chkStdDaily" min="1" max="24" step="0.5" />
+                  <div class="hint">Base para convertir el sueldo a tarifa por hora.</div>
+                </div>
+                <div class="field">
+                  <label><i class="ph-bold ph-calendar"></i> Jornada semanal (horas)</label>
+                  <input type="number" id="chkStdWeekly" min="1" max="168" step="1" />
+                </div>
+                <div class="field">
+                  <label><i class="ph-bold ph-timer"></i> Tolerancia de entrada (min)</label>
+                  <input type="number" id="chkLateTolerance" min="0" max="240" step="1" />
+                  <div class="hint">Minutos después de la hora de entrada antes de marcar retardo.</div>
+                </div>
+                <div class="field">
+                  <label><i class="ph-bold ph-sign-out"></i> Tolerancia de salida (min)</label>
+                  <input type="number" id="chkEarlyTolerance" min="0" max="240" step="1" />
+                </div>
+                <div class="field">
+                  <label><i class="ph-bold ph-hourglass-high"></i> Tiempo extra</label>
+                  <select id="chkOvertimeMode">
+                    <option value="mx_lft">Ley mexicana (9 h al doble, resto al triple)</option>
+                    <option value="flat">Múltiplo fijo</option>
+                    <option value="none">No pagar tiempo extra</option>
+                  </select>
+                </div>
+                <div class="field" id="chkOvertimeMultiplierField">
+                  <label><i class="ph-bold ph-x"></i> Múltiplo del tiempo extra</label>
+                  <input type="number" id="chkOvertimeMultiplier" min="1" max="5" step="0.25" />
+                </div>
+                <div class="field">
+                  <label><i class="ph-bold ph-hand-palm"></i> Cortesía antes de tiempo extra (min)</label>
+                  <input type="number" id="chkOvertimeGrace" min="0" max="240" step="1" />
+                </div>
+                <div class="field">
+                  <label><i class="ph-bold ph-arrow-fat-line-up"></i> Tope de tiempo extra por día (min)</label>
+                  <input type="number" id="chkOvertimeMax" min="0" max="1440" step="15" />
+                </div>
+                <div class="field">
+                  <label><i class="ph-bold ph-minus-circle"></i> Descuento por retardos</label>
+                  <select id="chkLateMode">
+                    <option value="none">No descontar</option>
+                    <option value="per_minute">Importe por minuto</option>
+                    <option value="per_incident">Importe por retardo</option>
+                    <option value="per_day_each_three">Un día por cada 3 retardos</option>
+                  </select>
+                </div>
+                <div class="field" id="chkLateAmountField">
+                  <label><i class="ph-bold ph-currency-circle-dollar"></i> Importe del descuento</label>
+                  <input type="number" id="chkLateAmount" min="0" step="0.5" />
+                </div>
+                <div class="field">
+                  <label><i class="ph-bold ph-calendar-x"></i> Días extra castigados por falta</label>
+                  <input type="number" id="chkAbsenceExtra" min="0" max="5" step="1" />
+                  <div class="hint">Adicionales al día no laborado (0 = sólo el día).</div>
+                </div>
+                <div class="field">
+                  <label><i class="ph-bold ph-moon"></i> Auto-cierre de turno (horas)</label>
+                  <input type="number" id="chkAutoClose" min="1" max="48" step="1" />
+                  <div class="hint">Tras este tiempo un turno sin salida deja de acumular horas.</div>
+                </div>
+                <div class="field">
+                  <label><i class="ph-bold ph-repeat"></i> Anti doble checada (min)</label>
+                  <input type="number" id="chkMinGap" min="0" max="120" step="1" />
+                </div>
+                <div class="field">
+                  <label><i class="ph-bold ph-circle-half"></i> Redondeo de la jornada</label>
+                  <select id="chkRound">
+                    <option value="0">Sin redondeo</option>
+                    <option value="5">A 5 minutos</option>
+                    <option value="10">A 10 minutos</option>
+                    <option value="15">A 15 minutos</option>
+                    <option value="30">A 30 minutos</option>
+                  </select>
+                </div>
+                <div class="field">
+                  <label><i class="ph-bold ph-sun-horizon"></i> Prima dominical (%)</label>
+                  <input type="number" id="chkSundayPct" min="0" max="100" step="1" />
+                </div>
+                <div class="field">
+                  <label><i class="ph-bold ph-confetti"></i> Multiplicador de día festivo</label>
+                  <input type="number" id="chkHolidayMultiplier" min="1" max="5" step="0.5" />
+                </div>
+                <div class="toggle-row chk-span">
+                  <div class="t-info"><i class="ph-bold ph-minus-circle"></i><div><b>Descontar días no laborados</b><span>Aplica al personal con sueldo fijo</span></div></div>
+                  <label class="switch"><input type="checkbox" id="chkAbsenceDeduction" /><span class="track"></span></label>
+                </div>
+                <div class="toggle-row chk-span">
+                  <div class="t-info"><i class="ph-bold ph-sun"></i><div><b>Pagar prima dominical</b><span>Sobre el salario diario por cada domingo trabajado</span></div></div>
+                  <label class="switch"><input type="checkbox" id="chkSundayPremium" /><span class="track"></span></label>
+                </div>
+                <div class="toggle-row chk-span">
+                  <div class="t-info"><i class="ph-bold ph-bed"></i><div><b>El descanso trabajado es tiempo extra</b><span>Todas las horas del día de descanso se pagan como extra</span></div></div>
+                  <label class="switch"><input type="checkbox" id="chkRestOvertime" /><span class="track"></span></label>
+                </div>
+                <div class="toggle-row chk-span">
+                  <div class="t-info"><i class="ph-bold ph-door-open"></i><div><b>Pagar turnos sin salida registrada</b><span>Si se apaga, un turno sin salida no acumula horas</span></div></div>
+                  <label class="switch"><input type="checkbox" id="chkOpenShiftPay" /><span class="track"></span></label>
+                </div>
+              </form>
             </div>
 
           </div>
@@ -3069,6 +3380,7 @@
         <div class="pos-movement-kind-hint" id="posMovementKindHint"></div>
         <input type="hidden" id="posMovementKindModal" value="income" />
         <div class="field" id="posMovementCategoryWrap" hidden><label for="posMovementCategoryModal">Categoría de gasto</label><select id="posMovementCategoryModal"><option value="">Selecciona una categoría</option></select><small id="posMovementCategoryHint" class="hint"></small></div>
+        <div class="field" id="posMovementEmployeeWrap" hidden><label for="posMovementEmployeeModal">Empleado (adelanto de nómina)</label><select id="posMovementEmployeeModal"><option value="">Selecciona al empleado</option></select><small id="posMovementEmployeeHint" class="hint"></small></div>
         <div class="row-2">
           <div class="field">
             <label><i class="ph-bold ph-currency-circle-dollar"></i> Monto</label>
@@ -3819,11 +4131,249 @@
       </form>
     </div>
   </div>
+  <!-- ════════ Reloj checador ════════ -->
+  <div class="modal-bg" id="chkDeviceModal" role="dialog" aria-modal="true">
+    <div class="modal" style="max-width:620px">
+      <h3 id="chkDeviceModalTitle"><i class="ph-bold ph-device-tablet"></i> Nueva liga de checador</h3>
+      <form id="chkDeviceForm">
+        <input type="hidden" id="chkDeviceId" />
+        <div class="row-2">
+          <div class="field"><label><i class="ph-bold ph-text-aa"></i> Nombre del dispositivo *</label><input type="text" id="chkDeviceName" maxlength="80" required placeholder="Tableta recepción" /></div>
+          <div class="field"><label><i class="ph-bold ph-storefront"></i> Sucursal</label><select id="chkDeviceBranch"><option value="">Todas / sin sucursal</option></select></div>
+        </div>
+        <div class="field">
+          <label><i class="ph-bold ph-fingerprint"></i> Métodos aceptados *</label>
+          <div class="chk-method-picker">
+            <label><input type="checkbox" value="pin" checked /><span><b>NIP</b><small>Número de empleado + clave</small></span></label>
+            <label><input type="checkbox" value="qr" /><span><b>Credencial QR</b><small>Cámara o lector de gafetes</small></span></label>
+            <label><input type="checkbox" value="biometric" /><span><b>Huella / rostro</b><small>Biometría del dispositivo (requiere HTTPS)</small></span></label>
+          </div>
+        </div>
+        <div class="toggle-row">
+          <div class="t-info"><i class="ph-bold ph-lock-key"></i><div><b>Sólo empleados de la sucursal</b><span>Impide checar desde otra ubicación</span></div></div>
+          <label class="switch"><input type="checkbox" id="chkDeviceLock" checked /><span class="track"></span></label>
+        </div>
+        <div class="toggle-row">
+          <div class="t-info"><i class="ph-bold ph-camera"></i><div><b>Exigir foto de evidencia</b><span>Guarda una foto en cada checada</span></div></div>
+          <label class="switch"><input type="checkbox" id="chkDevicePhoto" /><span class="track"></span></label>
+        </div>
+        <div class="toggle-row">
+          <div class="t-info"><i class="ph-bold ph-map-pin-area"></i><div><b>Geocerca</b><span>Sólo permite checar cerca del punto autorizado</span></div></div>
+          <label class="switch"><input type="checkbox" id="chkDeviceGeo" /><span class="track"></span></label>
+        </div>
+        <div id="chkDeviceGeoFields" hidden>
+          <div class="row-2">
+            <div class="field"><label>Latitud</label><input type="number" id="chkDeviceLat" step="0.000001" placeholder="19.432608" /></div>
+            <div class="field"><label>Longitud</label><input type="number" id="chkDeviceLng" step="0.000001" placeholder="-99.133209" /></div>
+          </div>
+          <div class="field">
+            <label>Radio permitido (metros)</label>
+            <input type="number" id="chkDeviceRadius" min="20" max="5000" step="10" value="150" />
+            <div class="hint"><button type="button" class="btn btn-ghost btn-sm" id="chkDeviceGeoHere"><i class="ph-bold ph-crosshair"></i> Usar mi ubicación actual</button></div>
+          </div>
+        </div>
+        <div class="toggle-row">
+          <div class="t-info"><i class="ph-bold ph-power"></i><div><b>Liga activa</b><span>Si se apaga, el checador deja de responder</span></div></div>
+          <label class="switch"><input type="checkbox" id="chkDeviceActive" checked /><span class="track"></span></label>
+        </div>
+        <div class="modal-actions">
+          <button type="button" class="btn btn-ghost" id="chkDeviceCancel">Cancelar</button>
+          <button type="submit" class="btn btn-primary"><i class="ph-bold ph-check"></i> Guardar liga</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <div class="modal-bg" id="chkLinkModal" role="dialog" aria-modal="true">
+    <div class="modal" style="max-width:560px">
+      <h3><i class="ph-bold ph-link"></i> Liga del checador</h3>
+      <div class="chk-link-box">
+        <img id="chkLinkQr" alt="Código QR de la liga" />
+        <div class="share-box"><input type="text" id="chkLinkUrl" readonly /><button class="btn btn-primary btn-sm" type="button" id="chkLinkCopy"><i class="ph-bold ph-copy"></i> Copiar</button></div>
+        <p class="hint">Abre esta liga en la tableta, celular o TV que funcionará como reloj checador. Guárdala como acceso directo en la pantalla de inicio.</p>
+      </div>
+      <details class="chk-api-details">
+        <summary><i class="ph-bold ph-plugs"></i> Conectar un lector de huella o torniquete externo</summary>
+        <p class="hint">Tu hardware puede enviar las checadas por HTTP. Usa el método <b>POST</b> con el encabezado <code>x-checador-key</code>.</p>
+        <div class="field"><label>Endpoint</label><input type="text" id="chkApiEndpoint" readonly /></div>
+        <div class="field"><label>API key del dispositivo</label><input type="text" id="chkApiKey" readonly /></div>
+        <pre class="chk-code" id="chkApiSample"></pre>
+      </details>
+      <div class="modal-actions">
+        <button type="button" class="btn btn-ghost" id="chkLinkRotate"><i class="ph-bold ph-arrows-clockwise"></i> Renovar liga</button>
+        <button type="button" class="btn btn-primary" id="chkLinkClose">Listo</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal-bg" id="chkScheduleModal" role="dialog" aria-modal="true">
+    <div class="modal" style="max-width:680px">
+      <h3 id="chkScheduleModalTitle"><i class="ph-bold ph-calendar-dots"></i> Nuevo horario</h3>
+      <form id="chkScheduleForm">
+        <input type="hidden" id="chkScheduleId" />
+        <div class="row-2">
+          <div class="field"><label><i class="ph-bold ph-text-aa"></i> Nombre *</label><input type="text" id="chkScheduleName" maxlength="80" required placeholder="Turno matutino" /></div>
+          <div class="field"><label><i class="ph-bold ph-storefront"></i> Sucursal</label><select id="chkScheduleBranch"><option value="">Todas / sin sucursal</option></select></div>
+        </div>
+        <div class="chk-week-head"><span>Día</span><span>Entrada</span><span>Salida</span><span>Comida (min)</span></div>
+        <div id="chkScheduleDays"></div>
+        <div class="field" style="margin-top:14px"><label><i class="ph-bold ph-note"></i> Notas</label><input type="text" id="chkScheduleNotes" maxlength="300" placeholder="Opcional" /></div>
+        <div class="modal-actions">
+          <button type="button" class="btn btn-ghost" id="chkScheduleCancel">Cancelar</button>
+          <button type="submit" class="btn btn-primary"><i class="ph-bold ph-check"></i> Guardar horario</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <div class="modal-bg" id="chkEmployeeModal" role="dialog" aria-modal="true">
+    <div class="modal" style="max-width:680px">
+      <h3 id="chkEmployeeModalTitle"><i class="ph-bold ph-user-plus"></i> Nuevo empleado</h3>
+      <form id="chkEmployeeForm">
+        <input type="hidden" id="chkEmployeeId" />
+        <div class="row-2">
+          <div class="field"><label><i class="ph-bold ph-user"></i> Nombre completo *</label><input type="text" id="chkEmpName" maxlength="120" required /></div>
+          <div class="field"><label><i class="ph-bold ph-hash"></i> Número de empleado</label><input type="text" id="chkEmpCodeInput" maxlength="24" placeholder="Se genera solo" /></div>
+        </div>
+        <div class="row-2">
+          <div class="field"><label><i class="ph-bold ph-briefcase"></i> Puesto</label><input type="text" id="chkEmpPosition" maxlength="100" /></div>
+          <div class="field"><label><i class="ph-bold ph-storefront"></i> Sucursal *</label><select id="chkEmpBranch" required></select></div>
+        </div>
+        <div class="row-2">
+          <div class="field"><label><i class="ph-bold ph-calendar-dots"></i> Horario asignado</label><select id="chkEmpSchedule"><option value="">Sin horario</option></select></div>
+          <div class="field"><label><i class="ph-bold ph-calendar-plus"></i> Fecha de ingreso</label><input type="date" id="chkEmpHireDate" /></div>
+        </div>
+        <div class="row-2">
+          <div class="field">
+            <label><i class="ph-bold ph-money"></i> Esquema de pago</label>
+            <select id="chkEmpPayType">
+              <option value="monthly">Sueldo mensual</option>
+              <option value="biweekly">Sueldo quincenal</option>
+              <option value="weekly">Sueldo semanal</option>
+              <option value="daily">Pago por día</option>
+              <option value="hourly">Pago por hora</option>
+            </select>
+          </div>
+          <div class="field"><label><i class="ph-bold ph-currency-circle-dollar"></i> Importe del sueldo</label><input type="number" id="chkEmpPayRate" min="0" step="0.01" /><div class="hint" id="chkEmpRateHint">—</div></div>
+        </div>
+        <div class="row-2">
+          <div class="field"><label><i class="ph-bold ph-phone"></i> Teléfono</label><input type="text" id="chkEmpPhone" maxlength="30" /></div>
+          <div class="field"><label><i class="ph-bold ph-envelope"></i> Correo</label><input type="email" id="chkEmpEmail" maxlength="100" /></div>
+        </div>
+        <div class="field"><label><i class="ph-bold ph-password"></i> NIP del checador</label><input type="password" id="chkEmpPin" inputmode="numeric" maxlength="8" autocomplete="new-password" placeholder="4 a 8 dígitos" /><div class="hint" id="chkEmpPinHint">El empleado usará este NIP junto con su número para checar.</div></div>
+        <div class="toggle-row">
+          <div class="t-info"><i class="ph-bold ph-clock-user"></i><div><b>Habilitado en el checador</b><span>Si se apaga no podrá registrar entradas ni salidas</span></div></div>
+          <label class="switch"><input type="checkbox" id="chkEmpClockEnabled" checked /><span class="track"></span></label>
+        </div>
+        <div class="toggle-row">
+          <div class="t-info"><i class="ph-bold ph-user-check"></i><div><b>Empleado activo</b><span>Las bajas conservan su historial</span></div></div>
+          <label class="switch"><input type="checkbox" id="chkEmpActive" checked /><span class="track"></span></label>
+        </div>
+        <div class="modal-actions">
+          <button type="button" class="btn btn-ghost" id="chkEmployeeCancel">Cancelar</button>
+          <button type="submit" class="btn btn-primary"><i class="ph-bold ph-check"></i> Guardar empleado</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <div class="modal-bg" id="chkBadgeModal" role="dialog" aria-modal="true">
+    <div class="modal" style="max-width:420px">
+      <h3><i class="ph-bold ph-identification-badge"></i> Gafete del empleado</h3>
+      <div class="chk-badge" id="chkBadgeBody"></div>
+      <div class="modal-actions">
+        <button type="button" class="btn btn-ghost" id="chkBadgeRotate"><i class="ph-bold ph-arrows-clockwise"></i> Renovar código</button>
+        <button type="button" class="btn btn-primary" id="chkBadgePrint"><i class="ph-bold ph-printer"></i> Imprimir</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal-bg" id="chkPunchModal" role="dialog" aria-modal="true">
+    <div class="modal" style="max-width:520px">
+      <h3 id="chkPunchModalTitle"><i class="ph-bold ph-clock-clockwise"></i> Checada manual</h3>
+      <form id="chkPunchForm">
+        <input type="hidden" id="chkPunchId" />
+        <div class="field"><label><i class="ph-bold ph-user"></i> Empleado *</label><select id="chkPunchEmployee" required></select></div>
+        <div class="row-2">
+          <div class="field"><label><i class="ph-bold ph-calendar"></i> Fecha *</label><input type="date" id="chkPunchDate" required /></div>
+          <div class="field"><label><i class="ph-bold ph-clock"></i> Hora *</label><input type="time" id="chkPunchTime" required /></div>
+        </div>
+        <div class="field">
+          <label><i class="ph-bold ph-arrows-left-right"></i> Movimiento *</label>
+          <select id="chkPunchType">
+            <option value="in">Entrada</option>
+            <option value="out">Salida</option>
+            <option value="break_start">Inicio de comida</option>
+            <option value="break_end">Fin de comida</option>
+          </select>
+        </div>
+        <div class="field"><label><i class="ph-bold ph-note"></i> Motivo / nota</label><input type="text" id="chkPunchNotes" maxlength="200" placeholder="Olvidó checar, falla del equipo…" /></div>
+        <p class="hint">Las checadas manuales quedan marcadas como tales y con el usuario que las capturó.</p>
+        <div class="modal-actions">
+          <button type="button" class="btn btn-ghost" id="chkPunchCancel">Cancelar</button>
+          <button type="submit" class="btn btn-primary"><i class="ph-bold ph-check"></i> Guardar checada</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <div class="modal-bg" id="chkIncidenceModal" role="dialog" aria-modal="true">
+    <div class="modal" style="max-width:520px">
+      <h3><i class="ph-bold ph-first-aid-kit"></i> Registrar incidencia</h3>
+      <form id="chkIncidenceForm">
+        <div class="field"><label><i class="ph-bold ph-user"></i> Empleado</label><select id="chkIncidenceEmployee"><option value="">Todo el personal</option></select></div>
+        <div class="field"><label><i class="ph-bold ph-tag"></i> Tipo *</label><select id="chkIncidenceType" required></select></div>
+        <div class="row-2">
+          <div class="field"><label><i class="ph-bold ph-calendar"></i> Desde *</label><input type="date" id="chkIncidenceFrom" required /></div>
+          <div class="field"><label><i class="ph-bold ph-calendar-check"></i> Hasta *</label><input type="date" id="chkIncidenceTo" required /></div>
+        </div>
+        <div class="field"><label><i class="ph-bold ph-percent"></i> Proporción pagada</label><input type="number" id="chkIncidenceFactor" min="0" max="2" step="0.05" /><div class="hint">1 = día pagado completo · 0 = sin pago · 0.6 = subsidio típico de incapacidad.</div></div>
+        <div class="field"><label><i class="ph-bold ph-note"></i> Notas</label><input type="text" id="chkIncidenceNotes" maxlength="300" /></div>
+        <div class="modal-actions">
+          <button type="button" class="btn btn-ghost" id="chkIncidenceCancel">Cancelar</button>
+          <button type="submit" class="btn btn-primary"><i class="ph-bold ph-check"></i> Registrar</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <div class="modal-bg" id="chkPayrollModal" role="dialog" aria-modal="true">
+    <div class="modal" style="max-width:720px">
+      <h3 id="chkPayrollModalTitle"><i class="ph-bold ph-receipt"></i> Recibo del periodo</h3>
+      <div id="chkPayrollDetail"></div>
+      <div class="modal-actions">
+        <button type="button" class="btn btn-ghost" id="chkPayrollDetailClose">Cerrar</button>
+        <button type="button" class="btn btn-ghost" id="chkPayrollReceipts"><i class="ph-bold ph-file-pdf"></i> Recibos PDF (todos)</button>
+        <button type="button" class="btn btn-primary" id="chkPayrollPrint"><i class="ph-bold ph-printer"></i> Imprimir resumen</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal-bg" id="chkAdjustModal" role="dialog" aria-modal="true">
+    <div class="modal" style="max-width:480px">
+      <h3><i class="ph-bold ph-plus-minus"></i> Percepción o deducción</h3>
+      <form id="chkAdjustForm">
+        <input type="hidden" id="chkAdjustPeriodId" />
+        <input type="hidden" id="chkAdjustEmployeeId" />
+        <p class="hint" id="chkAdjustWho">—</p>
+        <div class="field"><label><i class="ph-bold ph-arrows-down-up"></i> Tipo *</label><select id="chkAdjustKind"><option value="deduction">Deducción (resta)</option><option value="earning">Percepción (suma)</option></select></div>
+        <div class="field"><label><i class="ph-bold ph-tag"></i> Concepto *</label><input type="text" id="chkAdjustConcept" maxlength="120" required placeholder="Bono de puntualidad, préstamo, ISR…" /></div>
+        <div class="field"><label><i class="ph-bold ph-currency-circle-dollar"></i> Importe *</label><input type="number" id="chkAdjustAmount" min="0" step="0.01" required /></div>
+        <div class="field"><label><i class="ph-bold ph-note"></i> Notas</label><input type="text" id="chkAdjustNotes" maxlength="200" /></div>
+        <div class="modal-actions">
+          <button type="button" class="btn btn-ghost" id="chkAdjustCancel">Cancelar</button>
+          <button type="submit" class="btn btn-primary"><i class="ph-bold ph-check"></i> Agregar</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
   <script src="/socket.io/socket.io.js"></script>
   <script src="/static/vendor/qz-tray.js?v=2.3.0"></script>
   <script src="/static/js/whatsapp.js?v=20261009-whatsapp-inbox-app"></script>
   <script src="/static/js/whatsapp-bot.js?v=20261101-activity-inbox-1"></script>
-  <script src="/static/js/app.js?v=20261029-whatsapp-bot-templates"></script>
+  <script src="/static/js/app.js?v=20261110-expense-measure"></script>
   <script src="/static/js/sar.js?v=20260929-tabs-1"></script>
+  <script src="/static/js/checador.js?v=20261110-payroll-receipts"></script>
 </body>
 </html>

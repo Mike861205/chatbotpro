@@ -273,6 +273,7 @@ test('borrar un gasto POS conserva auditoría y ajusta la caja cerrada vinculada
           assert.deepEqual(Array.from(params), [15, 'America/Mexico_City']);
           return { id: 15, branch_id: 7, branch_name: 'Auroras', session_id: 3, expense_date: '2026-10-07', concept: 'Luz', amount: 100, notes: '', created_by: 'caja7', created_at: '2026-10-07', movement_kind: 'expense' };
         }
+        if (sql.includes('FROM {s}.payroll_advances')) return undefined;
         assert.match(sql, /pos_sessions WHERE id=\$1 FOR UPDATE/);
         return { id: 3 };
       },

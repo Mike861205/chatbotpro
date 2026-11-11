@@ -1,0 +1,209 @@
+/* ============================================================
+   Reloj checador — vista del panel administrador
+   Se carga después de styles.css y reutiliza sus variables.
+   ============================================================ */
+.chk-kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px; margin-bottom: 18px; }
+.chk-kpis-sm { grid-template-columns: repeat(auto-fit, minmax(165px, 1fr)); margin: 16px 0; }
+.chk-kpi {
+  display: flex; align-items: center; gap: 13px; padding: 15px 16px; border-radius: var(--radius);
+  background: var(--card); border: 1px solid var(--line); box-shadow: var(--shadow-sm);
+}
+.chk-kpi-icon { width: 42px; height: 42px; border-radius: 13px; display: grid; place-items: center; font-size: 21px; flex: 0 0 auto; }
+.chk-kpi b { display: block; font-size: 21px; font-weight: 800; line-height: 1.15; letter-spacing: -0.4px; }
+.chk-kpi small { font-size: 12px; color: var(--ink-3); font-weight: 650; }
+
+.chk-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 14px; flex-wrap: wrap; margin-bottom: 18px; }
+.chk-panel { display: flex; flex-direction: column; gap: 18px; }
+.chk-panel-actions { display: flex; gap: 10px; flex-wrap: wrap; }
+.chk-card-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 14px; }
+.chk-card-head h3 { font-size: 16px; font-weight: 800; display: flex; align-items: center; gap: 9px; }
+.chk-card-head h3 i { color: var(--primary); }
+.chk-subhead { font-size: 13px; font-weight: 800; color: var(--ink-2); display: flex; align-items: center; gap: 7px; margin: 16px 0 8px; }
+.chk-subhead:first-child { margin-top: 0; }
+
+/* ---------- Filtros ---------- */
+.chk-filters { display: flex; flex-direction: column; gap: 12px; }
+.chk-filter-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.chk-filter-row select { width: auto; min-width: 180px; flex: 0 1 auto; }
+.chk-filter-dates { display: flex; align-items: center; gap: 8px; }
+.chk-filter-dates input { width: auto; min-width: 148px; }
+.chk-filter-dates span { font-size: 12.5px; font-weight: 700; color: var(--ink-3); }
+.chk-presets button { font-size: 13px; }
+
+/* ---------- Tablas ---------- */
+.chk-table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+.chk-table th, .chk-table td { padding: 11px 12px; text-align: left; border-bottom: 1px solid var(--line); vertical-align: middle; }
+.chk-table thead th { font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.5px; color: var(--ink-3); white-space: nowrap; }
+.chk-table tbody tr:hover { background: color-mix(in srgb, var(--primary) 4%, transparent); }
+.chk-table tfoot td { font-weight: 800; border-top: 2px solid var(--line); border-bottom: none; background: #fafbfe; }
+.chk-table .num, .chk-table th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.chk-table small { color: var(--ink-3); font-size: 11.5px; font-weight: 600; }
+.chk-table .pos { color: var(--green); }
+.chk-table .neg { color: var(--red); }
+.chk-table tr.is-absent { background: var(--red-soft); }
+.chk-table-compact th, .chk-table-compact td { padding: 8px 10px; font-size: 12.5px; }
+.chk-row-actions { display: inline-flex; gap: 6px; justify-content: flex-end; }
+.chk-cell-emp { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.chk-cell-emp b { display: block; line-height: 1.25; }
+.chk-cell-emp small { display: block; }
+.chk-thumb { width: 36px; height: 36px; border-radius: 9px; object-fit: cover; border: 1px solid var(--line); }
+
+/* ---------- Etiquetas ---------- */
+.chk-tag {
+  display: inline-flex; align-items: center; gap: 5px; padding: 4px 10px; border-radius: 999px;
+  font-size: 11.5px; font-weight: 750; white-space: nowrap;
+}
+.chk-tag.ok { background: var(--green-soft); color: var(--green); }
+.chk-tag.bad { background: var(--red-soft); color: var(--red); }
+.chk-tag.warn { background: var(--amber-soft); color: var(--amber); }
+.chk-tag.info { background: var(--blue-soft); color: var(--blue); }
+.chk-tag.rest { background: #eef1f7; color: var(--ink-2); }
+.chk-chip {
+  display: inline-flex; align-items: center; gap: 5px; padding: 4px 10px; border-radius: 8px;
+  background: #f2f4fa; border: 1px solid var(--line); font-size: 11.5px; font-weight: 700; color: var(--ink-2);
+}
+
+.chk-avatar {
+  width: 44px; height: 44px; border-radius: 14px; flex: 0 0 auto; display: grid; place-items: center;
+  color: #fff; font-size: 14px; font-weight: 800; letter-spacing: 0.3px;
+}
+.chk-avatar.sm { width: 34px; height: 34px; border-radius: 11px; font-size: 12px; }
+
+/* ---------- Tablero del día ---------- */
+.chk-today-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 12px; }
+.chk-today-card {
+  display: flex; align-items: flex-start; gap: 12px; padding: 14px; border-radius: 16px;
+  border: 1px solid var(--line); background: #fbfcff;
+}
+.chk-today-card.live { border-color: color-mix(in srgb, var(--green) 45%, transparent); background: color-mix(in srgb, var(--green) 5%, #fff); }
+.chk-today-info { flex: 1; min-width: 0; }
+.chk-today-info b { display: block; font-size: 14px; font-weight: 800; }
+.chk-today-info small { display: block; font-size: 11.5px; color: var(--ink-3); font-weight: 650; margin-top: 2px; }
+.chk-today-times { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 8px; font-size: 12px; font-weight: 700; color: var(--ink-2); }
+.chk-today-times i { color: var(--ink-3); margin-right: 3px; }
+.chk-today-state { display: flex; flex-direction: column; align-items: flex-end; gap: 5px; flex: 0 0 auto; }
+
+/* ---------- Empleados ---------- */
+.chk-employee-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 14px; }
+.chk-emp-card {
+  display: flex; flex-direction: column; gap: 12px; padding: 16px; border-radius: var(--radius);
+  background: var(--card); border: 1px solid var(--line); box-shadow: var(--shadow-sm);
+}
+.chk-emp-card.off { opacity: 0.6; }
+.chk-emp-head { display: flex; align-items: center; gap: 11px; }
+.chk-emp-head > div { flex: 1; min-width: 0; }
+.chk-emp-head b { display: block; font-size: 14.5px; font-weight: 800; }
+.chk-emp-head small { display: block; font-size: 11.5px; color: var(--ink-3); font-weight: 650; margin-top: 2px; }
+.chk-emp-meta { display: grid; gap: 6px; font-size: 12.5px; font-weight: 650; color: var(--ink-2); }
+.chk-emp-meta i { color: var(--ink-3); margin-right: 5px; }
+.chk-emp-meta .ok { color: var(--green); }
+.chk-emp-meta .warn { color: var(--amber); }
+.chk-emp-actions { display: flex; gap: 7px; flex-wrap: wrap; border-top: 1px solid var(--line); padding-top: 12px; }
+
+/* ---------- Dispositivos / ligas ---------- */
+.chk-config-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 18px; align-items: start; }
+.chk-config-grid .chk-span { grid-column: 1 / -1; }
+.chk-device-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(330px, 1fr)); gap: 14px; }
+.chk-device-card {
+  display: flex; flex-direction: column; gap: 11px; padding: 16px; border-radius: 16px;
+  border: 1px solid var(--line); background: #fbfcff;
+}
+.chk-device-card.off { opacity: 0.62; }
+.chk-device-head { display: flex; align-items: center; gap: 11px; }
+.chk-device-head > div { flex: 1; min-width: 0; }
+.chk-device-head b { display: block; font-size: 14.5px; font-weight: 800; }
+.chk-device-head small { display: block; font-size: 11.5px; color: var(--ink-3); font-weight: 650; }
+.chk-device-icon {
+  width: 40px; height: 40px; border-radius: 12px; display: grid; place-items: center; flex: 0 0 auto;
+  background: var(--primary-soft); color: var(--primary); font-size: 20px;
+}
+.chk-device-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chk-device-link { background: #fff; border: 1px dashed var(--line); border-radius: 10px; padding: 8px 10px; overflow: hidden; }
+.chk-device-link code { font-size: 11px; color: var(--ink-2); word-break: break-all; }
+.chk-device-last { font-size: 11px; color: var(--ink-3); font-weight: 650; }
+.chk-device-actions { display: flex; gap: 7px; flex-wrap: wrap; border-top: 1px solid var(--line); padding-top: 11px; }
+
+.chk-method-picker { display: grid; gap: 8px; }
+.chk-method-picker label {
+  display: flex; align-items: center; gap: 11px; padding: 11px 13px; border-radius: 12px;
+  border: 1.5px solid var(--line); cursor: pointer; margin: 0; transition: 0.16s;
+}
+.chk-method-picker label:hover { border-color: var(--primary); }
+.chk-method-picker input { width: 17px; height: 17px; flex: 0 0 auto; }
+.chk-method-picker b { display: block; font-size: 13.5px; color: var(--ink); }
+.chk-method-picker small { font-size: 11.5px; color: var(--ink-3); font-weight: 600; }
+
+.chk-link-box { display: grid; justify-items: center; gap: 13px; text-align: center; margin-bottom: 16px; }
+.chk-link-box img { width: 190px; height: 190px; border-radius: 14px; border: 1px solid var(--line); padding: 8px; background: #fff; }
+.chk-link-box .share-box { width: 100%; }
+.chk-api-details { border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; margin-bottom: 8px; }
+.chk-api-details summary { font-size: 13px; font-weight: 750; cursor: pointer; color: var(--ink-2); display: flex; align-items: center; gap: 7px; }
+.chk-api-details[open] summary { margin-bottom: 12px; }
+.chk-code {
+  background: #141d31; color: #d8e3f8; border-radius: 11px; padding: 12px 14px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11.5px; line-height: 1.6;
+  white-space: pre-wrap; word-break: break-all; overflow-x: auto;
+}
+
+/* ---------- Horarios ---------- */
+.chk-schedule-row {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 12px 14px; border-radius: 12px; border: 1px solid var(--line);
+  border-left: 4px solid var(--chk-sch, var(--primary)); margin-bottom: 9px; background: #fbfcff;
+}
+.chk-schedule-row b { display: block; font-size: 13.5px; font-weight: 800; }
+.chk-schedule-row small { display: block; font-size: 11.5px; color: var(--ink-3); font-weight: 650; margin-top: 2px; }
+.chk-week-head, .chk-week-row {
+  display: grid; grid-template-columns: minmax(120px, 1.4fr) 1fr 1fr 1fr; gap: 9px; align-items: center;
+}
+.chk-week-head { font-size: 10.5px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.5px; color: var(--ink-3); padding: 0 9px 6px; }
+.chk-week-row { padding: 7px 9px; border-radius: 9px; }
+.chk-week-row:nth-child(odd) { background: #f6f8fc; }
+.chk-week-row.is-rest { opacity: 0.52; }
+.chk-week-day { display: flex; align-items: center; gap: 9px; font-size: 13px; font-weight: 750; margin: 0; color: var(--ink); }
+.chk-week-day input { width: 17px; height: 17px; flex: 0 0 auto; }
+.chk-week-row input[type="time"], .chk-week-row input[type="number"] { padding: 8px 9px; font-size: 12.5px; }
+
+/* ---------- Reglas de cálculo ---------- */
+.chk-rules-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 4px 16px; }
+.chk-rules-grid .field { margin-bottom: 14px; }
+.chk-rules-grid .toggle-row { margin-bottom: 10px; }
+
+/* ---------- Nómina ---------- */
+.chk-period-head {
+  display: flex; align-items: center; gap: 14px; flex-wrap: wrap; padding: 12px 14px; margin-bottom: 14px;
+  border-radius: 12px; background: #f6f8fc; border: 1px solid var(--line); font-size: 13px; font-weight: 700; color: var(--ink-2);
+}
+.chk-period-actions { margin-left: auto; display: flex; gap: 7px; flex-wrap: wrap; }
+.chk-adjust-row td { background: #fafbfe; padding-top: 4px; padding-bottom: 8px; }
+.chk-adjust {
+  display: inline-flex; align-items: center; gap: 6px; padding: 3px 9px; border-radius: 8px;
+  font-size: 11.5px; font-weight: 700; margin-right: 6px;
+}
+.chk-adjust.pos { background: var(--green-soft); color: var(--green); }
+.chk-adjust.neg { background: var(--red-soft); color: var(--red); }
+.chk-adjust button { background: none; border: 0; padding: 0; color: inherit; opacity: 0.65; font-size: 11px; }
+.chk-adjust button:hover { opacity: 1; }
+
+/* ---------- Gafete ---------- */
+.chk-badge { display: grid; justify-items: center; gap: 9px; text-align: center; margin-bottom: 18px; }
+.chk-badge img { width: 200px; height: 200px; border-radius: 14px; border: 1px solid var(--line); padding: 8px; background: #fff; }
+.chk-badge b { font-size: 16px; font-weight: 800; }
+.chk-badge small { font-size: 12.5px; color: var(--ink-3); font-weight: 650; }
+
+/* ---------- Estados vacíos ---------- */
+.chk-empty { display: grid; justify-items: center; gap: 7px; text-align: center; padding: 38px 20px; color: var(--ink-3); }
+.chk-empty i { font-size: 38px; color: var(--primary); opacity: 0.55; }
+.chk-empty h4 { font-size: 15px; font-weight: 800; color: var(--ink); }
+.chk-empty p { font-size: 13px; max-width: 420px; line-height: 1.5; }
+
+@media (max-width: 760px) {
+  .chk-toolbar { flex-direction: column; align-items: stretch; }
+  .chk-filter-row select, .chk-filter-dates input { width: 100%; min-width: 0; }
+  .chk-filter-dates { width: 100%; }
+  .chk-config-grid { grid-template-columns: 1fr; }
+  .chk-week-head { display: none; }
+  .chk-week-row { grid-template-columns: 1fr 1fr; padding: 10px 9px; }
+  .chk-week-day { grid-column: 1 / -1; }
+  .chk-period-actions { margin-left: 0; width: 100%; }
+}

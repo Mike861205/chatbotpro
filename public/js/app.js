@@ -1105,6 +1105,7 @@ const VIEW_META = {
   'stock-sucursales': ['Stock por sucursal', 'Existencias reales y consolidadas por ubicación', 'ph-buildings'],
   compras: ['Compras', 'Proveedores, órdenes y traslados entre sucursales', 'ph-shopping-cart-simple'],
   empleados: ['Productividad Empleados', 'Métricas, comisiones y desempeño del equipo', 'ph-identification-badge'],
+  checador: ['Reloj checador', 'Asistencia, horarios, incidencias y nómina del personal', 'ph-clock-user'],
   chatbot: ['Mi chatbot', 'Configura el flujo y comparte tu liga', 'ph-chat-circle-dots'],
   whatsapp: ['WhatsApp', 'Conecta Zernio y atiende pedidos desde WhatsApp', 'ph-whatsapp-logo'],
   'whatsapp-bot': ['WhatsApp Bot QR', 'Conecta por QR y administra plantillas de pedidos', 'ph-qr-code'],
@@ -1133,6 +1134,7 @@ const VIEW_LOADERS = {
   'stock-sucursales': loadBranchStock,
   compras: loadPurchases,
   empleados: loadEmpleados,
+  checador: () => window.loadChecador?.(),
   chatbot: fillBotForm,
   whatsapp: loadWhatsApp,
   'whatsapp-bot': loadWhatsAppBot,
@@ -2795,7 +2797,32 @@ async function loadExpenseCategories() {
     list.innerHTML = EXPENSE_CATEGORIES.length ? `<table><thead><tr><th>Categoría</th><th>Estado</th><th>Acciones</th></tr></thead><tbody>${EXPENSE_CATEGORIES.map((row) => `<tr data-expense-category-id="${row.id}"><td>${ME?.role === 'owner' ? `<input value="${esc(row.name)}" maxlength="80" aria-label="Nombre de ${esc(row.name)}" />` : esc(row.name)}</td><td>${row.active ? 'Activa' : 'Inactiva'}</td><td>${ME?.role === 'owner' ? `<button class="btn btn-ghost btn-sm" type="button" data-category-save="${row.id}">Guardar nombre</button> <button class="btn btn-ghost btn-sm" type="button" data-category-toggle="${row.id}">${row.active ? 'Desactivar' : 'Activar'}</button>` : ''}</td></tr>`).join('')}</tbody></table>` : emptyHTML('ph-tag', 'Sin categorías', 'Agrega una categoría para habilitar gastos nuevos.');
   }
   $('#expenseCategoryForm').hidden = ME?.role !== 'owner';
+  syncCostingExpenseEmployee();
 }
+
+// Categoría de nómina en el gasto manual: pide el empleado del reloj checador.
+async function syncCostingExpenseEmployee() {
+  const wrap = $('#costingExpenseEmployeeWrap');
+  const select = $('#costingExpenseEmployee');
+  if (!wrap || !select) return;
+  const category = EXPENSE_CATEGORIES.find((row) => String(row.id) === $('#costingExpenseCategory').value);
+  wrap.hidden = !category?.payroll;
+  select.required = false;
+  if (wrap.hidden) { select.value = ''; return; }
+  if (!$('#costingExpenseConcept').value.trim()) $('#costingExpenseConcept').value = 'Adelanto de nómina';
+  try {
+    const data = await api('/api/costs/payroll-employees');
+    if (wrap.hidden) return;
+    const previous = select.value;
+    select.innerHTML = '<option value="">Selecciona al empleado</option>' + data.employees.map((row) => `<option value="${row.id}">${esc(row.name)}${row.branch_name ? ` · ${esc(row.branch_name)}` : ''}</option>`).join('');
+    select.value = data.employees.some((row) => String(row.id) === previous) ? previous : '';
+    select.required = data.employees.length > 0;
+    $('#costingExpenseEmployeeHint').textContent = data.employees.length
+      ? 'Se registra como adelanto y se descuenta de su nómina en el reloj checador.'
+      : 'No hay empleados en el reloj checador; el gasto se registra sin empleado.';
+  } catch (error) { toast(error.message, true); }
+}
+$('#costingExpenseCategory')?.addEventListener('change', syncCostingExpenseEmployee);
 
 async function loadCostingExpenses() {
   const request = ++COSTING_EXPENSE_REQUEST;
@@ -3105,6 +3132,7 @@ $('#costingExpenseForm')?.addEventListener('submit', async (event) => {
         branchId: $('#costingExpenseBranch').value === 'general' ? null : Number($('#costingExpenseBranch').value),
         expenseDate: $('#costingExpenseDate').value,
         categoryId: Number($('#costingExpenseCategory').value),
+        employeeId: $('#costingExpenseEmployeeWrap').hidden ? null : Number($('#costingExpenseEmployee').value) || null,
         concept: $('#costingExpenseConcept').value,
         amount: Number($('#costingExpenseAmount').value),
         notes: $('#costingExpenseNotes').value,
@@ -3114,6 +3142,7 @@ $('#costingExpenseForm')?.addEventListener('submit', async (event) => {
     $('#costingExpenseAmount').value = '';
     $('#costingExpenseNotes').value = '';
     $('#costingExpenseCategory').value = '';
+    syncCostingExpenseEmployee();
     await loadCostingExpenses();
     if (SALES_REPORT_DATA) refreshSalesReportSafely();
     toast('Gasto registrado');
@@ -3163,10 +3192,262 @@ $('#costingExpenseAllDates')?.addEventListener('click', () => {
 });
 $('#costingExpensePdf')?.addEventListener('click', exportExpensesPdf);
 $('#costingExpenseExcel')?.addEventListener('click', exportExpensesExcel);
+// ── Medición de gastos: porcentajes por categoría, sucursal y fecha ──
+const EXP_MEASURE_COLORS = ['#2a78d6', '#eb6834', '#1baf7a', '#eda100', '#e87ba4', '#008300', '#6250d6'];
+const EXP_MEASURE_OTHER_COLOR = '#898781';
+const EXP_MEASURE = { period: 'month', from: '', to: '', branch: 'all', withdrawals: false, request: 0, charts: {} };
+
+function expMeasureShiftDate(iso, days) {
+  const date = new Date(`${iso}T12:00:00Z`);
+  date.setUTCDate(date.getUTCDate() + days);
+  return date.toISOString().slice(0, 10);
+}
+function expMeasureDaysBetween(from, to) {
+  return Math.round((new Date(`${to}T12:00:00Z`) - new Date(`${from}T12:00:00Z`)) / 86400000) + 1;
+}
+function expMeasureMonthBounds(year, month) {
+  return { from: `${year}-${String(month).padStart(2, '0')}-01`, to: new Date(Date.UTC(year, month, 0)).toISOString().slice(0, 10) };
+}
+function expMeasureApplyPeriod(period) {
+  const today = getLocalIsoDate();
+  const year = Number(today.slice(0, 4));
+  const month = Number(today.slice(5, 7));
+  EXP_MEASURE.period = period;
+  if (period === 'month') Object.assign(EXP_MEASURE, expMeasureMonthBounds(year, month));
+  else if (period === 'prevMonth') Object.assign(EXP_MEASURE, month === 1 ? expMeasureMonthBounds(year - 1, 12) : expMeasureMonthBounds(year, month - 1));
+  else if (period === 'days30') { EXP_MEASURE.from = expMeasureShiftDate(today, -29); EXP_MEASURE.to = today; }
+  else if (period === 'year') { EXP_MEASURE.from = `${year}-01-01`; EXP_MEASURE.to = `${year}-12-31`; }
+  else if (period === 'all') { EXP_MEASURE.from = ''; EXP_MEASURE.to = ''; }
+}
+// Periodo inmediato anterior: mes calendario completo contra mes anterior; en otro caso, mismo número de días.
+function expMeasurePreviousRange(from, to) {
+  const monthEnd = new Date(Date.UTC(Number(to.slice(0, 4)), Number(to.slice(5, 7)), 0)).toISOString().slice(0, 10);
+  if (from.slice(8) === '01' && to === monthEnd && from.slice(0, 7) === to.slice(0, 7)) {
+    const prevEnd = expMeasureShiftDate(from, -1);
+    return { from: `${prevEnd.slice(0, 8)}01`, to: prevEnd };
+  }
+  const days = expMeasureDaysBetween(from, to);
+  return { from: expMeasureShiftDate(from, -days), to: expMeasureShiftDate(from, -1) };
+}
+
+function expMeasureAggregate(rows) {
+  const group = (keyOf, nameOf) => {
+    const map = new Map();
+    for (const row of rows) {
+      const key = keyOf(row);
+      const item = map.get(key) || { key, name: nameOf(row), total: 0, count: 0 };
+      item.total += Number(row.amount || 0);
+      item.count += 1;
+      map.set(key, item);
+    }
+    return [...map.values()].sort((a, b) => b.total - a.total);
+  };
+  const total = rows.reduce((sum, row) => sum + Number(row.amount || 0), 0);
+  return {
+    rows, total, count: rows.length,
+    categories: group((row) => (row.movement_kind === 'withdrawal' ? 'withdrawals' : row.category_name || 'legacy'), (row) => (row.movement_kind === 'withdrawal' ? 'Retiros de caja' : row.category_name || 'Sin categoría (histórico)')),
+    branches: group((row) => String(row.branch_id || 0), (row) => (row.branch_id ? row.branch_name || 'Sin nombre' : 'Sin sucursal')),
+    concepts: group((row) => String(row.concept || '').trim().toLowerCase(), (row) => String(row.concept || 'Sin concepto').trim()),
+  };
+}
+const expMeasurePct = (value, total) => (total > 0 ? (value / total) * 100 : 0);
+const expMeasureFmtPct = (value) => `${value.toFixed(1)}%`;
+
+// Top 7 por monto con su color fijo; el resto se agrupa en "Otras" para que el pastel siga legible.
+function expMeasureSlices(items, total) {
+  const top = items.slice(0, EXP_MEASURE_COLORS.length);
+  const slices = top.map((item, index) => ({ ...item, color: EXP_MEASURE_COLORS[index] }));
+  const rest = items.slice(EXP_MEASURE_COLORS.length);
+  if (rest.length) slices.push({ key: '__other', name: `Otras (${rest.length})`, total: rest.reduce((sum, item) => sum + item.total, 0), count: rest.reduce((sum, item) => sum + item.count, 0), color: EXP_MEASURE_OTHER_COLOR });
+  return slices.map((slice) => ({ ...slice, pct: expMeasurePct(slice.total, total) }));
+}
+
+function expMeasureDrawPie(chartKey, canvasId, legendId, slices, emptyLabel) {
+  EXP_MEASURE.charts[chartKey]?.destroy();
+  EXP_MEASURE.charts[chartKey] = null;
+  const legend = $(legendId);
+  if (!slices.length) {
+    legend.innerHTML = emptyHTML('ph-chart-pie-slice', emptyLabel, 'Prueba con otro periodo o sucursal.');
+    return;
+  }
+  legend.innerHTML = slices.map((slice) => `<div class="exp-measure-legend-row"><i style="background:${slice.color}"></i><span>${esc(slice.name)}</span><strong>${expMeasureFmtPct(slice.pct)}</strong><small>${esc(fmtMoney(slice.total))}</small></div>`).join('');
+  EXP_MEASURE.charts[chartKey] = new Chart($(canvasId), {
+    type: 'pie',
+    data: { labels: slices.map((slice) => slice.name), datasets: [{ data: slices.map((slice) => slice.total), backgroundColor: slices.map((slice) => slice.color), borderColor: '#fff', borderWidth: 2 }] },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: {
+        legend: { display: false },
+        tooltip: { callbacks: { label: (ctx) => ` ${ctx.label}: ${fmtMoney(ctx.parsed)} (${expMeasureFmtPct(slices[ctx.dataIndex].pct)})` } },
+      },
+    },
+  });
+}
+
+function expMeasureDrawTrend(current, from, to) {
+  EXP_MEASURE.charts.trend?.destroy();
+  EXP_MEASURE.charts.trend = null;
+  const rows = current.rows;
+  if (!rows.length) return;
+  const dates = rows.map((row) => String(row.expense_date).slice(0, 10)).sort();
+  const start = from || dates[0];
+  const end = to || dates[dates.length - 1];
+  const monthly = expMeasureDaysBetween(start, end) > 62;
+  const bucketOf = (iso) => (monthly ? iso.slice(0, 7) : iso);
+  const buckets = [];
+  if (monthly) {
+    for (let year = Number(start.slice(0, 4)), month = Number(start.slice(5, 7)); `${year}-${String(month).padStart(2, '0')}` <= end.slice(0, 7); month === 12 ? (year += 1, month = 1) : (month += 1)) buckets.push(`${year}-${String(month).padStart(2, '0')}`);
+  } else {
+    for (let day = start; day <= end; day = expMeasureShiftDate(day, 1)) buckets.push(day);
+  }
+  const slices = expMeasureSlices(current.categories, current.total);
+  const sliceOf = new Map();
+  slices.forEach((slice) => { if (slice.key !== '__other') sliceOf.set(slice.key, slice); });
+  const series = slices.map((slice) => ({ slice, values: new Map() }));
+  const seriesOf = new Map(series.map((item) => [item.slice.key, item]));
+  for (const row of rows) {
+    const key = row.movement_kind === 'withdrawal' ? 'withdrawals' : row.category_name || 'legacy';
+    const item = seriesOf.get(sliceOf.has(key) ? key : '__other');
+    const bucket = bucketOf(String(row.expense_date).slice(0, 10));
+    item.values.set(bucket, (item.values.get(bucket) || 0) + Number(row.amount || 0));
+  }
+  $('#expMeasureTrendHint').textContent = monthly ? 'Gasto mensual por categoría.' : 'Gasto diario por categoría.';
+  EXP_MEASURE.charts.trend = new Chart($('#expMeasureTrendChart'), {
+    type: 'bar',
+    data: {
+      labels: buckets.map((bucket) => (monthly ? bucket : bucket.slice(5).split('-').reverse().join('/'))),
+      datasets: series.map(({ slice, values }) => ({ label: slice.name, data: buckets.map((bucket) => values.get(bucket) || 0), backgroundColor: slice.color, borderColor: '#fff', borderWidth: 1, borderRadius: 3, stack: 'gasto' })),
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false, interaction: { mode: 'index', intersect: false },
+      scales: { x: { stacked: true, grid: { display: false } }, y: { stacked: true, beginAtZero: true, ticks: { callback: (value) => fmtMoney(value) } } },
+      plugins: {
+        legend: { position: 'bottom', labels: { boxWidth: 10, boxHeight: 10, usePointStyle: true } },
+        tooltip: { callbacks: { label: (ctx) => (ctx.parsed.y ? ` ${ctx.dataset.label}: ${fmtMoney(ctx.parsed.y)}` : null), footer: (items) => `Total: ${fmtMoney(items.reduce((sum, item) => sum + item.parsed.y, 0))}` } },
+      },
+    },
+  });
+}
+
+function expMeasureDelta(now, before) {
+  if (before == null) return '<small class="exp-measure-delta">Sin periodo anterior</small>';
+  if (!before) return now ? '<small class="exp-measure-delta up"><i class="ph-bold ph-arrow-up"></i> Nuevo (antes $0.00)</small>' : '<small class="exp-measure-delta">Sin cambio</small>';
+  const change = ((now - before) / before) * 100;
+  if (Math.abs(change) < 0.05) return '<small class="exp-measure-delta">Sin cambio</small>';
+  return `<small class="exp-measure-delta ${change > 0 ? 'up' : 'down'}"><i class="ph-bold ph-arrow-${change > 0 ? 'up' : 'down'}"></i> ${Math.abs(change).toFixed(1)}% vs periodo anterior</small>`;
+}
+
+function renderExpenseMeasure(current, previous, data, singleBranch) {
+  const days = current.rows.length ? new Set(current.rows.map((row) => String(row.expense_date).slice(0, 10))).size : 0;
+  const rangeDays = EXP_MEASURE.from && EXP_MEASURE.to ? expMeasureDaysBetween(EXP_MEASURE.from, EXP_MEASURE.to) : days;
+  const topCategory = current.categories[0];
+  const topBranch = current.branches[0];
+  const card = (icon, label, value, extra) => `<div class="expense-summary-card exp-measure-kpi"><i class="ph-bold ${icon}"></i><span>${esc(label)}</span><strong>${value}</strong>${extra}</div>`;
+  $('#expMeasureKpis').innerHTML = [
+    card('ph-money-wavy', 'Gasto total', esc(fmtMoney(current.total)), expMeasureDelta(current.total, previous ? previous.total : null)),
+    card('ph-receipt', 'Movimientos', String(current.count), `<small>Promedio ${esc(fmtMoney(current.count ? current.total / current.count : 0))} por gasto</small>`),
+    card('ph-calendar-blank', 'Promedio diario', esc(fmtMoney(rangeDays ? current.total / rangeDays : 0)), `<small>${rangeDays} día${rangeDays === 1 ? '' : 's'} en el periodo</small>`),
+    card('ph-tag', 'Categoría que más pesa', topCategory ? esc(topCategory.name) : '—', topCategory ? `<small>${expMeasureFmtPct(expMeasurePct(topCategory.total, current.total))} · ${esc(fmtMoney(topCategory.total))}</small>` : '<small>Sin gastos</small>'),
+    singleBranch || data.branchRestricted
+      ? card('ph-text-aa', 'Concepto más repetido', current.concepts.length ? esc([...current.concepts].sort((a, b) => b.count - a.count)[0].name) : '—', current.concepts.length ? `<small>${[...current.concepts].sort((a, b) => b.count - a.count)[0].count} veces</small>` : '<small>Sin gastos</small>')
+      : card('ph-storefront', 'Sucursal que más gasta', topBranch ? esc(topBranch.name) : '—', topBranch ? `<small>${expMeasureFmtPct(expMeasurePct(topBranch.total, current.total))} · ${esc(fmtMoney(topBranch.total))}</small>` : '<small>Sin gastos</small>'),
+  ].join('');
+
+  expMeasureDrawPie('category', '#expMeasureCategoryChart', '#expMeasureCategoryLegend', expMeasureSlices(current.categories, current.total), 'Sin gastos en este periodo');
+  const second = singleBranch || data.branchRestricted;
+  $('#expMeasureSecondTitle').innerHTML = second ? '<i class="ph-bold ph-text-aa"></i> Conceptos principales' : '<i class="ph-bold ph-storefront"></i> Gasto por sucursal';
+  $('#expMeasureSecondHint').textContent = second ? 'Conceptos que más dinero concentran en la sucursal.' : 'Qué sucursal concentra más gasto.';
+  expMeasureDrawPie('second', '#expMeasureSecondChart', '#expMeasureSecondLegend', expMeasureSlices(second ? current.concepts : current.branches, current.total), 'Sin gastos en este periodo');
+  expMeasureDrawTrend(current, EXP_MEASURE.from, EXP_MEASURE.to);
+
+  const previousByCategory = previous ? new Map(previous.categories.map((item) => [item.key, item.total])) : null;
+  $('#expMeasureRanking').innerHTML = current.categories.length
+    ? `<table><thead><tr><th>#</th><th>Categoría</th><th>Monto</th><th>% del total</th><th>Movimientos</th><th>Promedio</th><th>Periodo anterior</th></tr></thead><tbody>${current.categories.map((item, index) => {
+      const pct = expMeasurePct(item.total, current.total);
+      return `<tr><td>${index + 1}</td><td><b>${esc(item.name)}</b></td><td><b>${esc(fmtMoney(item.total))}</b></td><td><div class="exp-measure-bar"><span style="width:${Math.min(100, pct).toFixed(1)}%"></span><em>${expMeasureFmtPct(pct)}</em></div></td><td>${item.count}</td><td>${esc(fmtMoney(item.total / item.count))}</td><td>${expMeasureDelta(item.total, previousByCategory ? previousByCategory.get(item.key) || 0 : null)}</td></tr>`;
+    }).join('')}</tbody><tfoot><tr><td></td><td><b>Total</b></td><td><b>${esc(fmtMoney(current.total))}</b></td><td>100%</td><td>${current.count}</td><td>${esc(fmtMoney(current.count ? current.total / current.count : 0))}</td><td></td></tr></tfoot></table>`
+    : emptyHTML('ph-chart-pie-slice', 'Sin gastos en este periodo', 'Prueba con otro rango de fechas o sucursal.');
+
+  const showMatrix = !second && current.branches.length > 1;
+  $('#expMeasureMatrixCard').hidden = !showMatrix;
+  if (showMatrix) {
+    const cell = new Map();
+    for (const row of current.rows) {
+      const catKey = row.movement_kind === 'withdrawal' ? 'withdrawals' : row.category_name || 'legacy';
+      const key = `${catKey}|${row.branch_id || 0}`;
+      cell.set(key, (cell.get(key) || 0) + Number(row.amount || 0));
+    }
+    $('#expMeasureMatrix').innerHTML = `<table class="exp-measure-matrix"><thead><tr><th>Categoría</th>${current.branches.map((branch) => `<th>${esc(branch.name)}</th>`).join('')}<th>Total</th></tr></thead><tbody>${current.categories.map((category) => `<tr><td><b>${esc(category.name)}</b></td>${current.branches.map((branch) => {
+      const value = cell.get(`${category.key}|${branch.key}`) || 0;
+      return `<td>${value ? `${esc(fmtMoney(value))}<small>${expMeasureFmtPct(expMeasurePct(value, category.total))} de la categoría</small>` : '<span class="exp-measure-zero">—</span>'}</td>`;
+    }).join('')}<td><b>${esc(fmtMoney(category.total))}</b><small>${expMeasureFmtPct(expMeasurePct(category.total, current.total))} del total</small></td></tr>`).join('')}</tbody><tfoot><tr><td><b>Total</b></td>${current.branches.map((branch) => `<td><b>${esc(fmtMoney(branch.total))}</b><small>${expMeasureFmtPct(expMeasurePct(branch.total, current.total))} del total</small></td>`).join('')}<td><b>${esc(fmtMoney(current.total))}</b></td></tr></tfoot></table>`;
+  }
+
+  const top = [...current.rows].sort((a, b) => Number(b.amount) - Number(a.amount)).slice(0, 10);
+  $('#expMeasureTop').innerHTML = top.length
+    ? `<table><thead><tr><th>Fecha</th><th>Sucursal</th><th>Categoría</th><th>Concepto</th><th>Monto</th><th>% del total</th></tr></thead><tbody>${top.map((row) => `<tr><td>${esc(String(row.expense_date).slice(0, 10))}</td><td>${esc(row.branch_name)}</td><td>${esc(row.movement_kind === 'withdrawal' ? 'Retiro de caja' : row.category_name || 'Sin categoría (histórico)')}</td><td><b>${esc(row.concept)}</b></td><td><b>${esc(fmtMoney(row.amount))}</b></td><td>${expMeasureFmtPct(expMeasurePct(Number(row.amount), current.total))}</td></tr>`).join('')}</tbody></table>`
+    : emptyHTML('ph-receipt', 'Sin gastos en este periodo', 'Prueba con otro rango de fechas o sucursal.');
+}
+
+async function loadExpenseMeasure() {
+  const request = ++EXP_MEASURE.request;
+  const all = EXP_MEASURE.period === 'all';
+  if (!all && (!EXP_MEASURE.from || !EXP_MEASURE.to || EXP_MEASURE.from > EXP_MEASURE.to)) return toast('Selecciona un rango de fechas válido', true);
+  $('#expMeasureFrom').value = EXP_MEASURE.from;
+  $('#expMeasureTo').value = EXP_MEASURE.to;
+  document.querySelectorAll('[data-measure-period]').forEach((button) => button.classList.toggle('on', button.dataset.measurePeriod === EXP_MEASURE.period));
+  const fetchRange = (from, to) => api(`/api/costs/expenses?${all ? 'period=all' : new URLSearchParams({ from, to }).toString()}&branch=all`);
+  const previousRange = all ? null : expMeasurePreviousRange(EXP_MEASURE.from, EXP_MEASURE.to);
+  $('#expMeasureScope').textContent = 'Cargando medición…';
+  let data;
+  let previousData = null;
+  try {
+    [data, previousData] = await Promise.all([fetchRange(EXP_MEASURE.from, EXP_MEASURE.to), previousRange ? fetchRange(previousRange.from, previousRange.to) : null]);
+  } catch (error) {
+    if (request === EXP_MEASURE.request) $('#expMeasureScope').textContent = 'No se pudo cargar la medición';
+    throw error;
+  }
+  if (request !== EXP_MEASURE.request) return;
+  const branchSelect = $('#expMeasureBranch');
+  branchSelect.innerHTML = '<option value="all">Global (todas las sucursales)</option><option value="general">Sin sucursal</option>' + (data.branches || []).map((row) => `<option value="${row.id}">${esc(row.name)}</option>`).join('');
+  if (![...branchSelect.options].some((option) => option.value === EXP_MEASURE.branch)) EXP_MEASURE.branch = 'all';
+  branchSelect.value = EXP_MEASURE.branch;
+  $('#expMeasureBranchField').hidden = !!data.branchRestricted;
+  const scope = (rows) => rows.filter((row) => (EXP_MEASURE.withdrawals || row.movement_kind !== 'withdrawal')
+    && (EXP_MEASURE.branch === 'all' || data.branchRestricted || (EXP_MEASURE.branch === 'general' ? !row.branch_id : Number(row.branch_id) === Number(EXP_MEASURE.branch))));
+  const singleBranch = !data.branchRestricted && EXP_MEASURE.branch !== 'all';
+  const branchName = data.branchRestricted ? data.branches?.[0]?.name : singleBranch ? branchSelect.selectedOptions[0]?.textContent : 'todas las sucursales';
+  $('#expMeasureScope').textContent = `${all ? 'Todo el historial' : `${EXP_MEASURE.from} al ${EXP_MEASURE.to}`} · ${branchName || ''}${EXP_MEASURE.withdrawals ? ' · incluye retiros de caja' : ''}`;
+  renderExpenseMeasure(expMeasureAggregate(scope(data.expenses || [])), previousData ? expMeasureAggregate(scope(previousData.expenses || [])) : null, data, singleBranch);
+}
+
+function reloadExpenseMeasure() {
+  loadExpenseMeasure().catch((error) => toast(error.message || 'No se pudo cargar la medición', true));
+}
+document.querySelectorAll('[data-measure-period]').forEach((button) => button.addEventListener('click', () => {
+  expMeasureApplyPeriod(button.dataset.measurePeriod);
+  reloadExpenseMeasure();
+}));
+const expMeasureDateChanged = () => {
+  EXP_MEASURE.period = 'custom';
+  EXP_MEASURE.from = $('#expMeasureFrom').value;
+  EXP_MEASURE.to = $('#expMeasureTo').value;
+  if (EXP_MEASURE.from && EXP_MEASURE.to) reloadExpenseMeasure();
+};
+$('#expMeasureFrom')?.addEventListener('change', expMeasureDateChanged);
+$('#expMeasureTo')?.addEventListener('change', expMeasureDateChanged);
+$('#expMeasureBranch')?.addEventListener('change', (event) => { EXP_MEASURE.branch = event.target.value; reloadExpenseMeasure(); });
+$('#expMeasureWithdrawals')?.addEventListener('change', (event) => { EXP_MEASURE.withdrawals = event.target.checked; reloadExpenseMeasure(); });
+$('#expMeasureRefresh')?.addEventListener('click', reloadExpenseMeasure);
+
 document.querySelectorAll('[data-expense-tab]').forEach((button) => button.addEventListener('click', () => {
   const tab = button.dataset.expenseTab;
   document.querySelectorAll('[data-expense-tab]').forEach((item) => { const selected = item === button; item.classList.toggle('on', selected); item.setAttribute('aria-selected', String(selected)); });
   document.querySelectorAll('[data-expense-panel]').forEach((panel) => { panel.hidden = panel.dataset.expensePanel !== tab; });
+  if (tab === 'measure') {
+    if (!EXP_MEASURE.from && EXP_MEASURE.period !== 'all') expMeasureApplyPeriod(EXP_MEASURE.period);
+    reloadExpenseMeasure();
+  }
 }));
 document.querySelectorAll('[data-expense-period]').forEach((button) => button.addEventListener('click', () => {
   const period = button.dataset.expensePeriod;
@@ -5024,12 +5305,40 @@ function renderPosMovementKindHint(kind) {
     wrap.hidden = kind !== 'expense';
     $('#posMovementCategoryModal').required = kind === 'expense';
     if (kind === 'expense') api('/api/pos/expense-categories').then((data) => {
+      POS_EXPENSE_CATEGORIES = data.categories;
       const select = $('#posMovementCategoryModal');
       select.innerHTML = '<option value="">Selecciona una categoría</option>' + data.categories.map((row) => `<option value="${row.id}">${esc(row.name)}</option>`).join('');
       $('#posMovementCategoryHint').textContent = data.categories.length ? '' : 'No hay categorías activas. Pide al administrador que habilite una en Gastos.';
+      syncPosMovementEmployee();
     }).catch((error) => toast(error.message, true));
+    else syncPosMovementEmployee();
   }
 }
+
+// Categoría de nómina: pide el empleado del reloj checador para registrar el adelanto.
+let POS_EXPENSE_CATEGORIES = [];
+async function syncPosMovementEmployee() {
+  const wrap = $('#posMovementEmployeeWrap');
+  const select = $('#posMovementEmployeeModal');
+  if (!wrap || !select) return;
+  const category = POS_EXPENSE_CATEGORIES.find((row) => String(row.id) === $('#posMovementCategoryModal').value);
+  const show = $('#posMovementKindModal').value === 'expense' && !!category?.payroll;
+  wrap.hidden = !show;
+  select.required = false;
+  if (!show) { select.value = ''; return; }
+  try {
+    const data = await api('/api/pos/payroll-employees');
+    if ($('#posMovementEmployeeWrap').hidden) return;
+    const previous = select.value;
+    select.innerHTML = '<option value="">Selecciona al empleado</option>' + data.employees.map((row) => `<option value="${row.id}">${esc(row.name)}${row.branch_name ? ` · ${esc(row.branch_name)}` : ''}</option>`).join('');
+    select.value = data.employees.some((row) => String(row.id) === previous) ? previous : '';
+    select.required = data.employees.length > 0;
+    $('#posMovementEmployeeHint').textContent = data.employees.length
+      ? 'Se registra como adelanto y se descuenta de su nómina en el reloj checador.'
+      : 'No hay empleados en el reloj checador; el gasto se registra sin empleado.';
+  } catch (error) { toast(error.message, true); }
+}
+$('#posMovementCategoryModal')?.addEventListener('change', syncPosMovementEmployee);
 
 function posSaleStatusBadge(status) {
   const st = String(status || '').toLowerCase();
@@ -8900,6 +9209,7 @@ $('#posMovementFormModal')?.addEventListener('submit', async (e) => {
         amount: Number($('#posMovementAmountModal').value || 0),
         note: $('#posMovementNoteModal').value,
         categoryId: $('#posMovementKindModal').value === 'expense' ? Number($('#posMovementCategoryModal').value) : null,
+        employeeId: $('#posMovementEmployeeWrap').hidden ? null : Number($('#posMovementEmployeeModal').value) || null,
       }),
     });
     toast('Movimiento registrado');

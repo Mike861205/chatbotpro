@@ -3,6 +3,7 @@ const bcrypt = require('bcryptjs');
 const { requireAuth, requireOwner, requireModules } = require('../middleware/auth');
 const { ensureCostingSchema, money, preciseCost } = require('../utils/costing');
 const { getSetting } = require('../db');
+const { isPayrollCategoryName, listAdvanceEmployees, resolveAdvanceEmployee, advanceConcept, recordAdvance, releaseAdvance } = require('../utils/payrollAdvances');
 const { createRateLimiter } = require('../middleware/security');
 
 const router = express.Router();
@@ -34,7 +35,17 @@ router.get('/expense-categories', requireModules('gastos'), async (req, res, nex
   try {
     res.set('Cache-Control', 'no-store');
     const rows = await req.tdb.all('SELECT id, name, active FROM {s}.expense_categories ORDER BY name');
-    res.json({ categories: rows.map((row) => ({ id: Number(row.id), name: row.name, active: Boolean(row.active) })) });
+    res.json({ categories: rows.map((row) => ({ id: Number(row.id), name: row.name, active: Boolean(row.active), payroll: isPayrollCategoryName(row.name) })) });
+  } catch (error) { next(error); }
+});
+
+// Empleados del reloj checador que pueden recibir un adelanto de nómina como gasto manual.
+router.get('/payroll-employees', requireModules('gastos'), async (req, res, next) => {
+  try {
+    res.set('Cache-Control', 'no-store');
+    const branchId = req.user.role === 'owner' ? 0 : Number(req.user.branchId || 0);
+    if (req.user.role !== 'owner' && !branchId) return res.json({ employees: [] });
+    res.json({ employees: await listAdvanceEmployees(req.tdb, { branchId }) });
   } catch (error) { next(error); }
 });
 
@@ -331,13 +342,31 @@ router.post('/expenses', requireModules('gastos'), async (req, res, next) => {
       if (!branch) return res.status(400).json({ error: 'La sucursal no es válida' });
       branchName = branch.name;
     }
-    const row = await req.tdb.get(
+    let employee = null;
+    if (isPayrollCategoryName(categoryRow.name)) {
+      const resolved = await resolveAdvanceEmployee(req.tdb, req.body?.employeeId, { branchId: req.user.role === 'owner' ? 0 : Number(req.user.branchId) });
+      if (resolved.error) return res.status(400).json({ error: resolved.error });
+      employee = resolved.employee;
+    }
+    const expenseConcept = employee ? advanceConcept(employee, concept, 120) : concept;
+    const insertExpense = (t) => t.get(
       `INSERT INTO {s}.business_expenses
        (branch_id, branch_name, expense_date, concept, amount, notes, created_by, category_id, category_name)
        VALUES ($1, $2, $3::date, $4, $5, $6, $7, $8, $9)
        RETURNING id`,
-      [branchId, branchName, expenseDate, concept, money(amount), notes, req.user.username, categoryId, categoryRow.name]
+      [branchId, branchName, expenseDate, expenseConcept, money(amount), notes, req.user.username, categoryId, categoryRow.name]
     );
+    // Con empleado, el gasto y su adelanto de nómina se guardan juntos.
+    const row = employee
+      ? await req.tdb.tx(async (tx) => {
+        const created = await insertExpense(tx);
+        await recordAdvance(tx, {
+          employee, amount, date: expenseDate, timezone: req.timezone, branchId, branchName,
+          source: 'manual', sourceId: Number(created.id), note: notes, createdBy: req.user.username,
+        });
+        return created;
+      })
+      : await insertExpense(req.tdb);
     res.json({ ok: true, id: Number(row.id) });
   } catch (error) {
     next(error);
@@ -394,6 +423,7 @@ router.delete('/expenses/:id', requireModules('gastos'), expenseDeleteLimiter, a
           expense.created_by || '', expense.created_at, req.user.username, req.user.role, authorizedBy,
           expense.category_id || null, expense.category_name || '', expense.movement_kind]
       );
+      await releaseAdvance(tx, source, sourceId);
       if (source === 'manual') {
         await tx.run('DELETE FROM {s}.business_expenses WHERE id=$1', [sourceId]);
       } else {

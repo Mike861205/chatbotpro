@@ -12,6 +12,7 @@ const { validRtn, exonerateSarItems, calculateSarTotals } = require('../utils/sa
 const { operationalOrderNote } = require('../utils/orderNotes');
 const { ensureCostingSchema, itemsCost, preciseCost } = require('../utils/costing');
 const { ensurePurchasingSchema } = require('../utils/purchasing');
+const { isPayrollCategoryName, listAdvanceEmployees, resolveAdvanceEmployee, advanceConcept, recordAdvance, releaseAdvance } = require('../utils/payrollAdvances');
 const { ensureBranchStockSchema, initializeBranchStock, applyBranchSaleStock, restoreBranchSaleStock } = require('../utils/branchStock');
 const { emitNewOrder, emitSelfServiceStatus } = require('../notifications');
 const { parseCustomPaymentMethods, isCustomPaymentMethod } = require('../utils/paymentMethods');
@@ -1975,7 +1976,16 @@ router.get('/expense-categories', async (req, res, next) => {
   try {
     res.set('Cache-Control', 'no-store');
     const rows = await req.tdb.all('SELECT id, name FROM {s}.expense_categories WHERE active=TRUE ORDER BY name');
-    res.json({ categories: rows.map((row) => ({ id: Number(row.id), name: row.name, active: true })) });
+    res.json({ categories: rows.map((row) => ({ id: Number(row.id), name: row.name, active: true, payroll: isPayrollCategoryName(row.name) })) });
+  } catch (error) { next(error); }
+});
+
+// Empleados del reloj checador que pueden recibir adelantos de nómina desde la caja.
+router.get('/payroll-employees', async (req, res, next) => {
+  try {
+    res.set('Cache-Control', 'no-store');
+    const branchId = req.user.role === 'cashier' ? Number(req.user.branchId || 0) : 0;
+    res.json({ employees: await listAdvanceEmployees(req.tdb, { branchId }) });
   } catch (error) { next(error); }
 });
 
@@ -2034,16 +2044,31 @@ router.post('/movements', async (req, res, next) => {
     if (!MOVEMENT_KINDS.has(kind)) return res.status(400).json({ error: 'Tipo de movimiento inválido' });
     if (amount <= 0) return res.status(400).json({ error: 'El monto debe ser mayor a cero' });
     let category = null;
+    let employee = null;
     if (kind === 'expense') {
       const categoryId = Number(req.body?.categoryId);
       if (!Number.isSafeInteger(categoryId) || categoryId <= 0) return res.status(400).json({ error: 'Selecciona una categoría de gasto' });
       category = await req.tdb.get('SELECT id, name FROM {s}.expense_categories WHERE id=$1 AND active=TRUE', [categoryId]);
       if (!category) return res.status(400).json({ error: 'La categoría de gasto no está habilitada' });
+      if (isPayrollCategoryName(category.name)) {
+        const resolved = await resolveAdvanceEmployee(req.tdb, req.body?.employeeId, { branchId: req.user.role === 'cashier' ? Number(req.user.branchId || 0) : 0 });
+        if (resolved.error) return res.status(400).json({ error: resolved.error });
+        employee = resolved.employee;
+      }
     }
-    await req.tdb.run(
-      'INSERT INTO {s}.pos_cash_movements (session_id, kind, amount, note, created_by, category_id, category_name) VALUES ($1, $2, $3, $4, $5, $6, $7)',
-      [session.id, kind, amount, note, req.user.username, category?.id || null, category?.name || '']
-    );
+    const movementNote = employee ? advanceConcept(employee, note, 240) : note;
+    await req.tdb.tx(async (tx) => {
+      const movement = await tx.get(
+        'INSERT INTO {s}.pos_cash_movements (session_id, kind, amount, note, created_by, category_id, category_name) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id',
+        [session.id, kind, amount, movementNote, req.user.username, category?.id || null, category?.name || '']
+      );
+      if (employee) {
+        await recordAdvance(tx, {
+          employee, amount, timezone: tenantTimeZone(req.tdb), branchId: session.branch_id, branchName: session.branch_name,
+          source: 'pos', sourceId: Number(movement.id), note, createdBy: req.user.username,
+        });
+      }
+    });
     const totals = await getSessionTotals(req.tdb, session.id);
     res.json({ ok: true, totals, expectedCash: expectedCashForSession(session, totals), recentMovements: await listRecentMovements(req.tdb, session.id) });
   } catch (e) {
@@ -2073,6 +2098,7 @@ router.delete('/movements/:id', movementDeleteLimiter, async (req, res, next) =>
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
         [movement.id, session.id, session.branch_id || null, movement.kind, movement.amount, movement.note || '', movement.created_by || '', movement.created_at, req.user.username, authorizedBy, movement.category_id || null, movement.category_name || '', req.user.role]
       );
+      await releaseAdvance(tx, 'pos', id);
       await tx.run('DELETE FROM {s}.pos_cash_movements WHERE id=$1', [id]);
       await tx.run("UPDATE {s}.pos_close_approvals SET status='stale' WHERE session_id=$1 AND status='approved'", [session.id]);
       return { kind: movement.kind, totals: await getSessionTotals(tx, session.id), session };

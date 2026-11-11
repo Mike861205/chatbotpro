@@ -110,6 +110,7 @@ app.use('/api/notifications', require('./src/routes/notifications'));
 app.use('/api/printing', require('./src/routes/printing'));
 app.use('/api/inventory', require('./src/routes/inventory'));
 app.use('/api/employees', require('./src/routes/employees'));
+app.use('/api/checador', require('./src/routes/checador'));
 app.use('/api/kds', require('./src/routes/kds'));
 app.use('/api/invoicing', require('./src/routes/invoicing'));
 app.use('/api/sar', require('./src/routes/sar'));
@@ -139,6 +140,10 @@ app.get('/autorizar-cierre/:slug/:token', validSlug, (req, res) => {
   return page('pos-close-approval.html')(req, res);
 });
 app.get('/kds/:slug/:token', validSlug, validKdsToken, page('kds.html'));
+app.get('/checador/:slug/:token', validSlug, validKdsToken, (req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  return page('checador.html')(req, res);
+});
 app.get('/superadmin/login', page('superadmin-login.html'));
 app.get('/superadmin', page('superadmin.html'));
 app.get('/resellers/panel', page('reseller.html'));

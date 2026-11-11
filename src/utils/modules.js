@@ -6,7 +6,8 @@ const ALL_MODULES = Object.freeze([
   ['cfdi', 'CFDI emitidos'], ['cancelaciones', 'Cancelaciones'], ['cortes', 'Cortes'],
   ['kds', 'Pantallas KDS'], ['productos', 'Productos'], ['promociones', 'Promociones'], ['costos', 'Costo de ventas'],
   ['inventarios', 'Inventarios'], ['stock-sucursales', 'Stock por sucursal'],
-  ['compras', 'Compras'], ['empleados', 'Productividad'], ['chatbot', 'Mi chatbot'], ['whatsapp', 'WhatsApp'], ['whatsapp-bot', 'WhatsApp Bot'],
+  ['compras', 'Compras'], ['empleados', 'Productividad'], ['checador', 'Reloj checador'],
+  ['chatbot', 'Mi chatbot'], ['whatsapp', 'WhatsApp'], ['whatsapp-bot', 'WhatsApp Bot'],
   ['config', 'Mi negocio'], ['suscripciones', 'Suscripciones'], ['instrucciones', 'Instrucciones'],
 ]);
 

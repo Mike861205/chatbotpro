@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#0f172a" />
+  <meta name="robots" content="noindex, nofollow" />
+  <title>Reloj checador</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@500;600;700;800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/bold/style.css" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/fill/style.css" />
+  <link rel="stylesheet" href="/static/css/checador.css?v=20261106-1" />
+  <link rel="icon" type="image/png" href="/static/chatbotpro100.png" />
+</head>
+<body>
+  <div class="ck-boot" id="ckBoot">
+    <div class="ck-boot-mark"><img src="/static/chatbotpro100.png" alt="" /></div>
+    <strong>Conectando el reloj checador…</strong>
+  </div>
+
+  <div class="ck-shell" id="ckShell" hidden>
+    <header class="ck-header">
+      <div class="ck-brand">
+        <span class="ck-logo"><img id="ckLogo" src="/static/chatbotpro100.png" alt="" /></span>
+        <div>
+          <span class="ck-eyebrow" id="ckBusiness">ChatBotPro</span>
+          <h1 id="ckDeviceName">Reloj checador</h1>
+          <span class="ck-branch" id="ckBranch" hidden><i class="ph-bold ph-storefront"></i> <span></span></span>
+        </div>
+      </div>
+      <div class="ck-clock">
+        <time id="ckTime">--:--:--</time>
+        <span id="ckDate">—</span>
+      </div>
+    </header>
+
+    <main class="ck-main">
+      <!-- ───────── Paso 1: identificación ───────── -->
+      <section class="ck-stage" id="ckStageIdentify">
+        <div class="ck-methods" id="ckMethods" role="tablist" aria-label="Forma de identificación">
+          <button type="button" class="on" data-method="pin" role="tab"><i class="ph-bold ph-password"></i> NIP</button>
+          <button type="button" data-method="qr" role="tab"><i class="ph-bold ph-qr-code"></i> Credencial QR</button>
+          <button type="button" data-method="biometric" role="tab"><i class="ph-bold ph-fingerprint"></i> Huella</button>
+        </div>
+
+        <!-- NIP -->
+        <div class="ck-panel" id="ckPanelPin">
+          <div class="ck-pin-display">
+            <label for="ckEmpCode">Número de empleado</label>
+            <input type="text" id="ckEmpCode" inputmode="numeric" autocomplete="off" placeholder="0001" maxlength="24" />
+            <label for="ckPinDots" style="margin-top:14px">NIP</label>
+            <div class="ck-dots" id="ckPinDots" aria-live="polite"></div>
+          </div>
+          <div class="ck-keypad" id="ckKeypad">
+            <button type="button" data-key="1">1</button>
+            <button type="button" data-key="2">2</button>
+            <button type="button" data-key="3">3</button>
+            <button type="button" data-key="4">4</button>
+            <button type="button" data-key="5">5</button>
+            <button type="button" data-key="6">6</button>
+            <button type="button" data-key="7">7</button>
+            <button type="button" data-key="8">8</button>
+            <button type="button" data-key="9">9</button>
+            <button type="button" class="ck-key-alt" data-key="clear"><i class="ph-bold ph-eraser"></i></button>
+            <button type="button" data-key="0">0</button>
+            <button type="button" class="ck-key-ok" data-key="enter"><i class="ph-bold ph-arrow-right"></i></button>
+          </div>
+        </div>
+
+        <!-- QR -->
+        <div class="ck-panel" id="ckPanelQr" hidden>
+          <div class="ck-scanner">
+            <video id="ckScannerVideo" playsinline muted></video>
+            <div class="ck-scanner-frame"></div>
+            <p id="ckScannerHint">Acerca tu credencial al lector</p>
+          </div>
+          <div class="ck-qr-manual">
+            <label for="ckQrInput">O captura el código de tu gafete</label>
+            <input type="text" id="ckQrInput" autocomplete="off" placeholder="Escanea o escribe el código" />
+            <button class="ck-btn ck-btn-primary" type="button" id="ckQrSubmit"><i class="ph-bold ph-arrow-right"></i> Continuar</button>
+          </div>
+        </div>
+
+        <!-- Huella -->
+        <div class="ck-panel ck-panel-center" id="ckPanelBio" hidden>
+          <button type="button" class="ck-bio-btn" id="ckBioBtn">
+            <i class="ph-fill ph-fingerprint"></i>
+            <span>Toca para checar con tu huella</span>
+          </button>
+          <p class="ck-note" id="ckBioNote">Usa el lector biométrico de este dispositivo. Si es tu primera vez, identifícate con tu NIP y registra tu huella.</p>
+        </div>
+
+        <p class="ck-error" id="ckError" hidden></p>
+      </section>
+
+      <!-- ───────── Paso 2: elegir movimiento ───────── -->
+      <section class="ck-stage" id="ckStageAction" hidden>
+        <div class="ck-employee">
+          <span class="ck-avatar" id="ckAvatar">—</span>
+          <div>
+            <h2 id="ckEmpName">Empleado</h2>
+            <p id="ckEmpMeta">—</p>
+          </div>
+          <button type="button" class="ck-btn ck-btn-ghost" id="ckCancelBtn"><i class="ph-bold ph-x"></i> Cancelar</button>
+        </div>
+
+        <div class="ck-status-strip" id="ckStatusStrip"></div>
+
+        <div class="ck-camera" id="ckCameraWrap" hidden>
+          <video id="ckCameraVideo" playsinline muted></video>
+          <span class="ck-camera-tag"><i class="ph-bold ph-camera"></i> Foto de evidencia</span>
+        </div>
+
+        <div class="ck-actions" id="ckActions"></div>
+
+        <div class="ck-extra">
+          <button type="button" class="ck-btn ck-btn-ghost" id="ckEnrollBtn" hidden>
+            <i class="ph-bold ph-fingerprint"></i> Registrar mi huella en este dispositivo
+          </button>
+        </div>
+
+        <p class="ck-error" id="ckActionError" hidden></p>
+        <p class="ck-countdown" id="ckCountdown"></p>
+      </section>
+
+      <!-- ───────── Paso 3: confirmación ───────── -->
+      <section class="ck-stage ck-stage-done" id="ckStageDone" hidden>
+        <div class="ck-done-mark" id="ckDoneMark"><i class="ph-fill ph-check-circle"></i></div>
+        <h2 id="ckDoneTitle">¡Listo!</h2>
+        <p id="ckDoneName">—</p>
+        <div class="ck-done-time" id="ckDoneTime">--:--</div>
+        <p class="ck-done-meta" id="ckDoneMeta"></p>
+      </section>
+    </main>
+
+    <footer class="ck-footer">
+      <span id="ckFooterMeta">—</span>
+      <span class="ck-footer-brand">Checador <b>ChatBotPro</b></span>
+    </footer>
+  </div>
+
+  <script src="/static/js/checador-kiosk.js?v=20261106-1"></script>
+</body>
+</html>

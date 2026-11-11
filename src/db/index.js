@@ -1317,6 +1317,215 @@ async function createTenantSchema(slug) {
     );
     CREATE UNIQUE INDEX IF NOT EXISTS idx_${s}_emp_comm_rec_uq ON "${s}".emp_commission_records(employee_id, COALESCE(scheme_id,-1), period_year, period_month);
 
+    -- ═══════ Módulo: Reloj checador (asistencia y nómina) ═══════
+    -- Credenciales y datos de nómina viven sobre la tabla de empleados ya existente.
+    ALTER TABLE "${s}".employees ADD COLUMN IF NOT EXISTS emp_code TEXT NOT NULL DEFAULT '';
+    ALTER TABLE "${s}".employees ADD COLUMN IF NOT EXISTS pin_hash TEXT NOT NULL DEFAULT '';
+    ALTER TABLE "${s}".employees ADD COLUMN IF NOT EXISTS qr_token TEXT;
+    ALTER TABLE "${s}".employees ADD COLUMN IF NOT EXISTS photo_url TEXT NOT NULL DEFAULT '';
+    ALTER TABLE "${s}".employees ADD COLUMN IF NOT EXISTS schedule_id INTEGER;
+    ALTER TABLE "${s}".employees ADD COLUMN IF NOT EXISTS pay_type TEXT NOT NULL DEFAULT 'monthly';
+    ALTER TABLE "${s}".employees ADD COLUMN IF NOT EXISTS pay_rate NUMERIC(12,2) NOT NULL DEFAULT 0;
+    ALTER TABLE "${s}".employees ADD COLUMN IF NOT EXISTS clock_enabled INTEGER NOT NULL DEFAULT 1;
+    UPDATE "${s}".employees
+       SET qr_token = substr(replace(gen_random_uuid()::text, '-', '') || replace(gen_random_uuid()::text, '-', ''), 1, 36)
+     WHERE qr_token IS NULL;
+    UPDATE "${s}".employees SET emp_code = lpad(id::text, 4, '0') WHERE emp_code = '';
+    UPDATE "${s}".employees SET pay_rate = salary_base WHERE pay_rate = 0 AND COALESCE(salary_base,0) > 0;
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_${s}_employees_qr ON "${s}".employees(qr_token) WHERE qr_token IS NOT NULL;
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_${s}_employees_code ON "${s}".employees(lower(emp_code)) WHERE emp_code <> '';
+
+    -- Horarios / turnos asignables a cada empleado
+    CREATE TABLE IF NOT EXISTS "${s}".work_schedules (
+      id SERIAL PRIMARY KEY,
+      name TEXT NOT NULL,
+      branch_id INTEGER,
+      color TEXT NOT NULL DEFAULT '#6c47ff',
+      notes TEXT NOT NULL DEFAULT '',
+      active INTEGER NOT NULL DEFAULT 1,
+      created_at TIMESTAMPTZ DEFAULT now(),
+      updated_at TIMESTAMPTZ DEFAULT now()
+    );
+    CREATE TABLE IF NOT EXISTS "${s}".work_schedule_days (
+      schedule_id INTEGER NOT NULL,
+      weekday INTEGER NOT NULL,
+      is_rest INTEGER NOT NULL DEFAULT 0,
+      start_time TEXT NOT NULL DEFAULT '09:00',
+      end_time TEXT NOT NULL DEFAULT '18:00',
+      break_minutes INTEGER NOT NULL DEFAULT 0,
+      PRIMARY KEY (schedule_id, weekday)
+    );
+
+    -- Dispositivos / ligas externas del checador
+    CREATE TABLE IF NOT EXISTS "${s}".time_clock_devices (
+      id SERIAL PRIMARY KEY,
+      name TEXT NOT NULL DEFAULT 'Reloj checador',
+      branch_id INTEGER,
+      access_token TEXT UNIQUE NOT NULL,
+      api_key TEXT NOT NULL DEFAULT '',
+      methods_json TEXT NOT NULL DEFAULT '["pin","qr"]',
+      require_photo INTEGER NOT NULL DEFAULT 0,
+      require_geo INTEGER NOT NULL DEFAULT 0,
+      geo_lat NUMERIC(10,6),
+      geo_lng NUMERIC(10,6),
+      geo_radius_m INTEGER NOT NULL DEFAULT 150,
+      lock_to_branch INTEGER NOT NULL DEFAULT 1,
+      active INTEGER NOT NULL DEFAULT 1,
+      last_used_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ DEFAULT now(),
+      updated_at TIMESTAMPTZ DEFAULT now()
+    );
+    UPDATE "${s}".time_clock_devices
+       SET api_key = replace(gen_random_uuid()::text, '-', '') || replace(gen_random_uuid()::text, '-', '')
+     WHERE api_key = '';
+    CREATE INDEX IF NOT EXISTS idx_${s}_tc_devices_token ON "${s}".time_clock_devices(access_token);
+
+    -- Credenciales biométricas (WebAuthn) y lectores externos por empleado
+    CREATE TABLE IF NOT EXISTS "${s}".time_clock_credentials (
+      id SERIAL PRIMARY KEY,
+      employee_id INTEGER NOT NULL,
+      device_id INTEGER,
+      kind TEXT NOT NULL DEFAULT 'webauthn',
+      credential_id TEXT NOT NULL,
+      public_key TEXT NOT NULL DEFAULT '',
+      algorithm INTEGER NOT NULL DEFAULT -7,
+      sign_count BIGINT NOT NULL DEFAULT 0,
+      label TEXT NOT NULL DEFAULT '',
+      active INTEGER NOT NULL DEFAULT 1,
+      last_used_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ DEFAULT now()
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_${s}_tc_cred_uq ON "${s}".time_clock_credentials(credential_id);
+    CREATE INDEX IF NOT EXISTS idx_${s}_tc_cred_emp ON "${s}".time_clock_credentials(employee_id, active);
+
+    -- Checadas
+    CREATE TABLE IF NOT EXISTS "${s}".time_clock_punches (
+      id SERIAL PRIMARY KEY,
+      employee_id INTEGER NOT NULL,
+      device_id INTEGER,
+      branch_id INTEGER,
+      punch_type TEXT NOT NULL DEFAULT 'in',
+      punched_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      business_date DATE NOT NULL,
+      method TEXT NOT NULL DEFAULT 'pin',
+      photo_url TEXT NOT NULL DEFAULT '',
+      latitude NUMERIC(10,6),
+      longitude NUMERIC(10,6),
+      accuracy_m INTEGER,
+      distance_m INTEGER,
+      ip TEXT NOT NULL DEFAULT '',
+      user_agent TEXT NOT NULL DEFAULT '',
+      notes TEXT NOT NULL DEFAULT '',
+      status TEXT NOT NULL DEFAULT 'valid',
+      source TEXT NOT NULL DEFAULT 'kiosk',
+      created_by TEXT NOT NULL DEFAULT '',
+      created_at TIMESTAMPTZ DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS idx_${s}_tc_punch_emp_date ON "${s}".time_clock_punches(employee_id, business_date, punched_at);
+    CREATE INDEX IF NOT EXISTS idx_${s}_tc_punch_date ON "${s}".time_clock_punches(business_date, punched_at DESC);
+
+    -- Incidencias (faltas, permisos, vacaciones, incapacidades, festivos)
+    CREATE TABLE IF NOT EXISTS "${s}".attendance_incidences (
+      id SERIAL PRIMARY KEY,
+      employee_id INTEGER,
+      incidence_type TEXT NOT NULL DEFAULT 'falta',
+      date_from DATE NOT NULL,
+      date_to DATE NOT NULL,
+      paid INTEGER NOT NULL DEFAULT 0,
+      pay_factor NUMERIC(5,2) NOT NULL DEFAULT 0,
+      notes TEXT NOT NULL DEFAULT '',
+      created_by TEXT NOT NULL DEFAULT '',
+      created_at TIMESTAMPTZ DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS idx_${s}_tc_incidence ON "${s}".attendance_incidences(employee_id, date_from, date_to);
+
+    -- Nómina
+    CREATE TABLE IF NOT EXISTS "${s}".payroll_periods (
+      id SERIAL PRIMARY KEY,
+      name TEXT NOT NULL,
+      period_type TEXT NOT NULL DEFAULT 'biweekly',
+      start_date DATE NOT NULL,
+      end_date DATE NOT NULL,
+      branch_id INTEGER,
+      status TEXT NOT NULL DEFAULT 'draft',
+      total_gross NUMERIC(12,2) NOT NULL DEFAULT 0,
+      total_deductions NUMERIC(12,2) NOT NULL DEFAULT 0,
+      total_net NUMERIC(12,2) NOT NULL DEFAULT 0,
+      config_json TEXT NOT NULL DEFAULT '{}',
+      notes TEXT NOT NULL DEFAULT '',
+      created_by TEXT NOT NULL DEFAULT '',
+      created_at TIMESTAMPTZ DEFAULT now(),
+      approved_at TIMESTAMPTZ,
+      paid_at TIMESTAMPTZ
+    );
+    CREATE INDEX IF NOT EXISTS idx_${s}_payroll_periods_range ON "${s}".payroll_periods(start_date, end_date);
+    CREATE TABLE IF NOT EXISTS "${s}".payroll_items (
+      id SERIAL PRIMARY KEY,
+      period_id INTEGER NOT NULL,
+      employee_id INTEGER NOT NULL,
+      employee_name TEXT NOT NULL DEFAULT '',
+      pay_type TEXT NOT NULL DEFAULT 'monthly',
+      pay_rate NUMERIC(12,2) NOT NULL DEFAULT 0,
+      daily_rate NUMERIC(12,2) NOT NULL DEFAULT 0,
+      hourly_rate NUMERIC(12,2) NOT NULL DEFAULT 0,
+      worked_minutes INTEGER NOT NULL DEFAULT 0,
+      expected_minutes INTEGER NOT NULL DEFAULT 0,
+      overtime_minutes INTEGER NOT NULL DEFAULT 0,
+      double_overtime_minutes INTEGER NOT NULL DEFAULT 0,
+      triple_overtime_minutes INTEGER NOT NULL DEFAULT 0,
+      late_minutes INTEGER NOT NULL DEFAULT 0,
+      late_count INTEGER NOT NULL DEFAULT 0,
+      worked_days INTEGER NOT NULL DEFAULT 0,
+      absent_days NUMERIC(6,2) NOT NULL DEFAULT 0,
+      paid_leave_days NUMERIC(6,2) NOT NULL DEFAULT 0,
+      rest_days INTEGER NOT NULL DEFAULT 0,
+      base_pay NUMERIC(12,2) NOT NULL DEFAULT 0,
+      overtime_pay NUMERIC(12,2) NOT NULL DEFAULT 0,
+      premium_pay NUMERIC(12,2) NOT NULL DEFAULT 0,
+      other_earnings NUMERIC(12,2) NOT NULL DEFAULT 0,
+      absence_deduction NUMERIC(12,2) NOT NULL DEFAULT 0,
+      late_deduction NUMERIC(12,2) NOT NULL DEFAULT 0,
+      other_deductions NUMERIC(12,2) NOT NULL DEFAULT 0,
+      gross_pay NUMERIC(12,2) NOT NULL DEFAULT 0,
+      net_pay NUMERIC(12,2) NOT NULL DEFAULT 0,
+      detail_json TEXT NOT NULL DEFAULT '{}',
+      notes TEXT NOT NULL DEFAULT ''
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_${s}_payroll_items_uq ON "${s}".payroll_items(period_id, employee_id);
+    CREATE TABLE IF NOT EXISTS "${s}".payroll_adjustments (
+      id SERIAL PRIMARY KEY,
+      period_id INTEGER NOT NULL,
+      employee_id INTEGER NOT NULL,
+      concept TEXT NOT NULL,
+      kind TEXT NOT NULL DEFAULT 'deduction',
+      amount NUMERIC(12,2) NOT NULL DEFAULT 0,
+      notes TEXT NOT NULL DEFAULT '',
+      created_by TEXT NOT NULL DEFAULT '',
+      created_at TIMESTAMPTZ DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS idx_${s}_payroll_adj ON "${s}".payroll_adjustments(period_id, employee_id);
+
+    -- Adelantos de nómina: gastos de categoría NOMINA (POS o manuales) ligados a un empleado.
+    -- period_id queda vacío hasta que un periodo de nómina los descuente.
+    CREATE TABLE IF NOT EXISTS "${s}".payroll_advances (
+      id SERIAL PRIMARY KEY,
+      employee_id INTEGER NOT NULL,
+      employee_name TEXT NOT NULL DEFAULT '',
+      amount NUMERIC(12,2) NOT NULL,
+      advance_date DATE NOT NULL,
+      branch_id INTEGER,
+      branch_name TEXT NOT NULL DEFAULT '',
+      source TEXT NOT NULL,
+      source_id INTEGER NOT NULL,
+      note TEXT NOT NULL DEFAULT '',
+      created_by TEXT NOT NULL DEFAULT '',
+      created_at TIMESTAMPTZ DEFAULT now(),
+      period_id INTEGER,
+      adjustment_id INTEGER,
+      UNIQUE (source, source_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_${s}_payroll_adv_emp ON "${s}".payroll_advances(employee_id, period_id);
+
     -- FacturaciÃ³n electrÃ³nica MÃ©xico (CFDI 4.0)
     ALTER TABLE "${s}".products ADD COLUMN IF NOT EXISTS sat_product_code TEXT;
     ALTER TABLE "${s}".products ADD COLUMN IF NOT EXISTS sat_unit_code TEXT;
