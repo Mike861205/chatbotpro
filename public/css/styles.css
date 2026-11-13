@@ -3220,6 +3220,14 @@ select.status-sel {
   font-size: 30px; font-weight: 900; line-height: 1.12;
   letter-spacing: -0.6px;
 }
+.subs-global-title {
+  margin-top: 14px;
+  display: flex; align-items: center; flex-wrap: wrap; gap: 12px;
+  font-size: clamp(30px, 4vw, 46px); font-weight: 900; line-height: 1.05;
+  letter-spacing: -1px; text-transform: uppercase;
+}
+.subs-global-title i { color: #38bdf8; font-size: 1.1em; }
+.subs-global-title .grad-text,
 .subs-hero h2 .grad-text {
   background: linear-gradient(90deg, #ffb88c, #ff6b35 35%, #f43f5e 70%, #a78bfa);
   -webkit-background-clip: text; background-clip: text;
@@ -3415,6 +3423,19 @@ select.status-sel {
 .plan-usd-equivalent small { color:#526079; font-size:9.5px; font-weight:700; line-height:1.35; }
 .plan-usd-equivalent.annual { border-color:#67e8f9; background:rgba(236,254,255,.78); color:#075985; }
 .plan-usd-equivalent.annual>i { color:#0891b2; }
+.plan-usd-intl {
+  display:flex; align-items:center; gap:10px; margin-top:10px; padding:9px 12px;
+  border:1px dashed #93c5fd; border-radius:13px; background:rgba(239,246,255,.86); color:#1e3a8a;
+}
+.plan-usd-intl>i { flex:0 0 auto; font-size:22px; color:#2563eb; }
+.plan-usd-intl span { display:grid; gap:1px; }
+.plan-usd-intl small { color:#526079; font-size:10.5px; font-weight:800; text-transform:uppercase; letter-spacing:.3px; }
+.plan-usd-intl strong { font-size:18px; font-weight:900; line-height:1.15; }
+.plan-usd-intl em { font-style:normal; font-size:12px; font-weight:700; color:#526079; }
+.plan-usd-intl.annual { border-color:#67e8f9; background:rgba(236,254,255,.78); color:#075985; }
+.plan-usd-intl.annual>i { color:#0891b2; }
+.plan-usd-intl.invoicing { border-color:#86efac; background:rgba(240,253,244,.86); color:#14532d; }
+.plan-usd-intl.invoicing>i { color:#16a34a; }
 .plan-old {
   margin-top: 6px; font-size: 12.5px; color: var(--ink-2);
 }
@@ -3844,6 +3865,7 @@ select.status-sel {
 @media (max-width: 760px) {
   .subs-hero { padding: 22px; }
   .subs-hero h2 { font-size: 24px; }
+  .subs-global-title { font-size: 28px; }
   .subs-hero-badge { width: 100%; flex-direction: row; justify-content: space-between; }
   .badge-off { font-size: 24px; }
   .subs-plans { grid-template-columns: 1fr; }
