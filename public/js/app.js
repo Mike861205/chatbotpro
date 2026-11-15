@@ -725,6 +725,8 @@ function closeTrialExpiredModal({ remember = true, continueSetup = true } = {}) 
 }
 
 async function api(path, opts = {}) {
+  const method = String(opts.method || 'GET').toUpperCase();
+  const requestModule = CURRENT_VIEW;
   const headers = new Headers(opts.headers || {});
   const scope = getAuthScope();
   if (scope) headers.set('x-cbp-auth-scope', scope);
@@ -745,6 +747,14 @@ async function api(path, opts = {}) {
     err.status = res.status;
     err.data = data;
     throw err;
+  }
+  if (['POST', 'PUT', 'PATCH'].includes(method)
+    && String(path || '').startsWith('/api/')
+    && !String(path || '').startsWith('/api/auth/')
+    && !ME?.identityRequired
+    && VIEW_META[requestModule]) {
+    if (CURRENT_VIEW === requestModule) recordCurrentModuleUsage('action', requestModule);
+    else trackModuleUsage(requestModule);
   }
   return data;
 }
@@ -936,6 +946,7 @@ function shouldOfferEmptyCatalogAi() {
   return ME?.role === 'owner'
     && !ME?.impersonated
     && !ME?.demoSession
+    && ME?.onboardingRequired
     && PRODUCT_CATALOG_TOTAL === 0
     && !ME?.identityRequired
     && !ME?.tenant?.hiddenModules?.includes('productos')
@@ -944,7 +955,6 @@ function shouldOfferEmptyCatalogAi() {
 
 function openEmptyCatalogAiWelcome() {
   if (!shouldOfferEmptyCatalogAi()) return false;
-  if (CURRENT_VIEW !== 'productos') navigate('productos').catch((error) => toast(error.message, true));
   const ui = businessUi();
   const title = $('#emptyCatalogAiTitle');
   const text = $('#emptyCatalogAiText');
@@ -965,6 +975,9 @@ function closeEmptyCatalogAiWelcome({ continueJourney = true } = {}) {
   EMPTY_CATALOG_PROMPT_DISMISSED = true;
   $('#emptyCatalogAiModal')?.classList.remove('show');
   document.body.classList.remove('empty-catalog-ai-open');
+  if (ME?.onboardingRequired) {
+    completeOnboarding().catch((error) => toast(error.message || 'No se pudo guardar el avance inicial', true));
+  }
   const input = $('#emptyCatalogMenuImage');
   if (input) input.value = '';
   if (continueJourney) setTimeout(presentStartupJourney, 100);
@@ -1017,49 +1030,8 @@ function presentStartupJourney() {
     setTimeout(openEmptyCatalogAiWelcome, 180);
     return;
   }
-  if (ME?.trial?.isExpired) {
-    let alreadyShown = false;
-    try { alreadyShown = localStorage.getItem(trialExpiredNoticeKey()) === businessIsoDate(); } catch {}
-    if (!alreadyShown) {
-      showTrialExpiredModal(ME.trial);
-      return;
-    }
-  }
-  if (ME?.trial?.isActive) {
-    const days = Math.max(1, Number(ME.trial.daysRemaining || 1));
-    const todayKey = `${ME?.trial?.endsOn || 'trial'}:${days}`;
-    let alreadyShown = false;
-    try { alreadyShown = localStorage.getItem(`cbp_trial_notice_${ME.tenant.slug}`) === todayKey; } catch {}
-    if (!alreadyShown) {
-      const ownerName = String(ME?.tenant?.ownerName || '').trim();
-      const businessName = String(SETTINGS?.business_name || ME?.tenant?.businessName || 'Tu negocio').trim();
-      const businessModel = BUSINESS_MODELS.find((model) => model.id === currentBusinessType());
-      const currency = SETTINGS?.regional?.currencies?.find((item) => item.code === SETTINGS?.currency);
-      const timezone = SETTINGS?.regional?.timezones?.find((item) => item.value === businessTimeZone());
-      const logo = String(SETTINGS?.logo || ME?.tenant?.logo || '').trim();
-      $('#trialDaysNumber').textContent = String(days);
-      $('#trialDaysLabel').textContent = days === 1 ? 'día disponible' : 'días disponibles';
-      $('#trialBusinessName').textContent = businessName;
-      $('#trialWelcomeEyebrow').textContent = days === 5 && ownerName
-        ? `¡Felicidades por tu registro, ${ownerName}!`
-        : 'Prueba real de ChatBotPro';
-      $('#trialWelcomeTitle').textContent = days === 5
-        ? `${businessName} ya tiene su sistema listo`
-        : `Te ${days === 1 ? 'queda' : 'quedan'} ${days} ${days === 1 ? 'día' : 'días'} de prueba`;
-      $('#trialWelcomeText').textContent = days === 5
-        ? `Preparamos ChatBotPro con la identidad de ${businessName}. Ahora tienes 5 días para cargar información real y comprobar todo el sistema.`
-        : days === 1
-        ? 'Aprovecha hoy para terminar tus pruebas. Mañana verás un aviso para conocer los planes; el sistema seguirá disponible.'
-        : `Usa estos ${days} días para cargar tus productos, registrar ventas y comprobar pedidos desde tu chatbot.`;
-      $('#trialBusinessModel').textContent = businessModel?.label || 'Restaurante / cafetería';
-      $('#trialBusinessCurrency').textContent = currency ? `${currency.flag} ${currency.code}` : (SETTINGS?.currency || 'MXN');
-      $('#trialBusinessTimezone').textContent = timezone?.label || businessTimeZone();
-      const logoHost = $('#trialBusinessLogo');
-      logoHost.hidden = !logo;
-      logoHost.innerHTML = logo ? `<img src="${esc(logo)}" alt="Logo de ${esc(businessName)}" />` : '';
-      $('#trialWelcomeModal')?.classList.add('show');
-      return;
-    }
+  if (ME?.onboardingRequired && PRODUCT_CATALOG_TOTAL !== null) {
+    completeOnboarding().catch((error) => toast(error.message || 'No se pudo guardar el avance inicial', true));
   }
 }
 
@@ -1144,6 +1116,11 @@ const VIEW_LOADERS = {
 };
 
 let CURRENT_VIEW = 'dashboard';
+const MODULE_USAGE_DWELL_MS = 5000;
+let moduleUsageDwellTimer = null;
+let moduleUsageDwellMs = 0;
+let moduleUsageLastTick = 0;
+let moduleUsageVisitTracked = false;
 
 const CASHIER_ALLOWED_VIEWS = new Set(['pos', 'gastos', 'pedidos', 'cancelaciones', 'cortes']);
 
@@ -1184,9 +1161,49 @@ function trackModuleUsage(moduleKey) {
   fetch('/api/auth/module-usage', {
     method: 'POST',
     headers,
-    body: JSON.stringify({ module: moduleKey }),
+    body: JSON.stringify({ module: moduleKey, eventType: 'action' }),
     keepalive: true,
   }).catch(() => {});
+}
+
+function recordCurrentModuleUsage(eventType, moduleKey = CURRENT_VIEW) {
+  if (!ME || !VIEW_META[moduleKey] || moduleUsageVisitTracked) return;
+  moduleUsageVisitTracked = true;
+  if (moduleUsageDwellTimer) {
+    clearInterval(moduleUsageDwellTimer);
+    moduleUsageDwellTimer = null;
+  }
+  const headers = { 'Content-Type': 'application/json' };
+  const scope = getAuthScope();
+  if (scope) headers['x-cbp-auth-scope'] = scope;
+  fetch('/api/auth/module-usage', {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ module: moduleKey, eventType }),
+    keepalive: true,
+  }).catch(() => {});
+}
+
+function startModuleUsageDwell(moduleKey) {
+  if (moduleUsageDwellTimer) clearInterval(moduleUsageDwellTimer);
+  moduleUsageDwellTimer = null;
+  moduleUsageDwellMs = 0;
+  moduleUsageLastTick = Date.now();
+  moduleUsageVisitTracked = false;
+  moduleUsageDwellTimer = setInterval(() => {
+    const now = Date.now();
+    const elapsed = now - moduleUsageLastTick;
+    moduleUsageLastTick = now;
+    const startupModalOpen = Boolean(document.querySelector(
+      '.modal-bg.show, #bootLoader:not(.hide)'
+    ));
+    if (document.visibilityState === 'visible' && !startupModalOpen) {
+      moduleUsageDwellMs += Math.min(elapsed, 1000);
+    }
+    if (moduleUsageDwellMs >= MODULE_USAGE_DWELL_MS) {
+      recordCurrentModuleUsage('view', moduleKey);
+    }
+  }, 500);
 }
 
 function applyUserScopeUI() {
@@ -1277,7 +1294,7 @@ async function navigate(view) {
   resetMainScroll();
   closeSidebar();
   syncPosSortControlVisibility();
-  trackModuleUsage(nextView);
+  startModuleUsageDwell(nextView);
 
   const loader = VIEW_LOADERS[nextView];
   if (!loader) return;
@@ -15443,7 +15460,7 @@ async function boot(navigateToHash = true) {
   if (navigateToHash) {
     const fallbackView = cashier ? 'pos' : 'dashboard';
     const hashView = (location.hash || '').slice(1);
-    const view = shouldOfferEmptyCatalogAi() ? 'productos' : normalizeView(hashView || fallbackView);
+    const view = normalizeView(hashView || fallbackView);
     document.body.setAttribute('data-current-view', view);
     await navigate(view);
   }

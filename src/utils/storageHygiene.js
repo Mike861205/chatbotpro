@@ -195,7 +195,7 @@ async function loadStorageTenants(query) {
       SELECT COUNT(*)::int AS payment_count FROM tenant_payments tp WHERE tp.tenant_id=t.id
     ) p ON true
     LEFT JOIN LATERAL (
-      SELECT MAX(last_seen_at) AS module_last_seen FROM module_usage m WHERE m.tenant_id=t.id
+      SELECT MAX(last_seen_at) AS module_last_seen FROM module_usage m WHERE m.tenant_id=t.id AND m.qualified=TRUE
     ) mu ON true
     ORDER BY t.customer_since NULLS FIRST, t.created_at DESC
   `);

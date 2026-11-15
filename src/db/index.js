@@ -230,7 +230,9 @@ async function initMaster(options = {}) {
       module_key TEXT NOT NULL,
       view_count INTEGER NOT NULL DEFAULT 1,
       first_seen_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-      last_seen_at TIMESTAMPTZ NOT NULL DEFAULT now()
+      last_seen_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      qualified BOOLEAN NOT NULL DEFAULT TRUE,
+      qualified_at TIMESTAMPTZ
     );
     CREATE TABLE IF NOT EXISTS sales_followup_activities (
       id SERIAL PRIMARY KEY,
@@ -407,6 +409,17 @@ async function initMaster(options = {}) {
   await q(`ALTER TABLE users ADD COLUMN IF NOT EXISTS active INTEGER DEFAULT 1`);
   await q(`ALTER TABLE users ADD COLUMN IF NOT EXISTS onboarding_completed INTEGER NOT NULL DEFAULT 1`);
   await q(`ALTER TABLE users ADD COLUMN IF NOT EXISTS identity_completed INTEGER NOT NULL DEFAULT 1`);
+  await q(`ALTER TABLE module_usage ADD COLUMN IF NOT EXISTS qualified BOOLEAN NOT NULL DEFAULT TRUE`);
+  await q(`ALTER TABLE module_usage ADD COLUMN IF NOT EXISTS qualified_at TIMESTAMPTZ`);
+  // Dashboard y Productos se abrían automáticamente antes de verificar
+  // actividad real. Oculta esas visitas antiguas sin borrar el historial.
+  await q(`UPDATE module_usage mu
+           SET qualified = FALSE
+           FROM tenants t
+           WHERE mu.tenant_id = t.id
+             AND mu.demo_lead_id IS NULL
+             AND mu.module_key IN ('dashboard', 'productos')
+             AND mu.qualified_at IS NULL`);
   // Los nombres de usuario pertenecen a cada negocio, no a toda la plataforma.
   // Crear primero el índice nuevo: si hay conflictos históricos, no se retira
   // la protección anterior y el arranque informa el problema.

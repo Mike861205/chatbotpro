@@ -55,7 +55,7 @@ function storageTenantSql(whereSql = 't.id = $1') {
   return `SELECT t.id,t.slug,t.business_name,t.logo,t.account_status,t.trial_status,t.sales_stage,
                  t.sales_updated_at,t.created_at,t.customer_since,
                  COALESCE((SELECT COUNT(*) FROM tenant_payments tp WHERE tp.tenant_id=t.id),0)::int AS payment_count,
-                 (SELECT MAX(last_seen_at) FROM module_usage mu WHERE mu.tenant_id=t.id) AS module_last_seen
+                 (SELECT MAX(last_seen_at) FROM module_usage mu WHERE mu.tenant_id=t.id AND mu.qualified=TRUE) AS module_last_seen
           FROM tenants t WHERE ${whereSql}`;
 }
 
@@ -733,7 +733,7 @@ router.get('/tenants', requireSuperAdmin, async (req, res, next) => {
             ) ORDER BY mu.view_count DESC, mu.last_seen_at DESC
           ) AS modules
         FROM module_usage mu
-        WHERE mu.tenant_id = t.id AND mu.demo_lead_id IS NULL
+        WHERE mu.tenant_id = t.id AND mu.demo_lead_id IS NULL AND mu.qualified = TRUE
       ) usage_stats ON true
       LEFT JOIN LATERAL (
         SELECT COUNT(*)::int AS activity_count, MAX(a.created_at) AS last_activity_at,
@@ -948,7 +948,7 @@ async function listClientRecords(req, res, next) {
             ) ORDER BY mu.view_count DESC, mu.last_seen_at DESC
           ) AS modules
         FROM module_usage mu
-        WHERE mu.tenant_id = t.id AND mu.demo_lead_id IS NULL
+        WHERE mu.tenant_id = t.id AND mu.demo_lead_id IS NULL AND mu.qualified = TRUE
       ) usage_stats ON true
       WHERE ${where.join(' AND ')}
       ORDER BY ${archived ? 't.non_renewal_at' : 't.customer_since'} DESC, t.created_at DESC`,

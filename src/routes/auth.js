@@ -36,6 +36,8 @@ const TRACKABLE_MODULES = new Set([
   'clientes',
   'pos',
   'gastos',
+  'cancelaciones',
+  'cortes',
   'facturacion',
   'sar',
   'cfdi',
@@ -48,8 +50,10 @@ const TRACKABLE_MODULES = new Set([
   'stock-sucursales',
   'compras',
   'empleados',
+  'checador',
   'chatbot',
   'whatsapp',
+  'whatsapp-bot',
   'config',
   'suscripciones',
   'instrucciones',
@@ -313,7 +317,7 @@ router.post('/register', authAttemptLimiter, async (req, res, next) => {
          RETURNING *
        ), new_user AS (
          INSERT INTO users (tenant_id, username, password_hash, onboarding_completed, identity_completed)
-         SELECT id, $8, $9, CASE WHEN $13 = 'invoicing' THEN 0 ELSE 1 END, 0 FROM new_tenant
+         SELECT id, $8, $9, 0, 0 FROM new_tenant
          RETURNING *
        )
        SELECT row_to_json(new_tenant) AS tenant, row_to_json(new_user) AS owner
@@ -575,8 +579,12 @@ router.post('/demo-login', authAttemptLimiter, async (req, res, next) => {
 router.post('/module-usage', requireAuth, async (req, res, next) => {
   try {
     const moduleKey = String(req.body?.module || '').trim().toLowerCase();
+    const eventType = String(req.body?.eventType || '').trim().toLowerCase();
     if (!TRACKABLE_MODULES.has(moduleKey)) {
       return res.status(400).json({ error: 'Módulo no válido' });
+    }
+    if (!['view', 'action'].includes(eventType)) {
+      return res.status(400).json({ error: 'La visita debe corresponder a una vista activa o una acción guardada' });
     }
 
     // Las sesiones abiertas desde SuperAdmin son soporte técnico y no deben
@@ -589,22 +597,26 @@ router.post('/module-usage', requireAuth, async (req, res, next) => {
 
     if (Number.isInteger(demoLeadId) && demoLeadId > 0) {
       result = await q(
-        `INSERT INTO module_usage (tenant_id, demo_lead_id, module_key, view_count, first_seen_at, last_seen_at)
-         SELECT $1, dl.id, $3, 1, now(), now()
+        `INSERT INTO module_usage (tenant_id, demo_lead_id, module_key, view_count, first_seen_at, last_seen_at, qualified, qualified_at)
+         SELECT $1, dl.id, $3, 1, now(), now(), TRUE, now()
          FROM demo_leads dl
          WHERE dl.id = $2
          ON CONFLICT (demo_lead_id, module_key) WHERE demo_lead_id IS NOT NULL
-         DO UPDATE SET view_count = module_usage.view_count + 1, last_seen_at = now()
+         DO UPDATE SET view_count = CASE WHEN module_usage.qualified THEN module_usage.view_count + 1 ELSE 1 END,
+                       first_seen_at = CASE WHEN module_usage.qualified THEN module_usage.first_seen_at ELSE now() END,
+                       last_seen_at = now(), qualified = TRUE, qualified_at = now()
          RETURNING view_count`,
         [tenantId, demoLeadId, moduleKey]
       );
       await q('UPDATE demo_leads SET last_seen_at = now() WHERE id = $1', [demoLeadId]);
     } else {
       result = await q(
-        `INSERT INTO module_usage (tenant_id, demo_lead_id, module_key, view_count, first_seen_at, last_seen_at)
-         VALUES ($1, NULL, $2, 1, now(), now())
+        `INSERT INTO module_usage (tenant_id, demo_lead_id, module_key, view_count, first_seen_at, last_seen_at, qualified, qualified_at)
+         VALUES ($1, NULL, $2, 1, now(), now(), TRUE, now())
          ON CONFLICT (tenant_id, module_key) WHERE demo_lead_id IS NULL
-         DO UPDATE SET view_count = module_usage.view_count + 1, last_seen_at = now()
+         DO UPDATE SET view_count = CASE WHEN module_usage.qualified THEN module_usage.view_count + 1 ELSE 1 END,
+                       first_seen_at = CASE WHEN module_usage.qualified THEN module_usage.first_seen_at ELSE now() END,
+                       last_seen_at = now(), qualified = TRUE, qualified_at = now()
          RETURNING view_count`,
         [tenantId, moduleKey]
       );
@@ -903,7 +915,9 @@ router.get('/me', requireAuth, async (req, res, next) => {
     branchName: req.user.branchName,
     cashierSlug: req.user.cashierSlug,
     onboardingCompleted: req.user.onboardingCompleted,
-    onboardingRequired: req.user.role === 'owner' && !req.user.onboardingCompleted && !req.user.impersonated,
+    onboardingRequired: req.user.role === 'owner'
+      && (!req.user.onboardingCompleted || !req.user.identityCompleted)
+      && !req.user.impersonated,
     identityCompleted: req.user.identityCompleted,
     identityRequired: req.user.role === 'owner' && !req.user.identityCompleted && !req.user.impersonated,
     demoSession: Boolean(req.user.demoLeadId),

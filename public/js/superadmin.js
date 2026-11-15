@@ -858,12 +858,18 @@ function renderSalesBulkBars() {
     const subjects = selectionSubjects(type);
     bar.hidden = subjects.length === 0;
     if (!subjects.length) { bar.innerHTML = ''; return; }
-    const deletable = subjects.every((item) => SA_DELETABLE_STAGES.has(String(item.entity.sales_stage || 'new')));
+    const tenantSelection = subjects.every((item) => item.type === 'tenant');
+    const demoLeadSelection = subjects.every((item) => item.type === 'demo_lead');
+    const deletable = (type === 'tenant' && subjects.length === 1)
+      || (demoLeadSelection && subjects.every((item) => SA_DELETABLE_STAGES.has(String(item.entity.sales_stage || 'new'))));
+    const deleteTitle = tenantSelection && subjects.length > 1
+      ? 'Selecciona un solo prospecto a la vez para revisar sus archivos'
+      : (demoLeadSelection ? 'Marca primero todos como No interesado o Cierre no exitoso' : 'Selecciona un solo registro para eliminar');
     const scope = type || 'all';
     bar.innerHTML = `<div><b>${subjects.length}</b> seleccionado${subjects.length === 1 ? '' : 's'}</div>
       <div class="sa-bulk-actions">
         <button type="button" class="btn btn-primary" data-sa-bulk-manage="${scope}"><i class="ph-bold ph-note-pencil"></i> Agregar gestión</button>
-        <button type="button" class="btn btn-danger" data-sa-bulk-delete="${scope}" ${deletable ? '' : 'disabled title="Marca primero todos como No interesado o Cierre no exitoso"'}><i class="ph-bold ph-trash"></i> Eliminar</button>
+        <button type="button" class="btn btn-danger" data-sa-bulk-delete="${scope}" ${deletable ? "" : `disabled title="${esc(deleteTitle)}"`}><i class="ph-bold ph-trash"></i> Eliminar</button>
         <button type="button" class="btn btn-ghost" data-sa-bulk-clear="${scope}">Quitar selección</button>
       </div>`;
   });
@@ -1463,7 +1469,10 @@ function openDeleteModal(type, id) {
 function openBulkDelete(subjects) {
   if (!Array.isArray(subjects) || !subjects.length) return;
   if (subjects.some((item) => item.type === 'tenant')) {
-    return toast('Los prospectos se eliminan individualmente desde Higiene de almacenamiento para incluir sus archivos', true);
+    if (subjects.length !== 1 || subjects[0].type !== 'tenant') {
+      return toast('Selecciona un solo prospecto para revisar y eliminar también sus archivos', true);
+    }
+    return openStorageAction('delete-prospect', { id: subjects[0].id }).catch((error) => toast(error.message, true));
   }
   if (!subjects.every((item) => SA_DELETABLE_STAGES.has(String(item.entity.sales_stage || 'new')))) {
     return toast('Solo puedes eliminar en masa contactos marcados como No interesado o Cierre no exitoso', true);
@@ -2455,7 +2464,7 @@ async function openStorageAction(kind, subject) {
     if (!preview.scanComplete) throw new Error(preview.scanError || 'La revisión del prospecto está incompleta');
     const deleting = kind === 'delete-prospect';
     action = {
-      kind, endpoint: `/api/superadmin/storage-hygiene/prospects/${preview.id}/${deleting ? 'delete' : 'orphan-files'}`,
+      kind, tenantId: Number(preview.id), endpoint: `/api/superadmin/storage-hygiene/prospects/${preview.id}/${deleting ? 'delete' : 'orphan-files'}`,
       phrase: deleting ? payload.confirmationPhrases.delete : payload.confirmationPhrases.orphanFiles,
       title: deleting ? 'Eliminar prospecto y sus archivos' : 'Limpiar archivos huérfanos',
       subject: `${preview.businessName} · /${preview.slug}`,
@@ -2516,7 +2525,10 @@ async function confirmStorageAction() {
     closeStorageAction();
     toast(result.message || 'Operación completada');
     await loadStorageHygiene();
-    if (action.kind === 'delete-prospect') await Promise.all([loadTenants(), loadFollowUp()]);
+    if (action.kind === 'delete-prospect') {
+      SA_SELECTED.delete(salesSubjectKey('tenant', action.tenantId));
+      await Promise.all([loadTenants(), loadFollowUp()]);
+    }
   } catch (error) {
     action.processing = false;
     button.innerHTML = original;
