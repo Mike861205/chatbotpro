@@ -6,6 +6,10 @@ const multer = require('multer');
 const XLSX = require('xlsx');
 const { requireAuth, requireModules } = require('../middleware/auth');
 const { encrypt, decrypt } = require('../utils/crypto');
+const { storeDocument, readDocument } = require('../utils/storedDocuments');
+
+const storePdf = (req, bytes) => storeDocument(bytes, { scope: req.tenant.slug, namespace: 'sar', extension: 'pdf', contentType: 'application/pdf' });
+const readPdf = (req, bytes) => readDocument(bytes, req.tenant.slug);
 const { restoreBranchSaleStock } = require('../utils/branchStock');
 const { TAX_CATEGORIES, money, sarNumber, validRtn, validCai, parseDocumentNumber, calculateSarTotals, calculateSarCredit } = require('../utils/sar');
 
@@ -132,7 +136,7 @@ router.post('/authorizations', ownerOnly, upload.single('pdf'), wrapped(async (r
     const row = await tx.get(`INSERT INTO {s}.sar_authorizations
       (branch_id,cai,establishment,emission_point,emitter_signature,document_type,range_start,range_end,next_number,expires_on,source_name,source_pdf,created_by)
       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING id`,
-      [branchId, cai, establishment, emissionPoint, emitterSignature(profile), documentType, rangeStart, rangeEnd, nextNumber, expiresOn, clean(req.file?.originalname, 180), req.file?.buffer || null, actor(req)]);
+      [branchId, cai, establishment, emissionPoint, emitterSignature(profile), documentType, rangeStart, rangeEnd, nextNumber, expiresOn, clean(req.file?.originalname, 180), await storePdf(req, req.file?.buffer || null), actor(req)]);
     await tx.run("INSERT INTO {s}.sar_events(subject_type,subject_id,event_type,detail,actor) VALUES ('authorization',$1,'loaded',$2,$3)", [row.id, `Tipo ${documentType}; CAI ${cai}; rango ${rangeStart}-${rangeEnd}; siguiente ${nextNumber}`, actor(req)]);
     return row;
   });
@@ -144,7 +148,7 @@ router.get('/authorizations/:id/pdf', ownerOnly, wrapped(async (req, res) => {
   if (!row?.source_pdf) throw fail(404, 'Esta autorización no tiene PDF adjunto');
   res.set('Content-Type', 'application/pdf');
   res.set('Content-Disposition', `attachment; filename="sar-927-${positiveId(req.params.id)}.pdf"`);
-  res.send(row.source_pdf);
+  res.send(await readPdf(req, row.source_pdf));
 }));
 
 router.post('/authorizations/:id/invalidate', ownerOnly, wrapped(async (req, res) => {
@@ -170,7 +174,7 @@ router.post('/orders/:id/exoneration-proof', requireModules('pos'), upload.singl
     if (!order || order.channel !== 'pos' || !order.sar_exoneration_enc) throw fail(404, 'Venta exonerada no encontrada');
     if (!isOwner(req) && Number(req.user.branchId) !== Number(order.service_branch_id)) throw fail(403, 'Venta de otra sucursal');
     if (await tx.get('SELECT id FROM {s}.sar_documents WHERE order_id=$1 AND status=$2', [id,'issued'])) throw fail(409, 'La factura ya fue emitida');
-    await tx.run('UPDATE {s}.orders SET sar_exoneration_proof_name=$1,sar_exoneration_proof_pdf=$2 WHERE id=$3', [clean(req.file.originalname,180),req.file.buffer,id]);
+    await tx.run('UPDATE {s}.orders SET sar_exoneration_proof_name=$1,sar_exoneration_proof_pdf=$2 WHERE id=$3', [clean(req.file.originalname,180),await storePdf(req, req.file.buffer),id]);
     await tx.run("INSERT INTO {s}.sar_events(subject_type,subject_id,event_type,detail,actor) VALUES ('order',$1,'exoneration_proof_loaded',$2,$3)", [id,clean(req.file.originalname,180),actor(req)]);
   });
   res.json({ok:true});
@@ -179,7 +183,7 @@ router.post('/orders/:id/exoneration-proof', requireModules('pos'), upload.singl
 router.get('/orders/:id/exoneration-proof', ownerOnly, wrapped(async (req,res) => {
   const row = await req.tdb.get('SELECT sar_exoneration_proof_pdf FROM {s}.orders WHERE id=$1', [positiveId(req.params.id)]);
   if (!row?.sar_exoneration_proof_pdf) throw fail(404,'Sin constancia adjunta');
-  res.type('pdf').send(row.sar_exoneration_proof_pdf);
+  res.type('pdf').send(await readPdf(req, row.sar_exoneration_proof_pdf));
 }));
 
 router.post('/orders/:id/issue', requireModules('pos'), wrapped(async (req, res) => {
@@ -431,7 +435,7 @@ router.post('/purchases', ownerOnly, upload.single('pdf'), wrapped(async (req, r
       exempt_amount,taxable_15,isv_15,taxable_18,isv_18,total,notes,source_name,source_pdf,created_by,
       accounted_on,exonerated_amount,creditable_isv_15,creditable_isv_18,oce_number,exemption_resolution,document_type,original_purchase_id)
       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24) RETURNING id`,
-      [purchaseOrderId,supplierName,supplierRtn,cai,documentNumber,issuedOn,...amounts,clean(b.notes,300),clean(req.file?.originalname,180),req.file?.buffer || null,actor(req),accountedOn,exoneratedAmount,creditable15,creditable18,oceNumber,exemptionResolution,documentType,originalPurchaseId]);
+      [purchaseOrderId,supplierName,supplierRtn,cai,documentNumber,issuedOn,...amounts,clean(b.notes,300),clean(req.file?.originalname,180),await storePdf(req, req.file?.buffer || null),actor(req),accountedOn,exoneratedAmount,creditable15,creditable18,oceNumber,exemptionResolution,documentType,originalPurchaseId]);
     });
     res.status(201).json({ ok: true, id: row.id });
   } catch (error) { if (error.code === '23505') throw fail(409, 'Ese comprobante de proveedor ya está registrado'); throw error; }
@@ -443,7 +447,7 @@ router.get('/purchases/:id/pdf', ownerOnly, wrapped(async (req,res) => {
   if (!row?.source_pdf) throw fail(404, 'Esta compra no tiene PDF adjunto');
   res.set('Content-Type','application/pdf');
   res.set('Content-Disposition',`attachment; filename="compra-sar-${id}.pdf"`);
-  res.send(row.source_pdf);
+  res.send(await readPdf(req, row.source_pdf));
 }));
 
 router.post('/purchases/:id/void', ownerOnly, wrapped(async (req,res) => {
@@ -549,7 +553,7 @@ router.post('/filings/:period/adjustments', ownerOnly, upload.single('proof'), w
   if (!['prior_excess','period_payment','compensation','credit_transfer','retained_state','retained_agreement','retained_card'].includes(adjustmentType) || amount<=0 || !reference) throw fail(400,'Indica tipo, importe y referencia del crédito');
   if (!req.file || req.file.buffer.subarray(0,5).toString() !== '%PDF-') throw fail(400,'Adjunta comprobante PDF del ajuste');
   const row=await req.tdb.get(`INSERT INTO {s}.sar_period_adjustments(period,adjustment_type,amount,reference,proof_name,proof_pdf,created_by)
-    VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING id`,[period,adjustmentType,amount,reference,clean(req.file.originalname,180),req.file.buffer,actor(req)]);
+    VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING id`,[period,adjustmentType,amount,reference,clean(req.file.originalname,180),await storePdf(req, req.file.buffer),actor(req)]);
   res.status(201).json({ok:true,id:row.id});
 }));
 
@@ -568,7 +572,7 @@ router.post('/filings/adjustments/:id/void', ownerOnly, wrapped(async (req,res) 
 router.get('/filings/adjustments/:id/pdf', ownerOnly, wrapped(async (req,res) => {
   const row=await req.tdb.get('SELECT proof_pdf FROM {s}.sar_period_adjustments WHERE id=$1',[positiveId(req.params.id)]);
   if (!row) throw fail(404,'Comprobante no encontrado');
-  res.type('pdf').send(row.proof_pdf);
+  res.type('pdf').send(await readPdf(req, row.proof_pdf));
 }));
 
 router.get('/filings/:period/workbook', ownerOnly, wrapped(async (req,res) => {
@@ -614,7 +618,7 @@ router.post('/filings/:period', ownerOnly, upload.single('receipt'), wrapped(asy
   const row=await req.tdb.tx(async (tx) => {
     await tx.run("UPDATE {s}.sar_filings SET status='superseded' WHERE period=$1 AND filing_type=$2 AND status='filed'",[period,filingType]);
     const saved=await tx.get(`INSERT INTO {s}.sar_filings(period,filing_type,source_hash,receipt_number,filed_on,receipt_name,receipt_pdf,notes,filed_by)
-      VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id`,[period,filingType,report.hashes[filingType],receiptNumber,filedOn,clean(req.file.originalname,180),req.file.buffer,clean(req.body?.notes,300),actor(req)]);
+      VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id`,[period,filingType,report.hashes[filingType],receiptNumber,filedOn,clean(req.file.originalname,180),await storePdf(req, req.file.buffer),clean(req.body?.notes,300),actor(req)]);
     await tx.run("INSERT INTO {s}.sar_events(subject_type,subject_id,event_type,detail,actor) VALUES ('filing',$1,'receipt_loaded',$2,$3)",[saved.id,`${filingType} ${period}: ${receiptNumber}`,actor(req)]);
     return saved;
   });
@@ -624,7 +628,7 @@ router.post('/filings/:period', ownerOnly, upload.single('receipt'), wrapped(asy
 router.get('/filings/receipts/:id/pdf', ownerOnly, wrapped(async (req,res) => {
   const row=await req.tdb.get('SELECT receipt_pdf FROM {s}.sar_filings WHERE id=$1',[positiveId(req.params.id)]);
   if (!row) throw fail(404,'Acuse no encontrado');
-  res.type('pdf').send(row.receipt_pdf);
+  res.type('pdf').send(await readPdf(req, row.receipt_pdf));
 }));
 
 module.exports = router;

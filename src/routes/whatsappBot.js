@@ -3,8 +3,7 @@ const multer = require('multer');
 const sharp = require('sharp');
 const QRCode = require('qrcode');
 const crypto = require('node:crypto');
-const fs = require('node:fs/promises');
-const path = require('node:path');
+const { saveMedia, readMedia, deleteMedia } = require('../utils/whatsappMedia');
 const { q, tdb, getSetting, setSetting } = require('../db');
 const { requireAuth, requireModules } = require('../middleware/auth');
 const { handleMessage } = require('../chatbot/engine');
@@ -15,7 +14,6 @@ const router = express.Router();
 const menuUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 8 * 1024 * 1024 }, fileFilter: (_req, file, cb) => cb(null, /^image\/(png|jpeg|webp)$/.test(file.mimetype)) });
 const secret = String(process.env.WHATSAPP_BOT_GATEWAY_SECRET || '');
 const gateway = `http://127.0.0.1:${Number(process.env.WHATSAPP_BOT_GATEWAY_PORT || 3013)}`;
-const mediaRoot = path.join(__dirname, '../..', 'data', 'whatsapp-bot-media');
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const presets = [
   { key: 'welcome', name: 'Bienvenida', body: '¡Hola! 👋 Bienvenido a {negocio}. Escribe *menú* para ver lo que tenemos y elegir tus productos. Después te pediré tus datos para preparar y confirmar tu pedido.' },
@@ -203,9 +201,12 @@ async function runBot(t, tenant, sessionId, jid, text, customerName, admission =
     else messages.push(prompt);
   }
   let choices = replyChoices(reply);
-  const menuImagePath = requestedMenu && menuMode === 'image' && menuImage
-    ? path.resolve(mediaRoot, tenant, path.basename(menuImage)) : '';
-  const hasMenuImage = Boolean(menuImagePath && await fs.access(menuImagePath).then(() => true, () => false));
+  let menuImageBytes = null;
+  if (requestedMenu && menuMode === 'image' && menuImage) {
+    try { menuImageBytes = await readMedia(menuImage, tenant); }
+    catch (error) { console.warn('[whatsapp-bot] Menu image unavailable', error.code || error.status || 'read_error'); }
+  }
+  const hasMenuImage = Boolean(menuImageBytes);
   if (hasMenuImage) {
     messages = ['Aquí tienes nuestro menú. Escribe el nombre del producto y la cantidad para agregarlo a tu pedido.'];
     choices = (reply.options || []).filter(option => !['menu', 'cart'].includes(option.value)).map(option => ({ label: option.label, value: option.value })).slice(0, 30);
@@ -219,7 +220,7 @@ async function runBot(t, tenant, sessionId, jid, text, customerName, admission =
     const context = await loadOrderContext(t, reply.order.id);
     if (context) messages[0] = renderTemplate(await activePresetBody(t, 'order_confirmation'), context.values);
   }
-  if (hasMenuImage) await sendImageAndRecord(t, sessionId, jid, await fs.readFile(menuImagePath), '');
+  if (hasMenuImage) await sendImageAndRecord(t, sessionId, jid, menuImageBytes, '');
   for (const message of messages.filter(Boolean)) await sendAndRecord(t, sessionId, jid, String(message));
   emitWhatsAppUpdate(tenant, { event: 'message' });
 }
@@ -244,15 +245,12 @@ router.post('/internal/message', async (req, res, next) => {
     const storedBody = kind === 'location' ? `Ubicación compartida: https://www.google.com/maps?q=${geo[1]},${geo[2]}` : String(text || '').slice(0, 10000);
     let mediaPath = '';
     if (kind === 'image' && typeof mediaBase64 === 'string' && mediaBase64.length < 700000 && /^[A-Za-z0-9+/=]+$/.test(mediaBase64)) {
-      const dir = path.join(mediaRoot, registry.tenant_slug);
-      await fs.mkdir(dir, { recursive: true, mode: 0o700 });
-      mediaPath = path.join(dir, `${crypto.randomUUID()}.jpg`);
-      await fs.writeFile(mediaPath, Buffer.from(mediaBase64, 'base64'), { mode: 0o600 });
+      mediaPath = await saveMedia(Buffer.from(mediaBase64, 'base64'), registry.tenant_slug);
     }
     const row = await t.get(`INSERT INTO {s}.whatsapp_bot_messages(session_id,external_message_id,contact_jid_enc,contact_jid_hash,direction,message_type,body,media_path)
       VALUES($1,$2,$3,$4,'inbound',$5,$6,$7) ON CONFLICT(session_id,external_message_id) DO NOTHING RETURNING id`,
     [sessionId, messageId, encrypt(jid), lookupHash(jid), kind, storedBody, mediaPath]);
-    if (!row) { if (mediaPath) await fs.rm(mediaPath, { force: true }); return res.json({ ok: true, duplicate: true }); }
+    if (!row) { if (mediaPath) await deleteMedia(mediaPath, registry.tenant_slug); return res.json({ ok: true, duplicate: true }); }
     res.json({ ok: true });
     enqueue(`${sessionId}:${jid}`, () => runBot(t, registry.tenant_slug, sessionId, jid, inboundText, String(pushName || '').slice(0, 120), admission))
       .catch(error => console.error('[whatsapp-bot][engine]', registry.tenant_slug, error.message));
@@ -317,15 +315,13 @@ router.put('/menu-config', owner, async (req, res, next) => {
 router.post('/menu-image', owner, menuUpload.single('image'), async (req, res, next) => {
   try {
     if (!req.file) return res.status(400).json({ error: 'Selecciona una imagen PNG, JPG o WEBP de hasta 8 MB' });
-    const tenantDir = path.join(mediaRoot, req.tenant.slug);
-    await fs.mkdir(tenantDir, { recursive: true, mode: 0o700 });
-    const filename = `${crypto.randomUUID()}.jpg`;
     const output = await sharp(req.file.buffer, { failOn: 'error' }).rotate().resize({ width: 1600, height: 1600, fit: 'inside', withoutEnlargement: true }).jpeg({ quality: 82, mozjpeg: true }).toBuffer();
     if (output.length > 950000) return res.status(400).json({ error: 'La imagen sigue siendo muy pesada. Usa una imagen más ligera (máximo 950 KB optimizada).' });
     const oldImage = await getSetting(req.tdb, 'whatsapp_bot_menu_image', '');
-    await fs.writeFile(path.join(tenantDir, filename), output, { mode: 0o600 });
-    await setSetting(req.tdb, 'whatsapp_bot_menu_image', filename);
-    if (oldImage && oldImage !== filename) await fs.rm(path.join(tenantDir, path.basename(oldImage)), { force: true });
+    const filename = await saveMedia(output, req.tenant.slug);
+    try { await setSetting(req.tdb, 'whatsapp_bot_menu_image', filename); }
+    catch (error) { await deleteMedia(filename, req.tenant.slug).catch(() => {}); throw error; }
+    if (oldImage && oldImage !== filename) await deleteMedia(oldImage, req.tenant.slug).catch(() => {});
     res.status(201).json({ ok: true, hasMenuImage: true });
   } catch (error) { next(error); }
 });
@@ -333,8 +329,7 @@ router.get('/menu-image', async (req, res, next) => {
   try {
     const filename = await getSetting(req.tdb, 'whatsapp_bot_menu_image', '');
     if (!filename) return res.status(404).end();
-    const imagePath = path.resolve(mediaRoot, req.tenant.slug, path.basename(filename));
-    res.type('jpeg').sendFile(imagePath);
+    res.type('jpeg').send(await readMedia(filename, req.tenant.slug));
   } catch (error) { next(error); }
 });
 router.get('/customer-qr', async (req, res, next) => {
@@ -501,7 +496,7 @@ router.get('/media/:id', async (req, res, next) => {
   try {
     const row = await req.tdb.get('SELECT media_path FROM {s}.whatsapp_bot_messages WHERE id=$1', [Number(req.params.id)]);
     if (!row?.media_path) return res.status(404).end();
-    res.type('jpeg').sendFile(row.media_path);
+    res.type('jpeg').send(await readMedia(row.media_path, req.tenant.slug));
   } catch (error) { next(error); }
 });
 router.renderTemplate = renderTemplate;

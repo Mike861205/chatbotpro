@@ -79,6 +79,7 @@ app.use('/uploads', (req, res, next) => {
   res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
   next();
 }, express.static(config.UPLOADS_DIR, { dotfiles: 'deny', fallthrough: true }));
+app.use('/assets', require('./src/middleware/assets').servePublicAsset);
 
 // Service Worker en raíz para que el scope cubra toda la app (necesario para PWA)
 app.get('/sw.js', (req, res) => {

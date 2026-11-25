@@ -4,6 +4,7 @@ const multer = require('multer');
 const sharp = require('sharp');
 const crypto = require('node:crypto');
 const config = require('../config');
+const objectStorage = require('./objectStorage');
 
 const fsPromises = fs.promises;
 
@@ -67,8 +68,18 @@ async function optimizeUploadedImage(file, { scope, outputPrefix, maxWidth = 160
     .resize({ width: maxWidth, height: maxWidth, fit: 'inside', withoutEnlargement: true })
     .webp({ quality, effort: 4 })
     .toFile(finalPath);
-  await safeUnlink(file.path);
-  return `/uploads/${scope}/${finalName}`;
+  try {
+    if (objectStorage.enabled) {
+      const reference = await objectStorage.put({ scope: String(scope).toLowerCase(), namespace: outputPrefix,
+        body: await fsPromises.readFile(finalPath),
+        extension: 'webp', contentType: 'image/webp', public: true });
+      return reference;
+    }
+    return `/uploads/${scope}/${finalName}`;
+  } finally {
+    await safeUnlink(file.path);
+    if (objectStorage.enabled) await safeUnlink(finalPath);
+  }
 }
 
 async function saveImageBuffer(bytes, { scope, outputPrefix = 'image', maxWidth = 1600, quality = 80 }) {
@@ -82,6 +93,13 @@ async function saveImageBuffer(bytes, { scope, outputPrefix = 'image', maxWidth 
       .resize({ width: maxWidth, height: maxWidth, fit: 'inside', withoutEnlargement: true })
       .webp({ quality, effort: 4 })
       .toFile(finalPath);
+    if (objectStorage.enabled) {
+      try {
+        return await objectStorage.put({ scope: cleanScope, namespace: outputPrefix,
+          body: await fsPromises.readFile(finalPath),
+          extension: 'webp', contentType: 'image/webp', public: true });
+      } finally { await safeUnlink(finalPath); }
+    }
     return `/uploads/${cleanScope}/${finalName}`;
   } catch (error) {
     await safeUnlink(finalPath);
@@ -113,6 +131,14 @@ async function safeUnlink(targetPath) {
 }
 
 async function deleteManagedUpload(publicPath) {
+  if (String(publicPath || '').startsWith(objectStorage.PUBLIC_PREFIX)) {
+    // A cleanup outage must not roll back a successfully saved product/logo
+    // and then remove its new image in the caller's error handler.
+    await objectStorage.deletePublic(publicPath).catch(error => {
+      console.warn('[storage] Asset cleanup deferred', error.code || 'storage_error');
+    });
+    return;
+  }
   const absolutePath = resolveManagedUploadPath(publicPath);
   if (!absolutePath) return;
   await safeUnlink(absolutePath);
@@ -128,6 +154,13 @@ async function deleteManagedUpload(publicPath) {
   }
 }
 
+async function readManagedUpload(publicPath) {
+  if (String(publicPath || '').startsWith(objectStorage.PUBLIC_PREFIX)) return objectStorage.readPublic(publicPath);
+  const absolutePath = resolveManagedUploadPath(publicPath);
+  if (!absolutePath) throw Object.assign(new Error('Archivo no permitido'), { status: 404 });
+  return fsPromises.readFile(absolutePath);
+}
+
 module.exports = {
   createImageUpload,
   deleteManagedUpload,
@@ -135,4 +168,5 @@ module.exports = {
   saveImageBuffer,
   resolveManagedUploadPath,
   safeUnlink,
+  readManagedUpload,
 };

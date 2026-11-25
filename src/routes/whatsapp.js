@@ -1,8 +1,7 @@
 const express = require('express');
 const crypto = require('node:crypto');
-const fs = require('node:fs');
 const sharp = require('sharp');
-const { resolveManagedUploadPath } = require('../utils/uploads');
+const { readManagedUpload } = require('../utils/uploads');
 const { q, tdb } = require('../db');
 const { encrypt, decrypt, lookupHash } = require('../utils/crypto');
 const { requireAuth, requireOwner, requireModules } = require('../middleware/auth');
@@ -156,9 +155,7 @@ async function readTenantLogoBytes(logo) {
     if (!response.ok) throw new Error('logo no disponible');
     return Buffer.from(await response.arrayBuffer());
   }
-  const absolute = resolveManagedUploadPath(`/${logo.replace(/^\/+/, '')}`);
-  if (!absolute) throw new Error('logo fuera de uploads');
-  return fs.promises.readFile(absolute);
+  return readManagedUpload(`/${logo.replace(/^\/+/, '')}`);
 }
 
 function photoError(message, status = 400) { return Object.assign(new Error(message), { status }); }

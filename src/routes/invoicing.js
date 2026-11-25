@@ -24,7 +24,8 @@ const {
   extractFacturamaIdentity,
   createRequestKey,
 } = require('../utils/invoicing');
-const { resolveManagedUploadPath } = require('../utils/uploads');
+const { readManagedUpload } = require('../utils/uploads');
+const { storeBase64Document, readBase64Document } = require('../utils/storedDocuments');
 
 const router = express.Router();
 const facturamaClients = createConfiguredFacturamaClients();
@@ -57,7 +58,7 @@ function facturamaLogoUrl(tenant) {
   const logo = String(tenant?.logo || '').trim();
   if (!logo) return '';
   if (/^https:\/\/[^?#]+\.(?:png|jpe?g)$/i.test(logo)) return logo;
-  if (!logo.startsWith('/uploads/')) return '';
+  if (!logo.startsWith('/uploads/') && !logo.startsWith('/assets/')) return '';
   const slug = String(tenant?.slug || '').trim().toLowerCase();
   if (!/^[a-z0-9-]{3,40}$/.test(slug)) return '';
   let origin;
@@ -455,7 +456,7 @@ async function cancelTypedDocument({ tenantDb,type,id,motive,replacementUuid,act
     `UPDATE {s}.${found.table} SET status=$1,cancellation_motive=$2,replacement_uuid=$3,cancellation_status=$4,
      cancellation_message=$5,cancellation_receipt_enc=$6,cancel_requested_at=COALESCE(cancel_requested_at,now()),
      canceled_at=CASE WHEN $7 THEN now() ELSE canceled_at END,updated_at=now() WHERE id=$8 RETURNING *`,
-    [nextStatus,motive,replacementUuid||null,cancellation.raw,cancellation.message,cancellation.receipt?encrypt(cancellation.receipt):null,cancellation.canceled,invoice.id]
+    [nextStatus,motive,replacementUuid||null,cancellation.raw,cancellation.message,await encryptedFiscalFile(cancellation.receipt, tenantDb, 'xml'),cancellation.canceled,invoice.id]
   );
   if(cancellation.canceled&&type==='global')await tenantDb.run('UPDATE {s}.global_invoice_orders SET active=0 WHERE global_invoice_id=$1',[invoice.id]);
   if(cancellation.canceled&&type==='payment')await tenantDb.run('UPDATE {s}.payment_complement_documents SET active=0 WHERE payment_complement_id=$1',[invoice.id]);
@@ -491,14 +492,28 @@ function cfdiDocumentSummary(row) {
   };
 }
 
-async function loadInvoiceFiles(invoice, profile) {
+// Documents remain recoverable from Facturama if the optional S3 cache fails.
+// No financial transaction or already issued CFDI is retried because of storage.
+async function encryptedFiscalFile(content, tenantDb, format) {
+  if (!content) return null;
+  try { return encrypt(await storeBase64Document(content, tenantDb, format)); }
+  catch (error) { console.warn('[invoicing] File cache unavailable', error.code || 'storage_error'); return null; }
+}
+
+async function cacheDownloadedFile(tenantDb, table, id, format, content) {
+  if (!['invoices', 'direct_invoices', 'global_invoices', 'payment_complements'].includes(table) || !['xml', 'pdf'].includes(format)) throw new Error('Documento no válido');
+  const stored = await encryptedFiscalFile(content, tenantDb, format);
+  if (stored) await tenantDb.run(`UPDATE {s}.${table} SET ${format === 'xml' ? 'xml_enc' : 'pdf_enc'}=$1,updated_at=now() WHERE id=$2`, [stored, id]);
+}
+
+async function loadInvoiceFiles(invoice, profile, tenantDb) {
   const files = {};
   if (!invoice.provider_id) return files;
   const facturama = facturamaFor(invoice.environment || profile);
   await Promise.all(['xml', 'pdf'].map(async (format) => {
     try {
       const result = await facturama.downloadCfdi(invoice.provider_id, format, apiModeFor(invoice, profile));
-      if (result?.Content) files[format] = String(result.Content);
+      if (result?.Content) files[format] = await storeBase64Document(String(result.Content), tenantDb, format);
     } catch (error) {
       console.warn(`[invoicing] No se pudo descargar ${format} de ${invoice.provider_id}:`, error.message);
     }
@@ -680,7 +695,7 @@ async function issueGlobalInvoice({ tenant, tenantDb, orderIds, conceptMode = 't
       } catch {}
     }
     if (!identity.providerId) throw new FacturamaError('Facturama no devolvió el identificador del CFDI global', { status: 502, uncertain: true });
-    const fileData = await loadInvoiceFiles({ provider_id: identity.providerId, environment: profile.environment, api_mode: profile.api_mode }, profile);
+    const fileData = await loadInvoiceFiles({ provider_id: identity.providerId, environment: profile.environment, api_mode: profile.api_mode }, profile, tenantDb);
     const updated = await tenantDb.get(
       `UPDATE {s}.global_invoices SET provider_id=$1,uuid=$2,certificate_number=$3,status='active',provider_response_enc=$4,
        xml_enc=$5,pdf_enc=$6,issued_at=now(),updated_at=now(),error_message='' WHERE id=$7 RETURNING *`,
@@ -854,7 +869,7 @@ async function issueSaleInvoice({ tenant, tenantDb, orderId, receiverInput, requ
       } catch {}
     }
     if (!identity.providerId) throw new FacturamaError('Facturama no devolvió el identificador del CFDI', { status: 502, uncertain: true });
-    const fileData = await loadInvoiceFiles({ provider_id: identity.providerId, environment: profile.environment, api_mode: profile.api_mode }, profile);
+    const fileData = await loadInvoiceFiles({ provider_id: identity.providerId, environment: profile.environment, api_mode: profile.api_mode }, profile, tenantDb);
     const updated = await tenantDb.get(
       `UPDATE {s}.invoices SET provider_id=$1, uuid=$2, certificate_number=$3, status='active',
          provider_response_enc=$4, xml_enc=$5, pdf_enc=$6, issued_at=now(), updated_at=now(), error_message=''
@@ -1016,7 +1031,7 @@ async function issueDirectInvoice({ tenant, tenantDb, input = {}, actor = '' }) 
       } catch {}
     }
     if (!identity.providerId) throw new FacturamaError('Facturama no devolvió el identificador del CFDI', { status: 502, uncertain: true });
-    const fileData = await loadInvoiceFiles({ provider_id: identity.providerId, environment: profile.environment, api_mode: profile.api_mode }, profile);
+    const fileData = await loadInvoiceFiles({ provider_id: identity.providerId, environment: profile.environment, api_mode: profile.api_mode }, profile, tenantDb);
     const updated = await tenantDb.get(
       `UPDATE {s}.direct_invoices SET provider_id=$1,uuid=$2,certificate_number=$3,status='active',provider_response_enc=$4,
        xml_enc=$5,pdf_enc=$6,issued_at=now(),updated_at=now(),error_message='' WHERE id=$7 RETURNING *`,
@@ -1049,7 +1064,7 @@ async function stampStandardDocument({ tenantDb, table, stampType, row, profile,
       } catch {}
     }
     if (!identity.providerId) throw new FacturamaError('Facturama no devolvió el identificador del CFDI', { status: 502, uncertain: true });
-    const files = await loadInvoiceFiles({ provider_id: identity.providerId, environment: profile.environment, api_mode: profile.api_mode }, profile);
+    const files = await loadInvoiceFiles({ provider_id: identity.providerId, environment: profile.environment, api_mode: profile.api_mode }, profile, tenantDb);
     const updated = await tenantDb.get(
       `UPDATE {s}.${table} SET provider_id=$1,uuid=$2,certificate_number=$3,status='active',provider_response_enc=$4,
        xml_enc=$5,pdf_enc=$6,issued_at=now(),updated_at=now(),error_message='' WHERE id=$7 RETURNING *`,
@@ -1313,9 +1328,7 @@ router.get('/public/:slug/logo/:version.png', async (req, res, next) => {
     if (!tenant?.logo) return res.status(404).end();
     const expectedVersion = createHash('sha256').update(String(tenant.logo)).digest('hex').slice(0, 16);
     if (req.params.version !== expectedVersion) return res.status(404).end();
-    const logoPath = resolveManagedUploadPath(tenant.logo);
-    if (!logoPath) return res.status(404).end();
-    const png = await sharp(logoPath, { failOn: 'none' })
+    const png = await sharp(await readManagedUpload(tenant.logo), { failOn: 'none' })
       .rotate()
       .resize({ width: 800, height: 800, fit: 'inside', withoutEnlargement: true })
       .png({ compressionLevel: 9 })
@@ -1484,12 +1497,12 @@ router.get('/public/:slug/direct-invoices/:id/:format', publicLimiter, async (re
     );
     if (!invoice || invoice.status !== 'active') return res.status(404).end();
     const format = req.params.format;
-    let content = decrypt(format === 'xml' ? invoice.xml_enc : invoice.pdf_enc);
+    let content = await readBase64Document(decrypt(format === 'xml' ? invoice.xml_enc : invoice.pdf_enc), tenantDb);
     if (!content && invoice.provider_id) {
       const profile = await getEmitter(tenantDb, invoice.fiscal_emitter_id);
       const downloaded = await facturamaFor(invoice.environment || profile).downloadCfdi(invoice.provider_id, format, apiModeFor(invoice, profile));
       content = String(downloaded?.Content || '');
-      if (content) await tenantDb.run(`UPDATE {s}.direct_invoices SET ${format === 'xml' ? 'xml_enc' : 'pdf_enc'}=$1,updated_at=now() WHERE id=$2`, [encrypt(content), invoice.id]);
+      if (content) await cacheDownloadedFile(tenantDb, "direct_invoices", invoice.id, format, content);
     }
     if (!content) return res.status(404).json({ error: 'El archivo todavía no está disponible' });
     res.type(format === 'xml' ? 'application/xml' : 'application/pdf');
@@ -1560,7 +1573,7 @@ router.get('/public/:slug/invoices/:id/:format', publicLimiter, async (req, res,
     if (!invoice || !invoiceAccessMatches(invoice, token)) return res.status(404).end();
     if (!['xml', 'pdf'].includes(req.params.format)) return res.status(400).json({ error: 'Formato no válido' });
     const format = req.params.format;
-    const content = decrypt(format === 'xml' ? invoice.xml_enc : invoice.pdf_enc);
+    const content = await readBase64Document(decrypt(format === 'xml' ? invoice.xml_enc : invoice.pdf_enc), tenantDb);
     if (!content) return res.status(404).json({ error: 'El archivo todavía no está disponible' });
     res.type(format === 'xml' ? 'application/xml' : 'application/pdf');
     res.setHeader('Content-Disposition', `attachment; filename="CFDI-${invoice.uuid || invoice.folio}.${format}"`);
@@ -2014,12 +2027,12 @@ router.get('/direct-invoices/:id/:format', async (req, res, next) => {
     if (!invoice) return res.status(404).end();
     if (!['xml','pdf'].includes(req.params.format)) return res.status(400).json({ error: 'Formato no válido' });
     const format = req.params.format;
-    let content = decrypt(format === 'xml' ? invoice.xml_enc : invoice.pdf_enc);
+    let content = await readBase64Document(decrypt(format === 'xml' ? invoice.xml_enc : invoice.pdf_enc), req.tdb);
     if (!content && invoice.provider_id) {
       const profile = await getEmitter(req.tdb, invoice.fiscal_emitter_id);
       const result = await facturamaFor(invoice.environment || profile).downloadCfdi(invoice.provider_id, format, apiModeFor(invoice, profile));
       content = String(result?.Content || '');
-      if (content) await req.tdb.run(`UPDATE {s}.direct_invoices SET ${format === 'xml' ? 'xml_enc' : 'pdf_enc'}=$1,updated_at=now() WHERE id=$2`, [encrypt(content),invoice.id]);
+      if (content) await cacheDownloadedFile(req.tdb, "direct_invoices", invoice.id, format, content);
     }
     if (!content) return res.status(404).json({ error: 'El archivo todavía no está disponible' });
     res.type(format === 'xml' ? 'application/xml' : 'application/pdf');
@@ -2034,8 +2047,8 @@ router.get('/payment-complements/:id/:format', async (req, res, next) => {
     if(!invoice)return res.status(404).end();
     if(!['xml','pdf'].includes(req.params.format))return res.status(400).json({error:'Formato no válido'});
     const format=req.params.format;
-    let content=decrypt(format==='xml'?invoice.xml_enc:invoice.pdf_enc);
-    if(!content&&invoice.provider_id){const profile=await getEmitter(req.tdb,invoice.fiscal_emitter_id);const result=await facturamaFor(invoice.environment||profile).downloadCfdi(invoice.provider_id,format,apiModeFor(invoice,profile));content=String(result?.Content||'');if(content)await req.tdb.run(`UPDATE {s}.payment_complements SET ${format==='xml'?'xml_enc':'pdf_enc'}=$1,updated_at=now() WHERE id=$2`,[encrypt(content),invoice.id]);}
+    let content=await readBase64Document(decrypt(format==='xml'?invoice.xml_enc:invoice.pdf_enc),req.tdb);
+    if(!content&&invoice.provider_id){const profile=await getEmitter(req.tdb,invoice.fiscal_emitter_id);const result=await facturamaFor(invoice.environment||profile).downloadCfdi(invoice.provider_id,format,apiModeFor(invoice,profile));content=String(result?.Content||'');if(content)await cacheDownloadedFile(req.tdb, 'payment_complements', invoice.id, format, content);}
     if(!content)return res.status(404).json({error:'El archivo todavía no está disponible'});
     res.type(format==='xml'?'application/xml':'application/pdf');res.setHeader('Content-Disposition',`attachment; filename="REP-${invoice.uuid||invoice.folio}.${format}"`);res.send(Buffer.from(content,'base64'));
   }catch(error){next(error);}
@@ -2136,16 +2149,13 @@ router.get('/global-invoices/:id/:format', async (req, res, next) => {
     if (!invoice) return res.status(404).end();
     if (!['xml', 'pdf'].includes(req.params.format)) return res.status(400).json({ error: 'Formato no válido' });
     const format = req.params.format;
-    let content = decrypt(format === 'xml' ? invoice.xml_enc : invoice.pdf_enc);
+    let content = await readBase64Document(decrypt(format === 'xml' ? invoice.xml_enc : invoice.pdf_enc), req.tdb);
     if (!content && invoice.provider_id) {
       const profile = await getEmitter(req.tdb, invoice.fiscal_emitter_id);
       const facturama = facturamaFor(invoice.environment || profile);
       const result = await facturama.downloadCfdi(invoice.provider_id, format, apiModeFor(invoice, profile));
       content = String(result?.Content || '');
-      if (content) await req.tdb.run(
-        `UPDATE {s}.global_invoices SET ${format === 'xml' ? 'xml_enc' : 'pdf_enc'}=$1,updated_at=now() WHERE id=$2`,
-        [encrypt(content), invoice.id]
-      );
+      if (content) await cacheDownloadedFile(req.tdb, 'global_invoices', invoice.id, format, content);
     }
     if (!content) return res.status(404).json({ error: 'El archivo todavía no está disponible' });
     res.type(format === 'xml' ? 'application/xml' : 'application/pdf');
@@ -2165,7 +2175,7 @@ router.post('/documents/:type/:id/reconcile', requireOwner, async(req,res,next)=
     if(!providerRecord){const listing=await facturama.listIssuedCfdis({folio:invoice.folio,series:invoice.series,rfcIssuer:invoice.issuer_rfc,apiMode:apiModeFor(invoice,profile)});providerRecord=findCfdiInProviderResponse(listing,invoice);}
     if(!providerRecord)return res.status(202).json({ok:true,found:false,message:'Facturama todavía no reporta un CFDI con ese folio. El timbre continúa reservado para evitar duplicados.'});
     const identity=extractFacturamaIdentity(providerRecord);if(!identity.providerId)return res.status(202).json({ok:true,found:false,message:'Se encontró una coincidencia sin identificador confirmado; vuelve a consultar más tarde.'});
-    const files=await loadInvoiceFiles({provider_id:identity.providerId,environment:invoice.environment,api_mode:invoice.api_mode},profile);
+    const files=await loadInvoiceFiles({provider_id:identity.providerId,environment:invoice.environment,api_mode:invoice.api_mode},profile, req.tdb);
     const updated=await req.tdb.get(`UPDATE {s}.${found.table} SET provider_id=$1,uuid=$2,certificate_number=$3,status='active',provider_response_enc=$4,
       xml_enc=COALESCE($5,xml_enc),pdf_enc=COALESCE($6,pdf_enc),issued_at=COALESCE(issued_at,now()),error_message='',updated_at=now() WHERE id=$7 RETURNING *`,
       [identity.providerId,identity.uuid||invoice.uuid||null,identity.certificateNumber||null,encrypt(JSON.stringify(providerRecord)),files.xml?encrypt(files.xml):null,files.pdf?encrypt(files.pdf):null,invoice.id]);
@@ -2204,7 +2214,7 @@ router.post('/invoices/:id/cancel', requireOwner, async (req, res, next) => {
        cancellation_message=$5,cancellation_receipt_enc=$6,cancel_requested_at=COALESCE(cancel_requested_at,now()),
        canceled_at=CASE WHEN $7 THEN now() ELSE canceled_at END,updated_at=now() WHERE id=$8 RETURNING *`,
       [nextStatus, motive, replacementUuid || null, cancellation.raw, cancellation.message,
-        cancellation.receipt ? encrypt(cancellation.receipt) : null, cancellation.canceled, invoice.id]
+        await encryptedFiscalFile(cancellation.receipt, req.tdb, 'xml'), cancellation.canceled, invoice.id]
     );
     await req.tdb.run("INSERT INTO {s}.invoice_events (invoice_id,event_type,detail,actor) VALUES ($1,'cancel_requested',$2,$3)", [invoice.id, cancellation.raw || 'solicitada', req.user.username]);
     res.json({ ok: true, invoice: invoiceSummary(updated) });
@@ -2232,7 +2242,7 @@ router.post('/global-invoices/:id/cancel', requireOwner, async (req, res, next) 
        cancellation_message=$5,cancellation_receipt_enc=$6,cancel_requested_at=COALESCE(cancel_requested_at,now()),
        canceled_at=CASE WHEN $7 THEN now() ELSE canceled_at END,updated_at=now() WHERE id=$8 RETURNING *`,
       [nextStatus,motive,replacementUuid || null,cancellation.raw,cancellation.message,
-        cancellation.receipt ? encrypt(cancellation.receipt) : null,cancellation.canceled,invoice.id]
+        await encryptedFiscalFile(cancellation.receipt, req.tdb, 'xml'),cancellation.canceled,invoice.id]
     );
     if (cancellation.canceled) await req.tdb.run('UPDATE {s}.global_invoice_orders SET active=0 WHERE global_invoice_id=$1', [invoice.id]);
     await req.tdb.run("INSERT INTO {s}.global_invoice_events (global_invoice_id,event_type,detail,actor) VALUES ($1,'cancel_requested',$2,$3)", [invoice.id,cancellation.raw || 'solicitada',req.user.username]);
@@ -2259,7 +2269,7 @@ router.post('/documents/:type/:id/refresh-cancellation', requireOwner, async (re
        cancellation_message=CASE WHEN $3<>'' THEN $3 ELSE cancellation_message END,
        cancellation_receipt_enc=CASE WHEN $4 IS NOT NULL THEN $4 ELSE cancellation_receipt_enc END,
        canceled_at=CASE WHEN $5 THEN COALESCE(canceled_at,now()) ELSE canceled_at END,updated_at=now() WHERE id=$6 RETURNING *`,
-      [nextStatus,cancellation.raw,cancellation.message,cancellation.receipt ? encrypt(cancellation.receipt) : null,cancellation.canceled,invoice.id]
+      [nextStatus,cancellation.raw,cancellation.message,await encryptedFiscalFile(cancellation.receipt, req.tdb, 'xml'),cancellation.canceled,invoice.id]
     );
     if (req.params.type === 'global' && cancellation.canceled) await req.tdb.run('UPDATE {s}.global_invoice_orders SET active=0 WHERE global_invoice_id=$1', [invoice.id]);
     if (req.params.type === 'payment' && cancellation.canceled) await req.tdb.run('UPDATE {s}.payment_complement_documents SET active=0 WHERE payment_complement_id=$1', [invoice.id]);
@@ -2276,7 +2286,7 @@ router.get('/documents/:type/:id/cancellation-receipt', async (req, res, next) =
     const found = await loadTypedDocument(req.tdb, req.params.type, Number(req.params.id));
     if (!found) return res.status(400).json({ error: 'Tipo de CFDI no válido' });
     const invoice = found.row;
-    let content = decrypt(invoice.cancellation_receipt_enc);
+    let content = await readBase64Document(decrypt(invoice.cancellation_receipt_enc), req.tdb);
     let format = 'xml';
     if (!content && invoice.provider_id && invoice.status === 'canceled') {
       const profile = await getEmitter(req.tdb, invoice.fiscal_emitter_id);
@@ -2297,13 +2307,13 @@ router.get('/invoices/:id/:format', async (req, res, next) => {
     if (!invoice) return res.status(404).end();
     if (!['xml', 'pdf'].includes(req.params.format)) return res.status(400).json({ error: 'Formato no válido' });
     const format = req.params.format;
-    let content = decrypt(format === 'xml' ? invoice.xml_enc : invoice.pdf_enc);
+    let content = await readBase64Document(decrypt(format === 'xml' ? invoice.xml_enc : invoice.pdf_enc), req.tdb);
     if (!content && invoice.provider_id) {
       const profile = await getEmitter(req.tdb, invoice.fiscal_emitter_id);
       const facturama = facturamaFor(invoice.environment || profile);
       const result = await facturama.downloadCfdi(invoice.provider_id, format, apiModeFor(invoice, profile));
       content = String(result?.Content || '');
-      if (content) await req.tdb.run(`UPDATE {s}.invoices SET ${format === 'xml' ? 'xml_enc' : 'pdf_enc'}=$1,updated_at=now() WHERE id=$2`, [encrypt(content), invoice.id]);
+      if (content) await cacheDownloadedFile(req.tdb, "invoices", invoice.id, format, content);
     }
     if (!content) return res.status(404).json({ error: 'El archivo todavía no está disponible' });
     res.type(format === 'xml' ? 'application/xml' : 'application/pdf');

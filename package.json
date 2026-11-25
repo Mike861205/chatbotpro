@@ -14,6 +14,8 @@
     "cleanup:uploads": "node scripts/cleanup-uploads.js"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "3.1178.0",
+    "@aws-sdk/s3-request-presigner": "3.1178.0",
     "@napi-rs/canvas": "0.1.100",
     "@whiskeysockets/baileys": "^7.0.0-rc14",
     "bcryptjs": "^2.4.3",

@@ -1,0 +1,58 @@
+NEON OBJECT STORAGE - NUEVOS ARCHIVOS
+
+Activacion por entorno:
+S3_STORAGE_ENABLED=true
+S3_BUCKET=assets
+AWS_ENDPOINT_URL_S3=https://<branch>.storage.<region>.neon.tech
+AWS_REGION=us-east-1
+AWS_ACCESS_KEY_ID y AWS_SECRET_ACCESS_KEY solo en .env.production ignorado
+por Git, con permisos 600 en el servidor. Nunca en public/ ni JavaScript
+del navegador. forcePathStyle y checksums WHEN_REQUIRED para Neon.
+
+El bucket assets es privado. Nuevos productos/logos/fotos del checador
+guardan /assets/<scope>/<tipo>/<nombre-aleatorio>. La ruta firma un GET
+de public/<scope>/... durante una hora y redirige; el navegador descarga
+desde S3 sin consultar PostgreSQL. El redirect se cachea solo cinco minutos.
+La base de datos nunca guarda una URL firmada que pueda caducar.
+
+WhatsApp y SAR usan private/<tenant>/... con referencias versionadas.
+Las rutas originales conservan sus controles de acceso. CFDI PDF/XML y
+acuses usan private/<schema>/invoicing/...; su referencia se cifra en las
+columnas existentes. SAR guarda una referencia pequena en BYTEA en lugar
+de bytes PDF. No se cambia el esquema ni se ejecuta una migracion masiva.
+
+Los archivos previos /uploads/, medios locales de WhatsApp y PDF/XML
+guardados en PostgreSQL conservan sus lectores. No hay backfill ni copia
+de historicos. Reemplazar/eliminar una imagen sigue su flujo habitual.
+La limpieza local de prospectos no lista ni elimina objetos de S3.
+Ante una escritura fallida de BD puede quedar un objeto sin referencia;
+se conserva antes que arriesgar borrar un documento con commit incierto.
+
+Las imagenes siguen sus limites y compresion actuales. Los temporales de
+procesamiento se eliminan despues de subir. No se añaden SELECT/HEAD S3
+a cada producto del POS. Un fallo de limpieza remota no elimina la nueva
+imagen ya asociada a un producto. Si S3 falla al cargar un adjunto nuevo,
+no se guarda una referencia inexistente ni se usa disco como fallback.
+
+Facturama sigue siendo el origen recuperable de CFDI: si falla la copia
+a S3, se conserva el resultado del timbrado y se omite esa copia para que
+una falla de almacenamiento no cause reintentos del documento fiscal.
+Los CSD se envian a Facturama como antes; no se crea una copia adicional
+de certificados/llaves. Archivos de programa, sesiones Baileys, logs y
+exportaciones generadas al vuelo no son cargas permanentes de contenido.
+
+El helper objectStorage.put acepta buffers o streams y MIME, incluidos
+video/mp4 y archivos binarios. Las rutas existentes de carga siguen
+aceptando los formatos que ya soportaban; esto no crea una nueva pantalla
+de subida de videos ni cambia el tratamiento de videos en WhatsApp.
+
+Verificacion sin operaciones comerciales (objetos temporales propios):
+node scripts/verify-object-storage.js --env .env.production --url http://127.0.0.1:3003 --output data/diagnostics/s3-production-verification.json
+Comprueba subida, firma GET, descarga, bucket privado, aislamiento de
+tenant, rangos de bytes, imagen optimizada y eliminacion de sus objetos.
+
+Rollback: deshabilitar nuevas escrituras con S3_STORAGE_ENABLED=false y
+reiniciar solo la app. Conservar codigo y credenciales para leer objetos
+ya guardados. Volver al codigo anterior sin estos lectores impediria
+abrir archivos creados despues de activar S3. No eliminar el bucket ni
+restaurar referencias antiguas para realizar un rollback de funcionalidad.

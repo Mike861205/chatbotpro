@@ -4,17 +4,23 @@ const { rateLimit } = require('express-rate-limit');
 const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
 
 function securityHeaders() {
+  let storageOrigin = [];
+  try {
+    const endpoint = new URL(process.env.AWS_ENDPOINT_URL_S3 || '');
+    if (endpoint.protocol === 'https:') storageOrigin = [endpoint.origin];
+  } catch {}
   return helmet({
     crossOriginEmbedderPolicy: false,
     contentSecurityPolicy: {
       directives: {
         defaultSrc: ["'self'"],
         baseUri: ["'self'"],
-        connectSrc: ["'self'", 'ws:', 'wss:', 'https://api.qrserver.com'],
+        connectSrc: ["'self'", 'ws:', 'wss:', 'https://api.qrserver.com', ...storageOrigin],
         fontSrc: ["'self'", 'data:', 'https://fonts.gstatic.com', 'https://cdn.jsdelivr.net'],
         formAction: ["'self'"],
         frameAncestors: ["'self'"],
-        imgSrc: ["'self'", 'data:', 'blob:', 'https://*.tile.openstreetmap.org', 'https://api.qrserver.com'],
+        imgSrc: ["'self'", 'data:', 'blob:', 'https://*.tile.openstreetmap.org', 'https://api.qrserver.com', ...storageOrigin],
+        mediaSrc: ["'self'", 'blob:', ...storageOrigin],
         manifestSrc: ["'self'"],
         objectSrc: ["'none'"],
         scriptSrc: ["'self'", "'unsafe-inline'", 'https://cdn.jsdelivr.net', 'https://unpkg.com'],
