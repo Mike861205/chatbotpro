@@ -53,6 +53,8 @@ function createObjectStorage(env = process.env, suppliedClient) {
   async function send(Command, input) {
     try { return await getClient().send(new Command({ Bucket: bucket, ...input })); }
     catch (error) {
+      if (error.name === 'NotModified' || error.$metadata?.httpStatusCode === 304) return { $metadata: { httpStatusCode: 304 } };
+      if (error.name === 'InvalidRange' || error.$metadata?.httpStatusCode === 416) throw Object.assign(new Error('Rango no válido'), { status: 416 });
       const missing = error.name === 'NoSuchKey' || error.$metadata?.httpStatusCode === 404;
       throw Object.assign(new Error(missing ? 'Archivo no encontrado' : 'Almacenamiento temporalmente no disponible. Intenta de nuevo.'), {
         status: missing ? 404 : 503, code: missing ? 'ASSET_NOT_FOUND' : 'ASSET_STORAGE_UNAVAILABLE',
@@ -81,6 +83,11 @@ function createObjectStorage(env = process.env, suppliedClient) {
     const result = await send(GetObjectCommand, { Key: key });
     return Buffer.from(await result.Body.transformToByteArray());
   }
+  async function openPublic(reference, { range, ifNoneMatch } = {}) {
+    const key = publicKey(reference);
+    if (!key) throw new Error('Referencia de archivo no válida');
+    return send(GetObjectCommand, { Key: key, ...(range ? { Range: range } : {}), ...(ifNoneMatch ? { IfNoneMatch: ifNoneMatch } : {}) });
+  }
   async function readPrivate(reference, scope) {
     const key = privateKey(reference, scope);
     if (!key) throw new Error('Referencia de archivo no válida');
@@ -101,7 +108,7 @@ function createObjectStorage(env = process.env, suppliedClient) {
     if (!key) throw new Error('Referencia de archivo no válida');
     return getSignedUrl(getClient(), new GetObjectCommand({ Bucket: bucket, Key: key }), { expiresIn });
   }
-  return { enabled, put, readPublic, readPrivate, deletePublic, deletePrivate, signedPublicUrl,
+  return { enabled, put, readPublic, openPublic, readPrivate, deletePublic, deletePrivate, signedPublicUrl,
     destroy: () => client?.destroy?.() };
 }
 

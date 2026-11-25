@@ -10,6 +10,7 @@ const config = require('../src/config');
 const uploads = require('../src/utils/uploads');
 const documents = require('../src/utils/storedDocuments');
 const media = require('../src/utils/whatsappMedia');
+const { Readable } = require('node:stream');
 
 function mockStore() {
   const objects = new Map();
@@ -27,7 +28,14 @@ function mockStore() {
     }
     if (command.constructor.name === 'GetObjectCommand') {
       if (!objects.has(Key)) throw Object.assign(new Error('missing'), { name: 'NoSuchKey' });
-      return { Body: { transformToByteArray: async () => objects.get(Key) } };
+      if (command.input.IfNoneMatch === '"fixture"') return { $metadata: { httpStatusCode: 304 } };
+      const all = objects.get(Key);
+      const partial = command.input.Range ? all.subarray(0, 2) : all;
+      const Body = Readable.from([partial]);
+      Body.transformToByteArray = async () => partial;
+      return { Body, ContentType: 'image/webp', ContentLength: partial.length, ETag: '"fixture"',
+        ...(command.input.Range ? { ContentRange: `bytes 0-1/${all.length}` } : {}),
+        $metadata: { httpStatusCode: command.input.Range ? 206 : 200 } };
     }
     if (command.constructor.name === 'DeleteObjectCommand') { objects.delete(Key); return {}; }
     throw new Error('unexpected operation');
@@ -38,7 +46,7 @@ function mockStore() {
 function useMock(t) {
   const mock = mockStore();
   const before = {};
-  for (const key of ['enabled', 'put', 'readPublic', 'readPrivate', 'deletePublic', 'deletePrivate', 'signedPublicUrl']) {
+  for (const key of ['enabled', 'put', 'readPublic', 'openPublic', 'readPrivate', 'deletePublic', 'deletePrivate', 'signedPublicUrl']) {
     before[key] = storage[key]; storage[key] = mock[key];
   }
   t.after(() => Object.assign(storage, before));
@@ -151,27 +159,37 @@ test('medios de WhatsApp conservan lectura local y protegen menú y adjuntos de 
   assert.deepEqual(await fs.readdir(directory), ['menu.jpg']);
 });
 
-test('URL pública estable redirige con firma renovada; CSP permite solo el endpoint configurado', async t => {
+test('URL pública conserva dominio, caché y rangos; funciona con la CSP de pestañas anteriores', async t => {
   useMock(t);
-  storage.signedPublicUrl = async reference => `https://example.storage.neon.tech/assets/${storage.publicKey(reference)}?signature=temporary`;
+  const reference = await storage.put({ scope: 'tenant-a', namespace: 'prod', body: Buffer.from('fixture'), extension: 'webp', public: true });
   const oldEndpoint = process.env.AWS_ENDPOINT_URL_S3;
   process.env.AWS_ENDPOINT_URL_S3 = 'https://example.storage.neon.tech';
   t.after(() => { if (oldEndpoint === undefined) delete process.env.AWS_ENDPOINT_URL_S3; else process.env.AWS_ENDPOINT_URL_S3 = oldEndpoint; });
   const app = express();
   app.use(require('../src/middleware/security').securityHeaders());
   app.use('/assets', require('../src/middleware/assets').servePublicAsset);
+  app.use((error, _req, res, _next) => res.status(error.status || 500).end());
   const server = app.listen(0, '127.0.0.1');
   await new Promise(resolve => server.once('listening', resolve));
   t.after(() => new Promise(resolve => server.close(resolve)));
   const base = `http://127.0.0.1:${server.address().port}`;
-  const response = await fetch(`${base}/assets/tenant-a/prod/image.webp`, { redirect: 'manual' });
-  assert.equal(response.status, 302);
-  assert.match(response.headers.get('location'), /assets\/public\/tenant-a\/prod\/image.webp/);
-  assert.match(response.headers.get('cache-control'), /max-age=300/);
+  const response = await fetch(`${base}${reference}`, { redirect: 'manual' });
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get('location'), null);
+  assert.equal(await response.text(), 'fixture');
+  assert.match(response.headers.get('cache-control'), /immutable/);
   assert.match(response.headers.get('content-security-policy'), /img-src[^;]+https:\/\/example.storage.neon.tech/);
   assert.match(response.headers.get('content-security-policy'), /media-src[^;]+https:\/\/example.storage.neon.tech/);
+  const partial = await fetch(`${base}${reference}`, { headers: { Range: 'bytes=0-1' } });
+  assert.equal(partial.status, 206);
+  assert.equal(await partial.text(), 'fi');
+  assert.equal(partial.headers.get('content-range'), 'bytes 0-1/7');
+  const cached = await fetch(`${base}${reference}`, { headers: { 'If-None-Match': '"fixture"' } });
+  assert.equal(cached.status, 304);
+  assert.equal((await fetch(`${base}${reference}`, { method: 'HEAD' })).headers.get('content-length'), '7');
   assert.equal((await fetch(`${base}/assets/a/%252e%252e/file`)).status, 404);
   assert.equal((await fetch(`${base}/assets/a/file`, { method: 'POST' })).status, 405);
+  assert.equal((await fetch(`${base}/assets/a/missing.webp`, { signal: AbortSignal.timeout(1000) })).status, 404);
 });
 
 function responseCapture() {

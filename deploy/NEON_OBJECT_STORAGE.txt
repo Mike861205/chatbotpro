@@ -10,10 +10,12 @@ por Git, con permisos 600 en el servidor. Nunca en public/ ni JavaScript
 del navegador. forcePathStyle y checksums WHEN_REQUIRED para Neon.
 
 El bucket assets es privado. Nuevos productos/logos/fotos del checador
-guardan /assets/<scope>/<tipo>/<nombre-aleatorio>. La ruta firma un GET
-de public/<scope>/... durante una hora y redirige; el navegador descarga
-desde S3 sin consultar PostgreSQL. El redirect se cachea solo cinco minutos.
-La base de datos nunca guarda una URL firmada que pueda caducar.
+guardan /assets/<scope>/<tipo>/<nombre-aleatorio>. La ruta entrega streams
+de public/<scope>/... en el mismo dominio, sin cargar todo el archivo en
+memoria ni consultar PostgreSQL. Asi funcionan tambien las pestanas con
+la politica CSP anterior al despliegue. Incluye cache inmutable, ETag,
+HEAD y rangos de bytes. La base de datos nunca guarda una URL que caduque.
+El helper tambien genera URLs firmadas por una hora para accesos directos.
 
 WhatsApp y SAR usan private/<tenant>/... con referencias versionadas.
 Las rutas originales conservan sus controles de acceso. CFDI PDF/XML y

@@ -34,10 +34,11 @@ async function main() {
     const anonymous = await fetch(url.split('?')[0], { signal: AbortSignal.timeout(15000) });
     check('bucket stays private', anonymous.status === 403 || anonymous.status === 401); await anonymous.arrayBuffer();
     if (baseUrl) {
-      const redirect = await fetch(`${baseUrl}${image}`, { redirect: 'manual', signal: AbortSignal.timeout(15000) });
-      check('stable application URL redirects', redirect.status === 302);
-      const result = await fetch(new URL(redirect.headers.get('location'), baseUrl), { signal: AbortSignal.timeout(15000) });
-      check('redirect downloads real object', result.status === 200 && result.headers.get('content-type') === 'image/webp'); await result.arrayBuffer();
+      const result = await fetch(`${baseUrl}${image}`, { redirect: 'manual', signal: AbortSignal.timeout(15000) });
+      check('stable same-origin URL downloads object', result.status === 200 && result.headers.get('content-type') === 'image/webp');
+      await result.arrayBuffer();
+      const unchanged = await fetch(`${baseUrl}${image}`, { headers: { 'If-None-Match': result.headers.get('etag') }, signal: AbortSignal.timeout(15000) });
+      check('conditional browser cache', unchanged.status === 304); await unchanged.arrayBuffer();
       const home = await fetch(`${baseUrl}/`, { signal: AbortSignal.timeout(15000) });
       check('CSP allows storage endpoint', (home.headers.get('content-security-policy') || '').includes(new URL(process.env.AWS_ENDPOINT_URL_S3).origin)); await home.arrayBuffer();
     }
@@ -55,6 +56,12 @@ async function main() {
     created.push({ public: true, ref: video });
     const partial = await fetch(await storage.signedPublicUrl(video), { headers: { Range: 'bytes=0-127' }, signal: AbortSignal.timeout(15000) });
     check('media byte ranges', partial.status === 206 && (await partial.arrayBuffer()).byteLength === 128);
+    if (baseUrl) {
+      const range = await fetch(`${baseUrl}${video}`, { headers: { Range: 'bytes=0-127' }, signal: AbortSignal.timeout(15000) });
+      check('same-origin media ranges', range.status === 206 && (await range.arrayBuffer()).byteLength === 128);
+      const head = await fetch(`${baseUrl}${video}`, { method: 'HEAD', signal: AbortSignal.timeout(15000) });
+      check('same-origin HEAD metadata', head.status === 200 && Number(head.headers.get('content-length')) === 4096);
+    }
     check('no permanent local image', (await fs.promises.readdir(path.join(require('../src/config').UPLOADS_DIR, scope))).length === 0);
   } finally {
     for (const item of created) {
