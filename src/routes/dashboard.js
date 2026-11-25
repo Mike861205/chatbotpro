@@ -1,6 +1,7 @@
 const express = require('express');
 const { requireAuth, requireOwner, requireModules } = require('../middleware/auth');
 const { branchCapacity } = require('../utils/branchLimit');
+const { localDayRange } = require('../utils/queryDates');
 
 const router = express.Router();
 router.use(requireAuth);
@@ -16,7 +17,7 @@ const PERIOD_META = {
     ordersLabel: 'Pedidos de hoy',
     chartTitle: 'Ventas por hora',
     topTitle: 'Más vendidos de hoy',
-    whereSql: `(COALESCE(credit_paid_at, created_at) AT TIME ZONE '${TZ}')::date = (now() AT TIME ZONE '${TZ}')::date`,
+    whereSql: localDayRange('COALESCE(credit_paid_at, created_at)', `'${TZ}'`),
     seriesSql: `SELECT bucket,
                        COALESCE(SUM(o.total),0)::float AS sales,
                        COUNT(o.id)::int AS count
@@ -27,6 +28,8 @@ const PERIOD_META = {
                      ) bucket
                 LEFT JOIN {s}.orders o
                   ON date_trunc('hour', COALESCE(o.credit_paid_at, o.created_at) AT TIME ZONE '${TZ}') = bucket
+                 AND COALESCE(o.credit_paid_at, o.created_at) >= (date_trunc('day', now() AT TIME ZONE '${TZ}') AT TIME ZONE '${TZ}')
+                 AND COALESCE(o.credit_paid_at, o.created_at) < ((date_trunc('day', now() AT TIME ZONE '${TZ}') + interval '1 day') AT TIME ZONE '${TZ}')
                  AND o.status != 'cancelado'
                  AND COALESCE(o.payment_status, 'paid') = 'paid'
                 GROUP BY bucket
@@ -38,8 +41,8 @@ const PERIOD_META = {
     ordersLabel: 'Pedidos de la semana',
     chartTitle: 'Ventas de la semana',
     topTitle: 'Más vendidos de la semana',
-    whereSql: `(COALESCE(credit_paid_at, created_at) AT TIME ZONE '${TZ}') >= date_trunc('week', now() AT TIME ZONE '${TZ}')
-      AND (COALESCE(credit_paid_at, created_at) AT TIME ZONE '${TZ}') < date_trunc('week', now() AT TIME ZONE '${TZ}') + interval '1 week'`,
+    whereSql: `COALESCE(credit_paid_at, created_at) >= (date_trunc('week', now() AT TIME ZONE '${TZ}') AT TIME ZONE '${TZ}')
+      AND COALESCE(credit_paid_at, created_at) < ((date_trunc('week', now() AT TIME ZONE '${TZ}') + interval '1 week') AT TIME ZONE '${TZ}')`,
     seriesSql: `SELECT bucket,
                        COALESCE(SUM(o.total),0)::float AS sales,
                        COUNT(o.id)::int AS count
@@ -50,6 +53,9 @@ const PERIOD_META = {
                      ) bucket
                 LEFT JOIN {s}.orders o
                   ON (COALESCE(o.credit_paid_at, o.created_at) AT TIME ZONE '${TZ}')::date = bucket::date
+
+                 AND COALESCE(o.credit_paid_at, o.created_at) >= (date_trunc('week', now() AT TIME ZONE '${TZ}') AT TIME ZONE '${TZ}')
+                 AND COALESCE(o.credit_paid_at, o.created_at) < ((date_trunc('week', now() AT TIME ZONE '${TZ}') + interval '1 week') AT TIME ZONE '${TZ}')
                  AND o.status != 'cancelado'
                  AND COALESCE(o.payment_status, 'paid') = 'paid'
                 GROUP BY bucket
@@ -61,8 +67,8 @@ const PERIOD_META = {
     ordersLabel: 'Pedidos del mes',
     chartTitle: 'Ventas del mes',
     topTitle: 'Más vendidos del mes',
-    whereSql: `(COALESCE(credit_paid_at, created_at) AT TIME ZONE '${TZ}') >= date_trunc('month', now() AT TIME ZONE '${TZ}')
-      AND (COALESCE(credit_paid_at, created_at) AT TIME ZONE '${TZ}') < date_trunc('month', now() AT TIME ZONE '${TZ}') + interval '1 month'`,
+    whereSql: `COALESCE(credit_paid_at, created_at) >= (date_trunc('month', now() AT TIME ZONE '${TZ}') AT TIME ZONE '${TZ}')
+      AND COALESCE(credit_paid_at, created_at) < ((date_trunc('month', now() AT TIME ZONE '${TZ}') + interval '1 month') AT TIME ZONE '${TZ}')`,
     seriesSql: `SELECT bucket,
                        COALESCE(SUM(o.total),0)::float AS sales,
                        COUNT(o.id)::int AS count
@@ -73,6 +79,9 @@ const PERIOD_META = {
                      ) bucket
                 LEFT JOIN {s}.orders o
                   ON (COALESCE(o.credit_paid_at, o.created_at) AT TIME ZONE '${TZ}')::date = bucket::date
+
+                 AND COALESCE(o.credit_paid_at, o.created_at) >= (date_trunc('month', now() AT TIME ZONE '${TZ}') AT TIME ZONE '${TZ}')
+                 AND COALESCE(o.credit_paid_at, o.created_at) < ((date_trunc('month', now() AT TIME ZONE '${TZ}') + interval '1 month') AT TIME ZONE '${TZ}')
                  AND o.status != 'cancelado'
                  AND COALESCE(o.payment_status, 'paid') = 'paid'
                 GROUP BY bucket
@@ -84,8 +93,8 @@ const PERIOD_META = {
     ordersLabel: 'Pedidos del año',
     chartTitle: 'Ventas del año',
     topTitle: 'Más vendidos del año',
-    whereSql: `(COALESCE(credit_paid_at, created_at) AT TIME ZONE '${TZ}') >= date_trunc('year', now() AT TIME ZONE '${TZ}')
-      AND (COALESCE(credit_paid_at, created_at) AT TIME ZONE '${TZ}') < date_trunc('year', now() AT TIME ZONE '${TZ}') + interval '1 year'`,
+    whereSql: `COALESCE(credit_paid_at, created_at) >= (date_trunc('year', now() AT TIME ZONE '${TZ}') AT TIME ZONE '${TZ}')
+      AND COALESCE(credit_paid_at, created_at) < ((date_trunc('year', now() AT TIME ZONE '${TZ}') + interval '1 year') AT TIME ZONE '${TZ}')`,
     seriesSql: `SELECT bucket,
                        COALESCE(SUM(o.total),0)::float AS sales,
                        COUNT(o.id)::int AS count
@@ -96,6 +105,8 @@ const PERIOD_META = {
                      ) bucket
                 LEFT JOIN {s}.orders o
                   ON date_trunc('month', COALESCE(o.credit_paid_at, o.created_at) AT TIME ZONE '${TZ}') = bucket
+                 AND COALESCE(o.credit_paid_at, o.created_at) >= (date_trunc('year', now() AT TIME ZONE '${TZ}') AT TIME ZONE '${TZ}')
+                 AND COALESCE(o.credit_paid_at, o.created_at) < ((date_trunc('year', now() AT TIME ZONE '${TZ}') + interval '1 year') AT TIME ZONE '${TZ}')
                  AND o.status != 'cancelado'
                  AND COALESCE(o.payment_status, 'paid') = 'paid'
                 GROUP BY bucket
@@ -130,17 +141,18 @@ router.get('/stats', async (req, res, next) => {
       seriesSql: template.seriesSql.replaceAll(TZ, req.timezone),
     };
 
-    const today = await t.get(
-      `SELECT COUNT(*)::int AS count, COALESCE(SUM(total),0)::float AS sales
-       FROM {s}.orders
-       WHERE ${meta.whereSql}
-         AND status != 'cancelado'
-         AND COALESCE(payment_status, 'paid') = 'paid'`
+    const periodRows = await t.all(
+      `SELECT status, COUNT(*)::int AS c,
+              COUNT(*) FILTER (WHERE status != 'cancelado' AND COALESCE(payment_status, 'paid') = 'paid')::int AS paid_count,
+              COALESCE(SUM(SUM(total) FILTER (WHERE status != 'cancelado' AND COALESCE(payment_status, 'paid') = 'paid')) OVER (), 0)::float AS paid_total
+       FROM {s}.orders WHERE ${meta.whereSql} GROUP BY status`
     );
+    const today = { count: periodRows.reduce((sum, row) => sum + row.paid_count, 0), sales: periodRows[0]?.paid_total || 0 };
+    const byStatus = periodRows.map(({ status, c }) => ({ status, c }));
+    const pending = byStatus.find((row) => row.status === 'pendiente')?.c || 0;
     const totals = await t.get(
       `SELECT COUNT(*)::int AS count, COALESCE(SUM(total),0)::float AS sales FROM {s}.orders WHERE status != 'cancelado' AND COALESCE(payment_status, 'paid') = 'paid'`
     );
-    const pending = (await t.get(`SELECT COUNT(*)::int AS c FROM {s}.orders WHERE status = 'pendiente' AND ${meta.whereSql}`)).c;
     const productCount = (await t.get('SELECT COUNT(*)::int AS c FROM {s}.products WHERE active = 1')).c;
     const customerCount = (await t.get('SELECT COUNT(*)::int AS c FROM {s}.customers')).c;
     const branchCounts = await t.get(
@@ -167,7 +179,6 @@ router.get('/stats', async (req, res, next) => {
       .slice(0, 5)
       .map(([name, qty]) => ({ name, qty }));
 
-    const byStatus = await t.all(`SELECT status, COUNT(*)::int AS c FROM {s}.orders WHERE ${meta.whereSql} GROUP BY status`);
 
     res.json({
       today,

@@ -19,7 +19,7 @@ const kds = read('src/routes/kds.js');
 test('comer en sucursal queda habilitado por defecto solo para restaurantes', () => {
   assert.match(db, /dine_in_enabled: '1'/);
   assert.match(settings, /'dine_in_enabled'/);
-  assert.match(chatbot, /getSetting\(t, 'dine_in_enabled', '1'\)/);
+  assert.match(chatbot, /dine_in_enabled: '1'/);
   const flags = { deliveryEnabled: true, pickupEnabled: true, dineInEnabled: true };
   assert.ok(defaultReceivingModes('restaurant', getLabels('restaurant'), flags).some((mode) => mode.id === 'comer_sucursal'));
   assert.ok(!defaultReceivingModes('travel_agency', getLabels('travel_agency'), flags).some((mode) => mode.id === 'comer_sucursal'));

@@ -1368,10 +1368,13 @@ router.get('/', async (req, res, next) => {
     const conversations = await req.tdb.all(
       `SELECT c.id,c.external_id,c.status,c.bot_enabled,c.last_message_at,c.updated_at,
               c.customer_phone_enc,c.customer_name_enc,
-              (SELECT body FROM {s}.whatsapp_messages m WHERE m.conversation_id=c.id ORDER BY m.created_at DESC, m.id DESC LIMIT 1) AS last_message,
-              (SELECT message_type FROM {s}.whatsapp_messages m WHERE m.conversation_id=c.id ORDER BY m.created_at DESC, m.id DESC LIMIT 1) AS last_message_type,
-              (SELECT direction FROM {s}.whatsapp_messages m WHERE m.conversation_id=c.id ORDER BY m.created_at DESC, m.id DESC LIMIT 1) AS last_direction
+              latest.body AS last_message, latest.message_type AS last_message_type,
+              latest.direction AS last_direction
        FROM {s}.whatsapp_conversations c
+       LEFT JOIN LATERAL (
+         SELECT body, message_type, direction FROM {s}.whatsapp_messages m
+         WHERE m.conversation_id=c.id ORDER BY m.created_at DESC, m.id DESC LIMIT 1
+       ) latest ON TRUE
        ORDER BY COALESCE(c.last_message_at,c.updated_at) DESC LIMIT 100`
     );
     res.json({

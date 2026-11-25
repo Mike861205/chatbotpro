@@ -70,7 +70,8 @@ test('pedidos, POS, comandas y KDS usan la zona horaria del tenant', () => {
   assert.match(orders, /AT TIME ZONE '\$\{req\.timezone\}'/);
   assert.match(pos, /tenantTimeZone\(t\)/);
   assert.match(pos, /timeZone: req\.timezone/);
-  assert.match(kds, /AT TIME ZONE '\$\{tenant\.timezone\}'/);
+  assert.match(kds, /localDayRange\('COALESCE\(o\.scheduled_for, o\.created_at\)', '\$4::text'\)/);
+  assert.match(kds, /isDeliveryArea, tenant\.timezone/);
   assert.match(kdsScript, /payload\?\.tenant\?\.timezone/);
   assert.match(appScript, /function fmtBusinessDateTime/);
   assert.match(appScript, /createdAt: fmtBusinessDateTime\(\)/);

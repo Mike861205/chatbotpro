@@ -1,0 +1,81 @@
+OPTIMIZACION DE NEON - 25/11/2026
+
+Alcance
+Lecturas agrupadas de configuracion y clientes; filtros por rangos locales;
+indices de pedidos, cortes y KDS; KDS limitado a pedidos relevantes;
+lecturas independientes del POS en paralelo con el mismo pool maximo de 5;
+ranking de ventas reutilizado solo mientras la visibilidad de PostgreSQL
+sea identica; migraciones por version para omitir tenants sin cambios;
+pausa del polling QR en pestanas ocultas; recuperacion de eventos KDS
+durante una lectura en curso.
+
+Se conservan calculos de dinero, inventario, permisos, sucursales, zonas
+horarias, pedidos programados y respaldos de sincronizacion. No se cambian
+limites de compute, suspension de produccion ni estados de los prospectos.
+
+Indices existentes
+Se crearon concurrentemente seis indices por schema en los tres tenants
+operativos: el-pollo-loco, golosinas-axel, asadero-la-joya. Los prospectos
+existentes no reciben estos indices automaticamente durante el arranque.
+Los nuevos registros se aprovisionan con los mismos indices.
+
+Para revisar/aplicar indices a otro negocio al entrar en operacion:
+node scripts/optimize-neon-indexes.js --env .env.production --tenants slug --project bold-rice-31953798
+node scripts/optimize-neon-indexes.js --env .env.production --tenants slug --project bold-rice-31953798 --apply
+El primer comando solo imprime el plan. El segundo crea cada indice
+CONCURRENTLY, con espera de bloqueo limitada y comprobacion de validez.
+
+Medicion posterior
+En produccion se escribe [compute-metrics] cada hora en el log de PM2.
+Incluye consultas, errores, tiempos agregados y percentiles aproximados
+por rangos, ademas del estado del pool. El temporizador solo lee memoria:
+no consulta ni despierta Neon. No se registran SQL, parametros, tokens,
+datos personales ni el contenido de las respuestas.
+
+Consultar el registro:
+pm2 logs chatbotpro --lines 200 --nostream
+
+Tomar una instantanea manual de contadores PostgreSQL:
+node scripts/neon-compute-snapshot.js --env .env.production --output data/diagnostics/compute-day2.json
+Comparar con la linea base del mismo endpoint:
+node scripts/neon-compute-snapshot.js --env .env.production --compare data/diagnostics/compute-production-baseline.json --output data/diagnostics/compute-comparison-day2.json
+
+Los contadores son acumulados. Descartar comparaciones con reinicios de
+contadores y contrastar filas leidas por pedido/solicitud con trafico similar.
+La linea base incluye trafico de auditoria; evitar pruebas de equivalencia
+repetidas durante las ventanas que se quieran usar para medir uso normal.
+Para confirmar el ahorro monetario, comparar CU-h por endpoint y dia en
+Neon durante 48-72h con volumen comparable. Menos CPU por consulta no
+garantiza menos CU-h si el endpoint ya permanece activo al minimo.
+
+Comprobar respuestas sin crear operaciones comerciales:
+node scripts/validate-neon-compute.js --env .env.production --revision d237dd8 --output data/diagnostics/compute-equivalence.json
+El validador usa una transaccion REPEATABLE READ READ ONLY y compara
+pedidos, dashboard, overview POS y pantallas KDS. Comprueba tambien limites
+de dia, incluyendo dias de 23 y 25 horas. Omite SQL interno del metadata,
+serverTime y orden entre comandas con la misma fecha al comparar el KDS.
+
+Validar la reutilizacion del ranking en una rama de desarrollo:
+node scripts/validate-versioned-read.js --env .env.test
+La prueba rechaza la rama de produccion, crea un schema de prueba unico,
+comprueba commits/rollbacks y cambios propios y lo elimina al terminar.
+Dentro de transacciones de negocio no se reutilizan resultados, porque
+una transaccion puede ver sus propias escrituras sin cambiar su snapshot.
+
+Pruebas
+Suite completa: 479 pruebas, 473 pasan; los mismos seis fallos existentes
+en d237dd8, comprobados contra una copia limpia de esa revision.
+Despues del ajuste de concurrencia del overview POS: 24 pruebas enfocadas
+de POS y optimizacion pasan. Validacion SQL/funcional: 42 casos equivalentes
+en los tres tenants de produccion, sin crear pedidos ni movimientos.
+
+Despliegue
+El endpoint /health/ready responde 200 solo al completar las migraciones.
+La primera ejecucion registra la version de cada schema. Arranques con
+version identica omiten DDL, defaults y reescrituras de esos tenants.
+Se prepara una instancia temporal con uploads/data compartidos y puerto
+libre verificado antes de cambiar el proxy; luego se vuelve al puerto
+principal. La pasarela de WhatsApp conserva su proceso y sesiones.
+
+Evidencia local y del servidor: data/diagnostics/compute-*.json y los logs
+de pruebas/aplicacion. Los datos de medicion se mantienen fuera de Git.

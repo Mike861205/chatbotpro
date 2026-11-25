@@ -6,6 +6,10 @@ const { decrypt } = require('../utils/crypto');
 const { operationalOrderNote } = require('../utils/orderNotes');
 const { emitKdsUpdate } = require('../notifications');
 const { normalizeTimeZone } = require('../utils/regional');
+const { localDayRange } = require('../utils/queryDates');
+const { createSingleFlight } = require('../utils/singleFlight');
+
+const shareBoardRead = createSingleFlight();
 
 const router = express.Router();
 const KDS_STATUSES = new Set(['pending', 'preparing', 'ready', 'completed']);
@@ -114,7 +118,7 @@ function orderIsDelivery(order) {
 
 async function buildKdsPayload(tenant, tenantDb, area) {
   const isDeliveryArea = area.area_type === 'delivery';
-  const [categoryAssignments, productAssignments, orderRows, tableRoundRows, settingsRows, preparationStateRows] = await Promise.all([
+  const [categoryAssignments, productAssignments, orderRows, tableRoundRows, settingsRows] = await Promise.all([
     tenantDb.all('SELECT category_id FROM {s}.kds_area_categories WHERE area_id = $1', [area.id]),
     tenantDb.all('SELECT product_id FROM {s}.kds_area_products WHERE area_id = $1', [area.id]),
     tenantDb.all(
@@ -127,7 +131,8 @@ async function buildKdsPayload(tenant, tenantDb, area) {
        WHERE o.status <> 'cancelado'
          AND NOT (o.channel = 'kiosk' AND o.status = 'pendiente_cobro')
          AND o.table_account_id IS NULL
-         AND (COALESCE(o.scheduled_for, o.created_at) AT TIME ZONE '${tenant.timezone}')::date = (now() AT TIME ZONE '${tenant.timezone}')::date
+         AND ${localDayRange('COALESCE(o.scheduled_for, o.created_at)', '$4::text')}
+         AND s.status IS DISTINCT FROM 'completed'
          AND (o.scheduled_for IS NULL OR o.scheduled_for <= now() + INTERVAL '30 minutes')
          AND (
            $2::int IS NULL
@@ -149,7 +154,7 @@ async function buildKdsPayload(tenant, tenantDb, area) {
            )
          )
        ORDER BY o.created_at ASC`,
-      [area.id, area.branch_id || null, isDeliveryArea]
+      [area.id, area.branch_id || null, isDeliveryArea, tenant.timezone]
     ),
     tenantDb.all(
             `SELECT (-tr.id) AS id, NULL::int AS customer_id, tr.items, tr.subtotal::float AS total, 'pendiente' AS order_status,
@@ -163,21 +168,27 @@ async function buildKdsPayload(tenant, tenantDb, area) {
        JOIN {s}.table_accounts ta ON ta.id = tr.account_id
        LEFT JOIN {s}.branches b ON b.id = NULLIF(ta.branch_id, 0)
        LEFT JOIN {s}.kds_ticket_states s ON s.order_id = -tr.id AND s.area_id = $1
-       WHERE (tr.created_at AT TIME ZONE '${tenant.timezone}')::date = (now() AT TIME ZONE '${tenant.timezone}')::date
+       WHERE ${localDayRange('tr.created_at', '$3::text')}
+         AND s.status IS DISTINCT FROM 'completed'
          AND ($2::int IS NULL OR NULLIF(ta.branch_id, 0) = $2)
        ORDER BY tr.created_at ASC`,
-      [area.id, area.branch_id || null]
+      [area.id, area.branch_id || null, tenant.timezone]
     ),
     tenantDb.all("SELECT key, value FROM {s}.settings WHERE key IN ('business_name','currency','timezone')"),
-    tenantDb.all(
-      `SELECT s.order_id, s.area_id, s.status
-       FROM {s}.kds_ticket_states s
-       JOIN {s}.kds_areas a ON a.id = s.area_id
-       WHERE a.active = 1 AND a.area_type = 'preparation'`
-    ),
   ]);
 
   const parsedOrders = [...orderRows, ...tableRoundRows].map((row) => ({ ...row, parsedItems: parseItems(row.items) }));
+  const orderIds = parsedOrders.map((order) => Number(order.id));
+  const preparationStateRows = orderIds.length
+    ? await tenantDb.all(
+      `SELECT s.order_id, s.area_id, s.status
+       FROM {s}.kds_ticket_states s
+       JOIN {s}.kds_areas a ON a.id = s.area_id
+       WHERE a.active = 1 AND a.area_type = 'preparation'
+         AND s.order_id = ANY($1::int[])`,
+      [orderIds]
+    )
+    : [];
   const productIds = [...new Set(parsedOrders.flatMap((order) => order.parsedItems.map(itemProductId).filter(Boolean)))];
   const products = productIds.length
     ? await tenantDb.all(
@@ -307,7 +318,8 @@ router.get('/public/:slug/:token', async (req, res, next) => {
   try {
     const found = await resolvePublicArea(req.params.slug, req.params.token);
     if (!found) return res.status(404).json({ error: 'Pantalla KDS no encontrada o desactivada' });
-    res.json(await buildKdsPayload(found.tenant, found.tenantDb, found.area));
+    const key = JSON.stringify([found.tenant, found.area]);
+    res.json(await shareBoardRead(key, () => buildKdsPayload(found.tenant, found.tenantDb, found.area)));
   } catch (error) {
     next(error);
   }

@@ -4,6 +4,9 @@ const crypto = require('crypto');
 const config = require('../config');
 const OpenAI = require('openai');
 const { q, getSetting, getSuperAdminSetting } = require('../db');
+const { getSettings } = require('../utils/settings');
+const { createVersionedRead } = require('../utils/versionedRead');
+const readSalesRanking = createVersionedRead();
 const { encrypt, decrypt, lookupHash } = require('../utils/crypto');
 const { emitNewOrder, emitSessionUpdate } = require('../notifications');
 const { ensurePurchasingSchema } = require('../utils/purchasing');
@@ -632,7 +635,7 @@ async function orderFullMenuCatalog(t, products, mode) {
   const normalizedMode = normalizeCatalogSortMode(mode);
   let soldQtyByProduct = new Map();
   if (normalizedMode === 'top_sold') {
-    const rows = await t.all(
+    const rows = await readSalesRanking(t, 'chatbot-sold-quantities', () => t.all(
       `SELECT product_id, SUM(qty)::float AS sold_qty
        FROM (
          SELECT
@@ -651,7 +654,7 @@ async function orderFullMenuCatalog(t, products, mode) {
        ) sold
        WHERE product_id IS NOT NULL
        GROUP BY product_id`
-    );
+    ));
     soldQtyByProduct = new Map(rows.map((row) => [Number(row.product_id), Number(row.sold_qty || 0)]));
   }
   return sortCatalogProducts(products, normalizedMode, soldQtyByProduct);
@@ -1925,73 +1928,72 @@ async function handleMessage(t, slug, sessionId, rawInput, runtime = {}) {
     console.warn('[currency-conversion] No se pudo obtener la tasa automática:', error.message);
     return null;
   });
-  const [
-    businessName,
-    businessType,
-    currency,
-    deliveryFeeRulesRaw,
-    deliveryZonesRaw,
-    whatsappRaw,
-    deliveryEnabledRaw,
-    pickupEnabledRaw,
-    dineInEnabledRaw,
-    locationEnabledRaw,
-    showFullMenuRaw,
-    catalogSortModeRaw,
-    timeZone,
-    businessHoursEnabledRaw,
-    preordersEnabledRaw,
-    businessHoursRaw,
-    customReceivingModesRaw,
-    deliveryCashRaw,
-    deliveryTransferRaw,
-    deliveryCardRaw,
-    pickupCashRaw,
-    pickupTransferRaw,
-    pickupCardRaw,
-    pickupPlatformRaw,
-    customPaymentMethodsRaw,
-    bankAccountsRaw,
-    upsellEnabledRaw,
-    legacyUpsellQuestionRaw,
-    legacyUpsellProductIdsRaw,
-    upsellOffersRaw,
-    chatbotInfoOptionsRaw,
-    currencyConversion,
-  ] = await Promise.all([
-    getSetting(t, 'business_name', slug),
-    getSetting(t, 'business_type', 'restaurant'),
-    getSetting(t, 'currency', 'MXN'),
-    getSetting(t, 'delivery_fee_rules', ''),
-    getSetting(t, 'delivery_zones_geojson', '[]'),
-    getSetting(t, 'whatsapp', ''),
-    getSetting(t, 'delivery_enabled', '1'),
-    getSetting(t, 'pickup_enabled', '1'),
-    getSetting(t, 'dine_in_enabled', '1'),
-    getSetting(t, 'location_enabled', '1'),
-    getSetting(t, 'chatbot_full_menu_enabled', '0'),
-    getSetting(t, 'pos_catalog_sort_mode', 'top_sold'),
-    getSetting(t, 'timezone', t.timezone || 'America/Mexico_City'),
-    getSetting(t, 'business_hours_enabled', '0'),
-    getSetting(t, 'chatbot_preorders_enabled', '0'),
-    getSetting(t, 'business_hours_json', '[]'),
-    getSetting(t, 'chatbot_receiving_modes_json', '[]'),
-    getSetting(t, 'chatbot_payment_delivery_cash', '1'),
-    getSetting(t, 'chatbot_payment_delivery_transfer', '0'),
-    getSetting(t, 'chatbot_payment_delivery_card', '0'),
-    getSetting(t, 'chatbot_payment_pickup_cash', '1'),
-    getSetting(t, 'chatbot_payment_pickup_transfer', '0'),
-    getSetting(t, 'chatbot_payment_pickup_card', '0'),
-    getSetting(t, 'chatbot_payment_pickup_platform', '0'),
-    getSetting(t, 'custom_payment_methods_json', '[]'),
-    getSetting(t, 'chatbot_bank_accounts_json', '[]'),
-    getSetting(t, 'chatbot_upsell_enabled', '0'),
-    getSetting(t, 'chatbot_upsell_question', '¿Deseas agregar alguno de estos productos a tu pedido?'),
-    getSetting(t, 'chatbot_upsell_product_ids', '[]'),
-    getSetting(t, 'chatbot_upsell_offers_json', '[]'),
-    getSetting(t, 'chatbot_extra_options_json', '[]'),
-    currencyConversionPromise,
-  ]);
+  const {
+    business_name: businessName,
+    business_type: businessType,
+    currency: currency,
+    delivery_fee_rules: deliveryFeeRulesRaw,
+    delivery_zones_geojson: deliveryZonesRaw,
+    whatsapp: whatsappRaw,
+    delivery_enabled: deliveryEnabledRaw,
+    pickup_enabled: pickupEnabledRaw,
+    dine_in_enabled: dineInEnabledRaw,
+    location_enabled: locationEnabledRaw,
+    chatbot_full_menu_enabled: showFullMenuRaw,
+    pos_catalog_sort_mode: catalogSortModeRaw,
+    timezone: timeZone,
+    business_hours_enabled: businessHoursEnabledRaw,
+    chatbot_preorders_enabled: preordersEnabledRaw,
+    business_hours_json: businessHoursRaw,
+    chatbot_receiving_modes_json: customReceivingModesRaw,
+    chatbot_payment_delivery_cash: deliveryCashRaw,
+    chatbot_payment_delivery_transfer: deliveryTransferRaw,
+    chatbot_payment_delivery_card: deliveryCardRaw,
+    chatbot_payment_pickup_cash: pickupCashRaw,
+    chatbot_payment_pickup_transfer: pickupTransferRaw,
+    chatbot_payment_pickup_card: pickupCardRaw,
+    chatbot_payment_pickup_platform: pickupPlatformRaw,
+    custom_payment_methods_json: customPaymentMethodsRaw,
+    chatbot_bank_accounts_json: bankAccountsRaw,
+    chatbot_upsell_enabled: upsellEnabledRaw,
+    chatbot_upsell_question: legacyUpsellQuestionRaw,
+    chatbot_upsell_product_ids: legacyUpsellProductIdsRaw,
+    chatbot_upsell_offers_json: upsellOffersRaw,
+    chatbot_extra_options_json: chatbotInfoOptionsRaw,
+  } = await getSettings(t, {
+    business_name: slug,
+    business_type: 'restaurant',
+    currency: 'MXN',
+    delivery_fee_rules: '',
+    delivery_zones_geojson: '[]',
+    whatsapp: '',
+    delivery_enabled: '1',
+    pickup_enabled: '1',
+    dine_in_enabled: '1',
+    location_enabled: '1',
+    chatbot_full_menu_enabled: '0',
+    pos_catalog_sort_mode: 'top_sold',
+    timezone: t.timezone || 'America/Mexico_City',
+    business_hours_enabled: '0',
+    chatbot_preorders_enabled: '0',
+    business_hours_json: '[]',
+    chatbot_receiving_modes_json: '[]',
+    chatbot_payment_delivery_cash: '1',
+    chatbot_payment_delivery_transfer: '0',
+    chatbot_payment_delivery_card: '0',
+    chatbot_payment_pickup_cash: '1',
+    chatbot_payment_pickup_transfer: '0',
+    chatbot_payment_pickup_card: '0',
+    chatbot_payment_pickup_platform: '0',
+    custom_payment_methods_json: '[]',
+    chatbot_bank_accounts_json: '[]',
+    chatbot_upsell_enabled: '0',
+    chatbot_upsell_question: '¿Deseas agregar alguno de estos productos a tu pedido?',
+    chatbot_upsell_product_ids: '[]',
+    chatbot_upsell_offers_json: '[]',
+    chatbot_extra_options_json: '[]',
+  });
+  const currencyConversion = await currencyConversionPromise;
   const deliveryFeeRules = parseDeliveryFeeRules(deliveryFeeRulesRaw);
   const deliveryZones = parseDeliveryZones(deliveryZonesRaw);
   let whatsapp = normalizeWhatsappNumber(whatsappRaw);

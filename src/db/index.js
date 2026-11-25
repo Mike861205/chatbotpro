@@ -6,6 +6,9 @@ const bcrypt = require('bcryptjs');
 const crypto = require('node:crypto');
 const config = require('../config');
 const { decrypt, lookupHash } = require('../utils/crypto');
+const { migrateTenantSchemas } = require('../utils/schemaMigrations');
+const { ensurePerformanceIndexes } = require('../utils/performanceIndexes');
+const { measuredQuery } = require('../utils/performanceMetrics');
 
 const pool = new Pool({
   connectionString: config.DATABASE_URL,
@@ -23,7 +26,7 @@ pool.on('error', (err) => console.error('[pg] error de pool:', err.message));
 async function q(sql, params = [], retries = 3) {
   for (let attempt = 1; attempt <= retries; attempt++) {
     try {
-      return await pool.query(sql, params);
+      return await measuredQuery(pool, sql, params);
     } catch (err) {
       const isRetryable =
         err.code === 'ECONNRESET' ||
@@ -62,10 +65,11 @@ function tdb(slug) {
       const client = await pool.connect();
       const scoped = {
         schema: s,
+        inTransaction: true,
         timezone: tenantDb.timezone,
-        all: async (sql, p = []) => (await client.query(fix(sql), p)).rows,
-        get: async (sql, p = []) => (await client.query(fix(sql), p)).rows[0],
-        run: async (sql, p = []) => client.query(fix(sql), p),
+        all: async (sql, p = []) => (await measuredQuery(client, fix(sql), p)).rows,
+        get: async (sql, p = []) => (await measuredQuery(client, fix(sql), p)).rows[0],
+        run: async (sql, p = []) => measuredQuery(client, fix(sql), p),
       };
       try {
         await client.query('BEGIN');
@@ -454,32 +458,45 @@ async function initMaster(options = {}) {
 
   // Migra/asegura el esquema aislado de tenants existentes.
   const existing = await q('SELECT id, slug, business_name, business_type, product_code FROM tenants');
-  for (const t of existing.rows) {
-    await createTenantSchema(t.slug);
-    await ensureTenantDefaults(t.slug, t.business_name, { businessType: t.business_type });
-    const savedModel = await getSetting(tdb(t.slug), 'business_type', t.business_type || 'restaurant');
-    if (savedModel !== t.business_type) {
-      await q('UPDATE tenants SET business_type = $1 WHERE id = $2', [savedModel, t.id]);
-    }
-    await ensureTenantCourtesyStamps(t.slug, t.id, 'system:migration');
-    if (t.product_code === 'invoicing' && t.slug !== config.DEMO_TENANT_SLUG) {
-      const tenantDb = tdb(t.slug);
-      await tenantDb.run(
-        `UPDATE {s}.fiscal_profiles SET environment='production',
-         api_mode=CASE WHEN upper(rfc)=$1 THEN 'web' ELSE 'multi' END,
-         sandbox_shared=0,csd_uploaded=CASE WHEN environment='production' THEN csd_uploaded ELSE 0 END,updated_at=now()`,
-        [config.FACTURAMA_PRODUCTION_RFC]
-      );
-      await tenantDb.run(
-        `UPDATE {s}.fiscal_emitters SET environment='production',
-         api_mode=CASE WHEN upper(rfc)=$1 THEN 'web' ELSE 'multi' END,
-         sandbox_shared=0,csd_uploaded=CASE WHEN environment='production' THEN csd_uploaded ELSE 0 END,updated_at=now()`,
-        [config.FACTURAMA_PRODUCTION_RFC]
-      );
-    }
-  }
+  const baseVersion = crypto.createHash('sha256').update([
+    createTenantSchema.toString(), ensureTenantDefaults.toString(),
+    ensureTenantCourtesyStamps.toString(), migrateExistingTenant.toString(),
+    config.FACTURAMA_PRODUCTION_RFC || '', config.DEMO_TENANT_SLUG || '',
+  ].join('\n')).digest('hex');
+  const migrations = await migrateTenantSchemas(q, existing.rows, (tenant) => ({
+    schema: schemaName(tenant.slug),
+    version: crypto.createHash('sha256').update(JSON.stringify([
+      baseVersion, tenant.id, tenant.business_name, tenant.business_type, tenant.product_code,
+    ])).digest('hex'),
+  }), migrateExistingTenant);
+  console.log(`[db] Schemas: ${migrations.migrated} migrados, ${migrations.skipped} sin cambios`);
 
   console.log('[db] Neon conectado — schema maestro listo');
+}
+
+async function migrateExistingTenant(t) {
+  await createTenantSchema(t.slug);
+  await ensureTenantDefaults(t.slug, t.business_name, { businessType: t.business_type });
+  const savedModel = await getSetting(tdb(t.slug), 'business_type', t.business_type || 'restaurant');
+  if (savedModel !== t.business_type) {
+    await q('UPDATE tenants SET business_type = $1 WHERE id = $2', [savedModel, t.id]);
+  }
+  await ensureTenantCourtesyStamps(t.slug, t.id, 'system:migration');
+  if (t.product_code === 'invoicing' && t.slug !== config.DEMO_TENANT_SLUG) {
+    const tenantDb = tdb(t.slug);
+    await tenantDb.run(
+      `UPDATE {s}.fiscal_profiles SET environment='production',
+       api_mode=CASE WHEN upper(rfc)=$1 THEN 'web' ELSE 'multi' END,
+       sandbox_shared=0,csd_uploaded=CASE WHEN environment='production' THEN csd_uploaded ELSE 0 END,updated_at=now()`,
+      [config.FACTURAMA_PRODUCTION_RFC]
+    );
+    await tenantDb.run(
+      `UPDATE {s}.fiscal_emitters SET environment='production',
+       api_mode=CASE WHEN upper(rfc)=$1 THEN 'web' ELSE 'multi' END,
+       sandbox_shared=0,csd_uploaded=CASE WHEN environment='production' THEN csd_uploaded ELSE 0 END,updated_at=now()`,
+      [config.FACTURAMA_PRODUCTION_RFC]
+    );
+  }
 }
 
 async function ensureSuperAdminSeed() {
@@ -2280,6 +2297,7 @@ async function initTenantDefaults(slug, businessName, regional = {}, tenantId = 
   await ensureTenantDefaults(slug, businessName, regional);
   await ensureTenantCourtesyStamps(slug, tenantId, 'system:registration');
   const t = tdb(slug);
+  await ensurePerformanceIndexes(t);
   return t;
 }
 

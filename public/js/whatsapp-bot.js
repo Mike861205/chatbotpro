@@ -160,7 +160,7 @@ async function loadWhatsAppBot() {
   wabPreview();
   await wabRecent();
   if (!WAB_TIMER) WAB_TIMER = setInterval(async () => {
-    if (!wab('view-whatsapp-bot')?.classList.contains('active') || WAB_POLL_BUSY) return;
+    if (document.hidden || !navigator.onLine || !wab('view-whatsapp-bot')?.classList.contains('active') || WAB_POLL_BUSY) return;
     WAB_POLL_BUSY = true;
     try {
       if (++WAB_TICKS % 3 === 0) await loadWhatsAppBot();

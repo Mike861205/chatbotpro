@@ -1,4 +1,5 @@
-const { getSetting, setSetting } = require('../db');
+const { setSetting } = require('../db');
+const { getSettings } = require('./settings');
 const { isSupportedCurrency } = require('./regional');
 
 const AUTO_REFRESH_MS = 12 * 60 * 60 * 1000;
@@ -71,8 +72,7 @@ async function readRawSettings(t) {
     'currency_conversion_rate', 'currency_conversion_updated_at', 'currency_conversion_chatbot_enabled',
     'currency_conversion_pos_enabled',
   ];
-  const values = await Promise.all(keys.map((key) => getSetting(t, key, '')));
-  return Object.fromEntries(keys.map((key, index) => [key, values[index]]));
+  return getSettings(t, Object.fromEntries(keys.map((key) => [key, ''])));
 }
 
 async function resolveCurrencyConversion(t, { scope = '', forceRefresh = false, raw = null, fetchImpl } = {}) {

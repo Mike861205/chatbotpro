@@ -5,7 +5,8 @@ const { Server: SocketIO } = require('socket.io');
 const cookieParser = require('cookie-parser');
 const multer = require('multer');
 const config = require('./src/config');
-const { initMaster, refreshTenantBillingStatuses, q, tdb } = require('./src/db');
+const { initMaster, refreshTenantBillingStatuses, q, tdb, pool } = require('./src/db');
+const { measureRequest, startPerformanceLogging } = require('./src/utils/performanceMetrics');
 const { setIo } = require('./src/notifications');
 const { verifyNotificationMailer } = require('./src/utils/mailer');
 const jwt = require('jsonwebtoken');
@@ -46,6 +47,8 @@ app.use(express.json({
 }));
 app.use(express.urlencoded({ extended: false, limit: '256kb' }));
 app.use(cookieParser());
+app.get('/health/ready', (_req, res) => res.status(databaseReady ? 200 : 503).json({ status: databaseReady ? 'ready' : 'starting' }));
+app.use('/api', measureRequest);
 app.use('/api', async (req, res, next) => {
   if (databaseReady) return next();
   try {
@@ -207,6 +210,7 @@ initMaster({
 })
   .then(async () => {
     markDatabaseReady();
+    startPerformanceLogging(pool);
 
     try {
       const firstRefresh = await refreshTenantBillingStatuses();

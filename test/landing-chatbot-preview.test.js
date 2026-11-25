@@ -51,7 +51,7 @@ test('confirmar un pedido de prueba no crea pedidos, clientes, stock ni notifica
       throw new Error(`La prueba no debe consultar datos operativos: ${sql}`);
     },
     async all(sql) {
-      if (sql.includes('settings')) return [];
+      if (sql.includes('settings')) return [{ key: 'whatsapp', value: '526141234567' }];
       throw new Error(`La prueba no debe consultar catálogos operativos: ${sql}`);
     },
     async run(sql, params) {

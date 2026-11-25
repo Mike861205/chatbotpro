@@ -8,6 +8,7 @@
   const SOUND_KEY = `cbp:kds:sound:${slug}`;
   let payload = null;
   let loading = false;
+  let refreshAgain = false;
   let bootstrapped = false;
   let knownPending = new Set();
   let soundEnabled = localStorage.getItem(SOUND_KEY) !== '0';
@@ -192,7 +193,7 @@
   }
 
   async function refresh({ initial = false } = {}) {
-    if (loading) return;
+    if (loading) { refreshAgain = true; return; }
     loading = true;
     try {
       const response = await fetch(endpoint, { cache: 'no-store' });
@@ -223,7 +224,13 @@
       if (!initial) toast(error.message, true);
     } finally {
       loading = false;
-      scheduleRefresh();
+      if (refreshAgain && !document.hidden && navigator.onLine) {
+        refreshAgain = false;
+        refresh();
+      } else {
+        refreshAgain = false;
+        scheduleRefresh();
+      }
     }
   }
 

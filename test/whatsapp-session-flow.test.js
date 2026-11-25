@@ -13,7 +13,7 @@ function sessionDb(row) {
       throw new Error(`Consulta get inesperada: ${sql}`);
     },
     async all(sql) {
-      if (sql.includes('settings')) return [];
+      if (sql.includes('settings')) return [{ key: 'whatsapp', value: '526141234567' }];
       throw new Error(`Consulta all inesperada: ${sql}`);
     },
     async run(sql, params) {

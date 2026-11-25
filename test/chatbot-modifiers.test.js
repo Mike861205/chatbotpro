@@ -121,7 +121,14 @@ test('confirmar por texto guarda el pedido que leen Pedidos y POS', async () => 
       throw new Error(`Consulta get inesperada: ${sql}`);
     },
     async all(sql) {
-      if (sql.includes('settings')) return [];
+      if (sql.includes('settings')) {
+        const keys = arguments[1]?.[0] || [];
+        const rows = await Promise.all(keys.map(async (key) => {
+          const row = await this.get('SELECT value FROM {s}.settings WHERE key=$1', [key]);
+          return row ? { key, value: row.value } : null;
+        }));
+        return rows.filter(Boolean);
+      }
       if (sql.includes('FROM {s}.branches WHERE active = 1')) return [];
       throw new Error(`Consulta all inesperada: ${sql}`);
     },
@@ -225,7 +232,14 @@ function fakeTenantDb(initialState) {
       throw new Error(`Consulta get inesperada: ${sql}`);
     },
     async all(sql) {
-      if (sql.includes('settings')) return [];
+      if (sql.includes('settings')) {
+        const keys = arguments[1]?.[0] || [];
+        const rows = await Promise.all(keys.map(async (key) => {
+          const row = await this.get('SELECT value FROM {s}.settings WHERE key=$1', [key]);
+          return row ? { key, value: row.value } : null;
+        }));
+        return rows.filter(Boolean);
+      }
       throw new Error(`Consulta all inesperada: ${sql}`);
     },
     async run(sql, params) {
@@ -270,7 +284,14 @@ function fakeCatalogTenantDb(initialState) {
       throw new Error(`Consulta get inesperada: ${sql}`);
     },
     async all(sql, params) {
-      if (sql.includes('settings')) return [];
+      if (sql.includes('settings')) {
+        const keys = arguments[1]?.[0] || [];
+        const rows = await Promise.all(keys.map(async (key) => {
+          const row = await this.get('SELECT value FROM {s}.settings WHERE key=$1', [key]);
+          return row ? { key, value: row.value } : null;
+        }));
+        return rows.filter(Boolean);
+      }
       const id = Number(params[0]);
       if (sql.includes('product_variants')) return variants.get(id) || [];
       if (sql.includes('modifier_groups')) return groups.get(id) || [];
@@ -301,7 +322,14 @@ function fakeMenuTenantDb(initialState) {
       throw new Error(`Consulta get inesperada: ${sql}`);
     },
     async all(sql, params) {
-      if (sql.includes('settings')) return [];
+      if (sql.includes('settings')) {
+        const keys = arguments[1]?.[0] || [];
+        const rows = await Promise.all(keys.map(async (key) => {
+          const row = await this.get('SELECT value FROM {s}.settings WHERE key=$1', [key]);
+          return row ? { key, value: row.value } : null;
+        }));
+        return rows.filter(Boolean);
+      }
       if (sql.includes('SELECT * FROM {s}.categories')) return categories;
       if (sql.includes('FROM {s}.products p LEFT JOIN {s}.categories')) return products;
       if (sql.includes('FROM {s}.product_variants')) return [];

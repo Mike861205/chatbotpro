@@ -4,6 +4,7 @@ const { decrypt } = require('../utils/crypto');
 const { ensurePurchasingSchema } = require('../utils/purchasing');
 const { ensureBranchStockSchema, initializeBranchStock, applyBranchSaleStock, restoreBranchSaleStock } = require('../utils/branchStock');
 const { operationalOrderNote } = require('../utils/orderNotes');
+const { localDateBoundary, localDayRange } = require('../utils/queryDates');
 
 const router = express.Router();
 router.use(requireAuth);
@@ -21,10 +22,8 @@ router.use(async (req, res, next) => {
 
 const STATUSES = ['pendiente', 'confirmado', 'preparando', 'enviado', 'entregado', 'cancelado'];
 
-async function decorate(t, o) {
-  const customer = o.customer_id
-    ? await t.get('SELECT * FROM {s}.customers WHERE id = $1', [o.customer_id])
-    : null;
+function decorate(o, customers) {
+  const customer = customers.get(Number(o.customer_id)) || null;
   let paymentBreakdown = null;
   try {
     paymentBreakdown = typeof o.payment_breakdown === 'string'
@@ -106,16 +105,21 @@ router.get('/', async (req, res, next) => {
       where.push('scheduled_for > now()');
       where.push("status <> 'cancelado'");
     } else if (isTodayOnly) {
-      where.push(`(COALESCE(scheduled_for, created_at) AT TIME ZONE '${req.timezone}')::date = (now() AT TIME ZONE '${req.timezone}')::date`);
+      params.push(req.timezone);
+      where.push(localDayRange('COALESCE(scheduled_for, created_at)', `$${params.length}::text`));
     } else {
       const validDate = /^\d{4}-\d{2}-\d{2}$/;
       if (startDate && validDate.test(String(startDate))) {
         params.push(String(startDate));
-        where.push(`(COALESCE(scheduled_for, created_at) AT TIME ZONE '${req.timezone}')::date >= $${params.length}::date`);
+        const dateSql = `$${params.length}::date`;
+        params.push(req.timezone);
+        where.push(`COALESCE(scheduled_for, created_at) >= ${localDateBoundary(dateSql, `$${params.length}::text`)}`);
       }
       if (endDate && validDate.test(String(endDate))) {
         params.push(String(endDate));
-        where.push(`(COALESCE(scheduled_for, created_at) AT TIME ZONE '${req.timezone}')::date <= $${params.length}::date`);
+        const dateSql = `$${params.length}::date`;
+        params.push(req.timezone);
+        where.push(`COALESCE(scheduled_for, created_at) < ${localDateBoundary(dateSql, `$${params.length}::text`, 1)}`);
       }
     }
 
@@ -128,7 +132,12 @@ router.get('/', async (req, res, next) => {
       ? ` ORDER BY scheduled_for ASC, id ASC LIMIT $${params.length}`
       : ` ORDER BY COALESCE(scheduled_for, created_at) DESC, id DESC LIMIT $${params.length}`;
     const rows = await req.tdb.all(sql, params);
-    res.json(await Promise.all(rows.map((o) => decorate(req.tdb, o))));
+    const customerIds = [...new Set(rows.map((o) => Number(o.customer_id)).filter(Boolean))];
+    const customerRows = customerIds.length
+      ? await req.tdb.all('SELECT id, name_enc, phone_enc, address_enc FROM {s}.customers WHERE id = ANY($1::int[])', [customerIds])
+      : [];
+    const customers = new Map(customerRows.map((customer) => [Number(customer.id), customer]));
+    res.json(rows.map((o) => decorate(o, customers)));
   } catch (e) { next(e); }
 });
 

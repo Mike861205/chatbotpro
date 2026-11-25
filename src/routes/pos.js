@@ -19,6 +19,8 @@ const { parseCustomPaymentMethods, isCustomPaymentMethod } = require('../utils/p
 const { loadProductTaxConfig, effectiveProductPrice, productTaxLineSnapshot, applyProductTaxToCatalogProduct } = require('../utils/productTax');
 const { applyPromotionsToItems, getActivePromotions, decorateCatalogProducts } = require('../utils/promotions');
 const { isProductAvailableToday } = require('../utils/productAvailability');
+const { createVersionedRead } = require('../utils/versionedRead');
+const readSalesRanking = createVersionedRead();
 
 const router = express.Router();
 const closeApprovalLimiter = createRateLimiter({ windowMs: 15 * 60 * 1000, max: 12, message: 'Demasiados intentos. Espera unos minutos.' });
@@ -816,7 +818,7 @@ async function listDeletedMovements(t, sessionId) {
 }
 
 async function listSoldQtyByProduct(t) {
-  const rows = await t.all(
+  const rows = await readSalesRanking(t, 'pos-sold-quantities', () => t.all(
     `SELECT product_id, SUM(qty)::float AS sold_qty
      FROM (
        SELECT
@@ -836,7 +838,7 @@ async function listSoldQtyByProduct(t) {
      WHERE product_id IS NOT NULL
      GROUP BY product_id`,
     []
-  );
+  ));
   return new Map(rows.map((row) => [Number(row.product_id), Number(row.sold_qty || 0)]));
 }
 
@@ -1416,31 +1418,44 @@ router.post('/table-accounts/:id/checkout', async (req, res, next) => {
 
 router.get('/overview', async (req, res, next) => {
   try {
-    const categories = await req.tdb.all('SELECT id, name, sort FROM {s}.categories ORDER BY sort, name');
-    const branches = await req.tdb.all('SELECT id, name, address, reference, active FROM {s}.branches WHERE active = 1 ORDER BY name');
+    const [categories, branches, allOpenSessions, products] = await Promise.all([
+      req.tdb.all('SELECT id, name, sort FROM {s}.categories ORDER BY sort, name'),
+      req.tdb.all('SELECT id, name, address, reference, active FROM {s}.branches WHERE active = 1 ORDER BY name'),
     // Sessiones activas de otras sucursales (para bloquear selección en admin)
-    const allOpenSessions = await req.tdb.all(
+      req.tdb.all(
       `SELECT id, branch_id, branch_name, opened_by,
               opening_amount::float AS opening_amount,
               to_char(opened_at AT TIME ZONE '${tenantTimeZone(req.tdb)}', 'DD Mon YYYY, HH24:MI') AS opened_at
        FROM {s}.pos_sessions ps
        WHERE status = 'open'
        ORDER BY ps.opened_at DESC`
-    );
-    const products = await req.tdb.all(
+      ),
+      req.tdb.all(
       `SELECT p.id, p.category_id, p.name, p.description, p.price::float AS price, p.image, p.sale_days, p.barcode, p.sat_product_code,
               p.grocery_brand, p.grocery_presentation, p.grocery_unit, c.name AS category_name
        FROM {s}.products p
        LEFT JOIN {s}.categories c ON c.id = p.category_id
        WHERE p.pos_active = 1
        ORDER BY COALESCE(c.sort, 0), c.name NULLS FIRST, p.name`
-    );
+      ),
+    ]);
     const availableProducts = products.filter((product) => isProductAvailableToday(product, new Date(), tenantTimeZone(req.tdb)));
     const unavailableProducts = products.filter((product) => !isProductAvailableToday(product, new Date(), tenantTimeZone(req.tdb)))
       .map(({ id, name, barcode, sat_product_code }) => ({ id, name, barcode, sat_product_code }));
-    const { variantsMap, groupsMap } = await getProductExtrasMaps(req.tdb, availableProducts.map((p) => p.id));
-    const taxConfig = await loadProductTaxConfig(req.tdb);
-    const soldQtyByProduct = await listSoldQtyByProduct(req.tdb);
+    const ctx = userSessionContext(req.user, req);
+    const [extras, taxConfig, soldQtyByProduct, promotions, session, lastClosedSession, chatbotIntegrationEnabled, policy, barcodeSetting] = await Promise.all([
+      getProductExtrasMaps(req.tdb, availableProducts.map((p) => p.id)),
+      loadProductTaxConfig(req.tdb),
+      listSoldQtyByProduct(req.tdb),
+      getActivePromotions(req.tdb, 'pos'),
+      getOpenSession(req.tdb, ctx),
+      getLastClosedSession(req.tdb, ctx),
+      isChatbotPosIntegrationEnabled(req.tdb),
+      getPosPolicy(req.tdb),
+      getSetting(req.tdb, 'barcode_enabled', '0'),
+    ]);
+    const { variantsMap, groupsMap } = extras;
+    const barcodeEnabled = barcodeSetting === '1';
     const productsWithExtras = await Promise.all(availableProducts.map(async (p) => applyProductTaxToCatalogProduct({
       ...p,
       image: await resolveExistingPublicMediaPath(p.image),
@@ -1448,13 +1463,16 @@ router.get('/overview', async (req, res, next) => {
       variants: variantsMap.get(p.id) || [],
       modifierGroups: groupsMap.get(p.id) || [],
     }, taxConfig)));
-    const productsWithPromotions = decorateCatalogProducts(
-      productsWithExtras,
-      await getActivePromotions(req.tdb, 'pos')
-    );
-    const ctx = userSessionContext(req.user, req);
-    const session = await getOpenSession(req.tdb, ctx);
-    const sessionTotals = session ? await getSessionTotals(req.tdb, session.id) : null;
+    const productsWithPromotions = decorateCatalogProducts(productsWithExtras, promotions);
+    const [sessionTotals, tables, selfServiceOrders, creditSales, recentSales, recentMovements, deletedMovements] = await Promise.all([
+      session ? getSessionTotals(req.tdb, session.id) : null,
+      listRestaurantTables(req.tdb, session, false),
+      listPendingSelfServiceOrders(req.tdb, session?.branch_id),
+      listOpenCreditSales(req.tdb, session?.branch_id),
+      listRecentSales(req.tdb, session?.id || null),
+      listRecentMovements(req.tdb, session?.id || null),
+      listDeletedMovements(req.tdb, session?.id || null),
+    ]);
     const activeSession = session
       ? {
           ...session,
@@ -1462,10 +1480,6 @@ router.get('/overview', async (req, res, next) => {
           expectedCash: expectedCashForSession(session, sessionTotals),
         }
       : null;
-    const lastClosedSession = await getLastClosedSession(req.tdb, ctx);
-    const chatbotIntegrationEnabled = await isChatbotPosIntegrationEnabled(req.tdb);
-    const policy = await getPosPolicy(req.tdb);
-    const barcodeEnabled = (await getSetting(req.tdb, 'barcode_enabled', '0')) === '1';
 
     // Sucursales bloqueadas por otras sesiones abiertas (distintas al usuario actual)
     const blockedBranchIds = allOpenSessions
@@ -1492,13 +1506,13 @@ router.get('/overview', async (req, res, next) => {
         movementDeleteRequirePin: policy.movementDeleteRequirePin,
       },
       openSessions: allOpenSessions,
-      tables: await listRestaurantTables(req.tdb, activeSession, false),
+      tables,
       blockedBranchIds,
-      selfServiceOrders: await listPendingSelfServiceOrders(req.tdb, activeSession?.branch_id),
-      creditSales: await listOpenCreditSales(req.tdb, activeSession?.branch_id),
-      recentSales: await listRecentSales(req.tdb, activeSession?.id || null),
-      recentMovements: await listRecentMovements(req.tdb, activeSession?.id || null),
-      deletedMovements: await listDeletedMovements(req.tdb, activeSession?.id || null),
+      selfServiceOrders,
+      creditSales,
+      recentSales,
+      recentMovements,
+      deletedMovements,
     });
   } catch (e) {
     next(e);
